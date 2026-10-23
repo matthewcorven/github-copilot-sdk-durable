@@ -12,6 +12,7 @@
 // repository via `#:include`.
 
 using System.Collections.Concurrent;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 #pragma warning disable IL2026, IL3050 // Durable state is reflection-serialized by design.
@@ -641,10 +642,16 @@ public class InMemoryStoreProvider : IDurableStoreProvider
     private readonly Dictionary<string, DocumentState> _documents = [];
     private readonly Dictionary<string, DurableTaskRecord> _tasks = [];
     private readonly Dictionary<string, ConversationRecord> _conversations = [];
-    private readonly Dictionary<string, List<string>> _entries = [];
-    private readonly Dictionary<string, EntryRecord> _entryRecords = [];
+
+    // The entry state is shared with the JSONL provider, which diffs the committed
+    // entry lists and records against the file at commit time.
+    protected readonly Dictionary<string, List<string>> _entries = [];
+    protected readonly Dictionary<string, EntryRecord> _entryRecords = [];
+
     private readonly Dictionary<string, TaskStateSnapshot> _taskStates = [];
-    private long _sequence;
+    // The sequence counter is shared with the JSONL provider, which replays the
+    // envelope sequences of the file's records on open.
+    protected long _sequence;
 
     /// <summary>
     /// The undo log of the transaction in flight. A transaction writes straight into
@@ -929,6 +936,295 @@ internal sealed class LegacyJsonStoreProvider : InMemoryStoreProvider
     }
 }
 
+/// <summary>
+/// The provider that persists state as JSONL: one JSON record per line, appended
+/// on every commit and flushed to disk before <see cref="Commit"/> returns. A torn
+/// trailing line -- a partial write from a crash -- is discarded on open and the
+/// file is truncated back to the last complete record, so recovery is silent and
+/// non-fatal.
+/// </summary>
+internal sealed class JsonlStoreProvider : InMemoryStoreProvider
+{
+    private string? _path;
+
+    /// <summary>
+    /// Loads the JSONL file at the configured path, replaying every complete record
+    /// into memory. A torn final line is discarded and truncated away; a file that
+    /// does not parse as JSONL at all is an error, because <see cref="DurableStoreFormat.Jsonl"/>
+    /// is an explicit format choice, not a guess.
+    /// </summary>
+    public override void Open(DurableStoreOptions options)
+    {
+        _path = options.Path;
+        if (_path is null)
+        {
+            return;
+        }
+
+        if (!File.Exists(_path))
+        {
+            var directory = Path.GetDirectoryName(_path);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            return;
+        }
+
+        Replay(_path);
+    }
+
+    /// <summary>Appends the records of the committed transaction to the file, flushed.</summary>
+    protected override void Persist()
+    {
+        if (_path is null)
+        {
+            return;
+        }
+
+        var records = TakePendingRecords();
+        if (records.Count == 0)
+        {
+            return;
+        }
+
+        var directory = Path.GetDirectoryName(_path);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        using var stream = new FileStream(_path, FileMode.Append, FileAccess.Write, FileShare.Read);
+        using var writer = new StreamWriter(stream, new UTF8Encoding(false));
+        foreach (var record in records)
+        {
+            writer.WriteLine(JsonSerializer.Serialize(record, DurableJson.Options));
+        }
+
+        writer.Flush();
+        stream.Flush(true);
+    }
+
+    /// <summary>
+    /// Reads the file line by line, replaying every complete record. A line is
+    /// complete when it is <c>\n</c>-terminated and parses as a JSON object; the
+    /// torn tail is discarded and the file is truncated back to the last complete
+    /// record boundary at open. A file that does not parse as JSONL at all is not
+    /// a torn tail and raises a clear error.
+    /// </summary>
+    private void Replay(string path)
+    {
+        long? truncateAfter = null;
+        using (var reader = new StreamReader(path, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: false))
+        {
+            var offset = 0L;
+            while (reader.ReadLine() is { } line)
+            {
+                // ReadLine consumes the terminator, so the byte offset of the next
+                // line is the offset after this line's text plus its newline.
+                var lineEnd = offset + Encoding.UTF8.GetByteCount(line) + 1;
+                JsonlRecord? record = null;
+                try
+                {
+                    record = JsonSerializer.Deserialize<JsonlRecord>(line, DurableJson.Options);
+                }
+                catch (JsonException)
+                {
+                    // Deserialization throws on unparseable content; treat that the
+                    // same as a null result so the guard below can classify it.
+                    record = null;
+                }
+
+                if (record is not { } parsed || parsed.Type is null)
+                {
+                    // A line that does not parse is a torn tail only when it is the
+                    // final one; anything earlier means the file is not JSONL.
+                    if (!reader.EndOfStream)
+                    {
+                        throw new InvalidDataException(
+                            $"The file '{path}' is not a valid JSONL durable store: line at byte offset {offset} does not parse as a JSONL record.");
+                    }
+
+                    break;
+                }
+
+                Apply(record);
+                offset = lineEnd;
+                truncateAfter = offset;
+            }
+        }
+
+        if (truncateAfter is { } boundary && new FileInfo(path).Length != boundary)
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Write);
+            stream.SetLength(boundary);
+        }
+
+        SeedCommittedFromReplay();
+    }
+
+    /// <summary>Applies one replayed record to the in-memory state.</summary>
+    private void Apply(JsonlRecord record)
+    {
+        _sequence = Math.Max(_sequence, record.Seq);
+        switch (record.Type)
+        {
+            case "conversation":
+                AddConversation(record.Payload.Deserialize<ConversationRecord>(DurableJson.Options)!);
+                break;
+            case "entry":
+                var conversationId = record.Payload.GetProperty("conversationId").GetString()!;
+                var entryId = record.Payload.GetProperty("entryId").GetString()!;
+                if (!_entries.TryGetValue(conversationId, out var entries))
+                {
+                    entries = [];
+                    _entries[conversationId] = entries;
+                }
+
+                entries.Add(entryId);
+                break;
+            case "entry-record":
+                var entry = record.Payload.Deserialize<EntryRecord>(DurableJson.Options)!;
+                _entryRecords[entry.Id] = entry;
+                _sequence = Math.Max(_sequence, entry.Sequence);
+                break;
+            case "document":
+                EnsureDocument(
+                    record.Payload.GetProperty("kind").GetString()!,
+                    record.Payload.GetProperty("ownerId").GetString()!,
+                    record.Payload.GetProperty("fork").Deserialize<ForkPolicy>(DurableJson.Options));
+                break;
+            case "document-version":
+                // A version's write sequence is the record's own envelope sequence:
+                // RecordDocumentVersion drew it from NextSequence when it was written.
+                var state = EnsureDocument(
+                    record.Payload.GetProperty("kind").GetString()!,
+                    record.Payload.GetProperty("ownerId").GetString()!,
+                    record.Payload.GetProperty("fork").Deserialize<ForkPolicy>(DurableJson.Options));
+                state.Versions.Add(new DocumentVersion(
+                    record.Payload.GetProperty("entryId").GetString()!,
+                    record.Payload.GetProperty("value").Clone(),
+                    record.Seq));
+                break;
+            case "task":
+                AddTask(record.Payload.Deserialize<DurableTaskRecord>(DurableJson.Options)!);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Seeds the committed baseline from the replayed file state, so the first
+    /// commit after a reopen diffs against what is already persisted instead of
+    /// re-emitting every existing record as a duplicate append.
+    /// </summary>
+    private void SeedCommittedFromReplay()
+    {
+        RememberCommitted();
+    }
+
+    /// <summary>
+    /// Captures the records this transaction wrote, in write order. The base class
+    /// wrote straight into its collections, so the writes are read back off the
+    /// state and diffed against what the last commit already persisted.
+    /// </summary>
+    private List<JsonlRecord> TakePendingRecords()
+    {
+        var records = new List<JsonlRecord>();
+        foreach (var conversation in Conversations)
+        {
+            if (!_emittedConversations.Add(conversation.Id))
+            {
+                continue;
+            }
+
+            records.Add(JsonlRecord.For("conversation", Sequence, conversation));
+        }
+
+        foreach (var (conversationId, entryIds) in _entries)
+        {
+            var knownCount = _committedEntries.GetValueOrDefault(conversationId)?.Count ?? 0;
+            foreach (var entryId in entryIds.Skip(knownCount))
+            {
+                records.Add(JsonlRecord.For("entry", Sequence, new JsonlEntryRef(conversationId, entryId)));
+                if (_entryRecords.TryGetValue(entryId, out var record))
+                {
+                    records.Add(JsonlRecord.For("entry-record", Sequence, record));
+                }
+            }
+        }
+
+        foreach (var document in Documents)
+        {
+            var key = DocumentKey(document.Kind, document.OwnerId);
+            if (_emittedDocuments.Add(key))
+            {
+                records.Add(JsonlRecord.For("document", Sequence, new JsonlDocumentRef(
+                    document.Kind, document.OwnerId, document.Fork)));
+            }
+
+            var committed = _committedVersions.GetValueOrDefault(key);
+            foreach (var version in document.Versions.Skip(committed))
+            {
+                records.Add(JsonlRecord.For("document-version", Sequence, new JsonlDocumentVersion(
+                    document.Kind, document.OwnerId, document.Fork, version.EntryId, version.Value.Clone())));
+            }
+        }
+
+        foreach (var task in Tasks)
+        {
+            var current = JsonSerializer.Serialize(task, DurableJson.Options);
+            if (!_emittedTasks.Add(task.Id) && _committedTasks.GetValueOrDefault(task.Id) == current)
+            {
+                continue;
+            }
+
+            _committedTasks[task.Id] = current;
+            records.Add(JsonlRecord.For("task", Sequence, task));
+        }
+
+        RememberCommitted();
+        return records;
+    }
+
+    /// <summary>Records the state the next commit diffs against.</summary>
+    private void RememberCommitted()
+    {
+        _emittedConversations.Clear();
+        _emittedConversations.UnionWith(Conversations.Select(c => c.Id));
+        _emittedTasks.Clear();
+        _emittedTasks.UnionWith(Tasks.Select(t => t.Id));
+        _committedTasks = Tasks.ToDictionary(
+            task => task.Id,
+            task => JsonSerializer.Serialize(task, DurableJson.Options));
+        _committedEntries = _entries.ToDictionary(pair => pair.Key, pair => pair.Value.ToList());
+        _committedVersions = Documents.ToDictionary(
+            document => DocumentKey(document.Kind, document.OwnerId),
+            document => document.Versions.Count);
+    }
+
+    private readonly HashSet<string> _emittedConversations = [];
+    private readonly HashSet<string> _emittedTasks = [];
+    private readonly HashSet<string> _emittedDocuments = [];
+    private Dictionary<string, List<string>> _committedEntries = [];
+    private Dictionary<string, int> _committedVersions = [];
+    private Dictionary<string, string> _committedTasks = [];
+
+    /// <summary>One JSONL record: the envelope plus its payload.</summary>
+    private sealed record JsonlRecord(long V, long Seq, string Type, JsonElement Payload)
+    {
+        public static JsonlRecord For(string type, long seq, object payload) => new(
+            1, seq, type, DurableJson.ToElement(payload));
+    }
+
+    private sealed record JsonlEntryRef(string ConversationId, string EntryId);
+
+    private sealed record JsonlDocumentRef(string Kind, string OwnerId, ForkPolicy Fork);
+
+    private sealed record JsonlDocumentVersion(
+        string Kind, string OwnerId, ForkPolicy Fork, string EntryId, JsonElement Value);
+}
+
 /// <summary>The durable store: documents, tasks, conversations, and entries, persisted atomically.</summary>
 public sealed class DurableStore
 {
@@ -960,8 +1256,7 @@ public sealed class DurableStore
         {
             DurableStoreFormat.InMemory => new InMemoryStoreProvider(),
             DurableStoreFormat.LegacyJson => new LegacyJsonStoreProvider(),
-            DurableStoreFormat.Jsonl => throw new NotSupportedException(
-                "The JSONL backend is not available yet. Use DurableStoreFormat.LegacyJson or DurableStoreFormat.InMemory."),
+            DurableStoreFormat.Jsonl => new JsonlStoreProvider(),
             // Auto does not sniff yet: a store with a path keeps the single-file
             // format, and a store without one stays in memory.
             _ => options.Path is null ? new InMemoryStoreProvider() : new LegacyJsonStoreProvider(),
