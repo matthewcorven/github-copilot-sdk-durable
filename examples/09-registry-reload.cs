@@ -25,12 +25,16 @@ var registry = new ExtensionRegistry();
 // currently reads.
 static Extension LoadFiles(string grepDescription)
 {
+    // "read" and "grep" are built-in tool names, so these have to say they mean to
+    // replace them. Without the override the built-in silently wins.
     var read = CopilotTool.DefineTool(
         ([Description("File path")] string path) => $"contents of {path}",
+        toolOptions: new CopilotToolOptions { OverridesBuiltInTool = true },
         factoryOptions: new AIFunctionFactoryOptions { Name = "read", Description = "Read a file" });
 
     var grep = CopilotTool.DefineTool(
         ([Description("Pattern")] string pattern) => $"matches for {pattern}",
+        toolOptions: new CopilotToolOptions { OverridesBuiltInTool = true },
         factoryOptions: new AIFunctionFactoryOptions { Name = "grep", Description = grepDescription });
 
     return new Extension("files", tools: [read, grep]);
@@ -57,6 +61,7 @@ var audit = new Extension("audit", tools:
 [
     CopilotTool.DefineTool(
         ([Description("File path")] string path) => $"audited: {path}",
+        toolOptions: new CopilotToolOptions { OverridesBuiltInTool = true },
         factoryOptions: new AIFunctionFactoryOptions { Name = "read", Description = "Read a file (audited)" }),
 ]);
 registry.Install(audit);

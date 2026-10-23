@@ -42,6 +42,9 @@ var readFile = CopilotTool.DefineTool(
         var full = Path.Combine(worktree, path);
         return File.Exists(full) ? File.ReadAllText(full) : $"(no such file: {path})";
     },
+    // "read_file" is a built-in tool name, so this one has to say it means to
+    // replace it. Without the override the built-in silently wins.
+    toolOptions: new CopilotToolOptions { OverridesBuiltInTool = true },
     factoryOptions: new AIFunctionFactoryOptions { Name = "read_file", Description = "Read a file" });
 
 // The role, and the review loop: every answer that still has findings gets a second pass.

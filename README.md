@@ -289,8 +289,27 @@ return values. To return richer objects, set
 **Give nullable parameters a default value.** A `string?` parameter is still marked
 `required` in the generated schema unless it has a default (`string name = ""`).
 
-**Avoid built-in tool names.** `read`, `edit`, and `bash` collide with the SDK's built-ins.
-Either rename the tool or set `CopilotToolOptions.OverridesBuiltInTool = true`.
+**Avoid built-in tool names — or override them explicitly.** The Copilot CLI ships built-in
+tools, and a custom tool with the same name is **silently shadowed**: the session starts
+fine, the model calls the tool, and the *built-in* answers instead of yours. The names
+that collide include `read`, `read_file`, `edit`, `grep`, `view`, `bash`, and `glob`.
+
+Two ways out:
+
+```csharp
+// 1. Rename the tool. This is the simplest fix.
+factoryOptions: new AIFunctionFactoryOptions { Name = "read_file", Description = "Read a file" };
+
+// 2. Say you mean to replace the built-in.
+toolOptions: new CopilotToolOptions { OverridesBuiltInTool = true },
+factoryOptions: new AIFunctionFactoryOptions { Name = "read_file", Description = "Read a file" });
+```
+
+Without the override, the symptom is a tool result that never mentions your code — for
+example `Error: No file path provided` from a tool that should have returned the file's
+contents. Examples [05](examples/05-harness.cs), [09](examples/09-registry-reload.cs),
+[16](examples/16-coding-tools.cs), [26](examples/26-plan-mode.cs), and
+[27](examples/27-reviewer.cs) use the override.
 
 **`Console.WriteLine("a:", x)` drops the `x`.** That is the format-string overload. Use
 interpolation.

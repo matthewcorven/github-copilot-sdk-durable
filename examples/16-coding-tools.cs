@@ -32,6 +32,9 @@ var read = CopilotTool.DefineTool(
         File.Exists(Path.Combine(workspace, path))
             ? File.ReadAllText(Path.Combine(workspace, path))
             : $"error: {path} not found",
+    // "read_file" is a built-in tool name, so this one has to say it means to
+    // replace it. Without the override the built-in silently wins.
+    toolOptions: new CopilotToolOptions { OverridesBuiltInTool = true },
     factoryOptions: new AIFunctionFactoryOptions { Name = "read_file", Description = "Read a file" });
 
 var edit = CopilotTool.DefineTool(

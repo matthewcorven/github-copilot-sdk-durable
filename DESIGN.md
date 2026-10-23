@@ -220,7 +220,9 @@ These cost the most time to discover and are all exercised by the examples:
   and records throw `NotSupportedException` under the SDK's source-generated serializer.
 - **Nullable reference parameters** are still `required` in the generated schema unless they
   have a default value.
-- **Built-in tool names** (`read`, `edit`, `bash`) collide; rename the tool or set
+- **Built-in tool names** (`read`, `read_file`, `edit`, `grep`, `view`, `bash`, `glob`) silently
+  shadow a custom tool of the same name: the session starts, the model calls the tool, and
+  the built-in answers instead. Rename the tool, or set
   `CopilotToolOptions.OverridesBuiltInTool = true`.
 - **`ToolInvocation`** is bound automatically into any tool that declares it, and is excluded
   from the schema. It carries `SessionId`, which is how a shared tool finds the conversation

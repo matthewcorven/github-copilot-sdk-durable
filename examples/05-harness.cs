@@ -27,6 +27,8 @@ var registry = new ExtensionRegistry();
 // saved; it is this process's code.
 var read = CopilotTool.DefineTool(
     ([Description("File path")] string path) => $"contents of {path}",
+    // "read" is a built-in tool name, so this one has to say it means to replace it.
+    toolOptions: new CopilotToolOptions { OverridesBuiltInTool = true },
     factoryOptions: new AIFunctionFactoryOptions
     {
         Name = "read",
