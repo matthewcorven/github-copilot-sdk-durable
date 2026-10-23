@@ -287,6 +287,14 @@ docs/
   DESIGN.md               original architecture design specification
 ```
 
+## Acknowledgements & Attribution
+
+This project is deeply inspired by the pioneering architectural work of the **Pi Durable** team at Earendil Works ([`@earendil-works/durable`](https://github.com/earendil-works/pi/tree/main/packages/durable)). 
+
+The concepts of a single-mutation durable line, versioned document history with fork policies, checkpointed task state machines with memo idempotency, dynamic extension registries, and dual-plane separation between LLM context and persistent domain state were originated by Pi Durable. This repository demonstrates how those exact principles can be faithfully mapped onto the GitHub Copilot SDK in modern .NET.
+
+---
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
