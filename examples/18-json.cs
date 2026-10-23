@@ -1,0 +1,60 @@
+// 18 — JSON mode.
+//
+// Stream one prompt's run as JSON lines, like `pi --mode json`.
+//
+// Each line is one session event, serialized as JSON. The first line is the session's
+// current state; later lines are only what changes after that.
+//
+// Mirrors the Pi Durable example `18-json.ts`.
+
+#:package GitHub.Copilot.SDK@1.0.26
+#:property TargetFramework=net10.0
+#:property NoWarn=GHCP001
+#:include ../lib/Durable.cs
+
+using System.Text.Json;
+using Durable;
+using GitHub.Copilot;
+
+var prompt = args.Length > 0 ? args[0] : "What is in this directory?";
+
+var store = new DurableStore();
+var registry = new ExtensionRegistry();
+
+registry.Install(new Extension(
+    "coding",
+    sections: [new PromptSection("preamble", _ => Task.FromResult<string?>("You are a concise coding assistant."), tag: false)]));
+
+await using var harness = await DurableHarness.OpenAsync(store, registry);
+var root = await harness.RootAsync(new AgentChoices { Extensions = ["coding"] });
+
+// Attach before submitting, so the stream covers the whole run.
+var print = (object? value) => Console.WriteLine(JsonSerializer.Serialize(value, value!.GetType(), DurableJson.Options));
+
+// The first line is the current state: the snapshot a late joiner would see.
+var snapshot = await root.ContextAsync();
+print(new { type = "snapshot", events = snapshot.Count });
+
+// Later lines are only what changes after that.
+using var subscription = root.Session.On<SessionEvent>(evt =>
+{
+    print(new
+    {
+        type = "event",
+        @event = evt.Type,
+        id = evt.Id,
+        agentId = evt.AgentId,
+        data = evt switch
+        {
+            UserMessageEvent user => user.Data.Content,
+            AssistantMessageEvent assistant => assistant.Data.Content,
+            ToolExecutionStartEvent tool => tool.Data.ToolName,
+            _ => null,
+        },
+    });
+});
+
+await root.SubmitAsync(prompt);
+
+// Let the last batch reach the listener before stopping.
+await Task.Delay(100);

@@ -1,0 +1,2009 @@
+// Durable support layer for GitHub Copilot SDK agents.
+//
+// The GitHub Copilot SDK already provides a durable conversation: sessions persist to
+// COPILOT_HOME/session-state/{id}/, can be resumed, forked, and streamed, and the runtime
+// persists tool calls and results.
+//
+// Pi Durable adds a layer on top of that: typed documents with rewindable history and fork
+// policies, checkpointed task state machines with idempotency memos, an extension registry
+// with reload semantics, and a submission inbox.
+//
+// This file provides exactly that missing layer. It is shared by every example in this
+// repository via `#:include`.
+
+using System.Collections.Concurrent;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+#pragma warning disable IL2026, IL3050 // Durable state is reflection-serialized by design.
+using System.Text.Json.Serialization.Metadata;
+using GitHub.Copilot;
+using Microsoft.Extensions.AI;
+
+namespace Durable;
+
+/// <summary>How a document behaves when a conversation is forked.</summary>
+public enum ForkPolicy
+{
+    /// <summary>The fork starts with the value the document had at the fork entry.</summary>
+    AsOf,
+
+    /// <summary>The fork starts with the parent's current value.</summary>
+    Current,
+
+    /// <summary>The fork starts with the document's initial value.</summary>
+    Initial,
+}
+
+/// <summary>How a document's history is retained.</summary>
+public enum DocumentHistory
+{
+    /// <summary>Only the latest value is retained.</summary>
+    Latest,
+
+    /// <summary>Every committed value is retained and can be read as of a past entry.</summary>
+    Rewindable,
+}
+
+/// <summary>Defines a typed document: durable JSON state attached to a conversation.</summary>
+public sealed class DocumentDefinition<T>
+{
+    /// <summary>Creates a document definition.</summary>
+    public DocumentDefinition(
+        string kind,
+        DocumentHistory history = DocumentHistory.Rewindable,
+        ForkPolicy fork = ForkPolicy.AsOf,
+        Func<T>? initial = null)
+    {
+        Kind = kind;
+        History = history;
+        Fork = fork;
+        Initial = initial ?? (() => default!);
+    }
+
+    /// <summary>The persisted document kind, e.g. <c>example.notes</c>.</summary>
+    public string Kind { get; }
+
+    /// <summary>How the document's history is retained.</summary>
+    public DocumentHistory History { get; }
+
+    /// <summary>What a forked conversation starts with.</summary>
+    public ForkPolicy Fork { get; }
+
+    /// <summary>The value a document starts with when first written.</summary>
+    public Func<T> Initial { get; }
+}
+
+/// <summary>One committed value of a document, with the entry that produced it.</summary>
+public sealed record DocumentVersion(string EntryId, JsonElement Value, long Sequence);
+
+/// <summary>One immutable transcript entry: a kind, an optional payload, and the conversation it belongs to.</summary>
+public sealed record EntryRecord(string Id, string ConversationId, string Kind, JsonElement? Data, long Sequence);
+
+/// <summary>The durable state of one document.</summary>
+public sealed class DocumentState
+{
+    /// <summary>Creates an empty document state.</summary>
+    public DocumentState(string kind, string ownerId, ForkPolicy fork, JsonElement? initial = null)
+    {
+        Kind = kind;
+        OwnerId = ownerId;
+        Fork = fork;
+        Initial = initial;
+    }
+
+    /// <summary>The document kind.</summary>
+    public string Kind { get; }
+
+    /// <summary>The conversation the document belongs to.</summary>
+    public string OwnerId { get; }
+
+    /// <summary>The fork policy captured when the document was first written.</summary>
+    public ForkPolicy Fork { get; }
+
+    /// <summary>The document's initial value, used when a fork starts from the initial state.</summary>
+    public JsonElement? Initial { get; }
+
+    /// <summary>The committed versions, oldest first.</summary>
+    public List<DocumentVersion> Versions { get; } = [];
+
+    /// <summary>The latest committed value, or <see langword="null"/> if never written.</summary>
+    public JsonElement? Latest => Versions.Count == 0 ? null : Versions[^1].Value;
+
+    /// <summary>The value committed in the same transaction as the given entry.</summary>
+    public JsonElement? AsOf(string entryId)
+    {
+        for (var i = Versions.Count - 1; i >= 0; i--)
+        {
+            if (Versions[i].EntryId == entryId)
+            {
+                return Versions[i].Value;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The value as of the given entry: the last version committed at or before that entry.
+    /// A version committed in the same transaction as the entry counts as "at" it.
+    /// </summary>
+    public JsonElement? AsOfOrBefore(string entryId, Func<string, long> sequenceOf)
+    {
+        var boundary = sequenceOf(entryId);
+        for (var i = Versions.Count - 1; i >= 0; i--)
+        {
+            var version = Versions[i];
+            if (version.EntryId == entryId)
+            {
+                return version.Value;
+            }
+
+            if (sequenceOf(version.EntryId) <= boundary)
+            {
+                return version.Value;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The value as of the given entry: the value committed with it, or the one before it.</summary>
+    public JsonElement? AsOfOrBefore(string entryId)
+    {
+        for (var i = Versions.Count - 1; i >= 0; i--)
+        {
+            if (Versions[i].EntryId == entryId)
+            {
+                return Versions[i].Value;
+            }
+        }
+
+        return Versions.Count == 0 ? null : Versions[0].Value;
+    }
+}
+
+/// <summary>The lifecycle status of a durable task.</summary>
+public enum TaskStatus
+{
+    /// <summary>Created but not yet started.</summary>
+    Pending,
+
+    /// <summary>Currently executing a phase.</summary>
+    Running,
+
+    /// <summary>Waiting on child tasks.</summary>
+    Waiting,
+
+    /// <summary>Sleeping until a durable deadline.</summary>
+    Sleeping,
+
+    /// <summary>Finished, successfully or not.</summary>
+    Terminal,
+}
+
+/// <summary>The durable record of one task.</summary>
+public sealed class DurableTaskRecord
+{
+    /// <summary>Creates a task record.</summary>
+    public DurableTaskRecord(string id, string name, JsonElement input, JsonElement checkpoint)
+    {
+        Id = id;
+        Name = name;
+        Input = input;
+        Checkpoint = checkpoint;
+        Status = TaskStatus.Pending;
+    }
+
+    /// <summary>The task identifier.</summary>
+    public string Id { get; set; }
+
+    /// <summary>The task definition name.</summary>
+    public string Name { get; set; }
+
+    /// <summary>The task's immutable input.</summary>
+    public JsonElement Input { get; set; }
+
+    /// <summary>The last saved checkpoint.</summary>
+    public JsonElement Checkpoint { get; set; }
+
+    /// <summary>The current lifecycle status.</summary>
+    public TaskStatus Status { get; set; }
+
+    /// <summary>The terminal outcome, once the task finishes.</summary>
+    public JsonElement? Outcome { get; set; }
+
+    /// <summary>How many times the task has been restarted after an interruption.</summary>
+    public int Restarts { get; set; }
+
+    /// <summary>The owning conversation, when the task is conversation-owned.</summary>
+    public string? OwnerConversationId { get; set; }
+
+    /// <summary>The owning task, when the task is task-owned.</summary>
+    public string? OwnerTaskId { get; set; }
+
+    /// <summary>Whether the task is background work that does not block its owner.</summary>
+    public bool Background { get; set; }
+
+    /// <summary>The child tasks this task waits on.</summary>
+    public List<string> WaitingOn { get; set; } = [];
+
+    /// <summary>Idempotency memos, so a rerun after a crash does not repeat an effect.</summary>
+    public Dictionary<string, JsonElement> Memos { get; set; } = [];
+}
+
+/// <summary>The result of a durable task.</summary>
+public sealed record TaskOutcome(string Status, JsonElement? Result = null, string? Error = null)
+{
+    /// <summary>Whether the task completed successfully.</summary>
+    public bool IsCompleted => Status == "completed";
+
+    /// <summary>Whether the task was aborted.</summary>
+    public bool IsAborted => Status == "aborted";
+
+    /// <summary>Whether the task failed.</summary>
+    public bool IsFailed => Status == "failed";
+}
+
+/// <summary>A commit that advances a task's durable state.</summary>
+public sealed class TaskCommit
+{
+    private TaskCommit(TaskStatus status, JsonElement? checkpoint, TaskOutcome? outcome)
+    {
+        Status = status;
+        Checkpoint = checkpoint;
+        Outcome = outcome;
+    }
+
+    /// <summary>The status to move to.</summary>
+    public TaskStatus Status { get; }
+
+    /// <summary>The next checkpoint, when the task continues.</summary>
+    public JsonElement? Checkpoint { get; }
+
+    /// <summary>The terminal outcome, when the task finishes.</summary>
+    public TaskOutcome? Outcome { get; }
+
+    /// <summary>The child tasks this commit waits on.</summary>
+    public IReadOnlyList<string> WaitingOn { get; init; } = [];
+
+    /// <summary>Creates a commit that continues the task with a new checkpoint.</summary>
+    public static TaskCommit Running(JsonElement checkpoint) => new(TaskStatus.Running, checkpoint, null);
+
+    /// <summary>Creates a commit that continues the task, waiting on child tasks.</summary>
+    public static TaskCommit Waiting(JsonElement checkpoint, IEnumerable<string> on) =>
+        new(TaskStatus.Waiting, checkpoint, null) { WaitingOn = on.ToList() };
+
+    /// <summary>Creates a commit that finishes the task successfully.</summary>
+    public static TaskCommit Completed(JsonElement result) =>
+        new(TaskStatus.Terminal, null, new TaskOutcome("completed", result));
+
+    /// <summary>Creates a commit that finishes the task with a failure.</summary>
+    public static TaskCommit Failed(string error) =>
+        new(TaskStatus.Terminal, null, new TaskOutcome("failed", Error: error));
+
+    /// <summary>Creates a commit that finishes the task as aborted.</summary>
+    public static TaskCommit Aborted() =>
+        new(TaskStatus.Terminal, null, new TaskOutcome("aborted"));
+}
+
+/// <summary>The context a task phase runs with.</summary>
+public sealed class TaskRuntime
+{
+    private readonly DurableStore _store;
+
+    /// <summary>Creates a task runtime.</summary>
+    public TaskRuntime(
+        DurableStore store,
+        DurableTaskRecord task,
+        DurableTaskDefinition definition,
+        CancellationToken cancellationToken = default)
+    {
+        _store = store;
+        Task = task;
+        Definition = definition;
+        CancellationToken = cancellationToken;
+    }
+
+    /// <summary>The task record being executed.</summary>
+    public DurableTaskRecord Task { get; }
+
+    /// <summary>The task definition being executed.</summary>
+    public DurableTaskDefinition Definition { get; }
+
+    /// <summary>
+    /// Cancelled when the task should stop. A task that is cancelled mid-phase leaves
+    /// its last checkpoint in place, so a later run continues from there.
+    /// </summary>
+    public CancellationToken CancellationToken { get; }
+
+    /// <summary>The current wall-clock time.</summary>
+    public DateTimeOffset Now => DateTimeOffset.UtcNow;
+
+    /// <summary>Saves a checkpoint, or finishes the task with an outcome.</summary>
+    public Task<TaskCommit> CommitAsync(Func<TaskCommit> commit) => _store.CommitTaskAsync(Task.Id, commit);
+
+    /// <summary>
+    /// Saves a checkpoint, or finishes the task with an outcome. The callback may
+    /// create child tasks: they are written in the same transaction as the checkpoint
+    /// that records them.
+    /// </summary>
+    public Task<TaskCommit> CommitAsync(Func<Transaction, Task<TaskCommit>> commit) =>
+        _store.CommitTaskAsync(Task.Id, commit);
+
+    /// <summary>
+    /// Creates a child task owned by this task. The child is written in the same
+    /// transaction as the checkpoint that records it, so a crash leaves either both
+    /// the child and the checkpoint, or neither.
+    /// </summary>
+    public DurableTaskRecord CreateChildTask(Transaction tx, DurableTaskDefinition definition, JsonElement input) =>
+        tx.CreateTask(definition, input, ownerTaskId: Task.Id);
+
+    /// <summary>Schedules a task to run.</summary>
+    public void ScheduleTask(string taskId, CancellationToken cancellationToken = default) =>
+        _store.ScheduleTask(taskId, cancellationToken);
+
+    /// <summary>Reads an idempotency memo, or writes one when <paramref name="value"/> is supplied.</summary>
+    public Task<JsonElement?> MemoAsync(string key, JsonElement? value = null) =>
+        _store.MemoAsync(Task.Id, key, value);
+
+    /// <summary>Sleeps until a durable deadline, saving the wake time in the checkpoint.</summary>
+    public Task<TaskCommit> SleepUntilAsync(DateTimeOffset deadline, Func<TaskCommit> nextCheckpoint) =>
+        _store.SleepUntilAsync(Task.Id, deadline, nextCheckpoint, CancellationToken);
+
+    /// <summary>Reads the outcomes of child tasks.</summary>
+    public Task<IReadOnlyList<TaskOutcome>> OutcomesAsync(IEnumerable<string> taskIds) =>
+        _store.OutcomesAsync(taskIds);
+}
+
+/// <summary>The definition of a durable task: a checkpointed state machine.</summary>
+public sealed class DurableTaskDefinition
+{
+    /// <summary>Creates a task definition.</summary>
+    public DurableTaskDefinition(
+        string name,
+        Func<JsonElement> initial,
+        IReadOnlyDictionary<string, Func<TaskRuntime, Task<TaskCommit>>> phases,
+        Func<TaskRuntime, Task<TaskCommit>> abort)
+    {
+        Name = name;
+        Initial = initial;
+        Phases = phases;
+        Abort = abort;
+    }
+
+    /// <summary>The task name, used to find the definition in the registry.</summary>
+    public string Name { get; }
+
+    /// <summary>The starting checkpoint.</summary>
+    public Func<JsonElement> Initial { get; }
+
+    /// <summary>One handler per phase.</summary>
+    public IReadOnlyDictionary<string, Func<TaskRuntime, Task<TaskCommit>>> Phases { get; }
+
+    /// <summary>Runs instead of the phases after an abort.</summary>
+    public Func<TaskRuntime, Task<TaskCommit>> Abort { get; }
+}
+
+/// <summary>Builds durable task definitions with typed input, checkpoint, and outcome.</summary>
+public static class DurableTask
+{
+    /// <summary>Defines a single-phase task whose checkpoint and outcome are typed.</summary>
+    public static DurableTaskDefinition Define<TInput, TCheckpoint, TResult>(
+        string name,
+        Func<TCheckpoint> initial,
+        Func<TInput, TCheckpoint, TaskRuntime, Task<TaskCommit>> phase,
+        Func<TInput, TCheckpoint, TaskRuntime, Task<TaskCommit>>? abort = null)
+    {
+        var phases = new Dictionary<string, Func<TaskRuntime, Task<TaskCommit>>>
+        {
+            ["run"] = runtime => phase(
+                runtime.Task.Input.Deserialize<TInput>(DurableJson.Options)!,
+                runtime.Task.Checkpoint.Deserialize<TCheckpoint>(DurableJson.Options)!,
+                runtime),
+        };
+
+        return new DurableTaskDefinition(
+            name,
+            () => DurableJson.ToElement(initial()),
+            phases,
+            abort is null
+                ? _ => Task.FromResult(TaskCommit.Aborted())
+                : runtime => abort(
+                    runtime.Task.Input.Deserialize<TInput>(DurableJson.Options)!,
+                    runtime.Task.Checkpoint.Deserialize<TCheckpoint>(DurableJson.Options)!,
+                    runtime));
+    }
+
+    /// <summary>Defines a multi-phase task from a phase-name to handler map.</summary>
+    public static DurableTaskDefinition DefinePhases<TInput, TCheckpoint>(
+        string name,
+        Func<TCheckpoint> initial,
+        IReadOnlyDictionary<string, Func<TInput, TCheckpoint, TaskRuntime, Task<TaskCommit>>> phases,
+        Func<TInput, TCheckpoint, TaskRuntime, Task<TaskCommit>>? abort = null)
+    {
+        var handlers = phases.ToDictionary(
+            pair => pair.Key,
+            pair => (Func<TaskRuntime, Task<TaskCommit>>)(runtime => pair.Value(
+                runtime.Task.Input.Deserialize<TInput>(DurableJson.Options)!,
+                runtime.Task.Checkpoint.Deserialize<TCheckpoint>(DurableJson.Options)!,
+                runtime)));
+
+        return new DurableTaskDefinition(
+            name,
+            () => DurableJson.ToElement(initial()),
+            handlers,
+            abort is null
+                ? _ => Task.FromResult(TaskCommit.Aborted())
+                : runtime => abort(
+                    runtime.Task.Input.Deserialize<TInput>(DurableJson.Options)!,
+                    runtime.Task.Checkpoint.Deserialize<TCheckpoint>(DurableJson.Options)!,
+                    runtime));
+    }
+}
+
+/// <summary>JSON helpers shared by the durable layer.</summary>
+public static class DurableJson
+{
+    /// <summary>The serializer options used for durable state.</summary>
+    public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
+    {
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    /// <summary>Serializes a value to a <see cref="JsonElement"/>.</summary>
+    public static JsonElement ToElement<T>(T value) =>
+        JsonSerializer.SerializeToElement(value, Options);
+
+    /// <summary>Deserializes a <see cref="JsonElement"/> to a value.</summary>
+    public static T? FromElement<T>(JsonElement element) => element.Deserialize<T>(Options);
+}
+
+/// <summary>The record of one conversation.</summary>
+public sealed class ConversationRecord
+{
+    /// <summary>Creates a conversation record.</summary>
+    public ConversationRecord(string id, string? parentConversationId = null, string? forkEntryId = null)
+    {
+        Id = id;
+        ParentConversationId = parentConversationId;
+        ForkEntryId = forkEntryId;
+    }
+
+    /// <summary>The conversation identifier.</summary>
+    public string Id { get; set; }
+
+    /// <summary>The conversation this one was forked from.</summary>
+    public string? ParentConversationId { get; set; }
+
+    /// <summary>The entry the fork was taken at.</summary>
+    public string? ForkEntryId { get; set; }
+
+    /// <summary>The owning task, when the conversation is task-owned.</summary>
+    public string? OwnerTaskId { get; set; }
+
+    /// <summary>The owning conversation, when the conversation is conversation-owned.</summary>
+    public string? OwnerConversationId { get; set; }
+}
+
+/// <summary>The durable store: documents, tasks, conversations, and entries, persisted atomically.</summary>
+public sealed class DurableStore
+{
+    private readonly string? _path;
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly Dictionary<string, DocumentState> _documents = [];
+    private readonly Dictionary<string, DurableTaskRecord> _tasks = [];
+    private readonly Dictionary<string, ConversationRecord> _conversations = [];
+    private readonly Dictionary<string, List<string>> _entries = [];
+    private readonly Dictionary<string, EntryRecord> _entryRecords = [];
+    private long _sequence;
+
+    /// <summary>Creates a store. When <paramref name="path"/> is given, state is persisted to that file.</summary>
+    public DurableStore(string? path = null)
+    {
+        _path = path;
+        if (path is not null && File.Exists(path))
+        {
+            Load();
+        }
+    }
+
+    /// <summary>The conversations known to this store.</summary>
+    public IReadOnlyCollection<ConversationRecord> Conversations => _conversations.Values;
+
+    /// <summary>The tasks known to this store.</summary>
+    public IReadOnlyCollection<DurableTaskRecord> Tasks => _tasks.Values;
+
+    /// <summary>The documents known to this store.</summary>
+    public IReadOnlyCollection<DocumentState> Documents => _documents.Values;
+
+    /// <summary>Runs a transaction. Everything written inside is saved together, or discarded if it throws.</summary>
+    public async Task<T> CommitAsync<T>(Func<Transaction, Task<T>> body)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            var transaction = new Transaction(this);
+            var result = await body(transaction);
+            Persist();
+            return result;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>Runs a transaction that produces no value.</summary>
+    public Task CommitAsync(Func<Transaction, Task> body) =>
+        CommitAsync<object?>(async tx =>
+        {
+            await body(tx);
+            return null;
+        });
+
+    /// <summary>Reads a document's state.</summary>
+    public DocumentState? Document(string kind, string ownerId) =>
+        _documents.TryGetValue(DocumentKey(kind, ownerId), out var state) ? state : null;
+
+    /// <summary>Reads a task record.</summary>
+    public DurableTaskRecord? Task(string id) => _tasks.GetValueOrDefault(id);
+
+    /// <summary>Reads a conversation record.</summary>
+    public ConversationRecord? Conversation(string id) => _conversations.GetValueOrDefault(id);
+
+    /// <summary>Reads the entry ids of a conversation, oldest first.</summary>
+    public IReadOnlyList<string> Entries(string conversationId) =>
+        _entries.TryGetValue(conversationId, out var entries) ? entries : [];
+
+    /// <summary>Advances a task's durable state.</summary>
+    /// <summary>
+    /// Advances a task's durable state, letting the callback write other records in
+    /// the same transaction. Everything the callback writes is saved together with the
+    /// checkpoint, or discarded if the callback throws.
+    /// </summary>
+    internal async Task<TaskCommit> CommitTaskAsync(string taskId, Func<Transaction, Task<TaskCommit>> commit)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            if (!_tasks.TryGetValue(taskId, out var task))
+            {
+                return TaskCommit.Failed("unknown task");
+            }
+
+            var transaction = new Transaction(this);
+            var next = await commit(transaction);
+
+            task.Status = next.Status;
+            if (next.Checkpoint is { } checkpoint)
+            {
+                task.Checkpoint = checkpoint;
+            }
+
+            if (next.WaitingOn.Count > 0)
+            {
+                task.WaitingOn.Clear();
+                task.WaitingOn.AddRange(next.WaitingOn);
+            }
+
+            if (next.Outcome is { } outcome)
+            {
+                task.Outcome = DurableJson.ToElement(outcome);
+            }
+
+            Persist();
+            return next;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    internal async Task<TaskCommit> CommitTaskAsync(string taskId, Func<TaskCommit> commit)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            if (!_tasks.TryGetValue(taskId, out var task))
+            {
+                return TaskCommit.Failed("unknown task");
+            }
+
+            var next = commit();
+            task.Status = next.Status;
+            if (next.Checkpoint is { } checkpoint)
+            {
+                task.Checkpoint = checkpoint;
+            }
+
+            if (next.Outcome is { } outcome)
+            {
+                task.Outcome = DurableJson.ToElement(outcome);
+            }
+
+            Persist();
+            return next;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>Reads or writes an idempotency memo.</summary>
+    internal async Task<JsonElement?> MemoAsync(string taskId, string key, JsonElement? value)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            if (!_tasks.TryGetValue(taskId, out var task))
+            {
+                return null;
+            }
+
+            if (value is not null)
+            {
+                task.Memos[key] = value.Value.Clone();
+                Persist();
+                return value;
+            }
+
+            return task.Memos.TryGetValue(key, out var existing) ? existing : null;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>Sleeps until a deadline, saving the wake time in the checkpoint.</summary>
+    internal async Task<TaskCommit> SleepUntilAsync(
+        string taskId,
+        DateTimeOffset deadline,
+        Func<TaskCommit> nextCheckpoint,
+        CancellationToken cancellationToken = default)
+    {
+        var delay = deadline - DateTimeOffset.UtcNow;
+        if (delay > TimeSpan.Zero)
+        {
+            await System.Threading.Tasks.Task.Delay(delay, cancellationToken);
+        }
+
+        return await CommitTaskAsync(taskId, nextCheckpoint);
+    }
+
+    /// <summary>Reads the outcomes of child tasks.</summary>
+    internal async Task<IReadOnlyList<TaskOutcome>> OutcomesAsync(IEnumerable<string> taskIds)
+    {
+        // The gate may already be held by the transaction that is committing this
+        // task's checkpoint, so read without taking it.
+        return taskIds
+            .Select(id => _tasks.GetValueOrDefault(id))
+            .Where(task => task is not null)
+            .Select(task => task!.Outcome is { } outcome
+                ? outcome.Deserialize<TaskOutcome>(DurableJson.Options)!
+                : new TaskOutcome("pending"))
+            .ToList();
+    }
+
+    internal static string DocumentKey(string kind, string ownerId) => $"{kind}@{ownerId}";
+
+    internal long NextSequence() => ++_sequence;
+
+    internal void AddConversation(ConversationRecord record) => _conversations[record.Id] = record;
+
+    internal void AddEntry(string conversationId, string entryId)
+    {
+        if (!_entries.TryGetValue(conversationId, out var entries))
+        {
+            entries = [];
+            _entries[conversationId] = entries;
+        }
+
+        entries.Add(entryId);
+        _entryRecords[entryId] = new EntryRecord(entryId, conversationId, "entry", null, NextSequence());
+    }
+
+    /// <summary>
+    /// Copies the parent's entries up to and including <paramref name="forkEntryId"/> into the fork.
+    /// A fork inherits the parent's transcript up to the entry it was taken at.
+    /// </summary>
+    internal void CopyEntries(string fromConversationId, string toConversationId, string? forkEntryId)
+    {
+        var source = Entries(fromConversationId);
+        var inherited = forkEntryId is null
+            ? source.ToList()
+            : source.TakeWhile(entry => entry != forkEntryId).Append(forkEntryId).ToList();
+
+        _entries[toConversationId] = inherited;
+    }
+
+    internal DocumentState EnsureDocument(string kind, string ownerId, ForkPolicy fork)
+    {
+        var key = DocumentKey(kind, ownerId);
+        if (!_documents.TryGetValue(key, out var state))
+        {
+            state = new DocumentState(kind, ownerId, fork);
+            _documents[key] = state;
+        }
+
+        return state;
+    }
+
+    internal void RecordDocumentVersion(DocumentState state, string entryId, JsonElement value)
+    {
+        state.Versions.Add(new DocumentVersion(entryId, value.Clone(), NextSequence()));
+    }
+
+    internal DurableTaskRecord AddTask(DurableTaskRecord record) => _tasks[record.Id] = record;
+
+    /// <summary>
+    /// Schedules a task to run. The harness owns the runner, so the store asks it to
+    /// start the task rather than running it itself.
+    /// </summary>
+    internal Action<string, CancellationToken>? TaskScheduler { get; set; }
+
+    internal void ScheduleTask(string taskId, CancellationToken cancellationToken) =>
+        TaskScheduler?.Invoke(taskId, cancellationToken);
+
+    internal void CopyDocument(DocumentState source, string toOwner, string? forkEntryId)
+    {
+        var target = EnsureDocument(source.Kind, toOwner, source.Fork);
+        JsonElement? value = source.Fork switch
+        {
+            ForkPolicy.AsOf => forkEntryId is null ? source.Latest : source.AsOfOrBefore(forkEntryId, SequenceOf),
+            ForkPolicy.Current => source.Latest,
+            _ => null,
+        };
+
+        if (value is { } element)
+        {
+            target.Versions.Add(new DocumentVersion(forkEntryId ?? string.Empty, element.Clone(), NextSequence()));
+        }
+    }
+
+    /// <summary>The write sequence of an entry, used to order document versions against it.</summary>
+    internal long SequenceOf(string entryId) =>
+        _entryRecords.TryGetValue(entryId, out var record) ? record.Sequence : long.MaxValue;
+
+    private void Persist()
+    {
+        if (_path is null)
+        {
+            return;
+        }
+
+        var snapshot = new StoreSnapshot
+        {
+            Sequence = _sequence,
+            Conversations = _conversations.Values.ToList(),
+            Tasks = _tasks.Values.ToList(),
+            Documents = _documents.Values.Select(d => new DocumentSnapshot
+            {
+                Kind = d.Kind,
+                OwnerId = d.OwnerId,
+                Fork = d.Fork,
+                Versions = d.Versions.Select(v => new DocumentVersionSnapshot
+                {
+                    EntryId = v.EntryId,
+                    Sequence = v.Sequence,
+                    Value = v.Value.Clone(),
+                }).ToList(),
+            }).ToList(),
+            Entries = _entries.ToDictionary(pair => pair.Key, pair => pair.Value),
+            EntryRecords = _entryRecords.Values.ToList(),
+        };
+
+        var directory = Path.GetDirectoryName(_path);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        var temporary = _path + ".tmp";
+        File.WriteAllText(temporary, JsonSerializer.Serialize(snapshot, DurableJson.Options));
+        File.Move(temporary, _path, overwrite: true);
+    }
+
+    private void Load()
+    {
+        var snapshot = JsonSerializer.Deserialize<StoreSnapshot>(File.ReadAllText(_path!), DurableJson.Options);
+        if (snapshot is null)
+        {
+            return;
+        }
+
+        _sequence = snapshot.Sequence;
+        foreach (var conversation in snapshot.Conversations)
+        {
+            _conversations[conversation.Id] = conversation;
+        }
+
+        foreach (var task in snapshot.Tasks)
+        {
+            _tasks[task.Id] = task;
+        }
+
+        foreach (var document in snapshot.Documents)
+        {
+            var state = new DocumentState(document.Kind, document.OwnerId, document.Fork);
+            foreach (var version in document.Versions)
+            {
+                state.Versions.Add(new DocumentVersion(version.EntryId, version.Value.Clone(), version.Sequence));
+            }
+
+            _documents[DocumentKey(document.Kind, document.OwnerId)] = state;
+        }
+
+        foreach (var pair in snapshot.Entries)
+        {
+            _entries[pair.Key] = pair.Value;
+        }
+
+        foreach (var record in snapshot.EntryRecords)
+        {
+            _entryRecords[record.Id] = record;
+        }
+    }
+}
+
+/// <summary>A transaction: the only way to write durable state.</summary>
+public sealed class Transaction
+{
+    private readonly DurableStore _store;
+
+    internal Transaction(DurableStore store) => _store = store;
+
+    /// <summary>Creates a conversation and returns its record.</summary>
+    public ConversationRecord CreateConversation(
+        string? ownerTaskId = null,
+        string? ownerConversationId = null,
+        string? parentConversationId = null,
+        string? forkEntryId = null)
+    {
+        var id = $"c{_store.NextSequence()}";
+        var record = new ConversationRecord(id, parentConversationId, forkEntryId)
+        {
+            OwnerTaskId = ownerTaskId,
+            OwnerConversationId = ownerConversationId,
+        };
+        _store.AddConversation(record);
+        return record;
+    }
+
+    /// <summary>Appends an entry to a conversation and returns its id.</summary>
+    public string AppendEntry(string conversationId, string kind, string? data = null)
+    {
+        var entryId = $"e{_store.NextSequence()}";
+        _store.AddEntry(conversationId, entryId);
+        return entryId;
+    }
+
+    /// <summary>Reads an editable copy of a document, creating it on first use.</summary>
+    public DocumentDraft<T> Doc<T>(DocumentDefinition<T> definition, string ownerId)
+    {
+        var state = _store.EnsureDocument(definition.Kind, ownerId, definition.Fork);
+        var current = state.Latest is { } latest
+            ? latest.Deserialize<T>(DurableJson.Options)!
+            : definition.Initial();
+        return new DocumentDraft<T>(this, definition, ownerId, current);
+    }
+
+    /// <summary>Creates a task and returns its record.</summary>
+    public DurableTaskRecord CreateTask(
+        DurableTaskDefinition definition,
+        JsonElement input,
+        string? ownerConversationId = null,
+        string? ownerTaskId = null,
+        bool background = false)
+    {
+        var record = new DurableTaskRecord($"t{_store.NextSequence()}", definition.Name, input, definition.Initial())
+        {
+            OwnerConversationId = ownerConversationId,
+            OwnerTaskId = ownerTaskId,
+            Background = background,
+        };
+        _store.AddTask(record);
+        return record;
+    }
+
+    internal void CommitDocument<T>(DocumentDefinition<T> definition, string ownerId, T value, string entryId)
+    {
+        var state = _store.EnsureDocument(definition.Kind, ownerId, definition.Fork);
+        _store.RecordDocumentVersion(state, entryId, DurableJson.ToElement(value));
+    }
+}
+
+/// <summary>An editable copy of a document. Assigning to it stages a write.</summary>
+public sealed class DocumentDraft<T>
+{
+    private readonly Transaction _transaction;
+    private readonly DocumentDefinition<T> _definition;
+    private readonly string _ownerId;
+    private T _value;
+
+    internal DocumentDraft(Transaction transaction, DocumentDefinition<T> definition, string ownerId, T value)
+    {
+        _transaction = transaction;
+        _definition = definition;
+        _ownerId = ownerId;
+        _value = value;
+    }
+
+    /// <summary>The current value.</summary>
+    public T Value
+    {
+        get => _value;
+        set => _value = value;
+    }
+
+    /// <summary>Stages the current value to be written when the transaction commits.</summary>
+    public void Save(string entryId) => _transaction.CommitDocument(_definition, _ownerId, _value, entryId);
+}
+
+/// <summary>The persisted shape of the durable store.</summary>
+public sealed class StoreSnapshot
+{
+    /// <summary>The monotonic write sequence.</summary>
+    public long Sequence { get; set; }
+
+    /// <summary>The conversations.</summary>
+    public List<ConversationRecord> Conversations { get; set; } = [];
+
+    /// <summary>The tasks.</summary>
+    public List<DurableTaskRecord> Tasks { get; set; } = [];
+
+    /// <summary>The documents.</summary>
+    public List<DocumentSnapshot> Documents { get; set; } = [];
+
+    /// <summary>The entry ids per conversation.</summary>
+    public Dictionary<string, List<string>> Entries { get; set; } = [];
+
+    /// <summary>The entry records, with their write sequence.</summary>
+    public List<EntryRecord> EntryRecords { get; set; } = [];
+}
+
+/// <summary>The persisted shape of one document.</summary>
+public sealed class DocumentSnapshot
+{
+    /// <summary>The document kind.</summary>
+    public string Kind { get; set; } = string.Empty;
+
+    /// <summary>The owning conversation.</summary>
+    public string OwnerId { get; set; } = string.Empty;
+
+    /// <summary>The fork policy.</summary>
+    public ForkPolicy Fork { get; set; }
+
+    /// <summary>The committed versions.</summary>
+    public List<DocumentVersionSnapshot> Versions { get; set; } = [];
+}
+
+/// <summary>The persisted shape of one document version.</summary>
+public sealed class DocumentVersionSnapshot
+{
+    /// <summary>The entry that produced the version.</summary>
+    public string EntryId { get; set; } = string.Empty;
+
+    /// <summary>The write sequence.</summary>
+    public long Sequence { get; set; }
+
+    /// <summary>The value.</summary>
+    public JsonElement Value { get; set; }
+}
+
+/// <summary>An extension: a named bundle of tools, prompt sections, and tasks.</summary>
+public sealed class Extension
+{
+    /// <summary>Creates an extension.</summary>
+    public Extension(
+        string name,
+        IReadOnlyList<AIFunction>? tools = null,
+        IReadOnlyList<PromptSection>? sections = null,
+        IReadOnlyList<DurableTaskDefinition>? tasks = null,
+        IReadOnlyList<ToolWrapper>? wraps = null)
+    {
+        Name = name;
+        Tools = tools ?? [];
+        Sections = sections ?? [];
+        Tasks = tasks ?? [];
+        Wraps = wraps ?? [];
+    }
+
+    /// <summary>The extension name. Stored configuration references extensions by this name.</summary>
+    public string Name { get; }
+
+    /// <summary>The tools this extension contributes.</summary>
+    public IReadOnlyList<AIFunction> Tools { get; }
+
+    /// <summary>The prompt sections this extension contributes.</summary>
+    public IReadOnlyList<PromptSection> Sections { get; }
+
+    /// <summary>The durable tasks this extension contributes.</summary>
+    public IReadOnlyList<DurableTaskDefinition> Tasks { get; }
+
+    /// <summary>
+    /// The tools this extension wraps. A wrapper never captures a base tool: it names
+    /// the tool it decorates, so whichever implementation of that name wins is the one
+    /// that gets wrapped.
+    /// </summary>
+    public IReadOnlyList<ToolWrapper> Wraps { get; }
+}
+
+/// <summary>A wrapper that decorates whichever tool with a given name wins.</summary>
+public sealed class ToolWrapper
+{
+    /// <summary>Creates a wrapper.</summary>
+    public ToolWrapper(string toolName, Func<AIFunction, AIFunction> wrap)
+    {
+        ToolName = toolName;
+        Wrap = wrap;
+    }
+
+    /// <summary>The name of the tool this wrapper decorates.</summary>
+    public string ToolName { get; }
+
+    /// <summary>Builds the wrapper around the winning tool.</summary>
+    public Func<AIFunction, AIFunction> Wrap { get; }
+}
+
+/// <summary>A named prompt section rendered into the system message.</summary>
+public sealed class PromptSection
+{
+    /// <summary>Creates a prompt section.</summary>
+    public PromptSection(string key, Func<SectionInput, Task<string?>> render, bool tag = true)
+    {
+        Key = key;
+        Render = render;
+        Tag = tag;
+    }
+
+    /// <summary>The section key.</summary>
+    public string Key { get; }
+
+    /// <summary>Renders the section's text, or <see langword="null"/> to omit it.</summary>
+    public Func<SectionInput, Task<string?>> Render { get; }
+
+    /// <summary>Whether the text is wrapped in <c>&lt;key&gt;...</key></c>.</summary>
+    public bool Tag { get; }
+}
+
+/// <summary>The input available to a prompt section renderer.</summary>
+public sealed class SectionInput
+{
+    /// <summary>Creates section input.</summary>
+    public SectionInput(
+        DurableConversation? conversation,
+        IReadOnlyList<AIFunction> tools,
+        IReadOnlyList<Extension> extensions,
+        string? workingDirectory)
+    {
+        Conversation = conversation;
+        Tools = tools;
+        Extensions = extensions;
+        WorkingDirectory = workingDirectory;
+    }
+
+    /// <summary>The conversation the prompt is being built for.</summary>
+    public DurableConversation? Conversation { get; }
+
+    /// <summary>The tools the agent will be offered.</summary>
+    public IReadOnlyList<AIFunction> Tools { get; }
+
+    /// <summary>The selected extensions.</summary>
+    public IReadOnlyList<Extension> Extensions { get; }
+
+    /// <summary>The working directory for this conversation.</summary>
+    public string? WorkingDirectory { get; }
+}
+
+/// <summary>The registry of extensions. Installing the same name replaces the extension in place.</summary>
+public sealed class ExtensionRegistry
+{
+    private readonly Dictionary<string, Extension> _extensions = [];
+
+    /// <summary>The installed extensions, in installation order.</summary>
+    public IReadOnlyList<Extension> Extensions => _extensions.Values.ToList();
+
+    /// <summary>Installs an extension, replacing any extension with the same name.</summary>
+    public void Install(Extension extension) => _extensions[extension.Name] = extension;
+
+    /// <summary>Removes an extension by name.</summary>
+    public void Uninstall(string name) => _extensions.Remove(name);
+
+    /// <summary>Finds an extension by name.</summary>
+    public Extension? Find(string name) => _extensions.GetValueOrDefault(name);
+
+    /// <summary>Finds a task definition by name across all installed extensions.</summary>
+    public DurableTaskDefinition? FindTask(string name) =>
+        _extensions.Values.SelectMany(extension => extension.Tasks).FirstOrDefault(task => task.Name == name);
+}
+
+/// <summary>The per-conversation agent choices. Stored by name, so they outlive the code.</summary>
+public sealed class AgentChoices
+{
+    /// <summary>The selected extension names, in order.</summary>
+    public List<string>? Extensions { get; set; }
+
+    /// <summary>The selected tool names, in order.</summary>
+    public List<string>? Tools { get; set; }
+
+    /// <summary>The model identifier.</summary>
+    public string? Model { get; set; }
+
+    /// <summary>The reasoning effort level.</summary>
+    public string? ReasoningEffort { get; set; }
+
+    /// <summary>The working directory.</summary>
+    public string? WorkingDirectory { get; set; }
+
+    /// <summary>Extra instructions appended to the system prompt.</summary>
+    public string? Instructions { get; set; }
+
+    /// <summary>Whether the session streams assistant message deltas.</summary>
+    public bool? Streaming { get; set; }
+
+    /// <summary>
+    /// Native session compaction settings. The Copilot SDK compacts the model context on its
+    /// own when it grows past the configured thresholds, so a long conversation keeps a small
+    /// context without the app summarizing anything itself.
+    /// </summary>
+    public InfiniteSessionConfig? InfiniteSessions { get; set; }
+
+    /// <summary>
+    /// Session hooks. Hooks are code-level configuration, so they are not persisted with the
+    /// document; they are supplied when the conversation is created.
+    /// </summary>
+    [JsonIgnore]
+    public SessionHooks? Hooks { get; set; }
+}
+
+/// <summary>The resolved agent: stored choices bound to live registry code.</summary>
+public sealed record ResolvedAgent(
+    string? Model,
+    string? ReasoningEffort,
+    string? WorkingDirectory,
+    string? Instructions,
+    bool? Streaming,
+    SessionHooks? Hooks,
+    InfiniteSessionConfig? InfiniteSessions,
+    IReadOnlyList<Extension> Extensions,
+    IReadOnlyList<AIFunction> Tools);
+
+/// <summary>A conversation handle: a Copilot session bound to durable app state.</summary>
+public sealed class DurableConversation
+{
+    private readonly DurableHarness _harness;
+    private readonly List<string> _answers = [];
+
+    internal DurableConversation(DurableHarness harness, CopilotSession session, ConversationRecord record)
+    {
+        _harness = harness;
+        Session = session;
+        Record = record;
+    }
+
+    /// <summary>The underlying Copilot session.</summary>
+    public CopilotSession Session { get; private set; }
+
+    /// <summary>
+    /// Attaches the Copilot session. The handle exists before the session does, so
+    /// prompt sections can read the conversation's durable documents while the
+    /// session configuration is being built.
+    /// </summary>
+    internal void Attach(CopilotSession session)
+    {
+        Session = session;
+        // A permanent subscription records every answer the session produces, so a
+        // review loop can look at the passes it has already made.
+        _subscription = session.On<SessionEvent>(evt =>
+        {
+            if (evt is AssistantMessageEvent message && !string.IsNullOrEmpty(message.Data.Content))
+            {
+                RecordAnswer(message.Data.Content);
+            }
+        });
+    }
+
+    private IDisposable? _subscription;
+
+    /// <summary>The durable conversation record.</summary>
+    public ConversationRecord Record { get; }
+
+    /// <summary>
+    /// The assistant's answers in this conversation, oldest first. A turn that calls
+    /// tools produces one answer per pass, so a review loop shows every pass.
+    /// </summary>
+    public IReadOnlyList<string> Answers => _answers;
+
+    /// <summary>Records an assistant answer.</summary>
+    internal void RecordAnswer(string answer)
+    {
+        lock (_answers)
+        {
+            _answers.Add(answer);
+        }
+    }
+
+    /// <summary>The conversation identifier.</summary>
+    public string Id => Record.Id;
+
+    /// <summary>The Copilot session identifier.</summary>
+    public string SessionId => Session.SessionId;
+
+    /// <summary>
+    /// Whether the conversation is busy: it has a run in flight, from an input until
+    /// its final answer.
+    /// </summary>
+    public bool Busy => _busy;
+
+    private bool _busy;
+
+    /// <summary>Tracks whether a run is in flight, so a caller can tell busy from idle.</summary>
+    internal void SetBusy(bool busy) => _busy = busy;
+
+    /// <summary>Reads the latest value of a document.</summary>
+    public T? Snapshot<T>(DocumentDefinition<T> definition) =>
+        _harness.Store.Document(definition.Kind, Id)?.Latest is { } latest
+            ? latest.Deserialize<T>(DurableJson.Options)
+            : default;
+
+    /// <summary>Reads the value a document had in the same transaction as the given entry.</summary>
+    public T? SnapshotAsOf<T>(DocumentDefinition<T> definition, string entryId) =>
+        _harness.Store.Document(definition.Kind, Id)?.AsOf(entryId) is { } value
+            ? value.Deserialize<T>(DurableJson.Options)
+            : default;
+
+    /// <summary>Runs a transaction against the durable store.</summary>
+    public Task<T> CommitAsync<T>(Func<Transaction, Task<T>> body) => _harness.Store.CommitAsync(body);
+
+    /// <summary>Runs a transaction against the durable store.</summary>
+    public Task CommitAsync(Func<Transaction, Task> body) => _harness.Store.CommitAsync(body);
+
+    /// <summary>Appends an entry to this conversation's transcript.</summary>
+    public Task<string> AppendEntryAsync(string kind, string? data = null) =>
+        CommitAsync(async tx =>
+        {
+            var entryId = tx.AppendEntry(Id, kind, data);
+            await Task.CompletedTask;
+            return entryId;
+        });
+
+    /// <summary>Sends a prompt and waits for the assistant's answer.</summary>
+    public async Task<AssistantMessageEvent?> SubmitAsync(string prompt, CancellationToken cancellationToken = default)
+    {
+        var completion = new TaskCompletionSource<AssistantMessageEvent?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        AssistantMessageEvent? last = null;
+        SetBusy(true);
+
+        // A turn that calls tools emits an assistant message *before* the tool runs, and
+        // the final answer comes after the tool result. Waiting for the session to go
+        // idle therefore waits for the whole turn, not just its first message.
+        using var subscription = Session.On<SessionEvent>(evt =>
+        {
+            switch (evt)
+            {
+                case AssistantMessageEvent message:
+                    last = message;
+                    break;
+                case SessionIdleEvent:
+                    completion.TrySetResult(last);
+                    break;
+                case SessionErrorEvent error:
+                    completion.TrySetException(new InvalidOperationException(error.Data.Message));
+                    break;
+            }
+        });
+
+        await Session.SendAsync(new MessageOptions { Prompt = prompt }, cancellationToken);
+        try
+        {
+            return await completion.Task.WaitAsync(cancellationToken);
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    /// <summary>Reads the stored transcript entries, newest first.</summary>
+    public IReadOnlyList<string> Entries(int limit = 20) =>
+        _harness.Store.Entries(Id).AsEnumerable().Reverse().Take(limit).ToList();
+
+    /// <summary>Reads the effective model context: the transcript as the model sees it.</summary>
+    public Task<IReadOnlyList<SessionEvent>> ContextAsync(CancellationToken cancellationToken = default) =>
+        Session.GetEventsAsync(cancellationToken);
+
+    /// <summary>Stores the agent choices for this conversation.</summary>
+    public async Task ConfigureAsync(AgentChoices choices, CancellationToken cancellationToken = default)
+    {
+        await CommitAsync(async tx =>
+        {
+            var draft = tx.Doc(_harness.AgentDocument, Id);
+            draft.Value = choices;
+            draft.Save(tx.AppendEntry(Id, "agent"));
+            await Task.CompletedTask;
+        });
+
+        // The live session follows the stored choices: switching a conversation into
+        // plan mode changes the tools it offers right away.
+        var resolved = Agent();
+        if (Session is not null)
+        {
+            await Session.SetToolsAsync(resolved.Tools.Cast<AIFunctionDeclaration>().ToList(), cancellationToken);
+        }
+    }
+
+    /// <summary>Reads the stored agent choices.</summary>
+    public AgentChoices? Choices() => Snapshot(_harness.AgentDocument);
+
+    /// <summary>Resolves the stored choices against the registry.</summary>
+    public ResolvedAgent Agent()
+    {
+        var choices = Choices() ?? new AgentChoices();
+        var extensions = _harness.ResolveExtensions(choices.Extensions);
+        var tools = _harness.ResolveTools(extensions, choices.Tools);
+        return new ResolvedAgent(
+            choices.Model,
+            choices.ReasoningEffort,
+            choices.WorkingDirectory,
+            choices.Instructions,
+            choices.Streaming,
+            choices.Hooks,
+            choices.InfiniteSessions,
+            extensions,
+            tools);
+    }
+
+    /// <summary>Forks this conversation at the given entry.</summary>
+    public Task<DurableConversation> ForkAsync(string entryId, CancellationToken cancellationToken = default) =>
+        _harness.ForkAsync(this, entryId, cancellationToken);
+}
+
+/// <summary>The harness: the durable host that owns the store, the registry, and the conversations.</summary>
+public sealed class DurableHarness : IAsyncDisposable
+{
+    /// <summary>
+    /// The model used when a conversation does not name one. It is a cheap,
+    /// reasoning-capable model: the examples are about durable mechanics, not model
+    /// quality, and a fixed model makes an example's behaviour reproducible.
+    /// </summary>
+    public const string DefaultModel = "gpt-6-luna";
+
+    private readonly Dictionary<string, DurableConversation> _conversations = [];
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<TaskOutcome>> _taskCompletions = [];
+    private readonly ConcurrentDictionary<string, byte> _runningTasks = [];
+
+    private DurableHarness(CopilotClient client, DurableStore store, ExtensionRegistry registry)
+    {
+        Client = client;
+        Store = store;
+        Registry = registry;
+        // Rewindable with "asOf", so a fork starts with the agent choices its parent had at
+        // the fork entry.
+        AgentDocument = new DocumentDefinition<AgentChoices>("durable.agent", DocumentHistory.Rewindable, ForkPolicy.AsOf);
+
+        // A task created by another task asks the harness to schedule it.
+        store.TaskScheduler = (taskId, cancellationToken) => _ = RunTaskAsync(taskId, cancellationToken);
+    }
+
+    private Dictionary<string, ModelInfo>? _models;
+
+    /// <summary>
+    /// Whether the given model accepts a reasoning effort. The runtime rejects a session
+    /// outright when it does not, so this is checked before the session is created.
+    /// </summary>
+    private bool SupportsReasoningEffort(string? model)
+    {
+        if (model is null || model == "auto")
+        {
+            return false;
+        }
+
+        _models ??= Client.ListModelsAsync().GetAwaiter().GetResult().ToDictionary(info => info.Id);
+        return _models.TryGetValue(model, out var info) && info.SupportedReasoningEfforts is { Count: > 0 };
+    }
+
+    /// <summary>The Copilot client.</summary>
+    public CopilotClient Client { get; }
+
+    /// <summary>The durable store.</summary>
+    public DurableStore Store { get; }
+
+    /// <summary>The extension registry.</summary>
+    public ExtensionRegistry Registry { get; }
+
+    /// <summary>The document holding per-conversation agent choices.</summary>
+    public DocumentDefinition<AgentChoices> AgentDocument { get; }
+
+    /// <summary>The conversations this harness knows about.</summary>
+    public IReadOnlyCollection<DurableConversation> Conversations => _conversations.Values;
+
+    /// <summary>
+    /// Finds a conversation by id, restoring it from the store if the harness has not
+    /// opened it yet. A conversation that was created before a restart is still there.
+    /// </summary>
+    public DurableConversation? FindConversation(string conversationId)
+    {
+        if (_conversations.TryGetValue(conversationId, out var existing))
+        {
+            return existing;
+        }
+
+        var record = Store.Conversation(conversationId);
+        if (record is null)
+        {
+            return null;
+        }
+
+        var choices = Store.Document(AgentDocument.Kind, conversationId)?.Latest is { } latest
+            ? latest.Deserialize<AgentChoices>(DurableJson.Options)
+            : null;
+
+        var session = Client.CreateSessionAsync(BuildSessionConfig(choices, null)).GetAwaiter().GetResult();
+        var conversation = new DurableConversation(this, null!, record);
+        conversation.Attach(session);
+        _conversations[conversationId] = conversation;
+        return conversation;
+    }
+
+    /// <summary>Opens a harness over a store and a registry.</summary>
+    public static async Task<DurableHarness> OpenAsync(
+        DurableStore store,
+        ExtensionRegistry registry,
+        CancellationToken cancellationToken = default)
+    {
+        var client = new CopilotClient();
+        await client.StartAsync(cancellationToken);
+        return new DurableHarness(client, store, registry);
+    }
+
+    /// <summary>Creates a conversation and its Copilot session.</summary>
+    public async Task<DurableConversation> CreateConversationAsync(
+        AgentChoices? choices = null,
+        string? ownerTaskId = null,
+        string? ownerConversationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var record = await Store.CommitAsync(tx =>
+        {
+            var created = tx.CreateConversation(ownerTaskId, ownerConversationId);
+            if (choices is not null)
+            {
+                var draft = tx.Doc(AgentDocument, created.Id);
+                draft.Value = choices;
+                draft.Save(tx.AppendEntry(created.Id, "agent"));
+            }
+
+            return Task.FromResult(created);
+        });
+
+        // The conversation handle exists before the session is created, so prompt
+        // sections can read the conversation's durable documents.
+        var conversation = new DurableConversation(this, null!, record);
+        var session = await Client.CreateSessionAsync(BuildSessionConfig(choices, conversation), cancellationToken);
+        conversation.Attach(session);
+        _conversations[record.Id] = conversation;
+        return conversation;
+    }
+
+    /// <summary>Returns the root conversation, creating it on first use.</summary>
+    public async Task<DurableConversation> RootAsync(
+        AgentChoices? choices = null,
+        CancellationToken cancellationToken = default)
+    {
+        var existing = _conversations.Values.FirstOrDefault();
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        // A store reopened from disk already holds its conversations. Restore them
+        // before creating a new one, so the root is the conversation that was
+        // there before, not a second one.
+        await RestoreConversationsAsync(cancellationToken);
+
+        existing = _conversations.Values.FirstOrDefault();
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        return await CreateConversationAsync(choices, cancellationToken: cancellationToken);
+    }
+
+    /// <summary>
+    /// Restores the conversations a reopened store already holds, giving each one a
+    /// Copilot session again.
+    /// </summary>
+    private async Task RestoreConversationsAsync(CancellationToken cancellationToken)
+    {
+        foreach (var record in Store.Conversations.ToList())
+        {
+            if (_conversations.ContainsKey(record.Id))
+            {
+                continue;
+            }
+
+            var choices = Store.Document(AgentDocument.Kind, record.Id)?.Latest is { } latest
+                ? latest.Deserialize<AgentChoices>(DurableJson.Options)
+                : null;
+
+            var session = await Client.CreateSessionAsync(BuildSessionConfig(choices, null), cancellationToken);
+            var conversation = new DurableConversation(this, null!, record);
+            conversation.Attach(session);
+            _conversations[record.Id] = conversation;
+        }
+    }
+
+    /// <summary>Forks a conversation at an entry.</summary>
+    public async Task<DurableConversation> ForkAsync(
+        DurableConversation parent,
+        string entryId,
+        CancellationToken cancellationToken = default)
+    {
+        var record = await Store.CommitAsync(tx =>
+        {
+            var created = tx.CreateConversation(parentConversationId: parent.Id, forkEntryId: entryId);
+            // The fork inherits the parent's transcript up to the entry it was taken at.
+            Store.CopyEntries(parent.Id, created.Id, entryId);
+            // Materialize first: copying a document adds to the same collection being enumerated.
+            foreach (var document in Store.Documents.Where(d => d.OwnerId == parent.Id).ToList())
+            {
+                Store.CopyDocument(document, created.Id, entryId);
+            }
+
+            return Task.FromResult(created);
+        });
+
+        var conversation = new DurableConversation(this, null!, record);
+        var session = await Client.CreateSessionAsync(BuildSessionConfig(parent.Choices(), conversation), cancellationToken);
+        conversation.Attach(session);
+        _conversations[record.Id] = conversation;
+        return conversation;
+    }
+
+    /// <summary>Creates a durable task and schedules it.</summary>
+    public async Task<DurableTaskRecord> CreateTaskAsync(
+        DurableTaskDefinition definition,
+        JsonElement input,
+        string? ownerConversationId = null,
+        string? ownerTaskId = null,
+        bool background = false,
+        CancellationToken cancellationToken = default)
+    {
+        var record = await Store.CommitAsync(tx => Task.FromResult(
+            tx.CreateTask(definition, input, ownerConversationId, ownerTaskId, background)));
+
+        _ = RunTaskAsync(record.Id, cancellationToken);
+        return record;
+    }
+
+    /// <summary>Runs a task to completion, resuming from its last checkpoint.</summary>
+    public async Task<TaskOutcome> RunTaskAsync(string taskId, CancellationToken cancellationToken = default)
+    {
+        var completion = _taskCompletions.GetOrAdd(taskId, _ => new TaskCompletionSource<TaskOutcome>(
+            TaskCreationOptions.RunContinuationsAsynchronously));
+
+        var record = Store.Task(taskId);
+        if (record is null)
+        {
+            var missing = new TaskOutcome("failed", Error: "unknown task");
+            completion.TrySetResult(missing);
+            return missing;
+        }
+
+        // A task runs once at a time. A second caller joins the run in flight.
+        if (!_runningTasks.TryAdd(taskId, 0))
+        {
+            return await completion.Task.WaitAsync(cancellationToken);
+        }
+
+        try
+        {
+            return await RunTaskCoreAsync(taskId, record, completion, cancellationToken);
+        }
+        finally
+        {
+            _runningTasks.TryRemove(taskId, out _);
+        }
+    }
+
+    private async Task<TaskOutcome> RunTaskCoreAsync(
+        string taskId,
+        DurableTaskRecord record,
+        TaskCompletionSource<TaskOutcome> completion,
+        CancellationToken cancellationToken)
+    {
+        if (record.Status == TaskStatus.Terminal)
+        {
+            var existing = record.Outcome is { } outcome
+                ? outcome.Deserialize<TaskOutcome>(DurableJson.Options)!
+                : new TaskOutcome("completed");
+            completion.TrySetResult(existing);
+            return existing;
+        }
+
+        var definition = Registry.FindTask(record.Name);
+        if (definition is null)
+        {
+            var unknown = new TaskOutcome("failed", Error: $"unknown task definition {record.Name}");
+            completion.TrySetResult(unknown);
+            return unknown;
+        }
+
+        if (record.Status == TaskStatus.Running)
+        {
+            record.Restarts++;
+            await Store.CommitAsync(_ => Task.CompletedTask);
+        }
+
+        var runtime = new TaskRuntime(Store, record, definition, cancellationToken);
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var phase = record.Checkpoint.ValueKind == JsonValueKind.Object
+                && record.Checkpoint.TryGetProperty("phase", out var phaseElement)
+                    ? phaseElement.GetString() ?? "run"
+                    : "run";
+
+            if (!definition.Phases.TryGetValue(phase, out var handler))
+            {
+                await Store.CommitTaskAsync(taskId, () => TaskCommit.Failed($"unknown phase {phase}"));
+                break;
+            }
+
+            TaskCommit commit;
+            try
+            {
+                commit = await handler(runtime);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // The task was interrupted. Its last checkpoint stays in place, so a
+                // later run continues from there.
+                break;
+            }
+            catch (Exception exception)
+            {
+                await Store.CommitTaskAsync(taskId, () => TaskCommit.Failed(exception.Message));
+                break;
+            }
+
+            if (commit.Outcome is { } outcome)
+            {
+                completion.TrySetResult(outcome);
+                break;
+            }
+
+            // A task that is waiting on child tasks holds no invocation: it is
+            // resumed when its children finish.
+            if (commit.Status == TaskStatus.Waiting)
+            {
+                var children = commit.WaitingOn;
+                await WaitForChildrenAsync(taskId, children, cancellationToken);
+                continue;
+            }
+        }
+
+        var final = Store.Task(taskId)?.Outcome is { } finalOutcome
+            ? finalOutcome.Deserialize<TaskOutcome>(DurableJson.Options)!
+            : new TaskOutcome("failed", Error: "task did not finish");
+        completion.TrySetResult(final);
+        return final;
+    }
+
+    /// <summary>Waits for a task to finish.</summary>
+    /// <summary>
+    /// Waits for child tasks to finish, then resumes the waiting parent. The parent
+    /// holds no invocation while it waits: its checkpoint says which children it is
+    /// waiting on.
+    /// </summary>
+    private async Task WaitForChildrenAsync(
+        string taskId,
+        IReadOnlyList<string> children,
+        CancellationToken cancellationToken)
+    {
+        foreach (var child in children)
+        {
+            var outcome = await WaitForTaskAsync(child, cancellationToken);
+            if (outcome.Status == "failed")
+            {
+                // With fail-fast, the first failure aborts the others.
+                foreach (var sibling in children.Where(id => id != child))
+                {
+                    await AbortTaskAsync(sibling, cancellationToken);
+                }
+
+                break;
+            }
+        }
+    }
+
+    public async Task<TaskOutcome> WaitForTaskAsync(string taskId, CancellationToken cancellationToken = default)
+    {
+        var record = Store.Task(taskId);
+        if (record is null)
+        {
+            return new TaskOutcome("failed", Error: "unknown task");
+        }
+
+        if (record.Status == TaskStatus.Terminal)
+        {
+            return record.Outcome is { } outcome
+                ? outcome.Deserialize<TaskOutcome>(DurableJson.Options)!
+                : new TaskOutcome("completed");
+        }
+
+        var completion = _taskCompletions.GetOrAdd(taskId, _ => new TaskCompletionSource<TaskOutcome>(
+            TaskCreationOptions.RunContinuationsAsynchronously));
+
+        // A task runs once at a time. A second caller joins the run in flight
+        // instead of starting a competing one.
+        _ = RunTaskAsync(taskId, cancellationToken);
+        return await completion.Task.WaitAsync(cancellationToken);
+    }
+
+    /// <summary>Aborts a task, running its abort handler.</summary>
+    public async Task AbortTaskAsync(string taskId, CancellationToken cancellationToken = default)
+    {
+        var record = Store.Task(taskId);
+        if (record is null || record.Status == TaskStatus.Terminal)
+        {
+            return;
+        }
+
+        var definition = Registry.FindTask(record.Name);
+        if (definition is null)
+        {
+            return;
+        }
+
+        var runtime = new TaskRuntime(Store, record, definition, cancellationToken);
+        await definition.Abort(runtime);
+    }
+
+    /// <summary>Resumes every task that was running when the process stopped.</summary>
+    public async Task ResumeAsync(CancellationToken cancellationToken = default)
+    {
+        foreach (var record in Store.Tasks.Where(t => t.Status is TaskStatus.Running or TaskStatus.Pending))
+        {
+            _ = RunTaskAsync(record.Id, cancellationToken);
+        }
+
+        await Task.CompletedTask;
+    }
+
+    /// <summary>Reads the task graph: tasks and their owner edges.</summary>
+    public IReadOnlyList<(DurableTaskRecord Task, string? Owner)> TaskGraph() =>
+        Store.Tasks
+            .Select(task => (task, Owner: task.OwnerTaskId ?? task.OwnerConversationId))
+            .ToList();
+
+    /// <summary>Resolves extension names against the registry.</summary>
+    public IReadOnlyList<Extension> ResolveExtensions(IReadOnlyList<string>? names)
+    {
+        if (names is null)
+        {
+            return Registry.Extensions;
+        }
+
+        return names.Select(Registry.Find).Where(extension => extension is not null).Select(extension => extension!).ToList();
+    }
+
+    /// <summary>
+    /// Resolves tool names against the selected extensions. When two selected extensions
+    /// contribute a tool with the same name, the later one replaces the earlier one in
+    /// place: the tool keeps its position in the list, but the later implementation wins.
+    /// Wrappers are applied last, so a wrapper decorates whichever implementation won.
+    /// </summary>
+    public IReadOnlyList<AIFunction> ResolveTools(IReadOnlyList<Extension> extensions, IReadOnlyList<string>? names)
+    {
+        // Later extensions replace earlier ones by name, keeping the original position.
+        var available = new List<AIFunction>();
+        var indexByName = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var tool in extensions.SelectMany(extension => extension.Tools))
+        {
+            if (indexByName.TryGetValue(tool.Name, out var index))
+            {
+                available[index] = tool;
+            }
+            else
+            {
+                indexByName[tool.Name] = available.Count;
+                available.Add(tool);
+            }
+        }
+
+        // A wrapper names the tool it decorates, so it wraps whichever implementation
+        // won rather than capturing one of them.
+        foreach (var wrapper in extensions.SelectMany(extension => extension.Wraps))
+        {
+            var index = indexByName.GetValueOrDefault(wrapper.ToolName);
+            if (index >= 0)
+            {
+                available[index] = wrapper.Wrap(available[index]);
+            }
+        }
+
+        if (names is null)
+        {
+            return available;
+        }
+
+        return names
+            .Select(name => available.FirstOrDefault(tool => tool.Name == name))
+            .Where(tool => tool is not null)
+            .Select(tool => tool!)
+            .ToList();
+    }
+
+    /// <summary>Builds the Copilot session configuration for a set of choices.</summary>
+    public SessionConfig BuildSessionConfig(AgentChoices? choices, DurableConversation? conversation)
+    {
+        var resolved = new ResolvedAgent(
+            choices?.Model,
+            choices?.ReasoningEffort,
+            choices?.WorkingDirectory,
+            choices?.Instructions,
+            choices?.Streaming,
+            choices?.Hooks,
+            choices?.InfiniteSessions,
+            ResolveExtensions(choices?.Extensions),
+            ResolveTools(ResolveExtensions(choices?.Extensions), choices?.Tools));
+
+        var config = new SessionConfig
+        {
+            // The default is a cheap, reasoning-capable model rather than "auto": "auto"
+            // does not accept a reasoning effort, and it re-routes per request, which
+            // makes an example's behaviour less reproducible.
+            Model = resolved.Model ?? DefaultModel,
+            OnPermissionRequest = PermissionHandler.ApproveAll,
+            WorkingDirectory = resolved.WorkingDirectory,
+        };
+
+        var sections = resolved.Extensions.SelectMany(extension => extension.Sections).ToList();
+
+        // The "auto" model does not accept a reasoning effort, and neither do some concrete
+        // models. The runtime rejects the session outright, so only send one when the
+        // chosen model actually advertises support.
+        if (resolved.ReasoningEffort is not null && SupportsReasoningEffort(resolved.Model))
+        {
+            config.ReasoningEffort = resolved.ReasoningEffort;
+        }
+
+        if (resolved.Streaming is { } streaming)
+        {
+            config.Streaming = streaming;
+        }
+
+        if (resolved.Hooks is not null)
+        {
+            config.Hooks = resolved.Hooks;
+        }
+
+        // Native compaction: the SDK summarizes the model context itself once it grows past
+        // the configured thresholds, so the app never has to.
+        if (resolved.InfiniteSessions is not null)
+        {
+            config.InfiniteSessions = resolved.InfiniteSessions;
+        }
+
+        // Prompt sections are rendered before every request, not once at session
+        // creation: a section that reads a durable document must see the document's
+        // value at the time of the request. The runtime injects the rendered
+        // sections as additional context for the model.
+        if (sections.Count > 0 && conversation is not null)
+        {
+            var userPromptSubmitted = config.Hooks?.OnUserPromptSubmitted;
+            config.Hooks ??= new SessionHooks();
+            config.Hooks.OnUserPromptSubmitted = async (input, invocation) =>
+            {
+                var output = userPromptSubmitted is null
+                    ? null
+                    : await userPromptSubmitted(input, invocation);
+
+                var rendered = await RenderSectionsAsync(resolved, sections, conversation);
+                if (string.IsNullOrWhiteSpace(rendered))
+                {
+                    return output;
+                }
+
+                output ??= new UserPromptSubmittedHookOutput();
+                output.AdditionalContext = string.IsNullOrWhiteSpace(output.AdditionalContext)
+                    ? rendered
+                    : $"{output.AdditionalContext}\n\n{rendered}";
+                return output;
+            };
+        }
+
+        if (resolved.Tools.Count > 0)
+        {
+            config.Tools = resolved.Tools.Cast<AIFunctionDeclaration>().ToList();
+        }
+
+        var systemMessage = BuildSystemMessage(resolved, sections, conversation);
+        if (!string.IsNullOrWhiteSpace(systemMessage))
+        {
+            config.SystemMessage = new SystemMessageConfig
+            {
+                Mode = SystemMessageMode.Append,
+                Content = systemMessage,
+            };
+        }
+
+        return config;
+    }
+
+    /// <summary>Renders the prompt sections for a request.</summary>
+    private static async Task<string> RenderSectionsAsync(
+        ResolvedAgent agent,
+        IReadOnlyList<PromptSection> sections,
+        DurableConversation conversation)
+    {
+        var parts = new List<string>();
+        foreach (var section in sections)
+        {
+            var input = new SectionInput(conversation, agent.Tools, agent.Extensions, agent.WorkingDirectory);
+            var text = await section.Render(input);
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                continue;
+            }
+
+            parts.Add(section.Tag ? $"<{section.Key}>\n{text}\n</{section.Key}>" : text);
+        }
+
+        return string.Join("\n\n", parts);
+    }
+
+    /// <summary>Renders the system message from the selected extensions' sections.</summary>
+    public string BuildSystemMessage(
+        ResolvedAgent agent,
+        IReadOnlyList<PromptSection> sections,
+        DurableConversation? conversation)
+    {
+        var parts = new List<string>();
+        foreach (var section in sections)
+        {
+            var input = new SectionInput(conversation, agent.Tools, agent.Extensions, agent.WorkingDirectory);
+            var text = section.Render(input).GetAwaiter().GetResult();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                continue;
+            }
+
+            parts.Add(section.Tag ? $"<{section.Key}>\n{text}\n</{section.Key}>" : text);
+        }
+
+        if (!string.IsNullOrWhiteSpace(agent.Instructions))
+        {
+            parts.Add($"<instructions>\n{agent.Instructions}\n</instructions>");
+        }
+
+        return string.Join("\n\n", parts);
+    }
+
+    /// <summary>Disposes the harness and its client.</summary>
+    public async ValueTask DisposeAsync()
+    {
+        await Client.DisposeAsync();
+    }
+}
+
+/// <summary>Convenience helpers for the durable layer.</summary>
+public static class DurableExtensions
+{
+    /// <summary>Reads the assistant's text from an event.</summary>
+    public static string Text(this AssistantMessageEvent message) => message.Data.Content;
+
+    /// <summary>Reads the user's text from an event.</summary>
+    public static string Text(this UserMessageEvent message) => message.Data.Content;
+
+    /// <summary>Reads the tool name from a tool execution event.</summary>
+    public static string ToolName(this ToolExecutionStartEvent tool) => tool.Data.ToolName;
+}
+
+#pragma warning restore IL2026, IL3050

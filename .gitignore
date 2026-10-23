@@ -1,0 +1,12 @@
+# Scratch directories used while developing examples.
+.scratch/
+.scratch-*/
+
+# .NET build artifacts from file-based apps.
+bin/
+obj/
+*.user
+
+# Local durable state written by the examples.
+*.sqlite
+*.sqlite.tmp
