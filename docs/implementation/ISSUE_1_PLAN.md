@@ -144,6 +144,15 @@ gh pr create --base dev --title "{description}" --body "Closes #{issue-number}" 
 
 Release tags are cut after `dev` is promoted forward to `main` — tags are never cut from a feature branch.
 
+**Enforcement (applied 2026-10-23):**
+
+| Setting | Value |
+|---------|-------|
+| Repository default branch | `dev` |
+| `dev` protection | PR required; no force-push; no deletion |
+| `main` protection | PR required; no force-push; no deletion |
+| Coding-agent base branch | `dev` (falls back to the repo default if `dev` is absent) |
+
 ## 7. Verification gates
 
 - `dotnet build tests/Durable.Tests` succeeds.
