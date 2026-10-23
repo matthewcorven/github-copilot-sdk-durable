@@ -17,6 +17,18 @@ restart and binds to whatever code the new process installs.
 
 ---
 
+## Architecture & Analysis Documentation
+
+In-depth technical reports, design notes, and audits are available in [`docs/`](docs/):
+
+- [**Comparative Architecture Analysis**](docs/COMPARATIVE_ANALYSIS.md): Comprehensive matrices comparing every storage and runtime subsystem of this project against Pi Durable.
+- [**Why this Layer is Necessary (Durability Analysis)**](docs/DURABILITY_ANALYSIS.md): Detailed breakdown of what the Copilot SDK provides natively, what it lacks, and what this library proves.
+- [**Example Suite Fidelity Audit**](docs/EXAMPLES_AUDIT.md): Complete audit verifying that all 31 examples run against real engine components rather than simulations or shortcuts.
+- [**Copilot SDK Notes & Gotchas**](docs/COPILOT_SDK_NOTES.md): SDK behaviors, tool authoring pitfalls (silent tool shadowing, serialization limits, async deadlocks), and model billing pricing tables.
+- [**Architecture Design Document**](docs/DESIGN.md): The foundational specification and concept mapping between Pi Durable and the GitHub Copilot SDK (.NET).
+
+---
+
 ## Prerequisites
 
 | Requirement | Version | Notes |
@@ -256,19 +268,23 @@ The script reports `PASS`/`FAIL` per example and prints the output of each one.
 
 The examples focus on durable mechanics rather than model quality, defaulting to inexpensive models (primarily `gpt-6-luna`). 
 
-For token pricing tables, reasoning effort constraints, and SDK-specific tool-authoring gotchas (tool shadowing, serializer limitations, event models), see [**`COPILOT_SDK_NOTES.md`**](COPILOT_SDK_NOTES.md).
+For token pricing tables, reasoning effort constraints, and SDK-specific tool-authoring gotchas (tool shadowing, serializer limitations, event models), see [**`docs/COPILOT_SDK_NOTES.md`**](docs/COPILOT_SDK_NOTES.md).
 
 ---
 
 ## Repository layout
 
 ```
-examples/            31 self-contained file-based C# apps
-lib/Durable.cs       the shared durable layer every example includes
-tests/Durable.Tests  xUnit test suite for the durable library
-scripts/validate.sh  compile-and-run validation for the whole suite
-COPILOT_SDK_NOTES.md Copilot SDK gotchas, tool shadowing rules, and pricing
-DESIGN.md            the architecture mapping this suite was built from
+examples/                 31 self-contained file-based C# apps
+lib/Durable.cs            the shared durable layer every example includes
+tests/Durable.Tests       xUnit test suite for the durable library
+scripts/validate.sh       compile-and-run validation for the whole suite
+docs/
+  COMPARATIVE_ANALYSIS.md architecture comparison vs Pi Durable
+  DURABILITY_ANALYSIS.md  what Copilot SDK provides vs what was added
+  EXAMPLES_AUDIT.md       rigorous fidelity audit of all 31 examples
+  COPILOT_SDK_NOTES.md    SDK quirks, tool shadowing rules, and pricing
+  DESIGN.md               original architecture design specification
 ```
 
 ## License
