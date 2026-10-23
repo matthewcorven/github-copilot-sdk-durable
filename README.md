@@ -252,96 +252,23 @@ The script reports `PASS`/`FAIL` per example and prints the output of each one.
 
 ---
 
-## Cost
+## Model selection and costs
 
-The examples are about durable mechanics, not model quality, so they use cheap models by
-default. The library's default is `gpt-6-luna` (10 in / 50 out per million tokens).
-`auto` is deliberately *not* the default: it re-routes per request, which makes an
-example's behaviour less reproducible, and it does not accept a reasoning effort.
+The examples focus on durable mechanics rather than model quality, defaulting to inexpensive models (primarily `gpt-6-luna`). 
 
-| Model | Input / M tokens | Output / M tokens |
-|---|---|---|
-| `gpt-6-luna` (default) | 10 | 50 |
-| `claude-haiku-5.5` | 10 | 50 |
-| `mai-code-1.1-flash` | 20 | 120 |
-| `gpt-5.6-luna` | 20 | 120 |
-| `claude-haiku-4.5` | 100 | 500 |
-| `gpt-6-sol`, `claude-sonnet-5.5` | 200 | 1000–1200 |
-| `claude-opus-5.5` | 400 | 2000 |
-| `claude-fable-5.1` | 1000 | 5000 |
-
-Prices are read from the SDK at runtime (`ModelInfo.Billing.TokenPrices`), so they track
-whatever the account is actually charged.
-
-A reasoning effort is only sent when the chosen model advertises support for it — the
-runtime rejects a session outright otherwise. The library checks
-`ModelInfo.SupportedReasoningEfforts` before setting it.
-
----
-
-## Notes for people writing their own tools
-
-These are the SDK behaviours that cost the most time to discover. They are all exercised
-by the examples.
-
-**Tool handlers must be `async`.** A synchronous `.GetAwaiter().GetResult()` inside a
-handler deadlocks the SDK's tool dispatch (see [21](examples/21-subagent-foreground.cs)
-and [30](examples/30-reload-and-restart.cs)).
-
-**Return `string` or `Dictionary<string, object?>`.** The SDK uses a source-generated
-serializer, so anonymous types and custom records throw `NotSupportedException` as tool
-return values. To return richer objects, set
-`AIFunctionFactoryOptions.SerializerOptions` to options that use
-`DefaultJsonTypeInfoResolver`.
-
-**Give nullable parameters a default value.** A `string?` parameter is still marked
-`required` in the generated schema unless it has a default (`string name = ""`).
-
-**Avoid built-in tool names — or override them explicitly.** The Copilot CLI ships built-in
-tools, and a custom tool with the same name is **silently shadowed**: the session starts
-fine, the model calls the tool, and the *built-in* answers instead of yours. The names
-that collide include `read`, `read_file`, `edit`, `grep`, `view`, `bash`, and `glob`.
-
-Two ways out:
-
-```csharp
-// 1. Rename the tool. This is the simplest fix.
-factoryOptions: new AIFunctionFactoryOptions { Name = "read_file", Description = "Read a file" };
-
-// 2. Say you mean to replace the built-in.
-toolOptions: new CopilotToolOptions { OverridesBuiltInTool = true },
-factoryOptions: new AIFunctionFactoryOptions { Name = "read_file", Description = "Read a file" });
-```
-
-Without the override, the symptom is a tool result that never mentions your code — for
-example `Error: No file path provided` from a tool that should have returned the file's
-contents. Examples [05](examples/05-harness.cs), [09](examples/09-registry-reload.cs),
-[16](examples/16-coding-tools.cs), [26](examples/26-plan-mode.cs), and
-[27](examples/27-reviewer.cs) use the override.
-
-**`Console.WriteLine("a:", x)` drops the `x`.** That is the format-string overload. Use
-interpolation.
-
-**`ToolInvocation` is bound automatically.** Declare it as a parameter and the SDK fills
-it in, excluding it from the schema. It carries `SessionId`, `ToolName`, and `Arguments`,
-which is how a shared tool finds the conversation that called it (see
-[28](examples/28-sandbox-per-conversation.cs)).
-
-**`AssistantStreamingDeltaEvent` carries no text.** The text deltas are on
-`AssistantMessageDeltaEvent.Data.DeltaContent`; the streaming event only has
-`TotalResponseSizeBytes`.
-
-**`ToolExecutionCompleteData` has no `ToolName`.** Match on `ToolCallId` instead.
+For token pricing tables, reasoning effort constraints, and SDK-specific tool-authoring gotchas (tool shadowing, serializer limitations, event models), see [**`COPILOT_SDK_NOTES.md`**](COPILOT_SDK_NOTES.md).
 
 ---
 
 ## Repository layout
 
 ```
-examples/          31 self-contained file-based C# apps
-lib/Durable.cs     the shared durable layer every example includes
+examples/            31 self-contained file-based C# apps
+lib/Durable.cs       the shared durable layer every example includes
+tests/Durable.Tests  xUnit test suite for the durable library
 scripts/validate.sh  compile-and-run validation for the whole suite
-DESIGN.md          the architecture mapping this suite was built from
+COPILOT_SDK_NOTES.md Copilot SDK gotchas, tool shadowing rules, and pricing
+DESIGN.md            the architecture mapping this suite was built from
 ```
 
 ## License
