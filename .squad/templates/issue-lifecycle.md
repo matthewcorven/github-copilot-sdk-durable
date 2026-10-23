@@ -120,7 +120,7 @@ az boards work-item show --id {id} --output json
 **Trigger:** Agent accepts issue assignment and begins work.
 
 **Actions:**
-1. Ensure working on latest base branch (usually `main` or `dev`)
+1. Ensure working on latest base branch (this repo: `dev`; `main` is release-only)
 2. Create feature branch using Squad naming convention
 3. Transition issue to `inProgress` state
 
@@ -128,7 +128,7 @@ az boards work-item show --id {id} --output json
 
 **Standard (single-agent, no parallelism):**
 ```bash
-git checkout main && git pull && git checkout -b squad/{issue-number}-{slug}
+git checkout dev && git pull && git checkout -b squad/{issue-number}-{slug}
 ```
 
 **Worktree (parallel multi-agent):**
@@ -183,7 +183,7 @@ git push -u origin squad/{issue-number}-{slug}
 gh pr create --title "{title}" \
   --body "Closes #{issue-number}\n\n{description}" \
   --head squad/{issue-number}-{slug} \
-  --base main
+  --base dev
 ```
 
 **Azure DevOps:**
@@ -191,7 +191,7 @@ gh pr create --title "{title}" \
 az repos pr create --title "{title}" \
   --description "Closes #{work-item-id}\n\n{description}" \
   --source-branch squad/{work-item-id}-{slug} \
-  --target-branch main
+  --target-branch dev
 ```
 
 **PR description template:**
@@ -273,7 +273,7 @@ az repos pr update --id {pr-id} --status completed --delete-source-branch true
 
 **Standard workflow cleanup:**
 ```bash
-git checkout main
+git checkout dev
 git pull
 git branch -d squad/{issue-number}-{slug}
 ```

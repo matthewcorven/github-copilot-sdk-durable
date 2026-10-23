@@ -149,9 +149,13 @@ jobs:
               throw new Error(`Issue #${issue_number} no longer has ${label}; refusing stale Copilot handoff.`);
             }
 
-            // Get the default branch name (main, master, etc.)
+            // Base branch for coding-agent work: `dev` (the integration branch) when it exists,
+            // otherwise fall back to the repository default branch (main, master, etc.).
             const { data: repoData } = await github.rest.repos.get({ owner, repo });
-            const baseBranch = repoData.default_branch;
+            const hasDevBranch = await github.rest.repos.getBranch({ owner, repo, branch: 'dev' })
+              .then(() => true)
+              .catch(() => false);
+            const baseBranch = hasDevBranch ? 'dev' : repoData.default_branch;
 
             const response = await github.request('POST /repos/{owner}/{repo}/issues/{issue_number}/assignees', {
                 owner,

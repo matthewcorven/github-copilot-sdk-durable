@@ -59,7 +59,7 @@ When worktree mode is enabled, the coordinator creates dedicated worktrees for i
 - Multiple agents on the same issue share a worktree
 - Path convention: `{repo-parent}/{repo-name}-{issue-number}`
   - Example: Working on issue #42 in `C:\src\squad` → worktree at `C:\src\squad-42`
-- Branch: `squad/{issue-number}-{kebab-case-slug}` (created from base branch, typically `main`)
+- Branch: `squad/{issue-number}-{kebab-case-slug}` (created from base branch, `dev` in this repo)
 
 **Dependency management:**
 - After creating a worktree, link `node_modules` from the main repo to avoid reinstalling
@@ -104,9 +104,9 @@ b. **Check if worktree already exists:**
 
 c. **Create the worktree:**
    - Determine branch name: `squad/{issue-number}-{kebab-case-slug}` (derive slug from issue title if available)
-   - Determine base branch (typically `main`, check default branch if needed)
+   - Determine base branch (`dev` in this repo; check default branch if needed)
    - Run: `git worktree add {path} -b {branch} {baseBranch}`
-   - Example: `git worktree add C:\src\squad-42 -b squad/42-fix-login main`
+   - Example: `git worktree add C:\src\squad-42 -b squad/42-fix-login dev`
 
 d. **Set up dependencies:**
    - Link `node_modules` from main repo to avoid reinstalling:

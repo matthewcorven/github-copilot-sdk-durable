@@ -100,7 +100,7 @@ jobs:
                     owner: context.repo.owner,
                     repo: context.repo.repo,
                     workflow_id: 'squad-issue-assign.yml',
-                    ref: context.payload.repository.default_branch,
+                    ref: 'dev',
                     inputs: { issue_number: String(decision.issueNumber) }
                   });
                   core.info(`Dispatched squad-issue-assign.yml for auto-assigned issue #${decision.issueNumber}`);
