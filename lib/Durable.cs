@@ -486,43 +486,501 @@ public sealed class ConversationRecord
     public string? OwnerConversationId { get; set; }
 }
 
-/// <summary>The durable store: documents, tasks, conversations, and entries, persisted atomically.</summary>
-public sealed class DurableStore
+/// <summary>The on-disk format of a durable store.</summary>
+public enum DurableStoreFormat
 {
-    private readonly string? _path;
-    private readonly SemaphoreSlim _gate = new(1, 1);
+    /// <summary>Sniff the file at open and pick the format that matches it.</summary>
+    Auto,
+
+    /// <summary>Keep the state in memory only; the filesystem is never touched.</summary>
+    InMemory,
+
+    /// <summary>One JSON record per line, appended on every commit.</summary>
+    Jsonl,
+
+    /// <summary>The single-file JSON snapshot format the store used before the JSONL backend.</summary>
+    LegacyJson,
+}
+
+/// <summary>How a durable store is opened: where it lives and in what format.</summary>
+public sealed class DurableStoreOptions
+{
+    /// <summary>The explicit file path. When null, the per-user default path is used.</summary>
+    public string? Path { get; init; }
+
+    /// <summary>The on-disk format. Auto sniffs the file at open.</summary>
+    public DurableStoreFormat Format { get; init; } = DurableStoreFormat.Auto;
+
+    /// <summary>The file name used under the per-user default directory.</summary>
+    public string FileName { get; init; } = "durable-store.jsonl";
+}
+
+/// <summary>
+/// The persistence seam of the durable store: the operations a backend has to
+/// provide so the store can keep its documents, tasks, conversations, and entries.
+/// The store owns the commit gate; the provider owns the state and the undo log
+/// that protects it.
+/// </summary>
+public interface IDurableStoreProvider
+{
+    /// <summary>Loads the committed state, or starts empty when there is none.</summary>
+    void Open(DurableStoreOptions options);
+
+    /// <summary>Starts the undo log for the transaction in flight.</summary>
+    void BeginTransaction();
+
+    /// <summary>Undoes everything the failed transaction wrote.</summary>
+    void Rollback();
+
+    /// <summary>Flushes the committed transaction to the backend.</summary>
+    void Commit();
+
+    /// <summary>The monotonic write sequence.</summary>
+    long Sequence { get; }
+
+    /// <summary>The conversations known to the store.</summary>
+    IReadOnlyCollection<ConversationRecord> Conversations { get; }
+
+    /// <summary>The tasks known to the store.</summary>
+    IReadOnlyCollection<DurableTaskRecord> Tasks { get; }
+
+    /// <summary>The documents known to the store.</summary>
+    IReadOnlyCollection<DocumentState> Documents { get; }
+
+    /// <summary>Reads a conversation record.</summary>
+    ConversationRecord? Conversation(string id);
+
+    /// <summary>Reads a task record.</summary>
+    DurableTaskRecord? Task(string id);
+
+    /// <summary>Reads a document's state.</summary>
+    DocumentState? Document(string kind, string ownerId);
+
+    /// <summary>Reads the entry ids of a conversation, oldest first.</summary>
+    IReadOnlyList<string> Entries(string conversationId);
+
+    /// <summary>The write sequence of an entry, used to order document versions against it.</summary>
+    long SequenceOf(string entryId);
+
+    /// <summary>Advances the write sequence and returns the new value.</summary>
+    long NextSequence();
+
+    /// <summary>Adds a conversation record, replacing any record with the same id.</summary>
+    void AddConversation(ConversationRecord record);
+
+    /// <summary>Appends an entry to a conversation.</summary>
+    void AddEntry(string conversationId, string entryId);
+
+    /// <summary>Copies the entries of one conversation into another, up to a fork point.</summary>
+    void CopyEntries(string fromConversationId, string toConversationId, string? forkEntryId);
+
+    /// <summary>Reads a document's state, creating it on first use.</summary>
+    DocumentState EnsureDocument(string kind, string ownerId, ForkPolicy fork);
+
+    /// <summary>Records a committed version of a document.</summary>
+    void RecordDocumentVersion(DocumentState state, string entryId, JsonElement value);
+
+    /// <summary>Copies a document into another owner, honouring its fork policy.</summary>
+    void CopyDocument(DocumentState source, string toOwner, string? forkEntryId);
+
+    /// <summary>Adds a task record, replacing any record with the same id.</summary>
+    DurableTaskRecord AddTask(DurableTaskRecord record);
+
+    /// <summary>
+    /// Records the current state of a task that was mutated in place. Task records
+    /// change after they are created -- a checkpoint, a status, a memo -- so a
+    /// provider that only saw <see cref="AddTask"/> would never learn about those
+    /// changes and would lose the task's progress across a reopen.
+    /// </summary>
+    void UpdateTask(DurableTaskRecord record);
+}
+
+/// <summary>
+/// A captured copy of a task's mutable state. The provider keeps the last state it
+/// was told about, so a transaction that rolls back can put the task back where it
+/// was before the transaction started.
+/// </summary>
+internal sealed record TaskStateSnapshot(
+    TaskStatus Status,
+    JsonElement Checkpoint,
+    JsonElement? Outcome,
+    List<string> WaitingOn,
+    Dictionary<string, JsonElement> Memos)
+{
+    /// <summary>Captures the current state of a task.</summary>
+    public static TaskStateSnapshot Capture(DurableTaskRecord task) => new(
+        task.Status,
+        task.Checkpoint,
+        task.Outcome,
+        task.WaitingOn.ToList(),
+        task.Memos.ToDictionary(pair => pair.Key, pair => pair.Value));
+
+    /// <summary>Puts a task back into this state.</summary>
+    public void ApplyTo(DurableTaskRecord task)
+    {
+        task.Status = Status;
+        task.Checkpoint = Checkpoint;
+        task.WaitingOn.Clear();
+        task.WaitingOn.AddRange(WaitingOn);
+        task.Outcome = Outcome;
+        task.Memos.Clear();
+        foreach (var (key, value) in Memos)
+        {
+            task.Memos[key] = value;
+        }
+    }
+}
+
+/// <summary>
+/// The in-memory provider: the store's state lives in the process and the
+/// filesystem is never touched. This is the provider behind the default
+/// <c>new DurableStore()</c> path.
+/// </summary>
+public class InMemoryStoreProvider : IDurableStoreProvider
+{
     private readonly Dictionary<string, DocumentState> _documents = [];
     private readonly Dictionary<string, DurableTaskRecord> _tasks = [];
     private readonly Dictionary<string, ConversationRecord> _conversations = [];
     private readonly Dictionary<string, List<string>> _entries = [];
     private readonly Dictionary<string, EntryRecord> _entryRecords = [];
+    private readonly Dictionary<string, TaskStateSnapshot> _taskStates = [];
     private long _sequence;
 
     /// <summary>
     /// The undo log of the transaction in flight. A transaction writes straight into
-    /// the store's collections, so a throw has to undo what it wrote. The log is
+    /// the provider's collections, so a throw has to undo what it wrote. The log is
     /// null when no transaction is running.
     /// </summary>
     private UndoLog? _undo;
 
-    /// <summary>Creates a store. When <paramref name="path"/> is given, state is persisted to that file.</summary>
-    public DurableStore(string? path = null)
+    /// <summary>Starts empty. The in-memory provider never touches the filesystem.</summary>
+    public virtual void Open(DurableStoreOptions options)
     {
-        _path = path;
-        if (path is not null && File.Exists(path))
+    }
+
+    /// <summary>Starts the undo log for the transaction in flight.</summary>
+    public void BeginTransaction() => _undo = new UndoLog();
+
+    /// <summary>Undoes everything the failed transaction wrote.</summary>
+    public void Rollback()
+    {
+        _undo?.Undo(this);
+        _undo = null;
+    }
+
+    /// <summary>Ends the transaction and flushes the state to the backend.</summary>
+    public virtual void Commit()
+    {
+        _undo = null;
+        Persist();
+    }
+
+    /// <summary>The monotonic write sequence.</summary>
+    public long Sequence => _sequence;
+
+    /// <summary>The conversations known to the store.</summary>
+    public IReadOnlyCollection<ConversationRecord> Conversations => _conversations.Values;
+
+    /// <summary>The tasks known to the store.</summary>
+    public IReadOnlyCollection<DurableTaskRecord> Tasks => _tasks.Values;
+
+    /// <summary>The documents known to the store.</summary>
+    public IReadOnlyCollection<DocumentState> Documents => _documents.Values;
+
+    /// <summary>Reads a conversation record.</summary>
+    public ConversationRecord? Conversation(string id) => _conversations.GetValueOrDefault(id);
+
+    /// <summary>Reads a task record.</summary>
+    public DurableTaskRecord? Task(string id) => _tasks.GetValueOrDefault(id);
+
+    /// <summary>Reads a document's state.</summary>
+    public DocumentState? Document(string kind, string ownerId) =>
+        _documents.TryGetValue(DocumentKey(kind, ownerId), out var state) ? state : null;
+
+    /// <summary>Reads the entry ids of a conversation, oldest first.</summary>
+    public IReadOnlyList<string> Entries(string conversationId) =>
+        _entries.TryGetValue(conversationId, out var entries) ? entries : [];
+
+    /// <summary>The write sequence of an entry, used to order document versions against it.</summary>
+    public long SequenceOf(string entryId) =>
+        _entryRecords.TryGetValue(entryId, out var record) ? record.Sequence : long.MaxValue;
+
+    /// <summary>Advances the write sequence and returns the new value.</summary>
+    public long NextSequence()
+    {
+        var sequence = ++_sequence;
+        _undo?.Sequence(() => _sequence = sequence - 1);
+        return sequence;
+    }
+
+    /// <summary>Adds a conversation record, replacing any record with the same id.</summary>
+    public void AddConversation(ConversationRecord record)
+    {
+        _undo?.Remove(_conversations, record.Id);
+        _conversations[record.Id] = record;
+    }
+
+    /// <summary>Appends an entry to a conversation.</summary>
+    public void AddEntry(string conversationId, string entryId)
+    {
+        if (!_entries.TryGetValue(conversationId, out var entries))
         {
-            Load();
+            entries = [];
+            _entries[conversationId] = entries;
+            _undo?.Remove(_entries, conversationId);
+        }
+
+        _undo?.Append(entries);
+        entries.Add(entryId);
+        _undo?.Remove(_entryRecords, entryId);
+        _entryRecords[entryId] = new EntryRecord(entryId, conversationId, "entry", null, NextSequence());
+    }
+
+    /// <summary>
+    /// Copies the parent's entries up to and including <paramref name="forkEntryId"/> into the fork.
+    /// A fork inherits the parent's transcript up to the entry it was taken at.
+    /// </summary>
+    public void CopyEntries(string fromConversationId, string toConversationId, string? forkEntryId)
+    {
+        var source = Entries(fromConversationId);
+        var inherited = forkEntryId is null
+            ? source.ToList()
+            : source.TakeWhile(entry => entry != forkEntryId).Append(forkEntryId).ToList();
+
+        _undo?.Remove(_entries, toConversationId);
+        _entries[toConversationId] = inherited;
+    }
+
+    /// <summary>Reads a document's state, creating it on first use.</summary>
+    public DocumentState EnsureDocument(string kind, string ownerId, ForkPolicy fork)
+    {
+        var key = DocumentKey(kind, ownerId);
+        if (!_documents.TryGetValue(key, out var state))
+        {
+            state = new DocumentState(kind, ownerId, fork);
+            _documents[key] = state;
+            _undo?.Remove(_documents, key);
+        }
+
+        return state;
+    }
+
+    /// <summary>Records a committed version of a document.</summary>
+    public void RecordDocumentVersion(DocumentState state, string entryId, JsonElement value)
+    {
+        _undo?.Append(state.Versions);
+        state.Versions.Add(new DocumentVersion(entryId, value.Clone(), NextSequence()));
+    }
+
+    /// <summary>Copies a document into another owner, honouring its fork policy.</summary>
+    public void CopyDocument(DocumentState source, string toOwner, string? forkEntryId)
+    {
+        var target = EnsureDocument(source.Kind, toOwner, source.Fork);
+        JsonElement? value = source.Fork switch
+        {
+            ForkPolicy.AsOf => forkEntryId is null ? source.Latest : source.AsOfOrBefore(forkEntryId, SequenceOf),
+            ForkPolicy.Current => source.Latest,
+            _ => null,
+        };
+
+        if (value is { } element)
+        {
+            _undo?.Append(target.Versions);
+            target.Versions.Add(new DocumentVersion(forkEntryId ?? string.Empty, element.Clone(), NextSequence()));
         }
     }
 
+    /// <summary>Adds a task record, replacing any record with the same id.</summary>
+    public DurableTaskRecord AddTask(DurableTaskRecord record)
+    {
+        _undo?.Remove(_tasks, record.Id);
+        _tasks[record.Id] = record;
+        _taskStates[record.Id] = TaskStateSnapshot.Capture(record);
+        return record;
+    }
+
+    /// <summary>
+    /// Records the current state of a task that was mutated in place. The record was
+    /// changed after it was added, so the provider is told about the new state; a
+    /// transaction that fails puts the task back where it was.
+    /// </summary>
+    public void UpdateTask(DurableTaskRecord record)
+    {
+        var current = TaskStateSnapshot.Capture(record);
+        if (_undo is not null && _taskStates.TryGetValue(record.Id, out var previous))
+        {
+            _undo.Restore(previous, record);
+        }
+
+        _taskStates[record.Id] = current;
+    }
+
+    /// <summary>The key a document is stored under.</summary>
+    internal static string DocumentKey(string kind, string ownerId) => $"{kind}@{ownerId}";
+
+    /// <summary>Flushes the state to the backend. The in-memory provider has nothing to flush.</summary>
+    protected virtual void Persist()
+    {
+    }
+
+    /// <summary>Builds a snapshot of the current state, for providers that persist a whole file.</summary>
+    protected virtual StoreSnapshot CreateSnapshot() => new()
+    {
+        Sequence = _sequence,
+        Conversations = _conversations.Values.ToList(),
+        Tasks = _tasks.Values.ToList(),
+        Documents = _documents.Values.Select(d => new DocumentSnapshot
+        {
+            Kind = d.Kind,
+            OwnerId = d.OwnerId,
+            Fork = d.Fork,
+            Versions = d.Versions.Select(v => new DocumentVersionSnapshot
+            {
+                EntryId = v.EntryId,
+                Sequence = v.Sequence,
+                Value = v.Value.Clone(),
+            }).ToList(),
+        }).ToList(),
+        Entries = _entries.ToDictionary(pair => pair.Key, pair => pair.Value),
+        EntryRecords = _entryRecords.Values.ToList(),
+    };
+
+    /// <summary>Restores the state from a snapshot.</summary>
+    protected virtual void RestoreSnapshot(StoreSnapshot snapshot)
+    {
+        _sequence = snapshot.Sequence;
+        foreach (var conversation in snapshot.Conversations)
+        {
+            _conversations[conversation.Id] = conversation;
+        }
+
+        foreach (var task in snapshot.Tasks)
+        {
+            _tasks[task.Id] = task;
+            _taskStates[task.Id] = TaskStateSnapshot.Capture(task);
+        }
+
+        foreach (var document in snapshot.Documents)
+        {
+            var state = new DocumentState(document.Kind, document.OwnerId, document.Fork);
+            foreach (var version in document.Versions)
+            {
+                state.Versions.Add(new DocumentVersion(version.EntryId, version.Value.Clone(), version.Sequence));
+            }
+
+            _documents[DocumentKey(document.Kind, document.OwnerId)] = state;
+        }
+
+        foreach (var pair in snapshot.Entries)
+        {
+            _entries[pair.Key] = pair.Value;
+        }
+
+        foreach (var record in snapshot.EntryRecords)
+        {
+            _entryRecords[record.Id] = record;
+        }
+    }
+}
+
+/// <summary>
+/// The provider that keeps the store in the single-file JSON snapshot format the
+/// store used before the JSONL backend. This is the persistence behind
+/// <c>new DurableStore(path)</c>; the backward-compatible reader and the format
+/// sniffing land with the legacy-store work.
+/// </summary>
+internal sealed class LegacyJsonStoreProvider : InMemoryStoreProvider
+{
+    private string? _path;
+
+    /// <summary>Loads the snapshot at the configured path, when there is one.</summary>
+    public override void Open(DurableStoreOptions options)
+    {
+        _path = options.Path;
+        if (_path is not null && File.Exists(_path))
+        {
+            var snapshot = JsonSerializer.Deserialize<StoreSnapshot>(File.ReadAllText(_path), DurableJson.Options);
+            if (snapshot is not null)
+            {
+                RestoreSnapshot(snapshot);
+            }
+        }
+    }
+
+    /// <summary>Writes the whole snapshot to the file, atomically.</summary>
+    protected override void Persist()
+    {
+        if (_path is null)
+        {
+            return;
+        }
+
+        var snapshot = CreateSnapshot();
+
+        var directory = Path.GetDirectoryName(_path);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        var temporary = _path + ".tmp";
+        File.WriteAllText(temporary, JsonSerializer.Serialize(snapshot, DurableJson.Options));
+        File.Move(temporary, _path, overwrite: true);
+    }
+}
+
+/// <summary>The durable store: documents, tasks, conversations, and entries, persisted atomically.</summary>
+public sealed class DurableStore
+{
+    private readonly IDurableStoreProvider _provider;
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
+    /// <summary>Creates a store. When <paramref name="path"/> is given, state is persisted to that file.</summary>
+    public DurableStore(string? path = null)
+    {
+        _provider = path is null
+            ? new InMemoryStoreProvider()
+            : new LegacyJsonStoreProvider();
+
+        _provider.Open(new DurableStoreOptions
+        {
+            Path = path,
+            Format = path is null ? DurableStoreFormat.InMemory : DurableStoreFormat.LegacyJson,
+        });
+    }
+
+    /// <summary>
+    /// Creates a store over the provider the options select. This is the entry point
+    /// for the pluggable backends; the constructor keeps the original single-file
+    /// behaviour.
+    /// </summary>
+    public static DurableStore Create(DurableStoreOptions options)
+    {
+        IDurableStoreProvider provider = options.Format switch
+        {
+            DurableStoreFormat.InMemory => new InMemoryStoreProvider(),
+            DurableStoreFormat.LegacyJson => new LegacyJsonStoreProvider(),
+            DurableStoreFormat.Jsonl => throw new NotSupportedException(
+                "The JSONL backend is not available yet. Use DurableStoreFormat.LegacyJson or DurableStoreFormat.InMemory."),
+            // Auto does not sniff yet: a store with a path keeps the single-file
+            // format, and a store without one stays in memory.
+            _ => options.Path is null ? new InMemoryStoreProvider() : new LegacyJsonStoreProvider(),
+        };
+
+        provider.Open(options);
+        return new DurableStore(provider);
+    }
+
+    private DurableStore(IDurableStoreProvider provider) => _provider = provider;
+
     /// <summary>The conversations known to this store.</summary>
-    public IReadOnlyCollection<ConversationRecord> Conversations => _conversations.Values;
+    public IReadOnlyCollection<ConversationRecord> Conversations => _provider.Conversations;
 
     /// <summary>The tasks known to this store.</summary>
-    public IReadOnlyCollection<DurableTaskRecord> Tasks => _tasks.Values;
+    public IReadOnlyCollection<DurableTaskRecord> Tasks => _provider.Tasks;
 
     /// <summary>The documents known to this store.</summary>
-    public IReadOnlyCollection<DocumentState> Documents => _documents.Values;
+    public IReadOnlyCollection<DocumentState> Documents => _provider.Documents;
 
     /// <summary>Runs a transaction. Everything written inside is saved together, or discarded if it throws.</summary>
     public async Task<T> CommitAsync<T>(Func<Transaction, Task<T>> body)
@@ -531,8 +989,7 @@ public sealed class DurableStore
         try
         {
             var transaction = new Transaction(this);
-            var undo = new UndoLog();
-            _undo = undo;
+            _provider.BeginTransaction();
             T result;
             try
             {
@@ -542,13 +999,11 @@ public sealed class DurableStore
             {
                 // The transaction failed: undo everything it wrote, so the store is
                 // left exactly as it was before the transaction started.
-                undo.Undo(this);
-                _undo = null;
+                _provider.Rollback();
                 throw;
             }
 
-            _undo = null;
-            Persist();
+            _provider.Commit();
             return result;
         }
         finally
@@ -566,20 +1021,17 @@ public sealed class DurableStore
         });
 
     /// <summary>Reads a document's state.</summary>
-    public DocumentState? Document(string kind, string ownerId) =>
-        _documents.TryGetValue(DocumentKey(kind, ownerId), out var state) ? state : null;
+    public DocumentState? Document(string kind, string ownerId) => _provider.Document(kind, ownerId);
 
     /// <summary>Reads a task record.</summary>
-    public DurableTaskRecord? Task(string id) => _tasks.GetValueOrDefault(id);
+    public DurableTaskRecord? Task(string id) => _provider.Task(id);
 
     /// <summary>Reads a conversation record.</summary>
-    public ConversationRecord? Conversation(string id) => _conversations.GetValueOrDefault(id);
+    public ConversationRecord? Conversation(string id) => _provider.Conversation(id);
 
     /// <summary>Reads the entry ids of a conversation, oldest first.</summary>
-    public IReadOnlyList<string> Entries(string conversationId) =>
-        _entries.TryGetValue(conversationId, out var entries) ? entries : [];
+    public IReadOnlyList<string> Entries(string conversationId) => _provider.Entries(conversationId);
 
-    /// <summary>Advances a task's durable state.</summary>
     /// <summary>
     /// Advances a task's durable state, letting the callback write other records in
     /// the same transaction. Everything the callback writes is saved together with the
@@ -590,7 +1042,8 @@ public sealed class DurableStore
         await _gate.WaitAsync();
         try
         {
-            if (!_tasks.TryGetValue(taskId, out var task))
+            var task = _provider.Task(taskId);
+            if (task is null)
             {
                 return TaskCommit.Failed("unknown task");
             }
@@ -606,8 +1059,7 @@ public sealed class DurableStore
             }
 
             var transaction = new Transaction(this);
-            var undo = new UndoLog();
-            _undo = undo;
+            _provider.BeginTransaction();
             TaskCommit next;
             try
             {
@@ -618,13 +1070,14 @@ public sealed class DurableStore
                 // The phase failed: undo everything it wrote, including the task's
                 // own state, so the checkpoint stays where it was and the task can
                 // be resumed.
-                undo.Undo(this);
-                _undo = null;
+                _provider.Rollback();
                 throw;
             }
 
-            _undo = null;
-            undo.Restore(task);
+            // The task's own state is part of the transaction: the checkpoint, the
+            // status, and the outcome are written together with everything the
+            // phase wrote, or none of it is.
+            _provider.UpdateTask(task);
             task.Status = next.Status;
             if (next.Checkpoint is { } checkpoint)
             {
@@ -642,7 +1095,8 @@ public sealed class DurableStore
                 task.Outcome = DurableJson.ToElement(outcome);
             }
 
-            Persist();
+            _provider.UpdateTask(task);
+            _provider.Commit();
             return next;
         }
         finally
@@ -656,7 +1110,8 @@ public sealed class DurableStore
         await _gate.WaitAsync();
         try
         {
-            if (!_tasks.TryGetValue(taskId, out var task))
+            var task = _provider.Task(taskId);
+            if (task is null)
             {
                 return TaskCommit.Failed("unknown task");
             }
@@ -681,7 +1136,8 @@ public sealed class DurableStore
                 task.Outcome = DurableJson.ToElement(outcome);
             }
 
-            Persist();
+            _provider.UpdateTask(task);
+            _provider.Commit();
             return next;
         }
         finally
@@ -696,7 +1152,8 @@ public sealed class DurableStore
         await _gate.WaitAsync();
         try
         {
-            if (!_tasks.TryGetValue(taskId, out var task))
+            var task = _provider.Task(taskId);
+            if (task is null)
             {
                 return null;
             }
@@ -704,7 +1161,10 @@ public sealed class DurableStore
             if (value is not null)
             {
                 task.Memos[key] = value.Value.Clone();
-                Persist();
+                // A memo is written outside any transaction, so the provider is told
+                // about the task's new state directly.
+                _provider.UpdateTask(task);
+                _provider.Commit();
                 return value;
             }
 
@@ -738,83 +1198,12 @@ public sealed class DurableStore
         // The gate may already be held by the transaction that is committing this
         // task's checkpoint, so read without taking it.
         return taskIds
-            .Select(id => _tasks.GetValueOrDefault(id))
+            .Select(id => _provider.Task(id))
             .Where(task => task is not null)
             .Select(task => task!.Outcome is { } outcome
                 ? outcome.Deserialize<TaskOutcome>(DurableJson.Options)!
                 : new TaskOutcome("pending"))
             .ToList();
-    }
-
-    internal static string DocumentKey(string kind, string ownerId) => $"{kind}@{ownerId}";
-
-    internal long NextSequence()
-    {
-        var sequence = ++_sequence;
-        _undo?.Sequence(() => _sequence = sequence - 1);
-        return sequence;
-    }
-
-    internal void AddConversation(ConversationRecord record)
-    {
-        _undo?.Remove(_conversations, record.Id);
-        _conversations[record.Id] = record;
-    }
-
-    internal void AddEntry(string conversationId, string entryId)
-    {
-        if (!_entries.TryGetValue(conversationId, out var entries))
-        {
-            entries = [];
-            _entries[conversationId] = entries;
-            _undo?.Remove(_entries, conversationId);
-        }
-
-        _undo?.Append(entries);
-        entries.Add(entryId);
-        _undo?.Remove(_entryRecords, entryId);
-        _entryRecords[entryId] = new EntryRecord(entryId, conversationId, "entry", null, NextSequence());
-    }
-
-    /// <summary>
-    /// Copies the parent's entries up to and including <paramref name="forkEntryId"/> into the fork.
-    /// A fork inherits the parent's transcript up to the entry it was taken at.
-    /// </summary>
-    internal void CopyEntries(string fromConversationId, string toConversationId, string? forkEntryId)
-    {
-        var source = Entries(fromConversationId);
-        var inherited = forkEntryId is null
-            ? source.ToList()
-            : source.TakeWhile(entry => entry != forkEntryId).Append(forkEntryId).ToList();
-
-        _undo?.Remove(_entries, toConversationId);
-        _entries[toConversationId] = inherited;
-    }
-
-    internal DocumentState EnsureDocument(string kind, string ownerId, ForkPolicy fork)
-    {
-        var key = DocumentKey(kind, ownerId);
-        if (!_documents.TryGetValue(key, out var state))
-        {
-            state = new DocumentState(kind, ownerId, fork);
-            _documents[key] = state;
-            _undo?.Remove(_documents, key);
-        }
-
-        return state;
-    }
-
-    internal void RecordDocumentVersion(DocumentState state, string entryId, JsonElement value)
-    {
-        _undo?.Append(state.Versions);
-        state.Versions.Add(new DocumentVersion(entryId, value.Clone(), NextSequence()));
-    }
-
-    internal DurableTaskRecord AddTask(DurableTaskRecord record)
-    {
-        _undo?.Remove(_tasks, record.Id);
-        _tasks[record.Id] = record;
-        return record;
     }
 
     /// <summary>
@@ -826,114 +1215,19 @@ public sealed class DurableStore
     internal void ScheduleTask(string taskId, CancellationToken cancellationToken) =>
         TaskScheduler?.Invoke(taskId, cancellationToken);
 
-    internal void CopyDocument(DocumentState source, string toOwner, string? forkEntryId)
-    {
-        var target = EnsureDocument(source.Kind, toOwner, source.Fork);
-        JsonElement? value = source.Fork switch
-        {
-            ForkPolicy.AsOf => forkEntryId is null ? source.Latest : source.AsOfOrBefore(forkEntryId, SequenceOf),
-            ForkPolicy.Current => source.Latest,
-            _ => null,
-        };
-
-        if (value is { } element)
-        {
-            _undo?.Append(target.Versions);
-            target.Versions.Add(new DocumentVersion(forkEntryId ?? string.Empty, element.Clone(), NextSequence()));
-        }
-    }
-
-    /// <summary>The write sequence of an entry, used to order document versions against it.</summary>
-    internal long SequenceOf(string entryId) =>
-        _entryRecords.TryGetValue(entryId, out var record) ? record.Sequence : long.MaxValue;
-
-    private void Persist()
-    {
-        if (_path is null)
-        {
-            return;
-        }
-
-        var snapshot = new StoreSnapshot
-        {
-            Sequence = _sequence,
-            Conversations = _conversations.Values.ToList(),
-            Tasks = _tasks.Values.ToList(),
-            Documents = _documents.Values.Select(d => new DocumentSnapshot
-            {
-                Kind = d.Kind,
-                OwnerId = d.OwnerId,
-                Fork = d.Fork,
-                Versions = d.Versions.Select(v => new DocumentVersionSnapshot
-                {
-                    EntryId = v.EntryId,
-                    Sequence = v.Sequence,
-                    Value = v.Value.Clone(),
-                }).ToList(),
-            }).ToList(),
-            Entries = _entries.ToDictionary(pair => pair.Key, pair => pair.Value),
-            EntryRecords = _entryRecords.Values.ToList(),
-        };
-
-        var directory = Path.GetDirectoryName(_path);
-        if (!string.IsNullOrEmpty(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        var temporary = _path + ".tmp";
-        File.WriteAllText(temporary, JsonSerializer.Serialize(snapshot, DurableJson.Options));
-        File.Move(temporary, _path, overwrite: true);
-    }
-
-    private void Load()
-    {
-        var snapshot = JsonSerializer.Deserialize<StoreSnapshot>(File.ReadAllText(_path!), DurableJson.Options);
-        if (snapshot is null)
-        {
-            return;
-        }
-
-        _sequence = snapshot.Sequence;
-        foreach (var conversation in snapshot.Conversations)
-        {
-            _conversations[conversation.Id] = conversation;
-        }
-
-        foreach (var task in snapshot.Tasks)
-        {
-            _tasks[task.Id] = task;
-        }
-
-        foreach (var document in snapshot.Documents)
-        {
-            var state = new DocumentState(document.Kind, document.OwnerId, document.Fork);
-            foreach (var version in document.Versions)
-            {
-                state.Versions.Add(new DocumentVersion(version.EntryId, version.Value.Clone(), version.Sequence));
-            }
-
-            _documents[DocumentKey(document.Kind, document.OwnerId)] = state;
-        }
-
-        foreach (var pair in snapshot.Entries)
-        {
-            _entries[pair.Key] = pair.Value;
-        }
-
-        foreach (var record in snapshot.EntryRecords)
-        {
-            _entryRecords[record.Id] = record;
-        }
-    }
+    /// <summary>
+    /// The provider behind this store. The harness reaches for it to write the
+    /// records a transaction owns -- a fork's inherited entries, a copied document.
+    /// </summary>
+    internal IDurableStoreProvider Provider => _provider;
 }
 
 /// <summary>A transaction: the only way to write durable state.</summary>
 public sealed class Transaction
 {
-    private readonly DurableStore _store;
+    private readonly IDurableStoreProvider _provider;
 
-    internal Transaction(DurableStore store) => _store = store;
+    internal Transaction(DurableStore store) => _provider = store.Provider;
 
     /// <summary>Creates a conversation and returns its record.</summary>
     public ConversationRecord CreateConversation(
@@ -942,28 +1236,28 @@ public sealed class Transaction
         string? parentConversationId = null,
         string? forkEntryId = null)
     {
-        var id = $"c{_store.NextSequence()}";
+        var id = $"c{_provider.NextSequence()}";
         var record = new ConversationRecord(id, parentConversationId, forkEntryId)
         {
             OwnerTaskId = ownerTaskId,
             OwnerConversationId = ownerConversationId,
         };
-        _store.AddConversation(record);
+        _provider.AddConversation(record);
         return record;
     }
 
     /// <summary>Appends an entry to a conversation and returns its id.</summary>
     public string AppendEntry(string conversationId, string kind, string? data = null)
     {
-        var entryId = $"e{_store.NextSequence()}";
-        _store.AddEntry(conversationId, entryId);
+        var entryId = $"e{_provider.NextSequence()}";
+        _provider.AddEntry(conversationId, entryId);
         return entryId;
     }
 
     /// <summary>Reads an editable copy of a document, creating it on first use.</summary>
     public DocumentDraft<T> Doc<T>(DocumentDefinition<T> definition, string ownerId)
     {
-        var state = _store.EnsureDocument(definition.Kind, ownerId, definition.Fork);
+        var state = _provider.EnsureDocument(definition.Kind, ownerId, definition.Fork);
         var current = state.Latest is { } latest
             ? latest.Deserialize<T>(DurableJson.Options)!
             : definition.Initial();
@@ -978,20 +1272,20 @@ public sealed class Transaction
         string? ownerTaskId = null,
         bool background = false)
     {
-        var record = new DurableTaskRecord($"t{_store.NextSequence()}", definition.Name, input, definition.Initial())
+        var record = new DurableTaskRecord($"t{_provider.NextSequence()}", definition.Name, input, definition.Initial())
         {
             OwnerConversationId = ownerConversationId,
             OwnerTaskId = ownerTaskId,
             Background = background,
         };
-        _store.AddTask(record);
+        _provider.AddTask(record);
         return record;
     }
 
     internal void CommitDocument<T>(DocumentDefinition<T> definition, string ownerId, T value, string entryId)
     {
-        var state = _store.EnsureDocument(definition.Kind, ownerId, definition.Fork);
-        _store.RecordDocumentVersion(state, entryId, DurableJson.ToElement(value));
+        var state = _provider.EnsureDocument(definition.Kind, ownerId, definition.Fork);
+        _provider.RecordDocumentVersion(state, entryId, DurableJson.ToElement(value));
     }
 }
 
@@ -1628,11 +1922,11 @@ public sealed class DurableHarness : IAsyncDisposable
         {
             var created = tx.CreateConversation(parentConversationId: parent.Id, forkEntryId: entryId);
             // The fork inherits the parent's transcript up to the entry it was taken at.
-            Store.CopyEntries(parent.Id, created.Id, entryId);
+            Store.Provider.CopyEntries(parent.Id, created.Id, entryId);
             // Materialize first: copying a document adds to the same collection being enumerated.
             foreach (var document in Store.Documents.Where(d => d.OwnerId == parent.Id).ToList())
             {
-                Store.CopyDocument(document, created.Id, entryId);
+                Store.Provider.CopyDocument(document, created.Id, entryId);
             }
 
             return Task.FromResult(created);
@@ -1717,6 +2011,9 @@ public sealed class DurableHarness : IAsyncDisposable
         if (record.Status == TaskStatus.Running)
         {
             record.Restarts++;
+            // The restart count is part of the task's durable state, so the provider
+            // is told about it before the transaction commits.
+            Store.Provider.UpdateTask(record);
             await Store.CommitAsync(_ => Task.CompletedTask);
         }
 
@@ -2121,7 +2418,7 @@ internal sealed class UndoLog
         _actions.Add(restore);
 
     /// <summary>Undoes every recorded mutation, most recent first.</summary>
-    public void Undo(DurableStore store)
+    public void Undo(IDurableStoreProvider provider)
     {
         for (var i = _actions.Count - 1; i >= 0; i--)
         {
@@ -2135,28 +2432,8 @@ internal sealed class UndoLog
     /// Records the task's own state, so a failed phase leaves the checkpoint where
     /// it was and the task can be resumed.
     /// </summary>
-    public void Restore(DurableTaskRecord task)
-    {
-        var status = task.Status;
-        var checkpoint = task.Checkpoint;
-        var waitingOn = task.WaitingOn.ToList();
-        var outcome = task.Outcome;
-        var memos = task.Memos.ToDictionary(pair => pair.Key, pair => pair.Value);
-
-        _actions.Add(() =>
-        {
-            task.Status = status;
-            task.Checkpoint = checkpoint;
-            task.WaitingOn.Clear();
-            task.WaitingOn.AddRange(waitingOn);
-            task.Outcome = outcome;
-            task.Memos.Clear();
-            foreach (var (key, value) in memos)
-            {
-                task.Memos[key] = value;
-            }
-        });
-    }
+    public void Restore(TaskStateSnapshot snapshot, DurableTaskRecord task) =>
+        _actions.Add(() => snapshot.ApplyTo(task));
 }
 
 /// <summary>Convenience helpers for the durable layer.</summary>
