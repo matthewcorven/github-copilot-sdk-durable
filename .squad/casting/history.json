@@ -1,0 +1,22 @@
+{
+  "universe_usage_history": [
+    {
+      "universe": "descriptive",
+      "assigned_at": "2026-10-23T12:50:00.000Z"
+    }
+  ],
+  "assignment_cast_snapshots": {
+    "init-2026-10-23": {
+      "universe": "descriptive",
+      "agents": [
+        "lead",
+        "core-engineer",
+        "polyglot-engineer",
+        "tester",
+        "docs"
+      ]
+    }
+  },
+  "transaction_id": "41de27ee-4f39-4748-935a-995aa4dc8d32",
+  "registry_revision": 1
+}

@@ -1,0 +1,12 @@
+[
+  {
+    "id": "6c7a2dda-f46b-4f74-849a-1b199d8fc084",
+    "class": "DECISION",
+    "loadGuidance": "ALWAYS",
+    "title": "User directive — dev integration branch, release tags from dev",
+    "path": ".squad/decisions/inbox/copilot-app-via-copilot-user-directive-dev-integration-branch-release-tags-from-dev-6c7a2dda.md",
+    "status": "active",
+    "createdAt": "2026-10-23T17:41:26.645Z",
+    "updatedAt": "2026-10-23T17:41:26.645Z"
+  }
+]
