@@ -2109,7 +2109,7 @@ internal sealed class UndoLog
     private readonly List<Action> _actions = [];
 
     /// <summary>Records that a key was added to a dictionary, so it can be removed again.</summary>
-    public void Remove<TKey, TValue>(Dictionary<TKey, TValue> map, TKey key) =>
+    public void Remove<TKey, TValue>(Dictionary<TKey, TValue> map, TKey key) where TKey : notnull =>
         _actions.Add(() => map.Remove(key));
 
     /// <summary>Records that an item was appended to a list, so it can be removed again.</summary>

@@ -226,12 +226,20 @@ process installs — that is the whole point of example 30.
 
 ## Validating the suite
 
+Validation runs in two complementary layers:
+
+1. **Self-asserting examples:** Every single example includes explicit `Check.*` assertions testing the durable invariants it claims (no duplicate executions across crash restarts, transaction rollback on mid-commit failure, document fork isolation, child-task abort cascade, etc.). An unhandled exception or failed assertion causes `validate.sh` to fail immediately.
+2. **xUnit test suite (`tests/Durable.Tests`):** Focused unit and integration tests verifying `DurableStore` rollback semantics, fork entry filtering and state independence, store crash recovery with memo idempotency, and abort propagation.
+
 ```bash
-# Every example: compile and run.
+# Every example: compile, run xUnit suite, and run all 31 examples.
 ./scripts/validate.sh
 
-# Only the examples that do not call a model (fast).
+# Fast offline validation: run xUnit suite + examples that do not call a model.
 SKIP_LIVE=1 ./scripts/validate.sh
+
+# Run only the xUnit test suite for the library.
+dotnet test tests/Durable.Tests
 
 # Compile only, no model calls at all.
 COMPILE_ONLY=1 ./scripts/validate.sh
