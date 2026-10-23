@@ -29,7 +29,13 @@ await using var harness = await DurableHarness.OpenAsync(store, registry);
 var root = await harness.RootAsync(new AgentChoices { Extensions = ["coding"] });
 
 // Attach before submitting, so the stream covers the whole run.
-var print = (object? value) => Console.WriteLine(JsonSerializer.Serialize(value, value!.GetType(), DurableJson.Options));
+var lines = new List<string>();
+var print = (object? value) =>
+{
+    var line = JsonSerializer.Serialize(value, value!.GetType(), DurableJson.Options);
+    lines.Add(line);
+    Console.WriteLine(line);
+};
 
 // The first line is the current state: the snapshot a late joiner would see.
 var snapshot = await root.ContextAsync();
@@ -58,3 +64,12 @@ await root.SubmitAsync(prompt);
 
 // Let the last batch reach the listener before stopping.
 await Task.Delay(100);
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// Every line is one JSON event, and the run produced a snapshot and at least
+// one event.
+Check.That(lines.Count >= 1, "the run produced at least one line");
+Check.That(lines.All(line => line.TrimStart().StartsWith('{')), "every line is a JSON object");
+Check.That(lines.Any(line => line.Contains("\"type\":\"snapshot\"")), "the first line is the snapshot");
+Check.That(lines.Any(line => line.Contains("\"type\":\"event\"")), "the run produced events");

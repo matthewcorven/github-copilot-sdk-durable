@@ -117,7 +117,8 @@ var declined = await harness.CreateTaskAsync(
     Checkout,
     DurableJson.ToElement(new Dictionary<string, string> { ["cards"] = "visa-1,expired-2,visa-3,visa-4" }),
     ownerConversationId: root.Id);
-Console.WriteLine($"  checkout: {(await harness.WaitForTaskAsync(declined.Id)).Status}");
+var declinedOutcome = await harness.WaitForTaskAsync(declined.Id);
+Console.WriteLine($"  checkout: {declinedOutcome.Status}");
 
 // The customer cancels:
 Console.WriteLine("The customer cancels:");
@@ -135,6 +136,40 @@ Console.WriteLine($"  checkout: {(await harness.WaitForTaskAsync(cancelled.Id)).
 // The task graph after the abort.
 Console.WriteLine("Task graph:");
 PrintGraph(harness.TaskGraph());
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// The checkout owns four payment children, and the graph shows the ownership
+// edges.
+var graph = harness.TaskGraph();
+var checkoutChildren = graph.Where(pair => pair.Owner == declined.Id).ToList();
+Check.Equal(4, checkoutChildren.Count, "the checkout owns four payment children");
+Check.That(checkoutChildren.All(pair => pair.Task.Name == "example.payment"), "the children are payments");
+Check.That(graph.Any(pair => pair.Task.Id == declined.Id && pair.Owner == root.Id), "the checkout is owned by the conversation");
+
+// One card was declined, so the checkout failed rather than completing.
+Check.Equal("failed", declinedOutcome.Status, "a declined payment fails the checkout");
+Check.That(declinedOutcome.Error is not null, "the failed checkout carries an error");
+
+// The declined card was never charged, and the other cards were.
+Check.That(!charged.Contains("expired-2"), "the declined card was never charged");
+Check.That(charged.Contains("visa-1"), "the other cards were charged");
+
+// The customer cancels: the checkout is aborted, and its children are aborted
+// with it, so their effects are undone.
+var cancelledOutcome = await harness.WaitForTaskAsync(cancelled.Id);
+Check.Equal("aborted", cancelledOutcome.Status, "the cancelled checkout is aborted");
+Check.That(!charged.Contains("visa-5"), "an aborted checkout undoes its effects");
+Check.That(!charged.Contains("visa-6"), "every aborted payment undoes its effect");
+
+var cancelledChildren = graph.Where(pair => pair.Owner == cancelled.Id).ToList();
+Check.Equal(4, cancelledChildren.Count, "the cancelled checkout still owns its four children");
+Check.That(
+    cancelledChildren.All(pair => pair.Task.Status == Durable.TaskStatus.Terminal),
+    "every child of an aborted checkout is terminal");
+Check.That(
+    cancelledChildren.All(pair => pair.Task.Outcome?.GetProperty("status").GetString() == "aborted"),
+    "every child of an aborted checkout is aborted, not completed");
 
 /// <summary>Print the live tasks as a tree along their owner edges.</summary>
 static void PrintGraph(IReadOnlyList<(DurableTaskRecord Task, string? Owner)> graph)

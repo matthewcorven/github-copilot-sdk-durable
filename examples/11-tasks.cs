@@ -81,3 +81,21 @@ var record = store.Task(paymentId.Id)!;
 Console.WriteLine($"task status: {record.Status}");
 Console.WriteLine($"task checkpoint: {record.Checkpoint.GetProperty("phase").GetString()}");
 Console.WriteLine($"payments charged: {payments.Count}");
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// The task ran to completion, and the receipt is the durable result.
+Check.Equal("completed", paid.Status, "the task completed");
+Check.Equal(500, paid.Result!.Value.GetProperty("receipt").GetInt32(), "the receipt holds the amount that was charged, in cents");
+Check.Equal(1, payments.Count, "the payment effect happened exactly once");
+Check.Equal(500, payments.Values.Single(), "the charged amount is the one that was asked for, in cents");
+
+// The task record is durable: its status, checkpoint, and outcome are all saved.
+Check.Equal(Durable.TaskStatus.Terminal, record.Status, "the saved record is terminal");
+Check.Equal("charge", record.Checkpoint.GetProperty("phase").GetString(), "the saved checkpoint is the last phase");
+Check.That(record.Outcome is not null, "the saved record holds the outcome");
+
+// A task that is already terminal does not run again.
+var rerun = await harness.WaitForTaskAsync(paymentId.Id);
+Check.Equal("completed", rerun.Status, "waiting on a finished task returns its outcome");
+Check.Equal(1, payments.Count, "waiting on a finished task does not repeat the effect");

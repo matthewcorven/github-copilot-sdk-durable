@@ -75,6 +75,8 @@ CurrentDirectory = root.Agent().WorkingDirectory ?? workspace;
 
 var answer = await root.SubmitAsync("Use the run_shell tool to run 'pwd', then tell me the directory.");
 Console.WriteLine($"answer: {answer?.Data.Content}");
+var first = answer;
+var firstDirectory = root.Agent().WorkingDirectory;
 
 // The user switches the project directory.
 await root.ConfigureAsync(new AgentChoices
@@ -87,6 +89,18 @@ userSettings.ParallelTools = false;
 
 var second = await root.SubmitAsync("Use the run_shell tool to run 'pwd' again, then tell me the directory.");
 Console.WriteLine($"answer: {second?.Data.Content}");
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// The environment follows the conversation's directory: changing the stored
+// working directory changes where the tool runs, with no restart.
+Check.Equal(workspace, firstDirectory, "the conversation's working directory is the one that was configured");
+Check.Contains(first?.Data.Content ?? "", workspace, "the tool ran in the conversation's directory");
+Check.Equal(app, root.Agent().WorkingDirectory, "the conversation's working directory changed");
+Check.Contains(second?.Data.Content ?? "", app, "the tool followed the conversation's new directory");
+// The app directory is inside the workspace, so the answer contains the
+// workspace path as a prefix. What matters is that it names the app directory.
+Check.Contains(second?.Data.Content ?? "", app, "the tool ran in the new directory");
 
 Console.WriteLine($"live settings: maxRetries={settings.Retry().MaxRetries} toolExecution={settings.ToolExecution()}");
 

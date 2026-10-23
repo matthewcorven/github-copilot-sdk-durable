@@ -58,6 +58,10 @@ var subagent = await harness.CreateConversationAsync(new AgentChoices
 
 // The rendered system message is what the model sees for each conversation.
 var rootAgent = root.Agent();
+
+// The instructions as they stand before the reconfigure below.
+var rootInstructions = root.Agent().Instructions;
+var subagentInstructions = subagent.Agent().Instructions;
 var rootSections = rootAgent.Extensions.SelectMany(extension => extension.Sections).ToList();
 Console.WriteLine("root system prompt:");
 Console.WriteLine(harness.BuildSystemMessage(rootAgent, rootSections, root));
@@ -80,5 +84,18 @@ Console.WriteLine($"root cwd now: {root.Agent().WorkingDirectory}");
 // The stored choices are per conversation: the subagent is unaffected.
 Console.WriteLine($"subagent cwd still: {subagent.Agent().WorkingDirectory}");
 Console.WriteLine($"subagent instructions still: {subagent.Agent().Instructions}");
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// The stored choices are per conversation: reconfiguring the root leaves the
+// subagent alone.
+Check.Equal(packages, root.Agent().WorkingDirectory, "the root's working directory changed");
+Check.That(subagent.Agent().WorkingDirectory != packages, "the subagent's working directory is unchanged");
+Check.Equal(subagentInstructions, subagent.Agent().Instructions, "the subagent's instructions are unchanged");
+
+// The prompt sections are rendered per request, not stored: the app keeps no
+// prompt state, so the same choices always produce the same prompt.
+Check.Equal(rootInstructions, root.Agent().Instructions, "the root's instructions are unchanged");
+Check.That(root.Agent().Extensions.Count >= 2, "the root selects both extensions");
 
 Directory.Delete(repo, recursive: true);

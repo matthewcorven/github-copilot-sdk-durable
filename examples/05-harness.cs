@@ -74,3 +74,20 @@ Console.WriteLine($"resolved: {agent.ReasoningEffort} [{string.Join(", ", agent.
 var again = await harness.RootAsync(new AgentChoices { ReasoningEffort = "high" });
 Console.WriteLine($"root is stable: {again.Id == root.Id}");
 Console.WriteLine($"stored agent unchanged: {root.Choices()!.ReasoningEffort}");
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// The harness resolves the stored names against the registry, so the agent is
+// the stored choices bound to live code.
+Check.Equal("low", root.Choices()!.ReasoningEffort, "the stored reasoning effort is the one that was configured");
+Check.Equal("low", agent.ReasoningEffort, "the resolved agent carries the stored reasoning effort");
+Check.Sequence(new[] { "files" }, agent.Extensions.Select(e => e.Name), "the resolved agent carries the selected extension");
+Check.Sequence(new[] { "read" }, agent.Tools.Select(t => t.Name), "the resolved agent carries the selected tool");
+
+// The root conversation is stable: a second RootAsync() returns the same one and
+// does not overwrite the stored choices.
+Check.Equal(root.Id, again.Id, "the root conversation is stable across calls");
+Check.Equal("low", root.Choices()!.ReasoningEffort, "a second RootAsync() does not overwrite the stored choices");
+
+// The document written in a commit is readable.
+Check.Equal("root notes", root.Snapshot(Notes)!["text"], "the committed document value is readable");

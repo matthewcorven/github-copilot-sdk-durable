@@ -57,3 +57,12 @@ using var subscription = root.Session.On<SessionEvent>(evt =>
 var answer = await run;
 Console.WriteLine($"answer: {answer?.Data.Content}");
 Console.WriteLine($"deltas received after joining: {deltas.Count}");
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// A late joiner gets the current state first, then the live events.
+Check.That(snapshot.Count >= 1, "the late joiner received the current state");
+Check.That(snapshot.Any(evt => evt is UserMessageEvent), "the snapshot holds the user message");
+Check.That(deltas.Count >= 1, "the late joiner received live deltas");
+Check.That(answer is not null, "the run finished");
+Check.That(answer!.Data.Content.Trim().Length > 0, "the answer is not empty");

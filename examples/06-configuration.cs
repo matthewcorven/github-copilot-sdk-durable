@@ -64,6 +64,11 @@ await root.ConfigureAsync(new AgentChoices
 
 Console.WriteLine($"stored: {root.Choices()!.Model} / {root.Choices()!.ReasoningEffort} / [{string.Join(", ", root.Choices()!.Tools!)}]");
 var agent = root.Agent();
+
+// The stored choices as they stand right now, before a later configure() replaces them.
+var storedModel = root.Choices()!.Model;
+var storedEffort = root.Choices()!.ReasoningEffort;
+var storedTools = root.Choices()!.Tools!;
 Console.WriteLine($"model: {agent.Model} thinking: {agent.ReasoningEffort} tools: [{string.Join(", ", tools())}]");
 
 // Deselect an extension; `null` clears a stored field back to the host default.
@@ -75,6 +80,7 @@ await root.ConfigureAsync(new AgentChoices
     Tools = ["write", "read"],
 });
 Console.WriteLine($"without search: [{string.Join(", ", tools())}]");
+var withoutSearch = tools();
 
 // Stored names outlive the code. The conversation selects exactly these two
 // extensions; uninstalling "files" leaves it selected, and requests just stop
@@ -86,12 +92,45 @@ await root.ConfigureAsync(new AgentChoices
 });
 registry.Uninstall("files");
 Console.WriteLine($"files uninstalled: [{string.Join(", ", tools())}]");
+var filesUninstalled = tools();
 registry.Install(Files);
 Console.WriteLine($"files reinstalled: [{string.Join(", ", tools())}]");
+var filesReinstalled = tools();
 
 // Settings changes need no commit; the next request uses the new value.
 settings.Retry.MaxRetries = 10;
 Console.WriteLine($"live settings: maxRetries={settings.Retry.MaxRetries} toolExecution={settings.ToolExecution}");
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// The stored choices are the source of truth, and the resolved agent is those
+// choices bound to the registry's code.
+Check.Equal("gpt-6-luna", storedModel, "the stored model is the one that was configured");
+Check.Equal("high", storedEffort, "the stored reasoning effort is the one that was configured");
+Check.Sequence(new[] { "write", "read" }, storedTools, "the stored tool names are the ones that were configured");
+Check.Sequence(new[] { "write", "read" }, agent.Tools.Select(t => t.Name), "the resolved tools follow the stored names");
+
+// A later configure() replaces the stored choices wholesale: a field it omits
+// is cleared, not merged.
+Check.Equal<string?>(null, root.Choices()!.ReasoningEffort, "a later configure() clears the fields it omits");
+Check.That(root.Choices()!.Tools is null, "a later configure() clears the tools it omits");
+
+// Deselecting an extension removes its tools from the resolved agent.
+Check.That(!withoutSearch.Contains("grep"), "the deselected extension's tools are gone");
+Check.That(withoutSearch.Contains("read"), "the still-selected extension keeps its tools");
+
+// Stored names outlive the code: uninstalling "files" leaves it selected, and
+// the conversation just stops offering its tools until it is back.
+Check.That(root.Choices()!.Extensions!.Contains("files"), "the uninstalled extension is still selected by name");
+Check.That(!filesUninstalled.Contains("read"), "an uninstalled extension contributes no tools");
+Check.That(filesUninstalled.Contains("grep"), "the other selected extension still contributes its tools");
+Check.That(filesReinstalled.Contains("read"), "reinstalling the extension brings its tools back");
+
+// Settings are read at every use and never stored, so a change takes effect
+// immediately and leaves no trace in the store.
+settings.Retry.MaxRetries = 10;
+Check.Equal(10, settings.Retry.MaxRetries, "a settings change takes effect immediately");
+Check.That(root.Choices()!.GetType().GetProperty("Retry") is null, "settings are not part of the stored choices");
 
 /// <summary>Harness-wide run policy, read at every use and never stored.</summary>
 public sealed class HarnessSettings

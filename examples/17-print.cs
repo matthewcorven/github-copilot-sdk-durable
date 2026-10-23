@@ -29,3 +29,10 @@ var root = await harness.RootAsync(new AgentChoices { Extensions = ["coding"] })
 // The host awaits its own submission, not global idle.
 var answer = await root.SubmitAsync(prompt);
 Console.WriteLine(answer?.Data.Content ?? "(no answer)");
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// The host awaited its own submission: the answer is complete, not a fragment.
+Check.That(answer is not null, "the model answered");
+Check.That(answer!.Data.Content.Trim().Length > 0, "the answer is not empty");
+Check.That(root.Answers.Count == 1, "the turn produced exactly one answer");

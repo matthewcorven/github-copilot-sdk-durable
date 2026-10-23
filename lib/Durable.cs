@@ -498,6 +498,13 @@ public sealed class DurableStore
     private readonly Dictionary<string, EntryRecord> _entryRecords = [];
     private long _sequence;
 
+    /// <summary>
+    /// The undo log of the transaction in flight. A transaction writes straight into
+    /// the store's collections, so a throw has to undo what it wrote. The log is
+    /// null when no transaction is running.
+    /// </summary>
+    private UndoLog? _undo;
+
     /// <summary>Creates a store. When <paramref name="path"/> is given, state is persisted to that file.</summary>
     public DurableStore(string? path = null)
     {
@@ -524,7 +531,23 @@ public sealed class DurableStore
         try
         {
             var transaction = new Transaction(this);
-            var result = await body(transaction);
+            var undo = new UndoLog();
+            _undo = undo;
+            T result;
+            try
+            {
+                result = await body(transaction);
+            }
+            catch
+            {
+                // The transaction failed: undo everything it wrote, so the store is
+                // left exactly as it was before the transaction started.
+                undo.Undo(this);
+                _undo = null;
+                throw;
+            }
+
+            _undo = null;
             Persist();
             return result;
         }
@@ -572,9 +595,36 @@ public sealed class DurableStore
                 return TaskCommit.Failed("unknown task");
             }
 
-            var transaction = new Transaction(this);
-            var next = await commit(transaction);
+            // A terminal task's outcome is final. A commit that arrives after the
+            // task finished -- a durable timer waking up, say -- must not overwrite
+            // it.
+            if (task.Status == TaskStatus.Terminal)
+            {
+                return task.Outcome is { } existing
+                    ? TaskCommit.Completed(existing)
+                    : TaskCommit.Completed(DurableJson.ToElement(new TaskOutcome("completed")));
+            }
 
+            var transaction = new Transaction(this);
+            var undo = new UndoLog();
+            _undo = undo;
+            TaskCommit next;
+            try
+            {
+                next = await commit(transaction);
+            }
+            catch
+            {
+                // The phase failed: undo everything it wrote, including the task's
+                // own state, so the checkpoint stays where it was and the task can
+                // be resumed.
+                undo.Undo(this);
+                _undo = null;
+                throw;
+            }
+
+            _undo = null;
+            undo.Restore(task);
             task.Status = next.Status;
             if (next.Checkpoint is { } checkpoint)
             {
@@ -609,6 +659,14 @@ public sealed class DurableStore
             if (!_tasks.TryGetValue(taskId, out var task))
             {
                 return TaskCommit.Failed("unknown task");
+            }
+
+            // A terminal task's outcome is final.
+            if (task.Status == TaskStatus.Terminal)
+            {
+                return task.Outcome is { } existing
+                    ? TaskCommit.Completed(existing)
+                    : TaskCommit.Completed(DurableJson.ToElement(new TaskOutcome("completed")));
             }
 
             var next = commit();
@@ -690,9 +748,18 @@ public sealed class DurableStore
 
     internal static string DocumentKey(string kind, string ownerId) => $"{kind}@{ownerId}";
 
-    internal long NextSequence() => ++_sequence;
+    internal long NextSequence()
+    {
+        var sequence = ++_sequence;
+        _undo?.Sequence(() => _sequence = sequence - 1);
+        return sequence;
+    }
 
-    internal void AddConversation(ConversationRecord record) => _conversations[record.Id] = record;
+    internal void AddConversation(ConversationRecord record)
+    {
+        _undo?.Remove(_conversations, record.Id);
+        _conversations[record.Id] = record;
+    }
 
     internal void AddEntry(string conversationId, string entryId)
     {
@@ -700,9 +767,12 @@ public sealed class DurableStore
         {
             entries = [];
             _entries[conversationId] = entries;
+            _undo?.Remove(_entries, conversationId);
         }
 
+        _undo?.Append(entries);
         entries.Add(entryId);
+        _undo?.Remove(_entryRecords, entryId);
         _entryRecords[entryId] = new EntryRecord(entryId, conversationId, "entry", null, NextSequence());
     }
 
@@ -717,6 +787,7 @@ public sealed class DurableStore
             ? source.ToList()
             : source.TakeWhile(entry => entry != forkEntryId).Append(forkEntryId).ToList();
 
+        _undo?.Remove(_entries, toConversationId);
         _entries[toConversationId] = inherited;
     }
 
@@ -727,6 +798,7 @@ public sealed class DurableStore
         {
             state = new DocumentState(kind, ownerId, fork);
             _documents[key] = state;
+            _undo?.Remove(_documents, key);
         }
 
         return state;
@@ -734,10 +806,16 @@ public sealed class DurableStore
 
     internal void RecordDocumentVersion(DocumentState state, string entryId, JsonElement value)
     {
+        _undo?.Append(state.Versions);
         state.Versions.Add(new DocumentVersion(entryId, value.Clone(), NextSequence()));
     }
 
-    internal DurableTaskRecord AddTask(DurableTaskRecord record) => _tasks[record.Id] = record;
+    internal DurableTaskRecord AddTask(DurableTaskRecord record)
+    {
+        _undo?.Remove(_tasks, record.Id);
+        _tasks[record.Id] = record;
+        return record;
+    }
 
     /// <summary>
     /// Schedules a task to run. The harness owns the runner, so the store asks it to
@@ -760,6 +838,7 @@ public sealed class DurableStore
 
         if (value is { } element)
         {
+            _undo?.Append(target.Versions);
             target.Versions.Add(new DocumentVersion(forkEntryId ?? string.Empty, element.Clone(), NextSequence()));
         }
     }
@@ -1644,6 +1723,14 @@ public sealed class DurableHarness : IAsyncDisposable
         var runtime = new TaskRuntime(Store, record, definition, cancellationToken);
         while (!cancellationToken.IsCancellationRequested)
         {
+            // The task may have been aborted while it was waiting on its children.
+            // An abort is durable: the record is terminal, so the run stops here
+            // instead of carrying on to the next phase.
+            if (Store.Task(taskId)?.Status == TaskStatus.Terminal)
+            {
+                break;
+            }
+
             var phase = record.Checkpoint.ValueKind == JsonValueKind.Object
                 && record.Checkpoint.TryGetProperty("phase", out var phaseElement)
                     ? phaseElement.GetString() ?? "run"
@@ -1759,6 +1846,13 @@ public sealed class DurableHarness : IAsyncDisposable
         if (definition is null)
         {
             return;
+        }
+
+        // The children go first: a parent that is aborted while waiting on them
+        // must not leave them running.
+        foreach (var child in Store.Tasks.Where(task => task.OwnerTaskId == taskId))
+        {
+            await AbortTaskAsync(child.Id, cancellationToken);
         }
 
         var runtime = new TaskRuntime(Store, record, definition, cancellationToken);
@@ -1937,6 +2031,18 @@ public sealed class DurableHarness : IAsyncDisposable
         return config;
     }
 
+    /// <summary>
+    /// Renders the prompt sections for a conversation, the way they are rendered
+    /// before each request. A section that reads a durable document sees the
+    /// document's value at the time of the call.
+    /// </summary>
+    public async Task<string> RenderSectionsAsync(DurableConversation conversation)
+    {
+        var resolved = conversation.Agent();
+        var sections = resolved.Extensions.SelectMany(extension => extension.Sections).ToList();
+        return await RenderSectionsAsync(resolved, sections, conversation);
+    }
+
     /// <summary>Renders the prompt sections for a request.</summary>
     private static async Task<string> RenderSectionsAsync(
         ResolvedAgent agent,
@@ -1993,6 +2099,66 @@ public sealed class DurableHarness : IAsyncDisposable
     }
 }
 
+/// <summary>
+/// The undo log of a transaction in flight. A transaction writes straight into the
+/// store's collections, so a throw has to undo what it wrote. The log records the
+/// inverse of every mutation, and replays it in reverse when the transaction fails.
+/// </summary>
+internal sealed class UndoLog
+{
+    private readonly List<Action> _actions = [];
+
+    /// <summary>Records that a key was added to a dictionary, so it can be removed again.</summary>
+    public void Remove<TKey, TValue>(Dictionary<TKey, TValue> map, TKey key) =>
+        _actions.Add(() => map.Remove(key));
+
+    /// <summary>Records that an item was appended to a list, so it can be removed again.</summary>
+    public void Append<T>(List<T> list) =>
+        _actions.Add(() => list.RemoveAt(list.Count - 1));
+
+    /// <summary>Records a restore action, such as resetting the write sequence.</summary>
+    public void Sequence(Action restore) =>
+        _actions.Add(restore);
+
+    /// <summary>Undoes every recorded mutation, most recent first.</summary>
+    public void Undo(DurableStore store)
+    {
+        for (var i = _actions.Count - 1; i >= 0; i--)
+        {
+            _actions[i]();
+        }
+
+        _actions.Clear();
+    }
+
+    /// <summary>
+    /// Records the task's own state, so a failed phase leaves the checkpoint where
+    /// it was and the task can be resumed.
+    /// </summary>
+    public void Restore(DurableTaskRecord task)
+    {
+        var status = task.Status;
+        var checkpoint = task.Checkpoint;
+        var waitingOn = task.WaitingOn.ToList();
+        var outcome = task.Outcome;
+        var memos = task.Memos.ToDictionary(pair => pair.Key, pair => pair.Value);
+
+        _actions.Add(() =>
+        {
+            task.Status = status;
+            task.Checkpoint = checkpoint;
+            task.WaitingOn.Clear();
+            task.WaitingOn.AddRange(waitingOn);
+            task.Outcome = outcome;
+            task.Memos.Clear();
+            foreach (var (key, value) in memos)
+            {
+                task.Memos[key] = value;
+            }
+        });
+    }
+}
+
 /// <summary>Convenience helpers for the durable layer.</summary>
 public static class DurableExtensions
 {
@@ -2004,6 +2170,73 @@ public static class DurableExtensions
 
     /// <summary>Reads the tool name from a tool execution event.</summary>
     public static string ToolName(this ToolExecutionStartEvent tool) => tool.Data.ToolName;
+}
+
+/// <summary>
+/// Assertions for the examples. Every example checks the durable invariant it
+/// demonstrates, so a broken guarantee fails the run instead of printing a
+/// plausible-looking value.
+/// </summary>
+public static class Check
+{
+    /// <summary>Asserts that a condition holds.</summary>
+    public static void That(bool condition, string because)
+    {
+        if (!condition)
+        {
+            throw new InvalidOperationException($"Assertion failed: {because}");
+        }
+    }
+
+    /// <summary>Asserts that two values are equal.</summary>
+    public static void Equal<T>(T expected, T actual, string because)
+    {
+        if (!EqualityComparer<T>.Default.Equals(expected, actual))
+        {
+            throw new InvalidOperationException(
+                $"Assertion failed: {because}\n  expected: {Format(expected)}\n  actual:   {Format(actual)}");
+        }
+    }
+
+    /// <summary>Asserts that two sequences hold the same values in the same order.</summary>
+    public static void Sequence<T>(IEnumerable<T> expected, IEnumerable<T> actual, string because)
+    {
+        var expectedList = expected.ToList();
+        var actualList = actual.ToList();
+        if (!expectedList.SequenceEqual(actualList))
+        {
+            throw new InvalidOperationException(
+                $"Assertion failed: {because}\n  expected: [{string.Join(", ", expectedList.Select(Format))}]\n  actual:   [{string.Join(", ", actualList.Select(Format))}]");
+        }
+    }
+
+    /// <summary>Asserts that a value is not null, and returns it.</summary>
+    public static T NotNull<T>(T? value, string because) where T : class
+    {
+        if (value is null)
+        {
+            throw new InvalidOperationException($"Assertion failed: {because}\n  expected: not null\n  actual:   null");
+        }
+
+        return value;
+    }
+
+    /// <summary>Asserts that a string contains a substring.</summary>
+    public static void Contains(string haystack, string needle, string because)
+    {
+        if (!haystack.Contains(needle, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Assertion failed: {because}\n  expected to contain: {needle}\n  actual:              {haystack}");
+        }
+    }
+
+    private static string Format<T>(T value) => value switch
+    {
+        null => "(null)",
+        string text => $"\"{text}\"",
+        _ => value.ToString() ?? "(null)",
+    };
 }
 
 #pragma warning restore IL2026, IL3050

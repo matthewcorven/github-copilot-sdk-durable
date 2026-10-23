@@ -62,3 +62,16 @@ foreach (var conversation in harness.Store.Conversations)
 {
     Console.WriteLine($"conversation {conversation.Id}: owner conversation={conversation.OwnerConversationId ?? "(none)"}");
 }
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// The parent's tool call created a child conversation, and the child is
+// recorded in the store with the parent as its owner.
+var children = harness.Store.Conversations.Where(c => c.OwnerConversationId == parent.Id).ToList();
+Check.Equal(1, children.Count, "the subagent tool created exactly one child conversation");
+Check.NotNull(harness.Store.Conversation(children[0].Id), "the child conversation is in the store");
+Check.That(children[0].Id != parent.Id, "the child is a different conversation");
+
+// The parent's answer carries the child's answer back.
+Check.That(answer is not null, "the parent answered");
+Check.Contains(answer!.Data.Content, "2", "the parent's answer carries the child's answer back");

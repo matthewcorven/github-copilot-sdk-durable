@@ -88,3 +88,19 @@ foreach (var evt in context)
 
     Console.WriteLine($"system message: {system.Data.Content}");
 }
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// The tool wrote the document, and the document is the durable state: it
+// outlives the turn that produced it.
+Check.Sequence(new[] { "fix the build" }, chat.Snapshot(Todos) ?? [], "the tool wrote the todo into the document");
+Check.That(reply is not null, "the model answered");
+
+// The section is rendered per request and injected as additional context, so the
+// model sees the list on the next request without the app storing any prompt
+// state. The section reads the document, so it sees the value the tool wrote.
+var rendered = await harness.RenderSectionsAsync(chat);
+Check.Contains(rendered, "fix the build", "the section renders the todo list from the document");
+
+// The document is the durable state: it holds the todo the tool wrote.
+Check.Sequence(new[] { "fix the build" }, chat.Snapshot(Todos) ?? [], "the document holds the todo");

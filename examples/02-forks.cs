@@ -36,12 +36,13 @@ var firstEntry = await chat.CommitAsync(async tx =>
     return entry;
 });
 
-await chat.CommitAsync(async tx =>
+var secondEntry = await chat.CommitAsync(async tx =>
 {
     var entry = tx.AppendEntry(chat.Id, "note", "goodbye");
     var notes = tx.Doc(Notes, chat.Id);
     notes.Value["text"] = "after goodbye";
     notes.Save(entry);
+    return entry;
 });
 
 // A fork is a new conversation that continues from one entry of another. It
@@ -53,6 +54,9 @@ var branch = await harness.ForkAsync(chat, firstEntry);
 // The fork sees "hello" (inherited from the parent) but not "goodbye", which came later.
 Console.WriteLine($"fork transcript: {string.Join(", ", branch.Entries(10).Select(entry => entry))}");
 Console.WriteLine($"fork notes: {branch.Snapshot(Notes)!["text"]}");
+
+// The fork starts with the document value as of the fork entry.
+var forkNotesAtFork = branch.Snapshot(Notes)!["text"];
 
 // The fork's copy is independent: editing it leaves the parent unchanged.
 await branch.CommitAsync(async tx =>
@@ -68,3 +72,24 @@ Console.WriteLine($"parent notes after edit: {chat.Snapshot(Notes)!["text"]}");
 // The fork records where it came from.
 Console.WriteLine($"fork parent: {branch.Record.ParentConversationId}");
 Console.WriteLine($"fork entry: {branch.Record.ForkEntryId}");
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// A fork inherits the parent's transcript up to the fork entry, and nothing
+// after it.
+// Entries() reads newest first, so the fork's own edit comes before the inherited
+// entry it was forked at.
+var forkEntries = branch.Entries(10);
+Check.Equal(2, forkEntries.Count, "the fork holds the inherited entry and its own edit");
+Check.Equal(firstEntry, forkEntries[^1], "the inherited entry is the oldest one in the fork");
+Check.That(!forkEntries.Contains(secondEntry), "the fork did not inherit entries written after the fork entry");
+Check.Equal("after hello", forkNotesAtFork, "the fork starts with the document value as of the fork entry");
+
+// The fork's copy is independent: editing it leaves the parent unchanged.
+Check.Equal("changed only in the fork", branch.Snapshot(Notes)!["text"], "the fork holds its own edit");
+Check.Equal("after goodbye", chat.Snapshot(Notes)!["text"], "the parent is unchanged by the fork's edit");
+
+// The fork records where it came from.
+Check.Equal(chat.Id, branch.Record.ParentConversationId, "the fork records its parent");
+Check.Equal(firstEntry, branch.Record.ForkEntryId, "the fork records the entry it was taken at");
+Check.That(branch.Id != chat.Id, "the fork is a different conversation");

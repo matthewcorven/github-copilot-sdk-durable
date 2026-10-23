@@ -181,5 +181,17 @@ foreach (var (name, agent) in after)
 var listedAgain = await main.SubmitAsync("Use the subagent tool to list my subagents.");
 Console.WriteLine($"status after restart: {listedAgain?.Data.Content}");
 
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// The registry is durable: the background subagent survived the restart, and
+// the restarted process still knows about it.
+Check.That(after.ContainsKey("reader"), "the background subagent survived the restart");
+Check.Equal(
+    before["reader"]["conversationId"],
+    after["reader"]["conversationId"],
+    "the restarted process points at the same subagent conversation");
+Check.That(listedAgain is not null, "the restarted process can list the subagent");
+Check.Contains(listedAgain!.Data.Content, "reader", "the restarted process still knows the subagent by name");
+
 await second.DisposeAsync();
 Directory.Delete(directory, recursive: true);

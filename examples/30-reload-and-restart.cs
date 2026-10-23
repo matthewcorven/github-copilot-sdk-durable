@@ -114,12 +114,14 @@ gate.TrySetResult();
 await submission;
 
 Console.WriteLine($"call running during the reload: {root.Answers.LastOrDefault()}");
+var duringReload = root.Answers.LastOrDefault() ?? "";
 
 // The next call uses the new code.
 gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 holdOpen = false;
 await root.SubmitAsync("Call the version tool again and report what it returns.");
 Console.WriteLine($"next call: {root.Answers.LastOrDefault()}");
+var afterReload = root.Answers.LastOrDefault() ?? "";
 
 // ─── Restart ────────────────────────────────────────────────────────────────
 //
@@ -144,5 +146,17 @@ if (process.ExitCode != 0)
 {
     Console.WriteLine($"second phase failed ({process.ExitCode}): {error}");
 }
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// Running work finishes on the code it started with: the call that was in
+// flight during the reload returned v1, and the next call used v2.
+Check.Contains(duringReload, "v1", "the call running during the reload finished on the old code");
+Check.Contains(afterReload, "v2", "the next call used the reloaded code");
+
+// The second process opened the same store and found the conversation, still
+// selecting "versioned" by name.
+Check.Contains(output, "after restart, before install: []", "the restarted process had not installed the extension yet");
+Check.Contains(output, "after install: [version]", "the restarted process bound the stored name to the new code");
 
 Directory.Delete(directory, recursive: true);

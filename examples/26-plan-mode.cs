@@ -91,6 +91,7 @@ await chat.ConfigureAsync(new AgentChoices
     WorkingDirectory = directory,
 });
 Console.WriteLine($"plan mode tools: [{string.Join(", ", tools())}]");
+var planTools = tools();
 
 var answer = await chat.SubmitAsync(
     "Make the port configurable. You are in plan mode: read server.ts, then call the submit_plan tool with the steps. Do not edit any file.");
@@ -107,5 +108,17 @@ Console.WriteLine($"tools again: [{string.Join(", ", tools())}]");
 
 var second = await chat.SubmitAsync("Go ahead.");
 Console.WriteLine($"answer: {second?.Data.Content}");
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// Plan mode swapped the tool list, and the plan was written to a document.
+Check.Sequence(new[] { "read_file" }, tools(), "the conversation starts with the coding tools");
+Check.Sequence(new[] { "submit_plan" }, planTools, "plan mode offers only the plan tool");
+Check.Sequence(new[] { "read_file" }, tools(), "leaving plan mode restores the coding tools");
+
+// The plan is durable state: it is in the document, not just in the answer.
+var plan = chat.Snapshot(PlanDoc);
+Check.That(plan is { Count: > 0 }, "the plan was written to the document");
+Check.That(plan!.All(step => step.Trim().Length > 0), "every plan step has content");
 
 Directory.Delete(directory, recursive: true);

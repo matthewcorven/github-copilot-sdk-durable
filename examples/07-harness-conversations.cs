@@ -54,3 +54,25 @@ Console.WriteLine($"parent entries: [{string.Join(", ", root.Entries(10))}]");
 Console.WriteLine($"root session: {root.SessionId}");
 Console.WriteLine($"helper session: {helper.SessionId}");
 Console.WriteLine($"fork session: {retry.SessionId}");
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// A created conversation applies its own choices; a fork starts with the agent
+// the parent had at the fork entry.
+Check.Equal("mai-code-1.1-flash", helper.Agent().Model, "the created conversation uses its own model");
+Check.Equal("minimal", helper.Agent().ReasoningEffort, "the created conversation uses its own reasoning effort");
+Check.Equal(root.Agent().Model, retry.Agent().Model, "the fork inherits the parent's model");
+Check.Equal(root.Agent().ReasoningEffort, retry.Agent().ReasoningEffort, "the fork inherits the parent's reasoning effort");
+
+// The fork is a real conversation in the store, and it is a different one.
+Check.NotNull(store.Conversation(retry.Id), "the fork is in the store");
+Check.That(retry.Id != root.Id, "the fork is a different conversation");
+Check.Equal(root.Id, retry.Record.ParentConversationId, "the fork records its parent");
+
+// Each conversation has its own Copilot session.
+Check.That(root.SessionId != helper.SessionId, "each conversation has its own session");
+Check.That(root.SessionId != retry.SessionId, "the fork has its own session");
+
+// The fork inherits the parent's transcript up to the entry it was taken at.
+Check.That(retry.Entries(10).Contains(hello), "the fork inherited the fork entry");
+Check.Equal(root.Entries(10).Count, retry.Entries(10).Count, "the fork inherited the parent's entries");

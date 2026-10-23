@@ -54,3 +54,12 @@ Console.WriteLine($"streamed {printed} chars; final message: {answer?.Data.Conte
 // The final assistant message always carries the complete content, whether or not
 // streaming is enabled.
 Console.WriteLine($"final length: {answer?.Data.Content.Length}");
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// The streamed deltas and the final message agree: the final message is the
+// complete answer, not a fragment.
+Check.That(answer is not null, "the model answered");
+Check.That(printed > 0, "the answer streamed as deltas");
+Check.Equal(answer!.Data.Content.Length, printed, "the streamed deltas add up to the final message");
+Check.That(answer.Data.Content.Length > 0, "the final message is not empty");

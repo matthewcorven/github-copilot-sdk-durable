@@ -34,3 +34,32 @@ Console.WriteLine($"  owner: {standalone.OwnerTaskId ?? "(none)"}");
 var conversation = await harness.CreateConversationAsync();
 Console.WriteLine($"copilot session: {conversation.SessionId}");
 Console.WriteLine($"conversation count: {harness.Store.Conversations.Count}");
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// A conversation created in a transaction is durable: it is in the store, it
+// has an id, and it is ownerless because no task created it.
+Check.That(standalone.Id.Length > 0, "a conversation has an id");
+Check.Equal<string?>(null, standalone.ParentConversationId, "a standalone conversation has no parent");
+Check.Equal<string?>(null, standalone.OwnerTaskId, "a standalone conversation has no owner task");
+Check.That(harness.Store.Conversations.Any(c => c.Id == standalone.Id), "the conversation is in the store");
+Check.That(harness.Store.Conversations.Any(c => c.Id == conversation.Id), "the live conversation is in the store");
+Check.Equal(2, harness.Store.Conversations.Count, "both conversations were created");
+
+// A transaction that throws writes nothing. This is the atomicity guarantee.
+var before = harness.Store.Conversations.Count;
+try
+{
+    await harness.Store.CommitAsync(async tx =>
+    {
+        tx.CreateConversation();
+        tx.CreateConversation();
+        throw new InvalidOperationException("boom");
+    });
+}
+catch (InvalidOperationException ex) when (ex.Message == "boom")
+{
+    // Expected.
+}
+
+Check.Equal(before, harness.Store.Conversations.Count, "a failed transaction writes nothing");

@@ -48,12 +48,16 @@ Console.WriteLine($"watch baseline: {baseline}");
 var frames = Channel.CreateUnbounded<string>();
 var delivered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
+// The frames the consumer actually saw, in order.
+var seen = new List<string>();
+
 var consumer = Task.Run(async () =>
 {
     await foreach (var frame in frames.Reader.ReadAllAsync())
     {
         // A slow callback: the next frame cannot start until this one returns.
         await Task.Delay(50);
+        seen.Add(frame);
         Console.WriteLine($"watch update: {frame}");
         delivered.TrySetResult();
     }
@@ -78,3 +82,12 @@ frames.Writer.Complete();
 await consumer;
 
 Console.WriteLine($"watch stopped at: {chat.Snapshot(Notes)!["text"]}");
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// The watch only ever saw committed values, and it saw the change once the
+// commit landed.
+Check.Equal("observed asynchronously", chat.Snapshot(Notes)!["text"], "the committed value is what the watch saw");
+Check.That(seen.Count >= 1, "the watch delivered at least one update");
+Check.Equal("observed asynchronously", seen[^1], "the last delivered frame is the committed value");
+Check.That(seen.All(frame => frame == "observed asynchronously"), "the watch only ever delivered committed values");

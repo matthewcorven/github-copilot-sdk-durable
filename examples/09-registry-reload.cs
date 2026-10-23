@@ -76,3 +76,20 @@ Console.WriteLine($"after uninstall: [{string.Join(", ", tools())}]");
 // still selects "files", and the new code is what it resolves to.
 Console.WriteLine($"stored extensions: [{string.Join(", ", root.Choices()?.Extensions ?? ["(host default)"])}]");
 Console.WriteLine($"resolved extensions: [{string.Join(", ", root.Agent().Extensions.Select(e => e.Name))}]");
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// Reloading replaces the extension in place: the same name, the new code, and
+// no gap where the extension is missing.
+Check.Equal(1, registry.Extensions.Count(e => e.Name == "files"), "the reload replaced the extension rather than adding one");
+Check.Equal("Search files, faster", registry.Find("files")!.Tools.Single(t => t.Name == "grep").Description, "the registry holds the new code");
+
+// The conversation resolves the stored name against the registry, so it picks up
+// the new code without being reconfigured.
+Check.Equal("Search files, faster", root.Agent().Tools.Single(t => t.Name == "grep").Description, "the conversation resolves the reloaded code");
+
+// Uninstalling removes the code; the stored selection is a name, so it survives
+// and simply resolves to nothing until the code is back.
+registry.Uninstall("audit");
+Check.That(registry.Find("audit") is null, "the uninstalled extension is gone from the registry");
+Check.Equal("Read a file", root.Agent().Tools.Single(t => t.Name == "read").Description, "the conversation falls back to the remaining code");

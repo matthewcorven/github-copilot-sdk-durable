@@ -120,4 +120,19 @@ foreach (var answer in reviewer.Answers)
     Console.WriteLine($"reviewer: {answer}");
 }
 
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// The reviewer's configuration is stored on its conversation, so a restart
+// keeps it.
+Check.Equal("mai-code-1.1-flash", agent.Model, "the reviewer uses its own model");
+Check.Sequence(new[] { "reviewer" }, agent.Extensions.Select(e => e.Name), "the reviewer selects its extension");
+Check.Sequence(new[] { "read_file" }, agent.Tools.Select(t => t.Name), "the reviewer has only the read tool");
+Check.Equal(worktree, agent.WorkingDirectory, "the reviewer has its own working directory");
+
+// The review loop ran: the first answer had findings, so the reviewer was sent
+// back, and it stopped once it had nothing left.
+Check.That(passes >= 2, "the review loop ran more than one pass");
+Check.That(reviewer.Answers.Count >= 2, "each pass produced an answer");
+Check.Contains(reviewer.Answers[^1], Done, "the last pass says there is nothing left");
+
 Directory.Delete(worktree, recursive: true);

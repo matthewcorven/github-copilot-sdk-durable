@@ -102,6 +102,16 @@ Console.WriteLine($"bob's sandbox: {File.ReadAllText(Path.Combine(bob.Path, "not
 Console.WriteLine($"alice's document: {alice.Conversation.Snapshot(Sandbox)?.Path}");
 Console.WriteLine($"bob's document: {bob.Conversation.Snapshot(Sandbox)?.Path}");
 
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// Each conversation wrote into its own sandbox: the tool found the sandbox
+// from the conversation that called it.
+Check.Equal("from alice", File.ReadAllText(Path.Combine(alice.Path, "note.txt")), "alice's note landed in alice's sandbox");
+Check.Equal("from bob", File.ReadAllText(Path.Combine(bob.Path, "note.txt")), "bob's note landed in bob's sandbox");
+Check.That(alice.Path != bob.Path, "the two conversations have different sandboxes");
+Check.Equal(alice.Path, alice.Conversation.Snapshot(Sandbox)?.Path, "alice's document points at her sandbox");
+Check.Equal(bob.Path, bob.Conversation.Snapshot(Sandbox)?.Path, "bob's document points at his sandbox");
+
 Directory.Delete(alice.Path, recursive: true);
 Directory.Delete(bob.Path, recursive: true);
 

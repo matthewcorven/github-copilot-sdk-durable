@@ -64,3 +64,42 @@ foreach (var version in document.Versions)
 {
     Console.WriteLine($"  {version.EntryId}: {version.Value.GetProperty("text").GetString()}");
 }
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// A rewindable document keeps every committed version, and each version can be
+// read back as of the entry that wrote it.
+Check.Equal("after goodbye", chat.Snapshot(Notes)!["text"], "the latest value is the last one written");
+Check.Equal("after hello", chat.SnapshotAsOf(Notes, firstEntry)!["text"], "the value as of the first entry is readable");
+Check.Equal("after goodbye", chat.SnapshotAsOf(Notes, secondEntry)!["text"], "the value as of the second entry is readable");
+Check.Equal(2, document.Versions.Count, "both committed versions are retained");
+Check.Equal(firstEntry, document.Versions[0].EntryId, "the first version belongs to the first entry");
+Check.Equal(secondEntry, document.Versions[1].EntryId, "the second version belongs to the second entry");
+
+// A document that was never written has no value at all.
+var untouched = new DocumentDefinition<Dictionary<string, string>>(
+    "example.untouched",
+    DocumentHistory.Latest,
+    ForkPolicy.AsOf,
+    () => new Dictionary<string, string> { ["text"] = "" });
+Check.That(chat.Snapshot(untouched) is null, "a document that was never written has no value");
+
+// A failed transaction leaves the document exactly as it was.
+var before = chat.Snapshot(Notes)!["text"];
+try
+{
+    await chat.CommitAsync(async tx =>
+    {
+        var notes = tx.Doc(Notes, chat.Id);
+        notes.Value["text"] = "should not survive";
+        notes.Save(tx.AppendEntry(chat.Id, "note", "doomed"));
+        throw new InvalidOperationException("boom");
+    });
+}
+catch (InvalidOperationException ex) when (ex.Message == "boom")
+{
+    // Expected.
+}
+
+Check.Equal(before, chat.Snapshot(Notes)!["text"], "a failed transaction does not change the document");
+Check.Equal(2, store.Document(Notes.Kind, chat.Id)!.Versions.Count, "a failed transaction adds no version");

@@ -139,4 +139,20 @@ foreach (var evt in context)
 Console.WriteLine($"file: {File.ReadAllText(Path.Combine(workspace, "notes.txt")).Trim()}");
 Console.WriteLine($"bash calls timed: {timings.Count}");
 
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// The app's own tools ran, not the CLI's built-ins: the file was read, edited,
+// and the shell command was timed by the hook.
+var toolNames = context.OfType<ToolExecutionStartEvent>().Select(evt => evt.Data.ToolName).ToList();
+Check.That(toolNames.Contains("read_file"), "the app's read_file tool ran");
+Check.That(toolNames.Contains("edit_file"), "the app's edit_file tool ran");
+Check.That(toolNames.Contains("run_shell"), "the app's run_shell tool ran");
+
+var failures = context.OfType<ToolExecutionCompleteEvent>().Where(evt => evt.Data.Error is not null).ToList();
+Check.Equal(0, failures.Count, "no tool call failed");
+
+// The edit reached the file, and the shell command saw the edited content.
+Check.Equal("hello durable", File.ReadAllText(Path.Combine(workspace, "notes.txt")).Trim(), "the edit reached the file");
+Check.Equal(1, timings.Count, "the hook timed the shell call");
+
 Directory.Delete(workspace, recursive: true);

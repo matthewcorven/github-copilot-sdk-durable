@@ -50,6 +50,7 @@ using var subscription = root.Session.On<SessionEvent>(evt =>
 });
 
 // A long chat: the context grows, and the runtime compacts it in the background.
+var answers = new List<AssistantMessageEvent?>();
 foreach (var question in new[]
 {
     "Where should we stay in Lisbon?",
@@ -60,6 +61,7 @@ foreach (var question in new[]
 })
 {
     var answer = await root.SubmitAsync(question);
+    answers.Add(answer);
     Console.WriteLine($"asked: {question}");
     Console.WriteLine($"  answered: {(answer?.Data.Content.Length ?? 0)} chars");
 }
@@ -76,3 +78,12 @@ foreach (var evt in context.OfType<SessionUsageCheckpointEvent>())
 {
     Console.WriteLine($"usage checkpoint: {evt.Data}");
 }
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// Every question was answered, and the stored transcript kept every entry
+// even though the model context was compacted.
+Check.Equal(5, answers.Count, "every question was answered");
+Check.That(answers.All(answer => answer is not null && answer.Data.Content.Trim().Length > 0), "no answer was empty");
+Check.That(stored.Count >= 1, "the stored transcript kept its entries");
+Check.That(context.Count > 0, "the model context is not empty");

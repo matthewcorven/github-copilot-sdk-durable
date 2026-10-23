@@ -54,3 +54,15 @@ foreach (var evt in context)
 
 // The durable store keeps the conversation's own entries alongside the session.
 Console.WriteLine($"stored entries: [{string.Join(", ", root.Entries(10))}]");
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// The turn is durable: the input was admitted, the answer came back, and the
+// transcript holds both.
+Check.Equal("Paris", answer?.Data.Content.Trim(), "the model answered the question");
+Check.That(root.Entries(10).Count >= 1, "the conversation stored its entries");
+
+var events = await root.ContextAsync();
+Check.That(events.Any(e => e is UserMessageEvent), "the transcript holds the user message");
+Check.That(events.Any(e => e is AssistantMessageEvent), "the transcript holds the assistant message");
+Check.That(events.Any(e => e is SystemMessageEvent), "the transcript holds the system message");

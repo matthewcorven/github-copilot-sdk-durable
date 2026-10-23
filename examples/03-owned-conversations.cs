@@ -82,3 +82,42 @@ foreach (var (name, entry) in registryValue)
 // The supervisor task is background work: it is recorded, but nothing waits for it here.
 var task = store.Task(setup.SupervisorId)!;
 Console.WriteLine($"supervisor status: {task.Status} (background: {task.Background})");
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// The task, the child conversation, and the registry entry were all written in
+// one commit, so they exist together.
+Check.NotNull(store.Task(setup.SupervisorId), "the supervisor task is in the store");
+Check.NotNull(store.Conversation(setup.Child.Id), "the child conversation is in the store");
+Check.Equal(setup.SupervisorId, setup.Child.OwnerTaskId, "the child records its owning task");
+Check.Equal<string?>(null, setup.Child.OwnerConversationId, "the child has no owning conversation");
+Check.Equal(setup.Child.Id, registryValue["researcher"]["conversationId"], "the registry points at the child");
+Check.Equal($"researcher:first-message:{setup.SupervisorId}", registryValue["researcher"]["requestId"], "the registry holds a fixed request id");
+
+// The supervisor is background work: it is recorded, but it does not block.
+Check.That(task.Background, "the supervisor task is background work");
+Check.Equal(Durable.TaskStatus.Pending, task.Status, "the supervisor task has not run");
+
+// A failed commit writes none of the three.
+var conversationsBefore = store.Conversations.Count;
+var tasksBefore = store.Tasks.Count;
+try
+{
+    await main.CommitAsync(async tx =>
+    {
+        tx.CreateTask(Supervisor, DurableJson.ToElement(new Dictionary<string, string>()), ownerConversationId: main.Id);
+        tx.CreateConversation(ownerTaskId: "t-doomed");
+        var registry = tx.Doc(AgentRegistry, main.Id);
+        registry.Value["doomed"] = new Dictionary<string, string> { ["conversationId"] = "c-doomed" };
+        registry.Save(tx.AppendEntry(main.Id, "agent", "doomed"));
+        throw new InvalidOperationException("boom");
+    });
+}
+catch (InvalidOperationException ex) when (ex.Message == "boom")
+{
+    // Expected.
+}
+
+Check.Equal(conversationsBefore, store.Conversations.Count, "a failed commit creates no conversation");
+Check.Equal(tasksBefore, store.Tasks.Count, "a failed commit creates no task");
+Check.That(!main.Snapshot(AgentRegistry)!.ContainsKey("doomed"), "a failed commit writes no registry entry");

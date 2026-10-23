@@ -90,6 +90,18 @@ Console.WriteLine($"plain answer: {plain.Answers.LastOrDefault()}");
 Console.WriteLine($"python answer: {python.Answers.LastOrDefault()}");
 Console.WriteLine($"timed bash calls: {timings.Count}");
 
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// The later extension replaced the earlier one: the python conversation's shell
+// runs inside the virtualenv, and the plain one does not.
+Check.Contains(python.Answers.LastOrDefault() ?? "", ".venv", "the venv shell replaced the plain one");
+Check.That(
+    !(plain.Answers.LastOrDefault() ?? "").Contains(".venv"),
+    "the plain conversation kept the plain shell");
+
+// The wrapper decorated whichever tool won, so both calls were timed.
+Check.Equal(2, timings.Count, "the wrapper timed both shell calls");
+
 Directory.Delete(project, recursive: true);
 
 static string RunShell(string workingDirectory, string command)

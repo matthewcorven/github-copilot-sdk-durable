@@ -50,3 +50,18 @@ foreach (var message in userMessages)
 {
     Console.WriteLine($"  {message}");
 }
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// The busy conversation queued the second prompt rather than dropping it: both
+// are in the transcript, and both were answered.
+Check.Equal(2, userMessages.Count, "both prompts are in the transcript");
+Check.That(userMessages.Any(m => m.Contains("2+2")), "the first prompt is in the transcript");
+Check.That(userMessages.Any(m => m.Contains("3+3")), "the queued prompt is in the transcript");
+Check.That(firstAnswer is not null, "the first prompt was answered");
+Check.That(followUpAnswer is not null, "the queued prompt was answered");
+// The answers are the model's business; what this example proves is that both
+// prompts were answered, in order, and neither was dropped.
+Check.That(firstAnswer!.Data.Content.Trim().Length > 0, "the first prompt was answered");
+Check.That(followUpAnswer!.Data.Content.Trim().Length > 0, "the queued prompt was answered");
+Check.That(root.Answers.Count == 2, "the conversation produced one answer per prompt");

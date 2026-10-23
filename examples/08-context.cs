@@ -62,3 +62,21 @@ var first = transcript.Entries(10).Last();
 var fork = await harness.ForkAsync(transcript, first);
 Console.WriteLine($"fork entries: [{string.Join(", ", fork.Entries(10))}]");
 Console.WriteLine($"parent entries: [{string.Join(", ", transcript.Entries(10))}]");
+
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// The stored transcript and the model context are different things: the store
+// holds the app's entries, the session holds the events the model saw.
+Check.Equal("CONTEXT", reply?.Data.Content, "the model answered as asked");
+Check.That(transcript.Entries(10).Count >= 1, "the conversation stored at least one entry");
+
+var events = await transcript.ContextAsync();
+Check.That(events.Any(e => e is UserMessageEvent), "the model context holds the user message");
+Check.That(events.Any(e => e is AssistantMessageEvent), "the model context holds the assistant message");
+Check.That(events.Any(e => e is SystemMessageEvent), "the model context holds the system message");
+
+// A fork at an earlier point sees only the transcript up to that entry.
+var forkEntries = fork.Entries(10);
+Check.That(forkEntries.Count <= transcript.Entries(10).Count, "the fork holds no more entries than the parent");
+Check.That(forkEntries.Contains(first), "the fork inherited the entry it was taken at");
+Check.Equal(transcript.Id, fork.Record.ParentConversationId, "the fork records its parent");

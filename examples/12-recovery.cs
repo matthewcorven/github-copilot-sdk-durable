@@ -117,4 +117,21 @@ Console.WriteLine($"after reopen: {counted.Status} {counted.Result!.Value.GetStr
 Console.WriteLine($"ticks printed in total: [{string.Join(", ", printed)}]");
 await secondRun.DisposeAsync();
 
+// ─── Assertions ─────────────────────────────────────────────────────────────
+//
+// The task resumed from its saved checkpoint and finished.
+Check.Equal("completed", counted.Status, "the reopened task finished");
+Check.Equal("counted to 5", counted.Result!.Value.GetString(), "the reopened task produced its result");
+
+// The durability guarantee: the memo stopped tick 2 from being printed twice,
+// even though its effect happened before the crash and its checkpoint was never
+// saved.
+Check.Sequence(new[] { 1, 2, 3, 4, 5 }, printed, "no tick was printed twice, and none was skipped");
+
+// The saved checkpoint was the one the task was interrupted at, and the memos
+// that made the rerun idempotent were saved with it.
+Check.Equal("tick", saved.Checkpoint.GetProperty("phase").GetString(), "the saved checkpoint is the interrupted phase");
+Check.Equal("2", saved.Checkpoint.GetProperty("n").GetString(), "the saved checkpoint is the interrupted tick");
+Check.Equal(2, saved.Memos.Count, "the memos for the two printed ticks were saved");
+
 Directory.Delete(directory, recursive: true);
