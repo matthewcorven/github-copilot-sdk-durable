@@ -907,8 +907,9 @@ public class InMemoryStoreProvider : IDurableStoreProvider
 /// <summary>
 /// The provider that keeps the store in the single-file JSON snapshot format the
 /// store used before the JSONL backend. This is the persistence behind
-/// <c>new DurableStore(path)</c>; the backward-compatible reader and the format
-/// sniffing land with the legacy-store work.
+/// <c>new DurableStore(path)</c>, and the format <see cref="DurableStoreFormat.Auto"/>
+/// selects for a file that already holds a legacy snapshot. The backward-compatible
+/// reader lands with the legacy-store work.
 /// </summary>
 internal sealed class LegacyJsonStoreProvider : InMemoryStoreProvider
 {
@@ -1266,6 +1267,12 @@ public sealed class DurableStore
     /// behaviour. When the caller asks for a persistent store and supplies no path,
     /// the per-user default path is used.
     /// </summary>
+    /// <remarks>
+    /// The default options select the durable tier: <c>Create(new DurableStoreOptions())</c>
+    /// opens the per-user default path and persists there. The ephemeral tier is
+    /// opt-in through <see cref="CreateEphemeral"/> or an explicit
+    /// <see cref="DurableStoreFormat.InMemory"/> format.
+    /// </remarks>
     public static DurableStore Create(DurableStoreOptions options)
     {
         if (options.Path is null && options.Format is not DurableStoreFormat.InMemory)
@@ -1314,6 +1321,9 @@ public sealed class DurableStore
     /// </summary>
     private static IDurableStoreProvider CreateProviderForAuto(string? path)
     {
+        // Auto without a path means the in-memory tier. <see cref="Create"/>
+        // resolves the per-user default path for every non-InMemory format, so
+        // this branch is a guard rather than a reachable case.
         if (path is null)
         {
             return new InMemoryStoreProvider();
@@ -1331,6 +1341,14 @@ public sealed class DurableStore
     /// property is a JSONL record envelope; anything else is the legacy
     /// single-file snapshot.
     /// </summary>
+    /// <remarks>
+    /// The discriminator is the JSONL envelope's top-level <c>type</c> property,
+    /// which the legacy snapshot never carries. It is what lets a store written
+    /// by <see cref="DurableStoreFormat.Auto"/> reopen in the format it was
+    /// written in. Distinguishing a legacy snapshot from a file that is neither
+    /// format -- and reporting the latter as an error instead of opening it
+    /// empty -- is the legacy-reader work in issue #13.
+    /// </remarks>
     private static DurableStoreFormat DetectFormat(string path)
     {
         if (!File.Exists(path))
