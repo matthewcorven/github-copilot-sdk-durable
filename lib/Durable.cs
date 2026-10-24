@@ -956,19 +956,8 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
     public override void Open(DurableStoreOptions options)
     {
         _path = options.Path;
-        if (_path is null)
+        if (_path is null || !File.Exists(_path))
         {
-            return;
-        }
-
-        if (!File.Exists(_path))
-        {
-            var directory = Path.GetDirectoryName(_path);
-            if (!string.IsNullOrEmpty(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
             return;
         }
 
@@ -1248,22 +1237,51 @@ public sealed class DurableStore
     /// <summary>
     /// Creates a store over the provider the options select. This is the entry point
     /// for the pluggable backends; the constructor keeps the original single-file
-    /// behaviour.
+    /// behaviour. When the caller asks for a persistent store and supplies no path,
+    /// the per-user default path is used.
     /// </summary>
     public static DurableStore Create(DurableStoreOptions options)
     {
+        if (options.Path is null && options.Format is not DurableStoreFormat.InMemory)
+        {
+            options = new DurableStoreOptions
+            {
+                Path = DefaultStorePath(options.FileName),
+                Format = options.Format,
+                FileName = options.FileName,
+            };
+        }
+
         IDurableStoreProvider provider = options.Format switch
         {
             DurableStoreFormat.InMemory => new InMemoryStoreProvider(),
             DurableStoreFormat.LegacyJson => new LegacyJsonStoreProvider(),
             DurableStoreFormat.Jsonl => new JsonlStoreProvider(),
-            // Auto does not sniff yet: a store with a path keeps the single-file
-            // format, and a store without one stays in memory.
+            // Auto does not sniff yet: a resolved path keeps the single-file
+            // format, and an in-memory store stays in memory.
             _ => options.Path is null ? new InMemoryStoreProvider() : new LegacyJsonStoreProvider(),
         };
 
         provider.Open(options);
         return new DurableStore(provider);
+    }
+
+    /// <summary>
+    /// Resolves the per-user default store path: <c>LocalApplicationData</c> on
+    /// Windows; <c>$XDG_STATE_HOME</c> when set and non-empty, otherwise
+    /// <c>~/.local/state</c>, elsewhere. The store file lives in a <c>durable</c>
+    /// subdirectory under that root. The directory itself is created on first
+    /// write, not by this method.
+    /// </summary>
+    public static string DefaultStorePath(string fileName = "durable-store.jsonl")
+    {
+        var root = OperatingSystem.IsWindows()
+            ? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
+            : Environment.GetEnvironmentVariable("XDG_STATE_HOME") is { Length: > 0 } xdg
+                ? xdg
+                : System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "state");
+
+        return System.IO.Path.Combine(root, "durable", fileName);
     }
 
     private DurableStore(IDurableStoreProvider provider) => _provider = provider;
