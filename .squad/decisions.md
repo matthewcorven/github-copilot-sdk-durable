@@ -148,6 +148,35 @@ Roadmap board: project 5 (project id `PVT_kwHOAajMkc4BobdZ`), Status field `PVTS
 
 **How it applies:** The plan's §2, §2.1, §3, §4, §5, §5.1 and §5.2 now carry the resolved contract. Issues #9, #11, #12, #13, #14 and #15 have a "Resolved design decisions" section appended; #12's doc-prose acceptance criterion was amended to point at #14.
 
+### 2026-10-23T23-27-58: Issue #1 handoff written; #9 implemented and pushed, PR decision deferred to next session
+
+**Date:** 2026-10-23
+**Author:** lead
+
+**What:** Issue #1 handoff written; #9 implemented and pushed, PR decision deferred to next session
+
+**References:** docs/implementation/ISSUE_1_HANDOFF.md, docs/implementation/ISSUE_1_PLAN.md, #1, #9, #10, #11, #12, #13, #14, #15
+
+**Why:**
+
+#### 2026-10-23T19:08:33.866-04:00: Issue #1 handoff written; #9 implemented, pushed, PR decision deferred
+
+**By:** Lead (via Copilot)
+
+**What:**
+
+1. **Handoff document.** `docs/implementation/ISSUE_1_HANDOFF.md` is the authoritative operational handoff for the next Lead session. It carries the eight resolved design decisions (short form, pointing at `docs/implementation/ISSUE_1_PLAN.md` §5 for the full rationale), the three findings that changed the provider contract, the verified build/test/validate state, what #9 delivered with `lib/Durable.cs` line references, an honest gap list, the remaining spine, the parallel sandbox line, the board and issue state with pinned ids, ten gotchas, and numbered next actions with exact commands.
+
+2. **#9 is implemented and pushed.** Branch `squad/9-durable-store-provider-interface` now exists on `origin` with commits `05a9562` (a `wip:` checkpoint that does not compile on its own) and `4e5ca88` (completes the refactor and restores compilation), plus `557bfb7` (the handoff) and `cddca31` (the merged squad decisions). The branch builds clean, `dotnet test tests/Durable.Tests` reports 4 passed / 0 failed, and `COMPILE_ONLY=1 ./scripts/validate.sh` reports all 31 examples compile. `examples/` and `tests/` are byte-identical to `origin/dev`.
+
+3. **The PR decision is deliberately deferred.** No PR was opened and nothing was merged to `dev`. The handoff judges #9 PR-ready and states the three caveats the PR body must carry: the branch has two commits and the first does not compile (squash or explain); the branch already performs much of #10's facade refactor, so #10 must be re-scoped; and `DurableStoreFormat.Jsonl` throwing plus `Auto` not sniffing are deliberate and land in #11/#13.
+
+4. **A plan-doc regression was found and repaired.** The working-tree copy of `docs/implementation/ISSUE_1_PLAN.md` had lost all four "Resolved:" markers and the entire §5 resolutions table that `HEAD` still carried. It was restored with `git checkout HEAD -- docs/implementation/ISSUE_1_PLAN.md`. The handoff records this as a gotcha so the next session repairs it the same way if it recurs.
+
+**Why:** The user asked for the remaining open questions to be settled on judgement and for a handoff document the next Lead session could carry forward. The questions were already resolved in commit `9e9581f`; the work here was to preserve the at-risk uncommitted implementation, verify it, and capture the state operationally.
+
+**How it applies:** `.squad/identity/now.md` now points at the handoff so session init lands on it. The board is unchanged — #1 and #9 are `In Progress`, nothing is `Done`. The next session decides the #9 PR, then re-scopes and routes #10 to Core Engineer.
+
 ## Governance
 
 - All meaningful changes require team consensus
