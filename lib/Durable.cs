@@ -524,6 +524,13 @@ public sealed class DurableStoreOptions
 /// </summary>
 public interface IDurableStoreProvider
 {
+    /// <summary>
+    /// Whether the provider's state is persisted to the filesystem. A provider that
+    /// is not persistent keeps its state in the process only, and that state is lost
+    /// when the process ends.
+    /// </summary>
+    bool IsPersistent { get; }
+
     /// <summary>Loads the committed state, or starts empty when there is none.</summary>
     void Open(DurableStoreOptions options);
 
@@ -659,6 +666,13 @@ public class InMemoryStoreProvider : IDurableStoreProvider
     /// null when no transaction is running.
     /// </summary>
     private UndoLog? _undo;
+
+    /// <summary>
+    /// Whether the provider's state is persisted. The in-memory provider is the
+    /// ephemeral tier: its state lives in the process and is lost when the process
+    /// ends.
+    /// </summary>
+    public virtual bool IsPersistent => false;
 
     /// <summary>Starts empty. The in-memory provider never touches the filesystem.</summary>
     public virtual void Open(DurableStoreOptions options)
@@ -893,12 +907,19 @@ public class InMemoryStoreProvider : IDurableStoreProvider
 /// <summary>
 /// The provider that keeps the store in the single-file JSON snapshot format the
 /// store used before the JSONL backend. This is the persistence behind
-/// <c>new DurableStore(path)</c>; the backward-compatible reader and the format
-/// sniffing land with the legacy-store work.
+/// <c>new DurableStore(path)</c>, and the format <see cref="DurableStoreFormat.Auto"/>
+/// selects for a file that already holds a legacy snapshot. The backward-compatible
+/// reader lands with the legacy-store work.
 /// </summary>
 internal sealed class LegacyJsonStoreProvider : InMemoryStoreProvider
 {
     private string? _path;
+
+    /// <summary>
+    /// Whether the provider's state is persisted. The legacy provider writes the
+    /// single-file JSON snapshot to the configured path.
+    /// </summary>
+    public override bool IsPersistent => true;
 
     /// <summary>Loads the snapshot at the configured path, when there is one.</summary>
     public override void Open(DurableStoreOptions options)
@@ -946,6 +967,12 @@ internal sealed class LegacyJsonStoreProvider : InMemoryStoreProvider
 internal sealed class JsonlStoreProvider : InMemoryStoreProvider
 {
     private string? _path;
+
+    /// <summary>
+    /// Whether the provider's state is persisted. The JSONL provider appends its
+    /// records to the configured path.
+    /// </summary>
+    public override bool IsPersistent => true;
 
     /// <summary>
     /// Loads the JSONL file at the configured path, replaying every complete record
@@ -1240,6 +1267,12 @@ public sealed class DurableStore
     /// behaviour. When the caller asks for a persistent store and supplies no path,
     /// the per-user default path is used.
     /// </summary>
+    /// <remarks>
+    /// The default options select the durable tier: <c>Create(new DurableStoreOptions())</c>
+    /// opens the per-user default path and persists there. The ephemeral tier is
+    /// opt-in through <see cref="CreateEphemeral"/> or an explicit
+    /// <see cref="DurableStoreFormat.InMemory"/> format.
+    /// </remarks>
     public static DurableStore Create(DurableStoreOptions options)
     {
         if (options.Path is null && options.Format is not DurableStoreFormat.InMemory)
@@ -1257,13 +1290,105 @@ public sealed class DurableStore
             DurableStoreFormat.InMemory => new InMemoryStoreProvider(),
             DurableStoreFormat.LegacyJson => new LegacyJsonStoreProvider(),
             DurableStoreFormat.Jsonl => new JsonlStoreProvider(),
-            // Auto does not sniff yet: a resolved path keeps the single-file
-            // format, and an in-memory store stays in memory.
-            _ => options.Path is null ? new InMemoryStoreProvider() : new LegacyJsonStoreProvider(),
+            _ => CreateProviderForAuto(options.Path),
         };
 
         provider.Open(options);
         return new DurableStore(provider);
+    }
+
+    /// <summary>
+    /// Creates an ephemeral store: the in-memory tier. Its state lives in the
+    /// process, the filesystem is never touched, and the state is lost when the
+    /// process ends. This is the named counterpart of the persistent tier that
+    /// <see cref="Create(DurableStoreOptions)"/> selects by default.
+    /// </summary>
+    public static DurableStore CreateEphemeral() =>
+        Create(new DurableStoreOptions { Format = DurableStoreFormat.InMemory });
+
+    /// <summary>
+    /// Whether the store's state is persisted. A persistent store survives the
+    /// process; an ephemeral one does not. The tier is a property of the provider
+    /// behind the store, so this reports what the store actually does rather than
+    /// what the caller asked for.
+    /// </summary>
+    public bool IsPersistent => _provider.IsPersistent;
+
+    /// <summary>
+    /// Picks the provider for <see cref="DurableStoreFormat.Auto"/>. A file that
+    /// does not exist yet is written in the canonical JSONL format; a file that
+    /// does exist is read in the format it was written in.
+    /// </summary>
+    private static IDurableStoreProvider CreateProviderForAuto(string? path)
+    {
+        // Auto without a path means the in-memory tier. <see cref="Create"/>
+        // resolves the per-user default path for every non-InMemory format, so
+        // this branch is a guard rather than a reachable case.
+        if (path is null)
+        {
+            return new InMemoryStoreProvider();
+        }
+
+        return DetectFormat(path) is DurableStoreFormat.Jsonl
+            ? new JsonlStoreProvider()
+            : new LegacyJsonStoreProvider();
+    }
+
+    /// <summary>
+    /// Detects the format of the file at the path. A file that does not exist, or
+    /// that holds no content, is written in the canonical JSONL format. A file
+    /// whose first non-empty line is a JSON object with a string <c>type</c>
+    /// property is a JSONL record envelope; anything else is the legacy
+    /// single-file snapshot.
+    /// </summary>
+    /// <remarks>
+    /// The discriminator is the JSONL envelope's top-level <c>type</c> property,
+    /// which the legacy snapshot never carries. It is what lets a store written
+    /// by <see cref="DurableStoreFormat.Auto"/> reopen in the format it was
+    /// written in. Distinguishing a legacy snapshot from a file that is neither
+    /// format -- and reporting the latter as an error instead of opening it
+    /// empty -- is the legacy-reader work in issue #13.
+    /// </remarks>
+    private static DurableStoreFormat DetectFormat(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return DurableStoreFormat.Jsonl;
+        }
+
+        string? firstContentLine = null;
+        foreach (var line in File.ReadLines(path))
+        {
+            if (!string.IsNullOrWhiteSpace(line))
+            {
+                firstContentLine = line;
+                break;
+            }
+        }
+
+        // An empty file holds no legacy snapshot, so there is nothing to read and
+        // the canonical format is the one to write.
+        if (firstContentLine is null)
+        {
+            return DurableStoreFormat.Jsonl;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(firstContentLine);
+            if (document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("type", out var type)
+                && type.ValueKind == JsonValueKind.String)
+            {
+                return DurableStoreFormat.Jsonl;
+            }
+        }
+        catch (JsonException)
+        {
+            // Not a JSONL record envelope, so the file is the legacy snapshot.
+        }
+
+        return DurableStoreFormat.LegacyJson;
     }
 
     /// <summary>
