@@ -4,7 +4,7 @@ Reference for connecting Squad to a repository and managing the issue→branch�
 
 ## Authoritative Status & Dependencies
 
-**Skill:** `github-issues` (corven-copilot-tools). Invoke it for any issue/board work —
+**Skill:** `github-issues` (corven-agent-tools). Invoke it for any issue/board work —
 do not wait for the user to name it.
 
 Status and dependency precedence (mandatory):

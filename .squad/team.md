@@ -43,7 +43,7 @@ Feature branches are created from `origin/dev` and follow the `squad/{issue-numb
 **Authoritative sources (mandatory):**
 - **Status:** the project board's `Status` field (Todo / In Progress / Done) — not labels or issue bodies.
 - **Dependencies:** native `blocked by` / `blocking` links (GraphQL `issue.blockedBy`) — not `## Dependencies` sections in issue bodies, which are informational only.
-- **Skill:** `github-issues` (corven-copilot-tools) — invoke for any issue/board work.
+- **Skill:** `github-issues` (corven-agent-tools) — invoke for any issue/board work.
 
 ## Project Context
 

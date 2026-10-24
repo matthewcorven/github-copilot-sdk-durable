@@ -893,7 +893,7 @@ Squad can connect to a GitHub repository's issues and manage the full issue → 
 
 ### Skill Declaration (always active when GitHub Issues Mode is used)
 
-**Skill:** `github-issues` (from the `corven-copilot-tools` skill set).
+**Skill:** `github-issues` (from the `corven-agent-tools` skill set).
 
 Agents working on issues, triage, backlog, or the project board MUST invoke the
 `github-issues` skill first — do not wait for the user to name it. If the skill is
