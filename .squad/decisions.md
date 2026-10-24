@@ -268,3 +268,23 @@ Roadmap board: project 5 (project id `PVT_kwHOAajMkc4BobdZ`), Status field `PVTS
 - Document architectural decisions here
 - Keep history focused on work, decisions focused on direction
 - Keep history focused on work, decisions focused on direction
+### 2026-10-23T21:15:00-04:00: Core Engineer — #12 loud ephemeral tier API implemented (PR #24, draft)
+
+**Date:** 2026-10-23
+**Author:** core-engineer
+
+**What:** Implemented items 1–3 of the Lead's "loud ephemeral tier" change set in `lib/Durable.cs`: `DurableStore.CreateEphemeral()`, `DurableStore.IsPersistent` (backed by a new `IDurableStoreProvider.IsPersistent` member), and `Create(new DurableStoreOptions())` resolving to the persistent tier at the per-user default path. The `Auto` arm was also amended so a non-existent file writes JSONL rather than the legacy snapshot.
+
+**References:** #12, #13, #14, #15, PR #24, branch `squad/12-ephemeral-tier-api`, commits `a87ccdb` + `5601081`, `lib/Durable.cs`
+
+**Why:**
+
+1. **The `Auto`→JSONL change was implemented, not deferred.** The Lead's recommendation #6 was small and safe to land here, and it was a prerequisite for item 3: without it, `Create(new DurableStoreOptions())` would have written the legacy single-file format to the default path, which is the opposite of the intent. The discriminator is the JSONL envelope's top-level `type` property, which the legacy snapshot never carries — the same rule already settled in `docs/implementation/ISSUE_1_PLAN.md` §2.1. A file that does not exist, or exists but is empty, is written as JSONL.
+
+2. **A bare "file exists ⇒ legacy" rule was rejected on evidence.** A scratch diagnostic showed the legacy provider reading a JSONL file opens it as an *empty* store rather than failing — silent data loss. So the `Auto` arm must never route a JSONL file to the legacy provider, which is why the discriminator is required rather than optional.
+
+3. **The remaining legacy-reader gap is left to #13 and is stated precisely.** A file that is neither format — valid JSON but not a `StoreSnapshot` — currently opens as an empty legacy store instead of raising an actionable error. That distinction is #13's scope and is recorded in the PR body.
+
+4. **Scope was respected.** `examples/` (#14) and `tests/` (#15) are untouched. `new DurableStore()` behaviour is unchanged and carries no `[Obsolete]` attribute. `DurableStoreFormat` members are unchanged.
+
+**How it applies:** PR #24 is open as a draft against `dev`, based on `origin/squad/12-default-path` (`1173c75`) because #12's PR #23 is still open and unmerged. Gates green: build 0 warnings / 0 errors, tests 4 passed / 0 failed, all 31 examples compile. Verified end-to-end in a scratch console project against the real `lib/Durable.cs` with a hermetic `XDG_STATE_HOME` — the default path's first line is `{"v":1,"seq":1,"type":"conversation","payload":{"id":"c1"}}`, a JSONL envelope, not a legacy snapshot.
