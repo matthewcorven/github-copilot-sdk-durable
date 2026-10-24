@@ -76,17 +76,37 @@ concepts the SDK does not have, and compose it with the SDK's native durability.
 
 ### 3.1 `DurableStore` — the document + task store
 
-A single JSON-file-backed store per example (or in-memory), holding:
+A provider-backed store holding documents, tasks, conversations, and transcript entries.
+`DurableStore` is the facade that owns the commit gate and the undo-log rollback; the
+`IDurableStoreProvider` behind it owns the state and decides where that state lives. The
+providers are the storage tiers:
 
-```csharp
-sealed record DurableDocument(string Kind, string Scope, string OwnerId, JsonElement Value, long Version);
-sealed record DurableTask(string Id, string Name, string Phase, JsonElement Checkpoint, JsonElement Input,
-                          string Status, JsonElement? Outcome, long Restarts);
-```
+- **Ephemeral (in-memory).** `InMemoryStoreProvider` never touches the filesystem; the
+  state is lost when the process ends. It is behind the plain `new DurableStore()`
+  constructor and the opt-in `DurableStore.CreateEphemeral()`.
+- **Durable (JSONL, canonical).** `JsonlStoreProvider` persists one UTF-8 JSON record per
+  line, appended on every commit and flushed before the commit returns. The record
+  envelope is `{"v":1,"seq":N,"type":"<kind>","payload":{...}}`, written in write-sequence
+  order. A torn trailing line — a partial write from a crash — is discarded on open and
+  the file is truncated back to the last complete record boundary, so recovery is silent
+  and non-fatal.
+- **Legacy snapshot (read).** `LegacyJsonStoreProvider` is the single-file JSON snapshot
+  format the store used before the JSONL backend, behind `new DurableStore(path)`. It is
+  still written atomically (temp file + `File.Move` overwrite) so a crash never leaves a
+  torn file.
 
-Written atomically (temp file + `File.Move` overwrite) so a crash never leaves a torn file.
-This is the C# analogue of Pi's SQLite/JSONL storage, and it is what makes the *task* and
-*document* examples meaningful.
+A store is opened through `DurableStore.Create(DurableStoreOptions)`. An explicit
+`Path` always wins. Without one, every non-in-memory format resolves the per-user default
+path: `LocalApplicationData` on Windows; `$XDG_STATE_HOME` when set and non-empty, else
+`~/.local/state`, elsewhere — with the store file in a `durable` subdirectory under that
+root, named by `DurableStoreOptions.FileName`. The default `Format` is `Auto`, which
+sniffs the file at open: a file that does not exist yet (or is empty) is written in the
+canonical JSONL format; a file whose first content line is a JSON object with a string
+`type` property is a JSONL record envelope, and anything else is read as a legacy
+snapshot. The store reports which tier it actually landed on through `IsPersistent`.
+
+This is the C# analogue of Pi Durable's pluggable storage — its `JsonlStorage` in
+particular — and it is what makes the *task* and *document* examples meaningful.
 
 ### 3.2 `DurableTask<TInput, TCheckpoint, TResult>` — the task state machine
 

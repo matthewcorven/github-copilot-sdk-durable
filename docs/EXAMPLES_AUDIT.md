@@ -1,6 +1,6 @@
 # Example Suite Fidelity Audit
 
-A strict code audit of all 31 examples (`00` through `30`) in `examples/` against the original reference implementations in Pi Durable (`packages/durable/test/examples/`).
+A strict code audit of all 32 examples (`00` through `31`) in `examples/` against the original reference implementations in Pi Durable (`packages/durable/test/examples/`).
 
 ---
 
@@ -39,6 +39,7 @@ A strict code audit of all 31 examples (`00` through `30`) in `examples/` agains
 | **28** | `28-sandbox-per-conversation` | **100% Real** | Live Copilot Model | Multi-conversation sandbox routing via `ToolInvocation.SessionId`. |
 | **29** | `29-tool-override` | **100% Real** | Live Copilot Model | Extension precedence replacement + `AIFunction` wrapper timing. |
 | **30** | `30-reload-and-restart` | **100% Real** | Live Copilot Model | Dual-process execution; in-flight call completes on v1, next on v2, restart re-binds. |
+| **31** | `31-jsonl-store` | **100% Real** | Offline mechanics | JSONL store over an explicit path and the per-user default path; commit/reopen round-trip verified, record envelope inspected on disk. No numbered Pi Durable mirror — the C# analogue of its `JsonlStorage` backend. |
 
 ---
 

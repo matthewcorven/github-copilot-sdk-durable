@@ -124,6 +124,7 @@ machinery run in under a second.
 | [28](examples/28-sandbox-per-conversation.cs) | One sandbox per conversation | The app records each conversation's sandbox in its own document, and the tool looks it up for every call. |
 | [29](examples/29-tool-override.cs) | Tool override | Two extensions define a tool with the same name; the later one wins. A third wraps whichever won, so reloading either implementation keeps the wrapper. |
 | [30](examples/30-reload-and-restart.cs) | Reload and restart | Reload an extension while a call runs, then restart the process. Running work finishes on the code it started with; stored choices are names, so they bind to the new code. |
+| [31](examples/31-jsonl-store.cs) | The JSONL store | Commit to an explicit path, close, reopen, and read the same value back; then the same over the per-user default path, resolved from a file name alone. |
 
 ---
 
