@@ -31,6 +31,14 @@ here only when their agent names also exist in the casting registry.
 3. Members can reassign by removing their label and adding another member's label.
 4. The `squad` label is the "inbox" — untriaged issues waiting for Lead review.
 
+### Authoritative Status & Dependencies
+
+**Skill:** `github-issues` (corven-copilot-tools) — invoke it for any issue/board work.
+
+- **Status** comes from the GitHub Project board (`github-copilot-sdk-durable Roadmap`, project #5) `Status` field — not from labels or issue bodies.
+- **Dependencies** come from native `blocked by` / `blocking` links (GraphQL `issue.blockedBy`) — not from `## Dependencies` sections in issue bodies, which are informational only.
+- Do not start an issue while any open blocker remains. When creating issues, add native `blocked by` links (GraphQL `addBlockedBy`).
+
 ## Rules
 
 1. **Eager by default** — spawn all agents who could usefully start work, including anticipatory downstream work.

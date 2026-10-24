@@ -2,6 +2,25 @@
 
 Reference for connecting Squad to a repository and managing the issue→branch→PR→merge lifecycle.
 
+## Authoritative Status & Dependencies
+
+**Skill:** `github-issues` (corven-copilot-tools). Invoke it for any issue/board work —
+do not wait for the user to name it.
+
+Status and dependency precedence (mandatory):
+
+1. **GitHub Project board** — authoritative for issue status (`Status` field:
+   Todo / In Progress / Done). Overrides labels, body text, and inference.
+2. **Native `blocked by` / `blocking` links** — authoritative for dependencies
+   (GraphQL `issue.blockedBy` / `issue.blocking`). An issue with an open blocker
+   must not be started.
+3. **Issue body sections** (`## Dependencies`, "Depends on") — informational only;
+   may be stale. Native links win on conflict; correct the body when they diverge.
+
+When creating issues, add native `blocked by` links (GraphQL `addBlockedBy`) in
+addition to any prose. Never derive sequencing from issue bodies when native links
+exist.
+
 ## Repo Connection Format
 
 When connecting Squad to an issue tracker, store the connection in `.squad/team.md`:
