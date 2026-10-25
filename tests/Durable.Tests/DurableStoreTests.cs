@@ -138,7 +138,7 @@ public class DurableStoreTests
             // First run: execute step 1
             string taskId;
             {
-                var store1 = new DurableStore(storePath);
+                using var store1 = new DurableStore(storePath);
                 await using var harness1 = await DurableHarness.OpenAsync(store1, registry);
                 var root = await harness1.RootAsync();
                 var taskRec = await harness1.CreateTaskAsync(taskDef, DurableJson.ToElement(new Dictionary<string, int> { ["target"] = 3 }), root.Id);
@@ -147,7 +147,7 @@ public class DurableStoreTests
 
             // Second run: reopen and continue to completion
             {
-                var store2 = new DurableStore(storePath);
+                using var store2 = new DurableStore(storePath);
                 await using var harness2 = await DurableHarness.OpenAsync(store2, registry);
                 var outcome = await harness2.WaitForTaskAsync(taskId);
 
@@ -225,5 +225,121 @@ public class DurableStoreTests
         Assert.All(children, c => Assert.Equal(TaskStatus.Terminal, c.Status));
         Assert.All(children, c => Assert.Equal("aborted", c.Outcome!.Value.GetProperty("status").GetString()));
         Assert.Equal(2, childAbortCount);
+    }
+
+    [Fact]
+    public void Open_SecondWriterOnSamePath_IsRefusedNamingTheFile()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"durable-test-lock-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var storePath = Path.Combine(dir, "session.jsonl");
+
+        try
+        {
+            using var first = DurableStore.Create(new DurableStoreOptions
+            {
+                Path = storePath,
+                Format = DurableStoreFormat.Jsonl,
+            });
+
+            var error = Assert.Throws<InvalidOperationException>(() =>
+                DurableStore.Create(new DurableStoreOptions
+                {
+                    Path = storePath,
+                    Format = DurableStoreFormat.Jsonl,
+                }));
+
+            Assert.Contains(storePath, error.Message);
+            Assert.Contains("already open", error.Message);
+            Assert.Contains(Environment.ProcessId.ToString(), error.Message);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Reopen_MintsSequenceGreaterThanEveryReplayedOne()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"durable-test-seq-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var storePath = Path.Combine(dir, "session.jsonl");
+
+        try
+        {
+            var definition = new DocumentDefinition<Dictionary<string, string>>("notes");
+            long highestBefore;
+
+            using (var first = DurableStore.Create(new DurableStoreOptions
+            {
+                Path = storePath,
+                Format = DurableStoreFormat.Jsonl,
+            }))
+            {
+                await first.CommitAsync(async transaction =>
+                {
+                    var draft = transaction.Doc(definition, "owner");
+                    draft.Value = new Dictionary<string, string> { ["text"] = "one" };
+                    draft.Save("e1");
+                    await Task.CompletedTask;
+                });
+
+                await first.CommitAsync(async transaction =>
+                {
+                    var draft = transaction.Doc(definition, "owner");
+                    draft.Value = new Dictionary<string, string> { ["text"] = "two" };
+                    draft.Save("e2");
+                    await Task.CompletedTask;
+                });
+
+                highestBefore = first.Documents
+                    .SelectMany(document => document.Versions)
+                    .Max(version => version.Sequence);
+            }
+
+            using var second = DurableStore.Create(new DurableStoreOptions
+            {
+                Path = storePath,
+                Format = DurableStoreFormat.Jsonl,
+            });
+
+            // The replayed versions keep the sequence each was minted with, not the
+            // envelope sequence of the commit that wrote it.
+            var replayed = second.Documents
+                .SelectMany(document => document.Versions)
+                .Select(version => version.Sequence)
+                .ToList();
+            Assert.Equal(2, replayed.Count);
+            Assert.Equal(highestBefore, replayed.Max());
+            Assert.Equal(replayed.Count, replayed.Distinct().Count());
+
+            long mintedAfterReopen = 0;
+            await second.CommitAsync(async transaction =>
+            {
+                var draft = transaction.Doc(definition, "owner");
+                draft.Value = new Dictionary<string, string> { ["text"] = "three" };
+                draft.Save("e3");
+                await Task.CompletedTask;
+            });
+
+            mintedAfterReopen = second.Documents
+                .SelectMany(document => document.Versions)
+                .Max(version => version.Sequence);
+
+            Assert.True(
+                mintedAfterReopen > highestBefore,
+                $"a reopened store must mint past every replayed sequence: {mintedAfterReopen} <= {highestBefore}");
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
     }
 }

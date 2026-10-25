@@ -250,8 +250,34 @@ process installs — that is the whole point of example 30.
 | `GenerationTask` | `CopilotSession` + `SessionHooks` | The SDK's own generation loop, with hooks for review loops and tool interception. |
 | `defineTask` / `TaskRuntime` | `DurableTask.Define` / `TaskRuntime` | Checkpointed state machines with `MemoAsync` and `SleepUntilAsync`. |
 | `wrapTool` | `ToolWrapper` | Wraps by name, so it decorates whichever implementation wins. |
-| `MemoryStorage` / `openNodeSqliteStorage` | `DurableStore` | In memory, or a single JSON file written atomically. |
+| `MemoryStorage` / `openNodeSqliteStorage` | `DurableStore` | In memory, or a single JSON file written atomically. One writer per file. |
 | `fork` | `harness.ForkAsync` | Inherits the parent's transcript and documents up to the fork entry. |
+
+### Storage and concurrency
+
+A `DurableStore` is either ephemeral (in memory) or persistent (a file). A persistent store takes
+an **exclusive lock** on a sidecar file next to the store (`{path}.lock`) when it opens and holds
+it until the store is disposed. The operating system releases the lock when the process exits, so
+a crash does not leave a stale lock.
+
+**A store file has exactly one writer.** A second process that opens the same path is refused at
+open with an `InvalidOperationException` naming the store file, the lock file, and the process id
+that holds it. There is no retry and no queue — the second writer fails fast rather than
+interleaving appends with the first.
+
+That makes a store's lifetime a scope. Dispose the store before another process opens the same
+path, including before launching a child process that will read it:
+
+```csharp
+var store = new DurableStore(storePath);
+var harness = await DurableHarness.OpenAsync(store, registry);
+// ...
+await harness.DisposeAsync();
+store.Dispose();   // releases the file lock
+```
+
+`DurableHarness.DisposeAsync()` closes the Copilot client; it does **not** dispose the store. See
+[`docs/DESIGN.md`](docs/DESIGN.md#concurrency-contract) for the full contract.
 
 ---
 

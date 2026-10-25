@@ -88,6 +88,32 @@ Written atomically (temp file + `File.Move` overwrite) so a crash never leaves a
 This is the C# analogue of Pi's SQLite/JSONL storage, and it is what makes the *task* and
 *document* examples meaningful.
 
+#### Concurrency contract
+
+**A store file has exactly one writer.** A persistent store takes an exclusive lock on a sidecar
+file next to the store (`{path}.lock`) when it opens, and holds it until the store is disposed.
+The operating system releases the lock when the process exits, so a crash does not leave a stale
+lock behind. A second process that opens the same path is refused at open with an
+`InvalidOperationException` naming the store file, the lock file, and the process id that holds
+it. There is no retry, no timeout, and no queue: the second writer fails fast rather than
+interleaving appends with the first.
+
+The consequence for application code is that a store's lifetime is a scope. Dispose the store
+before another process opens the same path — including before launching a child process that
+will read it. `DurableHarness.DisposeAsync()` closes the Copilot client; it does **not** dispose
+the store, so a harness that is closed and reopened against the same path must dispose the store
+in between.
+
+Because the lock makes the holder the only writer, a store reads its file once at open and then
+serves from memory. `DurableStore.RefreshAsync()` is therefore a no-op for a persistent store;
+it exists for the ephemeral tier and for a future read-only tier that observes a file another
+process writes.
+
+The sequence number is the store's monotonic commit counter. It is minted per record, persisted
+with the record, and restored on replay as the maximum of the replayed values, so a reopened
+store always mints past every sequence it has already written. A document version carries the
+sequence it was minted with, not the sequence of the commit that happened to write it.
+
 ### 3.2 `DurableTask<TInput, TCheckpoint, TResult>` — the task state machine
 
 Mirrors Pi's `defineTask`:

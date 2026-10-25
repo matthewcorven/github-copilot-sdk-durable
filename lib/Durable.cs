@@ -522,7 +522,12 @@ public sealed class DurableStoreOptions
 /// The store owns the commit gate; the provider owns the state and the undo log
 /// that protects it.
 /// </summary>
-public interface IDurableStoreProvider
+/// <remarks>
+/// A provider is disposable because a persistent backend holds a resource for the
+/// store's lifetime: the exclusive lock on the store file. Disposing the store
+/// releases that lock, which is what lets the next process open the same file.
+/// </remarks>
+public interface IDurableStoreProvider : IDisposable
 {
     /// <summary>
     /// Whether the provider's state is persisted to the filesystem. A provider that
@@ -676,6 +681,15 @@ public class InMemoryStoreProvider : IDurableStoreProvider
 
     /// <summary>Starts empty. The in-memory provider never touches the filesystem.</summary>
     public virtual void Open(DurableStoreOptions options)
+    {
+    }
+
+    /// <summary>
+    /// Releases whatever the provider holds for the store's lifetime. The in-memory
+    /// provider holds nothing, so this is a no-op; the persistent providers release
+    /// the exclusive lock on the store file.
+    /// </summary>
+    public virtual void Dispose()
     {
     }
 
@@ -905,6 +919,115 @@ public class InMemoryStoreProvider : IDurableStoreProvider
 }
 
 /// <summary>
+/// The exclusive lock a persistent provider holds on its store file for the store's
+/// lifetime. The lock is a sidecar file next to the store -- <c>{path}.lock</c> --
+/// opened with <see cref="FileShare.None"/>, so the operating system releases it when
+/// the process exits, even after a crash. The sidecar carries the owning process id
+/// and start time so a refused open can say who holds the file.
+/// </summary>
+internal sealed class StoreFileLock : IDisposable
+{
+    private readonly string _lockPath;
+    private readonly string _ownerPath;
+    private FileStream? _handle;
+
+    private StoreFileLock(string lockPath, string ownerPath, FileStream handle)
+    {
+        _lockPath = lockPath;
+        _ownerPath = ownerPath;
+        _handle = handle;
+    }
+
+    /// <summary>
+    /// Takes the lock for <paramref name="storePath"/>, or throws naming the store
+    /// file, the lock file, and the process that already holds it.
+    /// </summary>
+    public static StoreFileLock Acquire(string storePath)
+    {
+        var fullPath = Path.GetFullPath(storePath);
+        var directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        var lockPath = fullPath + ".lock";
+        var ownerPath = fullPath + ".lock.owner";
+        FileStream handle;
+        try
+        {
+            handle = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        }
+        catch (IOException exception)
+        {
+            throw new InvalidOperationException(
+                $"The durable store file '{fullPath}' is already open in another process. " +
+                $"Its lock file '{lockPath}' is held{DescribeOwner(ownerPath)}. " +
+                "A store file supports a single writer at a time; close the other store, " +
+                "or point this one at a different path.",
+                exception);
+        }
+
+        try
+        {
+            // The owner note lives beside the lock rather than inside it: the lock is
+            // held with FileShare.None, so a refused writer could not read it back.
+            File.WriteAllText(ownerPath, $"{Environment.ProcessId} {DateTimeOffset.UtcNow:O}");
+        }
+        catch (IOException)
+        {
+            // The lock is what matters; the owner note is a diagnostic nicety.
+        }
+
+        return new StoreFileLock(lockPath, ownerPath, handle);
+    }
+
+    private static string DescribeOwner(string ownerPath)
+    {
+        try
+        {
+            var text = File.ReadAllText(ownerPath).Trim();
+            if (text.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            var parts = text.Split(' ', 2);
+            return parts.Length == 2 && int.TryParse(parts[0], out var pid)
+                ? $" by process {pid} (since {parts[1]})"
+                : $" (owner: {text})";
+        }
+        catch (IOException)
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>Releases the lock and removes the sidecar.</summary>
+    public void Dispose()
+    {
+        var handle = _handle;
+        if (handle is null)
+        {
+            return;
+        }
+
+        _handle = null;
+        handle.Dispose();
+
+        try
+        {
+            File.Delete(_lockPath);
+            File.Delete(_ownerPath);
+        }
+        catch (IOException)
+        {
+            // A leftover sidecar is harmless: the next open truncates and rewrites it.
+        }
+    }
+}
+
+/// <summary>
 /// The provider that keeps the store in the single-file JSON snapshot format the
 /// store used before the JSONL backend. This is the persistence behind
 /// <c>new DurableStore(path)</c>, and the format <see cref="DurableStoreFormat.Auto"/>
@@ -914,6 +1037,7 @@ public class InMemoryStoreProvider : IDurableStoreProvider
 internal sealed class LegacyJsonStoreProvider : InMemoryStoreProvider
 {
     private string? _path;
+    private StoreFileLock? _lock;
 
     /// <summary>
     /// Whether the provider's state is persisted. The legacy provider writes the
@@ -921,11 +1045,20 @@ internal sealed class LegacyJsonStoreProvider : InMemoryStoreProvider
     /// </summary>
     public override bool IsPersistent => true;
 
-    /// <summary>Loads the snapshot at the configured path, when there is one.</summary>
+    /// <summary>
+    /// Takes the exclusive lock on the store file, then loads the snapshot at the
+    /// configured path, when there is one.
+    /// </summary>
     public override void Open(DurableStoreOptions options)
     {
         _path = options.Path;
-        if (_path is not null && File.Exists(_path))
+        if (_path is null)
+        {
+            return;
+        }
+
+        _lock = StoreFileLock.Acquire(_path);
+        if (File.Exists(_path))
         {
             var snapshot = JsonSerializer.Deserialize<StoreSnapshot>(File.ReadAllText(_path), DurableJson.Options);
             if (snapshot is not null)
@@ -933,6 +1066,13 @@ internal sealed class LegacyJsonStoreProvider : InMemoryStoreProvider
                 RestoreSnapshot(snapshot);
             }
         }
+    }
+
+    /// <summary>Releases the exclusive lock on the store file.</summary>
+    public override void Dispose()
+    {
+        _lock?.Dispose();
+        _lock = null;
     }
 
     /// <summary>Writes the whole snapshot to the file, atomically.</summary>
@@ -967,6 +1107,7 @@ internal sealed class LegacyJsonStoreProvider : InMemoryStoreProvider
 internal sealed class JsonlStoreProvider : InMemoryStoreProvider
 {
     private string? _path;
+    private StoreFileLock? _lock;
 
     /// <summary>
     /// Whether the provider's state is persisted. The JSONL provider appends its
@@ -975,20 +1116,32 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
     public override bool IsPersistent => true;
 
     /// <summary>
-    /// Loads the JSONL file at the configured path, replaying every complete record
-    /// into memory. A torn final line is discarded and truncated away; a file that
-    /// does not parse as JSONL at all is an error, because <see cref="DurableStoreFormat.Jsonl"/>
-    /// is an explicit format choice, not a guess.
+    /// Takes the exclusive lock on the store file, then loads the JSONL file at the
+    /// configured path, replaying every complete record into memory. A torn final
+    /// line is discarded and truncated away; a file that does not parse as JSONL at
+    /// all is an error, because <see cref="DurableStoreFormat.Jsonl"/> is an explicit
+    /// format choice, not a guess.
     /// </summary>
     public override void Open(DurableStoreOptions options)
     {
         _path = options.Path;
-        if (_path is null || !File.Exists(_path))
+        if (_path is null)
         {
             return;
         }
 
-        Replay(_path);
+        _lock = StoreFileLock.Acquire(_path);
+        if (File.Exists(_path))
+        {
+            Replay(_path);
+        }
+    }
+
+    /// <summary>Releases the exclusive lock on the store file.</summary>
+    public override void Dispose()
+    {
+        _lock?.Dispose();
+        _lock = null;
     }
 
     /// <summary>Appends the records of the committed transaction to the file, flushed.</summary>
@@ -1112,8 +1265,9 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
                     record.Payload.GetProperty("fork").Deserialize<ForkPolicy>(DurableJson.Options));
                 break;
             case "document-version":
-                // A version's write sequence is the record's own envelope sequence:
-                // RecordDocumentVersion drew it from NextSequence when it was written.
+                // A version carries the sequence RecordDocumentVersion minted for it,
+                // which is not the envelope sequence: the envelope is the store's
+                // sequence at commit time, and a commit can mint several sequences.
                 var state = EnsureDocument(
                     record.Payload.GetProperty("kind").GetString()!,
                     record.Payload.GetProperty("ownerId").GetString()!,
@@ -1121,7 +1275,9 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
                 state.Versions.Add(new DocumentVersion(
                     record.Payload.GetProperty("entryId").GetString()!,
                     record.Payload.GetProperty("value").Clone(),
-                    record.Seq));
+                    record.Payload.TryGetProperty("sequence", out var versionSequence)
+                        ? versionSequence.GetInt64()
+                        : record.Seq));
                 break;
             case "task":
                 AddTask(record.Payload.Deserialize<DurableTaskRecord>(DurableJson.Options)!);
@@ -1183,7 +1339,7 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
             foreach (var version in document.Versions.Skip(committed))
             {
                 records.Add(JsonlRecord.For("document-version", Sequence, new JsonlDocumentVersion(
-                    document.Kind, document.OwnerId, document.Fork, version.EntryId, version.Value.Clone())));
+                    document.Kind, document.OwnerId, document.Fork, version.EntryId, version.Sequence, version.Value.Clone())));
             }
         }
 
@@ -1238,14 +1394,24 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
     private sealed record JsonlDocumentRef(string Kind, string OwnerId, ForkPolicy Fork);
 
     private sealed record JsonlDocumentVersion(
-        string Kind, string OwnerId, ForkPolicy Fork, string EntryId, JsonElement Value);
+        string Kind, string OwnerId, ForkPolicy Fork, string EntryId, long Sequence, JsonElement Value);
 }
 
-/// <summary>The durable store: documents, tasks, conversations, and entries, persisted atomically.</summary>
-public sealed class DurableStore
+/// <summary>
+/// The durable store: documents, tasks, conversations, and entries, persisted atomically.
+/// </summary>
+/// <remarks>
+/// A persistent store holds an exclusive lock on its file for the store's lifetime, so
+/// dispose the store to release the file for the next process. A store file supports a
+/// single writer at a time; a second open of the same path fails at open rather than
+/// interleaving writes.
+/// </remarks>
+public sealed class DurableStore : IDisposable
 {
     private readonly IDurableStoreProvider _provider;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly string? _path;
+    private readonly DurableStoreFormat _format;
 
     /// <summary>Creates a store. When <paramref name="path"/> is given, state is persisted to that file.</summary>
     public DurableStore(string? path = null)
@@ -1254,10 +1420,13 @@ public sealed class DurableStore
             ? new InMemoryStoreProvider()
             : new LegacyJsonStoreProvider();
 
+        _path = path;
+        _format = path is null ? DurableStoreFormat.InMemory : DurableStoreFormat.LegacyJson;
+
         _provider.Open(new DurableStoreOptions
         {
             Path = path,
-            Format = path is null ? DurableStoreFormat.InMemory : DurableStoreFormat.LegacyJson,
+            Format = _format,
         });
     }
 
@@ -1294,7 +1463,7 @@ public sealed class DurableStore
         };
 
         provider.Open(options);
-        return new DurableStore(provider);
+        return new DurableStore(provider, options.Path, options.Format);
     }
 
     /// <summary>
@@ -1409,7 +1578,12 @@ public sealed class DurableStore
         return System.IO.Path.Combine(root, "durable", fileName);
     }
 
-    private DurableStore(IDurableStoreProvider provider) => _provider = provider;
+    private DurableStore(IDurableStoreProvider provider, string? path, DurableStoreFormat format)
+    {
+        _provider = provider;
+        _path = path;
+        _format = format;
+    }
 
     /// <summary>The conversations known to this store.</summary>
     public IReadOnlyCollection<ConversationRecord> Conversations => _provider.Conversations;
@@ -1658,6 +1832,51 @@ public sealed class DurableStore
     /// records a transaction owns -- a fork's inherited entries, a copied document.
     /// </summary>
     internal IDurableStoreProvider Provider => _provider;
+
+    /// <summary>
+    /// Re-reads the store file into memory, discarding the in-memory state. A store
+    /// reads its file once, at open, and then serves from memory; call this to pick up
+    /// writes another process made after this store was opened. The store must not be
+    /// mid-transaction.
+    /// </summary>
+    /// <remarks>
+    /// A persistent store holds the file's exclusive lock for its lifetime, so it is
+    /// the only writer and its memory is already current: for such a store this is a
+    /// no-op. The method exists for the ephemeral tier and for a future read-only
+    /// tier, where a store can observe a file another process is writing.
+    /// </remarks>
+    public async Task RefreshAsync()
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            if (_provider.IsPersistent)
+            {
+                return;
+            }
+
+            _provider.Open(new DurableStoreOptions
+            {
+                Path = null,
+                Format = DurableStoreFormat.InMemory,
+            });
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Releases the store's hold on its file. A persistent store keeps an exclusive
+    /// lock on the file for its lifetime, so dispose the store before another process
+    /// opens the same path.
+    /// </summary>
+    public void Dispose()
+    {
+        _provider.Dispose();
+        _gate.Dispose();
+    }
 }
 
 /// <summary>A transaction: the only way to write durable state.</summary>

@@ -83,7 +83,7 @@ if (phase == "second")
 // The store is file-backed, so the second process sees the same conversations.
 var registry = new ExtensionRegistry();
 var store = new DurableStore(storePath);
-await using var harness = await DurableHarness.OpenAsync(store, registry);
+var harness = await DurableHarness.OpenAsync(store, registry);
 
 registry.Install(new Extension("versioned", tools: [LoadVersioned("v1")]));
 
@@ -126,7 +126,11 @@ var afterReload = root.Answers.LastOrDefault() ?? "";
 // ─── Restart ────────────────────────────────────────────────────────────────
 //
 // The second process opens the same store. The conversation still selects
-// "versioned" by name.
+// "versioned" by name. A store file has a single writer, so this process has to
+// close its store before the child can open it.
+await harness.DisposeAsync();
+store.Dispose();
+
 var assembly = Environment.GetCommandLineArgs()[0];
 var startInfo = new ProcessStartInfo("dotnet")
 {
