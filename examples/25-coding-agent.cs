@@ -68,6 +68,7 @@ var root = await harness.RootAsync(new AgentChoices
 {
     Extensions = ["coding"],
     WorkingDirectory = workspace,
+    Permissions = ["custom-tool:run_shell"],
 });
 
 // The tool runs in the conversation's directory.
@@ -83,6 +84,7 @@ await root.ConfigureAsync(new AgentChoices
 {
     Extensions = ["coding"],
     WorkingDirectory = app,
+    Permissions = ["custom-tool:run_shell"],
 });
 CurrentDirectory = root.Agent().WorkingDirectory ?? workspace;
 userSettings.ParallelTools = false;

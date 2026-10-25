@@ -18,6 +18,7 @@ using System.Text.Json.Serialization;
 #pragma warning disable IL2026, IL3050 // Durable state is reflection-serialized by design.
 using System.Text.Json.Serialization.Metadata;
 using GitHub.Copilot;
+using GitHub.Copilot.Rpc;
 using Microsoft.Extensions.AI;
 
 namespace Durable;
@@ -2151,6 +2152,138 @@ public sealed class ExtensionRegistry
         _extensions.Values.SelectMany(extension => extension.Tasks).FirstOrDefault(task => task.Name == name);
 }
 
+/// <summary>
+/// A declared permission grant: a request kind, optionally narrowed to a scope.
+/// </summary>
+/// <remarks>
+/// Grants are written as <c>kind</c> or <c>kind:scope</c> — for example <c>custom-tool:read_file</c>,
+/// <c>read:/workspace</c>, <c>shell:git status</c>, or <c>url:https://example.com</c>. A grant with no
+/// scope allows every request of that kind; <c>*</c> in either position is a wildcard.
+/// <para>
+/// A scope is a prefix, but only at a boundary: <c>read:/tmp/foo</c> grants <c>/tmp/foo/bar</c> and
+/// not <c>/tmp/foobar</c>, and <c>url:https://example.com</c> does not grant
+/// <c>https://example.com.evil.test</c>.
+/// </para>
+/// </remarks>
+public sealed record PermissionGrant(string Kind, string? Scope = null)
+{
+    /// <summary>Parses the <c>kind</c> or <c>kind:scope</c> form.</summary>
+    public static PermissionGrant Parse(string text)
+    {
+        var separator = text.IndexOf(':');
+        return separator < 0
+            ? new PermissionGrant(text.Trim())
+            : new PermissionGrant(text[..separator].Trim(), text[(separator + 1)..].Trim());
+    }
+
+    /// <inheritdoc />
+    public override string ToString() => Scope is null ? Kind : $"{Kind}:{Scope}";
+}
+
+/// <summary>
+/// The fail-closed permission policy: a request is denied unless a declared grant covers it.
+/// </summary>
+/// <remarks>
+/// The Copilot SDK's own default is <see cref="PermissionHandler.ApproveAll"/>, which approves every
+/// tool call, shell command, file write, and URL fetch the model asks for. That is the wrong default
+/// for a durable agent, whose whole point is that its behaviour is reproducible from stored state:
+/// an approval that is not written down is not reproducible. So a durable conversation starts with
+/// no grants at all and denies everything it was not explicitly given.
+/// <para>
+/// Denial uses <see cref="PermissionDecisionReject"/> with a feedback string. The SDK's
+/// <c>PermissionDecisionDeniedByRules</c> and
+/// <c>PermissionDecisionDeniedNoApprovalRuleAndCouldNotRequestFromUser</c> variants serialize to wire
+/// values the Copilot CLI's permission host does not accept, so they fail the tool call with a
+/// malformed-payload error instead of a clean denial.
+/// </para>
+/// </remarks>
+public static class PermissionPolicy
+{
+    /// <summary>Describes a request as a grant kind and an optional scope.</summary>
+    public static (string Kind, string? Scope) Describe(PermissionRequest request) => request switch
+    {
+        PermissionRequestCustomTool tool => ("custom-tool", tool.ToolName),
+        PermissionRequestRead read => ("read", read.ResolvedPath ?? read.Path),
+        PermissionRequestWrite write => ("write", write.ResolvedPath ?? write.FileName),
+        PermissionRequestShell shell => ("shell", shell.FullCommandText),
+        PermissionRequestUrl url => ("url", url.Url),
+        PermissionRequestMcp mcp => ("mcp", $"{mcp.ServerName}/{mcp.ToolName}"),
+        PermissionRequestHook hook => ("hook", hook.ToolName),
+        PermissionRequestWorkflow workflow => ("workflow", workflow.Name),
+        PermissionRequestExtensionManagement management => ("extension-management", management.ExtensionName),
+        PermissionRequestExtensionPermissionAccess access => ("extension-permission-access", access.ExtensionName),
+        PermissionRequestExtensionEnvAccess env => ("extension-env-access", env.ExtensionName),
+        PermissionRequestMemory => ("memory", null),
+        _ => (request.Kind, null),
+    };
+
+    /// <summary>Whether a declared grant set covers a request.</summary>
+    public static bool IsGranted(IReadOnlyList<string>? grants, string kind, string? scope)
+    {
+        if (grants is null)
+        {
+            return false;
+        }
+
+        foreach (var text in grants)
+        {
+            var grant = PermissionGrant.Parse(text);
+            if (grant.Kind != "*" && !string.Equals(grant.Kind, kind, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (grant.Scope is null or "*" or "")
+            {
+                return true;
+            }
+
+            if (scope is not null && ScopeMatches(grant.Scope, scope))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Builds the permission handler for a declared grant set.</summary>
+    public static Func<PermissionRequest, PermissionInvocation, Task<PermissionDecision>> Handler(
+        IReadOnlyList<string>? grants) =>
+        (request, _) =>
+        {
+            var (kind, scope) = Describe(request);
+            if (IsGranted(grants, kind, scope))
+            {
+                return Task.FromResult<PermissionDecision>(new PermissionDecisionApproveOnce());
+            }
+
+            var target = scope is null ? kind : $"{kind} ({scope})";
+            return Task.FromResult<PermissionDecision>(new PermissionDecisionReject
+            {
+                Feedback =
+                    $"denied by durable policy: no grant for {target}. " +
+                    $"Add \"{kind}\" or \"{kind}:{scope ?? "*"}\" to the conversation's Permissions to allow it.",
+            });
+        };
+
+    private static bool ScopeMatches(string grant, string scope)
+    {
+        if (string.Equals(grant, scope, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (!scope.StartsWith(grant, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        // A prefix only counts at a boundary, so "/tmp/foo" does not grant "/tmp/foobar".
+        return scope[grant.Length] is '/' or '\\' or ' ' or ':' or ';' or ',';
+    }
+}
+
 /// <summary>The per-conversation agent choices. Stored by name, so they outlive the code.</summary>
 public sealed class AgentChoices
 {
@@ -2183,6 +2316,24 @@ public sealed class AgentChoices
     public InfiniteSessionConfig? InfiniteSessions { get; set; }
 
     /// <summary>
+    /// The permission grants this conversation is allowed to use, as <c>kind</c> or
+    /// <c>kind:scope</c> strings. Empty or absent means the conversation may use no gated
+    /// capability at all: the policy is fail-closed.
+    /// </summary>
+    /// <remarks>
+    /// Grants are persisted with the choices, so a conversation that was allowed to run a tool
+    /// before a restart is still allowed to run it after, and one that was denied stays denied.
+    /// A fork copies the parent's choices, so it inherits the parent's grants as a snapshot and
+    /// can never silently widen them.
+    /// <para>
+    /// Grants take effect when a session is created. The SDK has no per-session permission API,
+    /// so <see cref="DurableConversation.ConfigureAsync"/> cannot change them on a live session;
+    /// the new grants apply to the next conversation, restore, or fork.
+    /// </para>
+    /// </remarks>
+    public List<string>? Permissions { get; set; }
+
+    /// <summary>
     /// Session hooks. Hooks are code-level configuration, so they are not persisted with the
     /// document; they are supplied when the conversation is created.
     /// </summary>
@@ -2200,7 +2351,8 @@ public sealed record ResolvedAgent(
     SessionHooks? Hooks,
     InfiniteSessionConfig? InfiniteSessions,
     IReadOnlyList<Extension> Extensions,
-    IReadOnlyList<AIFunction> Tools);
+    IReadOnlyList<AIFunction> Tools,
+    IReadOnlyList<string>? Permissions);
 
 /// <summary>A conversation handle: a Copilot session bound to durable app state.</summary>
 public sealed class DurableConversation
@@ -2385,7 +2537,8 @@ public sealed class DurableConversation
             choices.Hooks,
             choices.InfiniteSessions,
             extensions,
-            tools);
+            tools,
+            choices.Permissions);
     }
 
     /// <summary>Forks this conversation at the given entry.</summary>
@@ -2900,7 +3053,8 @@ public sealed class DurableHarness : IAsyncDisposable
             choices?.Hooks,
             choices?.InfiniteSessions,
             ResolveExtensions(choices?.Extensions),
-            ResolveTools(ResolveExtensions(choices?.Extensions), choices?.Tools));
+            ResolveTools(ResolveExtensions(choices?.Extensions), choices?.Tools),
+            choices?.Permissions);
 
         var config = new SessionConfig
         {
@@ -2908,7 +3062,11 @@ public sealed class DurableHarness : IAsyncDisposable
             // does not accept a reasoning effort, and it re-routes per request, which
             // makes an example's behaviour less reproducible.
             Model = resolved.Model ?? DefaultModel,
-            OnPermissionRequest = PermissionHandler.ApproveAll,
+
+            // Fail-closed: a durable conversation may only use what it was explicitly granted.
+            // The SDK's own default approves everything, which would make the agent's behaviour
+            // depend on state that is not in the store.
+            OnPermissionRequest = PermissionPolicy.Handler(resolved.Permissions),
             WorkingDirectory = resolved.WorkingDirectory,
         };
 

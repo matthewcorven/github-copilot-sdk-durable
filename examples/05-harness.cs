@@ -54,6 +54,8 @@ var root = await harness.RootAsync(new AgentChoices
 {
     Extensions = ["files"],
     ReasoningEffort = "low",
+    // Fail-closed: the conversation may call the "read" tool and nothing else.
+    Permissions = ["custom-tool:read"],
 });
 
 await root.CommitAsync(async tx =>

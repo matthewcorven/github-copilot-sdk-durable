@@ -37,6 +37,64 @@ If you declare a `ToolInvocation` parameter in your tool delegate, the SDK autom
 
 ---
 
+## Permissions
+
+`SessionConfig.OnPermissionRequest` is a
+`Func<PermissionRequest, PermissionInvocation, Task<PermissionDecision>>`. `PermissionHandler.ApproveAll`
+is the SDK's default and it approves **everything** — every custom tool call, every file read and
+write, every shell command. A host that leaves it in place has no durable record of what its agent
+was allowed to do.
+
+### Custom tools are permission-gated
+
+A tool registered with `DefineTool` raises a `PermissionRequestCustomTool` before it runs. This is
+easy to miss because the default handler approves silently, so the request is invisible until you
+install a handler that logs or denies. Any fail-closed policy therefore has to grant `custom-tool`
+by name, or every tool call is denied.
+
+### Only some denial variants work
+
+The Copilot CLI's permission host accepts these decision variants: `approve-once`,
+`approve-for-session`, `approve-for-location`, `reject`, `user-not-available`, `approved`.
+
+`PermissionDecisionDeniedByRules` and `PermissionDecisionDeniedNoApprovalRuleAndCouldNotRequestFromUser`
+serialize to variants the CLI does not know, so they fail at the runtime boundary with
+`permission host returned malformed payload: unknown variant '...'` and surface to the model as a
+`GenericFailure` tool error. Use `PermissionDecisionReject { Feedback = "..." }` instead: it
+produces a clean `The user rejected this tool call. User feedback: <text>` error that the model can
+read and explain to the user.
+
+### There is no per-session permission API
+
+`CopilotSession` exposes `SetToolsAsync` and nothing else in the permission/tool surface. The
+permission handler is fixed when the `SessionConfig` is constructed, so a host cannot widen or
+narrow grants on a live session — only on the next session creation, restore, or fork.
+
+### Request variants and their kinds
+
+`PermissionRequest` is an abstract base with twelve concrete variants, each with a parameterless
+constructor and `required` members. `Kind` is a plain `string`, not an enum.
+
+| Variant | `Kind` | Required members |
+|---|---|---|
+| `PermissionRequestCustomTool` | `custom-tool` | `ToolName`, `ToolDescription` |
+| `PermissionRequestRead` | `read` | `Path`, `Intention` |
+| `PermissionRequestWrite` | `write` | `FileName`, `Diff`, `Intention`, `CanOfferSessionApproval` |
+| `PermissionRequestShell` | `shell` | `FullCommandText`, `Commands`, `Intention`, `PossiblePaths`, `PossibleUrls`, `HasWriteFileRedirection`, `CanOfferSessionApproval` |
+| `PermissionRequestUrl` | `url` | `Url`, `Intention` |
+| `PermissionRequestMcp` | `mcp` | `ServerName`, `ToolName`, `ToolTitle`, `ReadOnly` |
+| `PermissionRequestMemory` | `memory` | `Fact` |
+| `PermissionRequestHook` | `hook` | `ToolName` |
+| `PermissionRequestWorkflow` | `workflow` | `Name`, `Description`, `Operation`, `Phases`, `ApprovalKey`, `CanPersistApproval` |
+| `PermissionRequestExtensionManagement` | `extension-management` | `Operation` |
+| `PermissionRequestExtensionPermissionAccess` | `extension-permission-access` | `ExtensionName`, `Capabilities` |
+| `PermissionRequestExtensionEnvAccess` | `extension-env-access` | `ExtensionName`, `EnvironmentVariables` |
+
+`PermissionRequest`, `PermissionInvocation`, and the request variants are in `GitHub.Copilot`;
+`PermissionDecision` and its variants are in `GitHub.Copilot.Rpc`.
+
+---
+
 ## Event streaming quirks
 
 - **`AssistantStreamingDeltaEvent` carries no text:** Text deltas are provided on `AssistantMessageDeltaEvent.Data.DeltaContent`. The streaming delta event only provides `TotalResponseSizeBytes`.

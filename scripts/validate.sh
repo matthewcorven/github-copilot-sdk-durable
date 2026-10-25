@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EXAMPLES="$ROOT/examples"
 
 # Examples that make a live model call.
-LIVE_EXAMPLES=(08 10 13 15 16 17 18 19 20 21 22 24 25 26 27 28 29 30)
+LIVE_EXAMPLES=(08 10 13 15 16 17 18 19 20 21 22 24 25 26 27 28 29 30 31)
 
 # Run the unit test suite first if present
 TESTS_DIR="$ROOT/tests/Durable.Tests"

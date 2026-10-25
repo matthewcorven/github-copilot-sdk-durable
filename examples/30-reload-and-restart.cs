@@ -73,6 +73,7 @@ if (phase == "second")
     {
         Extensions = ["versioned"],
         Tools = ["version"],
+        Permissions = ["custom-tool:version"],
     });
     Console.WriteLine($"after install, configured: [{string.Join(", ", secondRoot.Agent().Tools.Select(tool => tool.Name))}]");
     return;
@@ -92,6 +93,7 @@ var root = await harness.RootAsync(new AgentChoices
     // Selected by name. The name is what is stored, never the code.
     Extensions = ["versioned"],
     Tools = ["version"],
+    Permissions = ["custom-tool:version"],
 });
 
 // The file changes while a call runs: the running call finishes on v1, the next call
@@ -107,6 +109,7 @@ await root.ConfigureAsync(new AgentChoices
 {
     Extensions = ["versioned"],
     Tools = ["version"],
+    Permissions = ["custom-tool:version"],
 });
 
 // Release the running call. It finishes on the code it started with.

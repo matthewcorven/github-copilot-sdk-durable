@@ -279,6 +279,44 @@ store.Dispose();   // releases the file lock
 `DurableHarness.DisposeAsync()` closes the Copilot client; it does **not** dispose the store. See
 [`docs/DESIGN.md`](docs/DESIGN.md#concurrency-contract) for the full contract.
 
+### Permissions
+
+A durable conversation is **fail-closed**: it may only use what it was explicitly granted. The
+grants live on `AgentChoices.Permissions` and are persisted with the conversation's choices, so a
+denial survives a restart and a fork inherits the parent's grants as a snapshot.
+
+```csharp
+var conversation = await harness.RootAsync(new AgentChoices
+{
+    Extensions = ["dangerous"],
+    Permissions = ["custom-tool:delete_everything"],
+});
+```
+
+A grant is `kind` or `kind:scope`:
+
+| Grant | Allows |
+| --- | --- |
+| `custom-tool:read_file` | the `read_file` tool, and nothing else |
+| `custom-tool` | every custom tool |
+| `read:/tmp/work` | reads under `/tmp/work` (a prefix only at a path boundary) |
+| `*` | everything |
+
+Kinds are the SDK's permission request kinds: `custom-tool`, `read`, `write`, `shell`, `url`,
+`mcp`, `hook`, `workflow`, `memory`, `extension-management`, `extension-permission-access`,
+`extension-env-access`. A scope is matched as a prefix only at a boundary, so `read:/tmp/work`
+does not grant `/tmp/workshop/file.txt` and `url:https://example.com` does not grant
+`https://example.com.evil.test`.
+
+The default is deliberate. The SDK's own default approves every request, which would make an
+agent's behaviour depend on state that is not in the store — the same conversation could do
+different things on two machines. Fail-closed keeps the grant set inside the durable record.
+
+Grants take effect when a session is created. The SDK has no per-session permission API, so
+`ConfigureAsync` cannot change grants on a live session; a new conversation, a restore, or a fork
+picks up the new set. See [`examples/31-permissions.cs`](examples/31-permissions.cs) for a
+conversation that is denied a tool, restarted, and denied again.
+
 ---
 
 ## Validating the suite

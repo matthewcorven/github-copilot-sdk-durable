@@ -111,6 +111,7 @@ var root = await harness.RootAsync(new AgentChoices
     Extensions = ["coding"],
     WorkingDirectory = workspace,
     Hooks = hooks,
+    Permissions = ["custom-tool:read_file", "custom-tool:edit_file", "custom-tool:run_shell"],
 });
 
 // Each tool call runs as a durable task owned by the generation, which waits for

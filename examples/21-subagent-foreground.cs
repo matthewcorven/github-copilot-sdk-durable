@@ -47,7 +47,11 @@ var subagent = CopilotTool.DefineTool(
 
 registry.Install(new Extension("subagent", tools: [subagent]));
 
-parent = await harness.RootAsync(new AgentChoices { Extensions = ["subagent"] });
+parent = await harness.RootAsync(new AgentChoices
+{
+    Extensions = ["subagent"],
+    Permissions = ["custom-tool:subagent"],
+});
 host = harness;
 
 // The parent's tool call creates the child, runs one task there, and returns the

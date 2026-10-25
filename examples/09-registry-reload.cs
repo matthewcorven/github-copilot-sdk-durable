@@ -44,8 +44,12 @@ registry.Install(LoadFiles("Search files"));
 
 await using var harness = await DurableHarness.OpenAsync(store, registry);
 // A conversation with no stored selection follows the host: every installed
-// extension, all of their tools.
-var root = await harness.RootAsync();
+// extension, all of their tools. The grants are still explicit: the host's
+// extension list is not a permission.
+var root = await harness.RootAsync(new AgentChoices
+{
+    Permissions = ["custom-tool:read", "custom-tool:grep"],
+});
 
 var tools = () => root.Agent().Tools.Select(tool => $"{tool.Name}: {tool.Description}").ToList();
 Console.WriteLine($"after load: [{string.Join(", ", tools())}]");

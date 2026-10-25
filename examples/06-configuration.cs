@@ -60,6 +60,7 @@ await root.ConfigureAsync(new AgentChoices
     Model = "gpt-6-luna",
     ReasoningEffort = "high",
     Tools = ["write", "read"],
+    Permissions = ["custom-tool:write", "custom-tool:read"],
 });
 
 Console.WriteLine($"stored: {root.Choices()!.Model} / {root.Choices()!.ReasoningEffort} / [{string.Join(", ", root.Choices()!.Tools!)}]");
@@ -78,6 +79,7 @@ await root.ConfigureAsync(new AgentChoices
     ReasoningEffort = "high",
     Extensions = ["files"],
     Tools = ["write", "read"],
+    Permissions = ["custom-tool:write", "custom-tool:read"],
 });
 Console.WriteLine($"without search: [{string.Join(", ", tools())}]");
 var withoutSearch = tools();
@@ -89,6 +91,7 @@ await root.ConfigureAsync(new AgentChoices
 {
     Model = "gpt-6-luna",
     Extensions = ["files", "search"],
+    Permissions = ["custom-tool:read", "custom-tool:write", "custom-tool:grep"],
 });
 registry.Uninstall("files");
 Console.WriteLine($"files uninstalled: [{string.Join(", ", tools())}]");

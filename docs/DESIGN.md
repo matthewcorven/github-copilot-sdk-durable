@@ -114,6 +114,34 @@ with the record, and restored on replay as the maximum of the replayed values, s
 store always mints past every sequence it has already written. A document version carries the
 sequence it was minted with, not the sequence of the commit that happened to write it.
 
+#### Permissions
+
+A durable conversation is fail-closed. `AgentChoices.Permissions` is a list of `kind` or
+`kind:scope` grants, and `DurableHarness.BuildSessionConfig` installs
+`PermissionPolicy.Handler(resolved.Permissions)` as `SessionConfig.OnPermissionRequest` instead of
+the SDK's `PermissionHandler.ApproveAll`.
+
+The reason is the same reason the store exists. An approval that is not written down is not
+reproducible: the SDK's default approves every request, so the same conversation would be allowed
+to do different things depending on who ran it and when. Persisting the grant set with the
+conversation's choices makes the agent's authority part of the durable record, which means it
+survives a restart and is inherited by a fork as a snapshot.
+
+`PermissionPolicy.Describe` maps each of the SDK's twelve permission request variants to a
+`(kind, scope)` pair — `custom-tool` is scoped by tool name, `read`/`write` by resolved path,
+`shell` by full command text, `url` by URL, `mcp` by `server/tool`. `PermissionPolicy.IsGranted`
+then matches a grant against that pair, treating a scope as a prefix only at a boundary
+(`/ \ space : ; ,`) so `read:/tmp/work` does not grant `/tmp/workshop/file.txt`.
+
+Denial uses `PermissionDecisionReject` with a feedback string naming the missing grant. The SDK's
+`PermissionDecisionDeniedByRules` and `PermissionDecisionDeniedNoApprovalRuleAndCouldNotRequestFromUser`
+serialize to wire variants the Copilot CLI does not accept, so they fail at the runtime boundary
+with a malformed-payload error; `Reject` is the variant that actually denies.
+
+Grants are fixed at session creation. `CopilotSession` exposes no per-session permission API, so
+`ConfigureAsync` persists a new grant set but cannot apply it to a live session — the next
+conversation creation, restore, or fork picks it up.
+
 ### 3.2 `DurableTask<TInput, TCheckpoint, TResult>` — the task state machine
 
 Mirrors Pi's `defineTask`:

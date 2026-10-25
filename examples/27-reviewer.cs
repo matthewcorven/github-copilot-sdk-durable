@@ -67,6 +67,7 @@ var root = await harness.RootAsync(new AgentChoices
     Extensions = ["reviewer"],
     Tools = ["read_file"],
     WorkingDirectory = worktree,
+    Permissions = ["custom-tool:read_file", "read"],
 });
 
 // The review loop. The hook is code-level configuration, so it is supplied when the
@@ -104,6 +105,7 @@ reviewer = await harness.CreateConversationAsync(new AgentChoices
     Tools = ["read_file"],
     WorkingDirectory = worktree,
     Hooks = reviewerHooks,
+    Permissions = ["custom-tool:read_file", "read"],
 });
 
 var agent = reviewer.Agent();

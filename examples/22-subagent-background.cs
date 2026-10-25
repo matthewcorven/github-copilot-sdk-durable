@@ -148,7 +148,11 @@ registryExtensions.Install(new Extension("subagent-tools", tools: [subagentTool]
 var firstStore = new DurableStore(storePath);
 var first = await DurableHarness.OpenAsync(firstStore, registryExtensions);
 host = first;
-main = await first.RootAsync(new AgentChoices { Extensions = ["subagent-tools"] });
+main = await first.RootAsync(new AgentChoices
+{
+    Extensions = ["subagent-tools"],
+    Permissions = ["custom-tool:subagent"],
+});
 
 var spawned = await main.SubmitAsync("Use the subagent tool to spawn a subagent named reader.");
 Console.WriteLine($"spawn: {spawned?.Data.Content}");
@@ -172,7 +176,11 @@ Console.WriteLine("(process restarts)");
 var secondStore = new DurableStore(storePath);
 var second = await DurableHarness.OpenAsync(secondStore, registryExtensions);
 host = second;
-main = await second.RootAsync(new AgentChoices { Extensions = ["subagent-tools"] });
+main = await second.RootAsync(new AgentChoices
+{
+    Extensions = ["subagent-tools"],
+    Permissions = ["custom-tool:subagent"],
+});
 
 var after = main.Snapshot(Subagents)!;
 Console.WriteLine($"registry after restart: {string.Join(", ", after.Keys)}");
