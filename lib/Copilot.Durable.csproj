@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <NoWarn>GHCP001</NoWarn>
+    <LangVersion>latest</LangVersion>
+
+    <!-- The package is built from the same single file the examples include. -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <RootNamespace>Durable</RootNamespace>
+    <AssemblyName>Copilot.Durable</AssemblyName>
+
+    <PackageId>Copilot.Durable</PackageId>
+    <Version>0.4.0</Version>
+    <Authors>Matthew Corven</Authors>
+    <Description>Durable state for GitHub Copilot SDK agents: typed documents with rewindable history and fork policies, checkpointed task state machines with idempotency memos, an extension registry with reload semantics, and a pluggable store.</Description>
+    <PackageTags>copilot;ai;agents;durable;state;dotnet</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryType>git</RepositoryType>
+    <RepositoryUrl>https://github.com/matthewcorven/github-copilot-sdk-durable</RepositoryUrl>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Missing XML comments on public members are not worth failing a build over. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Durable.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="GitHub.Copilot.SDK" Version="1.0.26" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

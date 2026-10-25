@@ -20,3 +20,8 @@ obj/
 .squad/.cache/
 # Squad: SubSquad activation file (local to this machine)
 .squad-workstream
+
+# NuGet pack output.
+artifacts/
+*.nupkg
+*.snupkg

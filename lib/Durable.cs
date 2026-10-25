@@ -959,7 +959,7 @@ internal sealed class LegacyJsonStoreProvider : InMemoryStoreProvider
 
 /// <summary>
 /// The provider that persists state as JSONL: one JSON record per line, appended
-/// on every commit and flushed to disk before <see cref="Commit"/> returns. A torn
+/// on every commit and flushed to disk before the commit returns. A torn
 /// trailing line -- a partial write from a crash -- is discarded on open and the
 /// file is truncated back to the last complete record, so recovery is silent and
 /// non-fatal.
@@ -1877,7 +1877,7 @@ public sealed class PromptSection
     /// <summary>Renders the section's text, or <see langword="null"/> to omit it.</summary>
     public Func<SectionInput, Task<string?>> Render { get; }
 
-    /// <summary>Whether the text is wrapped in <c>&lt;key&gt;...</key></c>.</summary>
+    /// <summary>Whether the text is wrapped in a <c>&lt;key&gt;</c> tag.</summary>
     public bool Tag { get; }
 }
 

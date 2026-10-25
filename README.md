@@ -129,9 +129,24 @@ machinery run in under a second.
 
 ## The shared library
 
-Every example includes one file, [`lib/Durable.cs`](lib/Durable.cs) (~2000 lines), with
-`#:include ../lib/Durable.cs`. It is the durable layer that the examples share; the
-examples themselves contain all the product code.
+The durable layer is one file, [`lib/Durable.cs`](lib/Durable.cs) (~2000 lines). It is
+published as the NuGet package **`Copilot.Durable`**, and it is also what every example
+includes directly, so a fresh clone runs with no package restore step.
+
+### Consuming it
+
+Downstream projects reference the package:
+
+```xml
+<PackageReference Include="Copilot.Durable" Version="0.4.0" />
+```
+
+```csharp
+using Durable;
+```
+
+The examples in this repository use the file-based app form instead, which keeps them
+self-contained and readable:
 
 ```csharp
 #:package GitHub.Copilot.SDK@1.0.26
@@ -139,6 +154,10 @@ examples themselves contain all the product code.
 #:property NoWarn=GHCP001
 #:include ../lib/Durable.cs
 ```
+
+Both paths compile the same source. `lib/Copilot.Durable.csproj` builds the package from
+`lib/Durable.cs`; `tests/Durable.Tests` references that project, so the test suite
+exercises the artifact consumers actually get.
 
 ### Core types
 
@@ -277,6 +296,7 @@ For token pricing tables, reasoning effort constraints, and SDK-specific tool-au
 ```
 examples/                 31 self-contained file-based C# apps
 lib/Durable.cs            the shared durable layer every example includes
+lib/Copilot.Durable.csproj  builds the Copilot.Durable NuGet package from that file
 tests/Durable.Tests       xUnit test suite for the durable library
 scripts/validate.sh       compile-and-run validation for the whole suite
 docs/
