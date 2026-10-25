@@ -347,7 +347,7 @@ COMPILE_ONLY=1 ./scripts/validate.sh
 
 The script reports `PASS`/`FAIL` per example and prints the output of each one.
 
-CI runs `dotnet test tests/Durable.Tests` and then `COMPILE_ONLY=1 SKIP_TESTS=1 ./scripts/validate.sh`, so every example is compiled on every push. CI does not run the examples — 19 of the 33 need a live model call, and the remaining offline examples are exercised by running the script locally with `SKIP_LIVE=1`.
+CI runs `dotnet test tests/Durable.Tests`, then `SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh`. Every example is compiled on every push, and the 14 that need no model session also execute with their assertions checked. The other 19 need a live Copilot session and are not run in CI.
 
 ---
 
