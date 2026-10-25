@@ -7,7 +7,7 @@
 
 A suite of **self-contained C# file-based apps** (`dotnet run app.cs`, .NET 10) that demonstrate
 durable GitHub Copilot SDK agents, with **breadth equal to the Pi Durable example set**
-(31 examples, `00`–`30`).
+(33 examples, `00`–`32`).
 
 Each example is a single `.cs` file plus, where it needs shared helpers, a `#:include`d
 support file. No `.csproj`.
@@ -84,7 +84,48 @@ sealed record DurableTask(string Id, string Name, string Phase, JsonElement Chec
                           string Status, JsonElement? Outcome, long Restarts);
 ```
 
-Written atomically (temp file + `File.Move` overwrite) so a crash never leaves a torn file.
+The store has two tiers. `DurableStore.CreateEphemeral()` keeps everything in the process and
+writes nothing. `DurableStore.Create(new DurableStoreOptions { Path = ... })` writes a file, and
+that file is what makes a conversation outlive the process.
+
+#### Where the file lives
+
+An explicit `Path` is honoured exactly. A store created with no path resolves the per-user default
+location instead, so an app that says nothing still gets a durable store:
+
+| Platform | Root |
+|---|---|
+| Windows | `%LOCALAPPDATA%` |
+| Linux / macOS | `$XDG_STATE_HOME` when set and non-empty, otherwise `~/.local/state` |
+
+The file is `Path.Combine(root, "durable", fileName)`, where `fileName` defaults to
+`durable-store.jsonl`. `DurableStore.DefaultStorePath(fileName)` exposes the resolution so an app
+can show the user where its state is. The default is deliberately *not* the current directory: a
+store that follows the working directory would give the same app a different history depending on
+where it was launched.
+
+#### How the file is written
+
+The file is JSONL — one record per line, appended on every commit. Each line is an envelope
+`{"v":1,"seq":<n>,"type":"<kind>","payload":{...}}` where `type` is one of `conversation`,
+`entry`, `entry-record`, `document`, `document-version`, or `task`. Appending is what makes a
+crash cheap: a process that dies mid-write leaves a torn final line, and the next open replays
+every complete record, truncates the file back to the last complete record's boundary, and
+continues. A torn tail costs one record, never the store.
+
+A line that fails to parse *and is not the final line* is a different matter — that is corruption
+in the middle of the file, and it is reported as an `InvalidDataException` naming the byte offset
+rather than silently dropping everything after it.
+
+`DurableStoreFormat` selects the backend explicitly:
+
+| Format | Behaviour |
+|---|---|
+| `Auto` (default) | Sniff the file. A first non-empty line that is a JSON object with a string `type` is JSONL; a file that parses whole as one JSON object is the legacy snapshot format; a missing or empty file is JSONL. `Auto` never converts — a legacy file is opened and written back in legacy format. |
+| `InMemory` | No file at all. |
+| `Jsonl` | JSONL, and only JSONL. Opening a legacy snapshot is the explicit "convert this store" case: the snapshot is read into memory on open and the first commit replaces the file with JSONL records. Opening alone never rewrites it. |
+| `LegacyJson` | The legacy single-file snapshot, written atomically (temp file + `File.Move` overwrite). Opening a JSONL file in this format is refused at open with an `InvalidDataException`, before the lock is taken. |
+
 This is the C# analogue of Pi's SQLite/JSONL storage, and it is what makes the *task* and
 *document* examples meaningful.
 
@@ -196,7 +237,7 @@ Wraps a `CopilotSession` plus the durable store, exposing Pi-shaped operations:
 - `ResumeAsync()` → re-enter running tasks
 - `CloseAsync()`
 
-## 4. Example suite (31 examples, mirroring Pi 00–30)
+## 4. Example suite (33 examples, mirroring Pi 00–30 plus two C#-only additions)
 
 | # | Pi example | C# example | Demonstrates |
 |---|---|---|---|

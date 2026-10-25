@@ -1,6 +1,6 @@
 # Durable GitHub Copilot SDK agents in C#
 
-A suite of 31 self-contained C# examples that build **durable** agents on the
+A suite of 33 self-contained C# examples that build **durable** agents on the
 [GitHub Copilot SDK](https://github.com/github/copilot-sdk). Every example is a single
 file-based .NET app — no `.csproj`, no solution, no build step beyond `dotnet run`.
 
@@ -23,7 +23,7 @@ In-depth technical reports, design notes, and audits are available in [`docs/`](
 
 - [**Comparative Architecture Analysis**](docs/COMPARATIVE_ANALYSIS.md): Comprehensive matrices comparing every storage and runtime subsystem of this project against Pi Durable.
 - [**Why this Layer is Necessary (Durability Analysis)**](docs/DURABILITY_ANALYSIS.md): Detailed breakdown of what the Copilot SDK provides natively, what it lacks, and what this library proves.
-- [**Example Suite Fidelity Audit**](docs/EXAMPLES_AUDIT.md): Complete audit verifying that all 31 examples run against real engine components rather than simulations or shortcuts.
+- [**Example Suite Fidelity Audit**](docs/EXAMPLES_AUDIT.md): Complete audit verifying that all 33 examples run against real engine components rather than simulations or shortcuts.
 - [**Copilot SDK Notes & Gotchas**](docs/COPILOT_SDK_NOTES.md): SDK behaviors, tool authoring pitfalls (silent tool shadowing, serialization limits, async deadlocks), and model billing pricing tables.
 - [**Architecture Design Document**](docs/DESIGN.md): The foundational specification and concept mapping between Pi Durable and the GitHub Copilot SDK (.NET).
 
@@ -124,6 +124,8 @@ machinery run in under a second.
 | [28](examples/28-sandbox-per-conversation.cs) | One sandbox per conversation | The app records each conversation's sandbox in its own document, and the tool looks it up for every call. |
 | [29](examples/29-tool-override.cs) | Tool override | Two extensions define a tool with the same name; the later one wins. A third wraps whichever won, so reloading either implementation keeps the wrapper. |
 | [30](examples/30-reload-and-restart.cs) | Reload and restart | Reload an extension while a call runs, then restart the process. Running work finishes on the code it started with; stored choices are names, so they bind to the new code. |
+| [31](examples/31-permissions.cs) | Permissions | A conversation is denied a tool, restarted, and denied again. Grants live in the store, so a restart cannot widen them. |
+| [32](examples/32-jsonl-store.cs) | The store file | Where a durable store lives and how it writes: an explicit path wins, no path resolves the per-user default, and the file is JSONL so a torn tail costs one record. |
 
 ---
 
@@ -327,7 +329,7 @@ Validation runs in two complementary layers:
 2. **xUnit test suite (`tests/Durable.Tests`):** Focused unit and integration tests verifying `DurableStore` rollback semantics, fork entry filtering and state independence, store crash recovery with memo idempotency, and abort propagation.
 
 ```bash
-# Every example: compile, run xUnit suite, and run all 31 examples.
+# Every example: compile, run xUnit suite, and run all 33 examples.
 ./scripts/validate.sh
 
 # Fast offline validation: run xUnit suite + examples that do not call a model.
@@ -358,7 +360,7 @@ For token pricing tables, reasoning effort constraints, and SDK-specific tool-au
 ## Repository layout
 
 ```
-examples/                 31 self-contained file-based C# apps
+examples/                 33 self-contained file-based C# apps
 lib/Durable.cs            the shared durable layer every example includes
 lib/Copilot.Durable.csproj  builds the Copilot.Durable NuGet package from that file
 tests/Durable.Tests       xUnit test suite for the durable library
@@ -366,7 +368,7 @@ scripts/validate.sh       compile-and-run validation for the whole suite
 docs/
   COMPARATIVE_ANALYSIS.md architecture comparison vs Pi Durable
   DURABILITY_ANALYSIS.md  what Copilot SDK provides vs what was added
-  EXAMPLES_AUDIT.md       rigorous fidelity audit of all 31 examples
+  EXAMPLES_AUDIT.md       rigorous fidelity audit of all 33 examples
   COPILOT_SDK_NOTES.md    SDK quirks, tool shadowing rules, and pricing
   DESIGN.md               original architecture design specification
 ```

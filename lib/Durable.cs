@@ -1032,9 +1032,18 @@ internal sealed class StoreFileLock : IDisposable
 /// The provider that keeps the store in the single-file JSON snapshot format the
 /// store used before the JSONL backend. This is the persistence behind
 /// <c>new DurableStore(path)</c>, and the format <see cref="DurableStoreFormat.Auto"/>
-/// selects for a file that already holds a legacy snapshot. The backward-compatible
-/// reader lands with the legacy-store work.
+/// selects for a file that already holds a legacy snapshot.
 /// </summary>
+/// <remarks>
+/// The reader is backward compatible and non-destructive: opening a legacy file
+/// loads it into memory and never rewrites it, so a store that is only read keeps
+/// its bytes. A commit writes the whole snapshot back in the same legacy format,
+/// which is what <see cref="DurableStoreFormat.Auto"/> promises -- it never
+/// converts a file behind the caller's back. Converting a legacy file to JSONL is
+/// the explicit opt-in of opening it with <see cref="DurableStoreFormat.Jsonl"/>.
+/// A file that is not a legacy snapshot raises an <see cref="InvalidDataException"/>
+/// naming the path and the reason, rather than opening as an empty store.
+/// </remarks>
 internal sealed class LegacyJsonStoreProvider : InMemoryStoreProvider
 {
     private string? _path;
@@ -1048,7 +1057,9 @@ internal sealed class LegacyJsonStoreProvider : InMemoryStoreProvider
 
     /// <summary>
     /// Takes the exclusive lock on the store file, then loads the snapshot at the
-    /// configured path, when there is one.
+    /// configured path, when there is one. A file that holds JSONL records is
+    /// refused before the lock is taken, because reading it as a legacy snapshot
+    /// would start empty and the first commit would replace the records.
     /// </summary>
     public override void Open(DurableStoreOptions options)
     {
@@ -1058,14 +1069,17 @@ internal sealed class LegacyJsonStoreProvider : InMemoryStoreProvider
             return;
         }
 
+        if (File.Exists(_path) && DurableStore.DetectFormat(_path) is DurableStoreFormat.Jsonl)
+        {
+            throw new InvalidDataException(
+                $"The durable store file '{_path}' holds JSONL records, not a legacy JSON snapshot. " +
+                "Open it with DurableStoreFormat.Jsonl or DurableStoreFormat.Auto instead of DurableStoreFormat.LegacyJson.");
+        }
+
         _lock = StoreFileLock.Acquire(_path);
         if (File.Exists(_path))
         {
-            var snapshot = JsonSerializer.Deserialize<StoreSnapshot>(File.ReadAllText(_path), DurableJson.Options);
-            if (snapshot is not null)
-            {
-                RestoreSnapshot(snapshot);
-            }
+            RestoreSnapshot(DurableStore.ReadLegacySnapshot(_path));
         }
     }
 
@@ -1123,6 +1137,11 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
     /// all is an error, because <see cref="DurableStoreFormat.Jsonl"/> is an explicit
     /// format choice, not a guess.
     /// </summary>
+    /// <remarks>
+    /// A path that holds a legacy single-file snapshot is the explicit "convert this
+    /// store" case: the snapshot is read into memory on open, and the first commit
+    /// writes JSONL over the legacy file. Opening alone never rewrites it.
+    /// </remarks>
     public override void Open(DurableStoreOptions options)
     {
         _path = options.Path;
@@ -1132,10 +1151,21 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
         }
 
         _lock = StoreFileLock.Acquire(_path);
-        if (File.Exists(_path))
+        if (!File.Exists(_path))
         {
-            Replay(_path);
+            return;
         }
+
+        if (DurableStore.DetectFormat(_path) is DurableStoreFormat.LegacyJson)
+        {
+            // Convert on open, into memory only. The committed baseline stays empty
+            // so the first commit emits the whole state as JSONL records.
+            RestoreSnapshot(DurableStore.ReadLegacySnapshot(_path));
+            _replaceOnCommit = true;
+            return;
+        }
+
+        Replay(_path);
     }
 
     /// <summary>Releases the exclusive lock on the store file.</summary>
@@ -1165,7 +1195,11 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
             Directory.CreateDirectory(directory);
         }
 
-        using var stream = new FileStream(_path, FileMode.Append, FileAccess.Write, FileShare.Read);
+        using var stream = new FileStream(
+            _path,
+            _replaceOnCommit ? FileMode.Create : FileMode.Append,
+            FileAccess.Write,
+            FileShare.Read);
         using var writer = new StreamWriter(stream, new UTF8Encoding(false));
         foreach (var record in records)
         {
@@ -1174,6 +1208,7 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
 
         writer.Flush();
         stream.Flush(true);
+        _replaceOnCommit = false;
     }
 
     /// <summary>
@@ -1383,6 +1418,12 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
     private Dictionary<string, int> _committedVersions = [];
     private Dictionary<string, string> _committedTasks = [];
 
+    /// <summary>
+    /// Whether the next commit replaces the file instead of appending to it. Set
+    /// when the path held a legacy snapshot that was converted into memory on open.
+    /// </summary>
+    private bool _replaceOnCommit;
+
     /// <summary>One JSONL record: the envelope plus its payload.</summary>
     private sealed record JsonlRecord(long V, long Seq, string Type, JsonElement Payload)
     {
@@ -1508,18 +1549,18 @@ public sealed class DurableStore : IDisposable
     /// Detects the format of the file at the path. A file that does not exist, or
     /// that holds no content, is written in the canonical JSONL format. A file
     /// whose first non-empty line is a JSON object with a string <c>type</c>
-    /// property is a JSONL record envelope; anything else is the legacy
-    /// single-file snapshot.
+    /// property is a JSONL record envelope; a file that parses as a single JSON
+    /// object is the legacy single-file snapshot. Anything else raises an
+    /// <see cref="InvalidDataException"/> naming the path and the reason, so a
+    /// corrupt file is reported instead of opening as an empty store.
     /// </summary>
     /// <remarks>
     /// The discriminator is the JSONL envelope's top-level <c>type</c> property,
     /// which the legacy snapshot never carries. It is what lets a store written
     /// by <see cref="DurableStoreFormat.Auto"/> reopen in the format it was
-    /// written in. Distinguishing a legacy snapshot from a file that is neither
-    /// format -- and reporting the latter as an error instead of opening it
-    /// empty -- is the legacy-reader work in issue #13.
+    /// written in.
     /// </remarks>
-    private static DurableStoreFormat DetectFormat(string path)
+    internal static DurableStoreFormat DetectFormat(string path)
     {
         if (!File.Exists(path))
         {
@@ -1555,10 +1596,64 @@ public sealed class DurableStore : IDisposable
         }
         catch (JsonException)
         {
-            // Not a JSONL record envelope, so the file is the legacy snapshot.
+            // Not a JSONL record envelope; the whole-file check below decides
+            // whether it is a legacy snapshot or not a durable store at all.
         }
 
-        return DurableStoreFormat.LegacyJson;
+        // The legacy writer emits exactly one JSON object for the whole file, so a
+        // file that does not parse that way is neither format.
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            if (document.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                return DurableStoreFormat.LegacyJson;
+            }
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidDataException(
+                $"The file '{path}' is not a durable store: it is neither JSONL records nor a legacy JSON snapshot ({exception.Message}).",
+                exception);
+        }
+
+        throw new InvalidDataException(
+            $"The file '{path}' is not a durable store: it is neither JSONL records nor a legacy JSON snapshot.");
+    }
+
+    /// <summary>
+    /// Reads the legacy single-file snapshot at the path. A file that does not
+    /// parse as a <see cref="StoreSnapshot"/> raises an
+    /// <see cref="InvalidDataException"/> naming the path and the reason.
+    /// </summary>
+    internal static StoreSnapshot ReadLegacySnapshot(string path)
+    {
+        string text;
+        try
+        {
+            text = File.ReadAllText(path);
+        }
+        catch (IOException exception)
+        {
+            throw new InvalidDataException(
+                $"The legacy durable store file '{path}' could not be read: {exception.Message}",
+                exception);
+        }
+
+        StoreSnapshot? snapshot;
+        try
+        {
+            snapshot = JsonSerializer.Deserialize<StoreSnapshot>(text, DurableJson.Options);
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidDataException(
+                $"The legacy durable store file '{path}' is not a valid JSON snapshot: {exception.Message}",
+                exception);
+        }
+
+        return snapshot ?? throw new InvalidDataException(
+            $"The legacy durable store file '{path}' is not a valid JSON snapshot: the file holds no JSON object.");
     }
 
     /// <summary>
