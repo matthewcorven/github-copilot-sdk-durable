@@ -39,6 +39,8 @@ A strict code audit of all 33 examples (`00` through `32`) in `examples/` agains
 | **28** | `28-sandbox-per-conversation` | **100% Real** | Live Copilot Model | Multi-conversation sandbox routing via `ToolInvocation.SessionId`. |
 | **29** | `29-tool-override` | **100% Real** | Live Copilot Model | Extension precedence replacement + `AIFunction` wrapper timing. |
 | **30** | `30-reload-and-restart` | **100% Real** | Live Copilot Model | Dual-process execution; in-flight call completes on v1, next on v2, restart re-binds. |
+| **31** | `31-permissions` | **100% Real** | Offline mechanics | Real `PermissionPolicy` handler; denial survives a store reopen and a fork. |
+| **32** | `32-jsonl-store` | **100% Real** | Offline mechanics | Real JSONL backend: explicit-path round-trip, torn-tail truncation, default-path resolution, ephemeral tier. |
 
 ---
 
