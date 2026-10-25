@@ -1398,154 +1398,6 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
         string Kind, string OwnerId, ForkPolicy Fork, string EntryId, long Sequence, JsonElement Value);
 }
 
-/// <summary>Receives committed document writes from a store. Implemented by <see cref="WatchHandle{T}"/>.</summary>
-internal interface IWatchSink
-{
-    void Offer(string kind, string ownerId, JsonElement value, long sequence);
-}
-
-/// <summary>
-/// A live subscription to one document. Every frame is a value that was actually committed.
-/// </summary>
-/// <remarks>
-/// A watch starts from one stable acquisition revision: the first frame is the document's
-/// value at the moment the watch was taken, so a consumer never has to guess where it began.
-/// Frames buffer in commit order up to <see cref="FrameLimit"/>. A consumer that falls further
-/// behind than that is reset to the current full value instead of being replayed a stale
-/// backlog, because the point of a watch is the present state, not the history. Delivery is
-/// serialized: one consumer drains the buffer, so a slow callback never overlaps the next
-/// frame. A watch is live only; it does not survive a restart.
-/// </remarks>
-public sealed class WatchHandle<T> : IWatchSink, IAsyncEnumerable<T>, IDisposable
-{
-    /// <summary>The number of frames a watch buffers before it resets to the current value.</summary>
-    public const int FrameLimit = 100;
-
-    private readonly string _kind;
-    private readonly string _ownerId;
-    private readonly Action _unsubscribe;
-    private readonly object _lock = new();
-    private readonly Queue<T> _frames = new();
-    private TaskCompletionSource<bool> _available = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private bool _closed;
-
-    internal WatchHandle(string kind, string ownerId, T initial, Action unsubscribe)
-    {
-        _kind = kind;
-        _ownerId = ownerId;
-        _unsubscribe = unsubscribe;
-        _frames.Enqueue(initial);
-    }
-
-    /// <summary>The document kind this watch follows.</summary>
-    public string Kind => _kind;
-
-    /// <summary>The document owner this watch follows.</summary>
-    public string OwnerId => _ownerId;
-
-    /// <summary>The number of frames waiting to be read.</summary>
-    public int Buffered
-    {
-        get
-        {
-            lock (_lock)
-            {
-                return _frames.Count;
-            }
-        }
-    }
-
-    void IWatchSink.Offer(string kind, string ownerId, JsonElement value, long sequence)
-    {
-        if (!string.Equals(kind, _kind, StringComparison.Ordinal) ||
-            !string.Equals(ownerId, _ownerId, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        var frame = DurableJson.FromElement<T>(value);
-        TaskCompletionSource<bool> wake;
-        lock (_lock)
-        {
-            if (_closed)
-            {
-                return;
-            }
-
-            if (_frames.Count >= FrameLimit)
-            {
-                // The consumer is too far behind to replay. Reset to the current full value.
-                _frames.Clear();
-            }
-
-            _frames.Enqueue(frame!);
-            wake = _available;
-            _available = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        }
-
-        wake.TrySetResult(true);
-    }
-
-    /// <summary>Reads frames as they are committed. One consumer at a time.</summary>
-    public async IAsyncEnumerator<T> GetAsyncEnumerator(CancellationToken cancellationToken = default)
-    {
-        while (true)
-        {
-            T frame = default!;
-            var hasFrame = false;
-            var closed = false;
-            Task wait;
-
-            lock (_lock)
-            {
-                if (_frames.Count > 0)
-                {
-                    frame = _frames.Dequeue();
-                    hasFrame = true;
-                }
-                else if (_closed)
-                {
-                    closed = true;
-                }
-
-                wait = _available.Task;
-            }
-
-            if (hasFrame)
-            {
-                yield return frame;
-                continue;
-            }
-
-            if (closed)
-            {
-                yield break;
-            }
-
-            await wait.WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
-    }
-
-    /// <summary>Stops the watch. Frames already buffered can still be read.</summary>
-    public void Dispose()
-    {
-        TaskCompletionSource<bool> wake;
-        lock (_lock)
-        {
-            if (_closed)
-            {
-                return;
-            }
-
-            _closed = true;
-            wake = _available;
-        }
-
-        _unsubscribe();
-        wake.TrySetResult(true);
-    }
-}
-
 /// <summary>
 /// The durable store: documents, tasks, conversations, and entries, persisted atomically.
 /// </summary>
@@ -1561,8 +1413,6 @@ public sealed class DurableStore : IDisposable
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly string? _path;
     private readonly DurableStoreFormat _format;
-    private readonly ConcurrentDictionary<long, IWatchSink> _watchers = new();
-    private long _nextWatchId;
 
     /// <summary>Creates a store. When <paramref name="path"/> is given, state is persisted to that file.</summary>
     public DurableStore(string? path = null)
@@ -1767,15 +1617,6 @@ public sealed class DurableStore : IDisposable
             }
 
             _provider.Commit();
-
-            // Watchers are told only after the commit succeeded, so a frame is always
-            // a value that is actually in the store.
-            if (transaction.PendingWatches.Count > 0)
-            {
-                NotifyWatchers(transaction.PendingWatches);
-                transaction.PendingWatches.Clear();
-            }
-
             return result;
         }
         finally
@@ -1791,51 +1632,6 @@ public sealed class DurableStore : IDisposable
             await body(tx);
             return null;
         });
-
-    /// <summary>
-    /// Watches one document. The first frame is the document's value at the moment the
-    /// watch is taken, so a consumer always starts from a known revision.
-    /// </summary>
-    /// <remarks>
-    /// A watch is live only: it follows commits made through this store and does not
-    /// survive a restart. Dispose the handle to stop it.
-    /// </remarks>
-    public WatchHandle<T> Watch<T>(DocumentDefinition<T> definition, string ownerId)
-    {
-        ArgumentNullException.ThrowIfNull(definition);
-        ArgumentNullException.ThrowIfNull(ownerId);
-
-        var initial = Document(definition.Kind, ownerId)?.Latest is { } latest
-            ? DurableJson.FromElement<T>(latest)!
-            : definition.Initial();
-
-        var id = Interlocked.Increment(ref _nextWatchId);
-        var handle = new WatchHandle<T>(
-            definition.Kind,
-            ownerId,
-            initial,
-            () => _watchers.TryRemove(id, out _));
-
-        _watchers[id] = handle;
-        return handle;
-    }
-
-    private void NotifyWatchers(
-        IEnumerable<(string Kind, string OwnerId, JsonElement Value, long Sequence)> writes)
-    {
-        if (_watchers.IsEmpty)
-        {
-            return;
-        }
-
-        foreach (var write in writes)
-        {
-            foreach (var sink in _watchers.Values)
-            {
-                sink.Offer(write.Kind, write.OwnerId, write.Value, write.Sequence);
-            }
-        }
-    }
 
     /// <summary>Reads a document's state.</summary>
     public DocumentState? Document(string kind, string ownerId) => _provider.Document(kind, ownerId);
@@ -2079,17 +1875,6 @@ public sealed class DurableStore : IDisposable
     /// </summary>
     public void Dispose()
     {
-        // Close every watch first, so a consumer blocked on a frame is released
-        // instead of waiting on a store that is going away.
-        foreach (var sink in _watchers.Values)
-        {
-            if (sink is IDisposable disposable)
-            {
-                disposable.Dispose();
-            }
-        }
-
-        _watchers.Clear();
         _provider.Dispose();
         _gate.Dispose();
     }
@@ -2098,21 +1883,9 @@ public sealed class DurableStore : IDisposable
 /// <summary>A transaction: the only way to write durable state.</summary>
 public sealed class Transaction
 {
-    private readonly DurableStore _store;
     private readonly IDurableStoreProvider _provider;
 
-    internal Transaction(DurableStore store)
-    {
-        _store = store;
-        _provider = store.Provider;
-    }
-
-    /// <summary>
-    /// Document writes staged by this transaction. They are handed to the store's
-    /// watchers only after the commit succeeds, so a rolled-back write is never
-    /// observed.
-    /// </summary>
-    internal List<(string Kind, string OwnerId, JsonElement Value, long Sequence)> PendingWatches { get; } = [];
+    internal Transaction(DurableStore store) => _provider = store.Provider;
 
     /// <summary>Creates a conversation and returns its record.</summary>
     public ConversationRecord CreateConversation(
@@ -2170,13 +1943,7 @@ public sealed class Transaction
     internal void CommitDocument<T>(DocumentDefinition<T> definition, string ownerId, T value, string entryId)
     {
         var state = _provider.EnsureDocument(definition.Kind, ownerId, definition.Fork);
-        var element = DurableJson.ToElement(value);
-        _provider.RecordDocumentVersion(state, entryId, element);
-
-        // The version carries the sequence the provider minted for it. Watchers are
-        // notified after the commit, so the frame they see is a committed one.
-        var sequence = state.Versions.Count == 0 ? 0 : state.Versions[^1].Sequence;
-        PendingWatches.Add((definition.Kind, ownerId, element, sequence));
+        _provider.RecordDocumentVersion(state, entryId, DurableJson.ToElement(value));
     }
 }
 
@@ -2664,17 +2431,6 @@ public sealed class DurableConversation
         _harness.Store.Document(definition.Kind, Id)?.Latest is { } latest
             ? latest.Deserialize<T>(DurableJson.Options)
             : default;
-
-    /// <summary>
-    /// Watches one of this conversation's documents. The first frame is the value at the
-    /// moment the watch is taken; later frames are values that were actually committed.
-    /// </summary>
-    /// <remarks>
-    /// A watch is live only: it follows commits made through this store and does not
-    /// survive a restart. Dispose the handle to stop it.
-    /// </remarks>
-    public WatchHandle<T> Watch<T>(DocumentDefinition<T> definition) =>
-        _harness.Store.Watch(definition, Id);
 
     /// <summary>Reads the value a document had in the same transaction as the given entry.</summary>
     public T? SnapshotAsOf<T>(DocumentDefinition<T> definition, string entryId) =>
