@@ -165,7 +165,8 @@ exercises the artifact consumers actually get.
 |---|---|
 | `DurableStore` | The durable state. Persists to a single JSON file atomically (temp file + move), or stays in memory. |
 | `DurableHarness` | Owns the client, the store, the registry, and the conversations. `OpenAsync`, `RootAsync`, `CreateConversationAsync`, `ForkAsync`, `CreateTaskAsync`. |
-| `DurableConversation` | A Copilot session bound to durable app state. `SubmitAsync`, `Snapshot`, `CommitAsync`, `ConfigureAsync`, `Agent`, `ForkAsync`. |
+| `DurableConversation` | A Copilot session bound to durable app state. `SubmitAsync`, `Snapshot`, `Watch`, `CommitAsync`, `ConfigureAsync`, `Agent`, `ForkAsync`. |
+| `WatchHandle<T>` | A live, single-consumer stream of a document's committed values. `IAsyncEnumerable<T>`, `Dispose`. |
 | `Transaction` | The unit of atomicity. `CreateConversation`, `AppendEntry`, `Doc`, `CreateTask`. Everything written inside commits together, or not at all. |
 | `DocumentDefinition<T>` | A document's kind, history policy, fork policy, and initial value. |
 | `DocumentDraft<T>` | An editable copy of a document. Assign to `.Value`, then `.Save(entryId)`. |
@@ -207,6 +208,27 @@ await conversation.CommitAsync(async tx =>
     draft.Save(tx.AppendEntry(conversation.Id, "todo", "fix the build"));
 });
 ```
+
+### Watching a document
+
+A watch is a live, single-consumer stream of a document's committed values. It starts from
+one stable acquisition revision, so the reader never has to guess where it began, and it only
+ever sees values that actually committed — a rolled-back write is never observed.
+
+```csharp
+using var watch = conversation.Watch(Todos);
+
+await foreach (var todos in watch)
+{
+    // A slow callback never overlaps the next delivery.
+    await RenderAsync(todos);
+}
+```
+
+Frames buffer up to `WatchHandle<T>.FrameLimit` (100). A consumer that falls further behind
+than that is reset to the current full value rather than replaying a stale backlog. `Dispose()`
+ends the enumeration. A watch is live-only: it does not survive a restart, and it is not
+persisted.
 
 ### Extensions and tools
 
