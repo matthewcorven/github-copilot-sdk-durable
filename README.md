@@ -338,7 +338,7 @@ SKIP_LIVE=1 ./scripts/validate.sh
 # Run only the xUnit test suite for the library.
 dotnet test tests/Durable.Tests
 
-# Compile only, no model calls at all.
+# Compile only: build every example without running any of them.
 COMPILE_ONLY=1 ./scripts/validate.sh
 
 # A few specific examples.
@@ -346,6 +346,8 @@ COMPILE_ONLY=1 ./scripts/validate.sh
 ```
 
 The script reports `PASS`/`FAIL` per example and prints the output of each one.
+
+CI runs `dotnet test tests/Durable.Tests` and then `COMPILE_ONLY=1 SKIP_TESTS=1 ./scripts/validate.sh`, so every example is compiled on every push. CI does not run the examples — 19 of the 33 need a live model call, and the remaining offline examples are exercised by running the script locally with `SKIP_LIVE=1`.
 
 ---
 

@@ -299,6 +299,10 @@ Every example must:
 `scripts/validate.sh` runs the whole suite. `SKIP_LIVE=1` skips the examples that call a
 model; `COMPILE_ONLY=1` builds without running.
 
+CI enforces requirement 1 for every example on every push by running
+`COMPILE_ONLY=1 SKIP_TESTS=1 ./scripts/validate.sh` after the xUnit suite. Requirements 2
+and 3 are enforced locally, because most examples need a live model session.
+
 Examples that need a live model use the signed-in Copilot CLI credentials. The library's
 default model is `gpt-6-luna` rather than `auto`: `auto` re-routes per request, which makes
 an example's behaviour less reproducible, and it does not accept a reasoning effort. A

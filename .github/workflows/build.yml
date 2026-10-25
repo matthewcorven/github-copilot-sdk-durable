@@ -29,6 +29,9 @@ jobs:
       - name: Test
         run: dotnet test tests/Durable.Tests --nologo -v q
 
+      - name: Compile examples
+        run: COMPILE_ONLY=1 SKIP_TESTS=1 ./scripts/validate.sh
+
       - name: Pack
         run: dotnet pack lib/Copilot.Durable.csproj --no-build -c Release -o artifacts
 
