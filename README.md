@@ -35,7 +35,7 @@ In-depth technical reports, design notes, and audits are available in [`docs/`](
 |---|---|---|
 | .NET SDK | 10.0 or later | File-based apps (`dotnet run file.cs`) need .NET 10 |
 | GitHub Copilot CLI | 1.0.103 or later | The SDK drives the CLI over RPC |
-| GitHub Copilot access | an active subscription | The examples make live model calls |
+| GitHub Copilot access | an active subscription | 20 of the 33 examples need a signed-in CLI: 19 make live model calls, and `07` only queries `models.list` to confirm the model supports a reasoning effort |
 
 Check both:
 
