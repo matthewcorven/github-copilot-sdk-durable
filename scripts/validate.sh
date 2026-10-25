@@ -6,17 +6,19 @@
 #   scripts/validate.sh              # validate every example
 #   scripts/validate.sh 00 05 12     # validate only the listed example numbers
 #
-# Examples that need a live model call take 30-90 seconds each. Set
-# SKIP_LIVE=1 to skip the examples that call a model, or COMPILE_ONLY=1 to
-# build every example without running it.
+# Examples that need a signed-in Copilot CLI take 30-90 seconds each. Set
+# SKIP_LIVE=1 to skip them, or COMPILE_ONLY=1 to build every example without
+# running it.
 
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EXAMPLES="$ROOT/examples"
 
-# Examples that make a live model call.
-LIVE_EXAMPLES=(08 10 13 15 16 17 18 19 20 21 22 24 25 26 27 28 29 30 31)
+# Examples that need a signed-in Copilot CLI: they either make a live model call, or
+# they set a reasoning effort, which makes the harness query models.list to confirm the
+# model supports one.
+LIVE_EXAMPLES=(07 08 10 13 15 16 17 18 19 20 21 22 24 25 26 27 28 29 30 31)
 
 # Run the unit test suite first if present
 TESTS_DIR="$ROOT/tests/Durable.Tests"
@@ -58,7 +60,7 @@ for name in "${selected[@]}"; do
 
   number="${name%%-*}"
   if [[ "${SKIP_LIVE:-0}" == "1" ]] && is_live "$number"; then
-    echo "SKIP     $name.cs (live model)"
+    echo "SKIP     $name.cs (needs Copilot auth)"
     continue
   fi
 

@@ -29,6 +29,12 @@ jobs:
       - name: Test
         run: dotnet test tests/Durable.Tests --nologo -v q
 
+      # Compiles all 33 examples and runs the 13 that need no Copilot sign-in.
+      # SKIP_TESTS=1 because the Test step above already ran the xUnit suite;
+      # without it validate.sh would run the same tests a second time.
+      - name: Validate examples
+        run: SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh
+
       - name: Pack
         run: dotnet pack lib/Copilot.Durable.csproj --no-build -c Release -o artifacts
 
