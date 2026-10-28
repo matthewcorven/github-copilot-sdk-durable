@@ -77,6 +77,11 @@ chat = await harness.RootAsync(new AgentChoices
 {
     Extensions = ["coding"],
     WorkingDirectory = directory,
+    // Grants are fixed when the session is created: ConfigureAsync can change the
+    // tool list but not the permission handler, so the conversation is granted
+    // everything it will need up front. Plan mode restricts the tool list, not
+    // the grants.
+    Permissions = ["custom-tool:read_file", "custom-tool:submit_plan", "read", "write"],
 });
 
 var tools = () => chat!.Agent().Tools.Select(tool => tool.Name).ToList();
@@ -89,6 +94,7 @@ await chat.ConfigureAsync(new AgentChoices
     Extensions = ["plan"],
     Tools = ["read_file", "submit_plan"],
     WorkingDirectory = directory,
+    Permissions = ["custom-tool:read_file", "custom-tool:submit_plan", "read", "write"],
 });
 Console.WriteLine($"plan mode tools: [{string.Join(", ", tools())}]");
 var planTools = tools();
@@ -103,6 +109,7 @@ await chat.ConfigureAsync(new AgentChoices
 {
     Extensions = ["coding"],
     WorkingDirectory = directory,
+    Permissions = ["custom-tool:read_file", "read", "write"],
 });
 Console.WriteLine($"tools again: [{string.Join(", ", tools())}]");
 

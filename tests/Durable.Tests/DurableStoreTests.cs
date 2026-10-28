@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Durable;
 using Xunit;
 
@@ -138,7 +138,7 @@ public class DurableStoreTests
             // First run: execute step 1
             string taskId;
             {
-                var store1 = new DurableStore(storePath);
+                using var store1 = new DurableStore(storePath);
                 await using var harness1 = await DurableHarness.OpenAsync(store1, registry);
                 var root = await harness1.RootAsync();
                 var taskRec = await harness1.CreateTaskAsync(taskDef, DurableJson.ToElement(new Dictionary<string, int> { ["target"] = 3 }), root.Id);
@@ -147,7 +147,7 @@ public class DurableStoreTests
 
             // Second run: reopen and continue to completion
             {
-                var store2 = new DurableStore(storePath);
+                using var store2 = new DurableStore(storePath);
                 await using var harness2 = await DurableHarness.OpenAsync(store2, registry);
                 var outcome = await harness2.WaitForTaskAsync(taskId);
 
@@ -225,5 +225,417 @@ public class DurableStoreTests
         Assert.All(children, c => Assert.Equal(TaskStatus.Terminal, c.Status));
         Assert.All(children, c => Assert.Equal("aborted", c.Outcome!.Value.GetProperty("status").GetString()));
         Assert.Equal(2, childAbortCount);
+    }
+
+    [Fact]
+    public void Open_SecondWriterOnSamePath_IsRefusedNamingTheFile()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"durable-test-lock-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var storePath = Path.Combine(dir, "session.jsonl");
+
+        try
+        {
+            using var first = DurableStore.Create(new DurableStoreOptions
+            {
+                Path = storePath,
+                Format = DurableStoreFormat.Jsonl,
+            });
+
+            var error = Assert.Throws<InvalidOperationException>(() =>
+                DurableStore.Create(new DurableStoreOptions
+                {
+                    Path = storePath,
+                    Format = DurableStoreFormat.Jsonl,
+                }));
+
+            Assert.Contains(storePath, error.Message);
+            Assert.Contains("already open", error.Message);
+            Assert.Contains(Environment.ProcessId.ToString(), error.Message);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Reopen_MintsSequenceGreaterThanEveryReplayedOne()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"durable-test-seq-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var storePath = Path.Combine(dir, "session.jsonl");
+
+        try
+        {
+            var definition = new DocumentDefinition<Dictionary<string, string>>("notes");
+            long highestBefore;
+
+            using (var first = DurableStore.Create(new DurableStoreOptions
+            {
+                Path = storePath,
+                Format = DurableStoreFormat.Jsonl,
+            }))
+            {
+                await first.CommitAsync(async transaction =>
+                {
+                    var draft = transaction.Doc(definition, "owner");
+                    draft.Value = new Dictionary<string, string> { ["text"] = "one" };
+                    draft.Save("e1");
+                    await Task.CompletedTask;
+                });
+
+                await first.CommitAsync(async transaction =>
+                {
+                    var draft = transaction.Doc(definition, "owner");
+                    draft.Value = new Dictionary<string, string> { ["text"] = "two" };
+                    draft.Save("e2");
+                    await Task.CompletedTask;
+                });
+
+                highestBefore = first.Documents
+                    .SelectMany(document => document.Versions)
+                    .Max(version => version.Sequence);
+            }
+
+            using var second = DurableStore.Create(new DurableStoreOptions
+            {
+                Path = storePath,
+                Format = DurableStoreFormat.Jsonl,
+            });
+
+            // The replayed versions keep the sequence each was minted with, not the
+            // envelope sequence of the commit that wrote it.
+            var replayed = second.Documents
+                .SelectMany(document => document.Versions)
+                .Select(version => version.Sequence)
+                .ToList();
+            Assert.Equal(2, replayed.Count);
+            Assert.Equal(highestBefore, replayed.Max());
+            Assert.Equal(replayed.Count, replayed.Distinct().Count());
+
+            long mintedAfterReopen = 0;
+            await second.CommitAsync(async transaction =>
+            {
+                var draft = transaction.Doc(definition, "owner");
+                draft.Value = new Dictionary<string, string> { ["text"] = "three" };
+                draft.Save("e3");
+                await Task.CompletedTask;
+            });
+
+            mintedAfterReopen = second.Documents
+                .SelectMany(document => document.Versions)
+                .Max(version => version.Sequence);
+
+            Assert.True(
+                mintedAfterReopen > highestBefore,
+                $"a reopened store must mint past every replayed sequence: {mintedAfterReopen} <= {highestBefore}");
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task JsonlBackend_SurvivesReopenWithIdenticalState()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"durable-test-jsonl-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var storePath = Path.Combine(dir, "state.jsonl");
+
+        try
+        {
+            var definition = new DocumentDefinition<Dictionary<string, string>>("notes");
+            var taskDefinition = DurableTask.Define<Dictionary<string, string>, Dictionary<string, string>, string>(
+                "reopen.task",
+                () => new Dictionary<string, string> { ["phase"] = "run" },
+                (_, _, runtime) => runtime.CommitAsync(
+                    () => TaskCommit.Completed(DurableJson.ToElement("done"))));
+
+            string conversationId;
+            string taskId;
+
+            using (var first = DurableStore.Create(new DurableStoreOptions
+            {
+                Path = storePath,
+                Format = DurableStoreFormat.Jsonl,
+            }))
+            {
+                (conversationId, taskId) = await first.CommitAsync(async transaction =>
+                {
+                    var conversation = transaction.CreateConversation();
+                    var draft = transaction.Doc(definition, conversation.Id);
+                    draft.Value = new Dictionary<string, string> { ["text"] = "first" };
+                    draft.Save(transaction.AppendEntry(conversation.Id, "notes.write"));
+                    var task = transaction.CreateTask(
+                        taskDefinition,
+                        DurableJson.ToElement(new Dictionary<string, string> { ["input"] = "value" }),
+                        conversation.Id);
+                    await Task.CompletedTask;
+                    return (conversation.Id, task.Id);
+                });
+
+                await first.CommitAsync(async transaction =>
+                {
+                    var draft = transaction.Doc(definition, conversationId);
+                    draft.Value = new Dictionary<string, string> { ["text"] = "second" };
+                    draft.Save(transaction.AppendEntry(conversationId, "notes.write"));
+                    await Task.CompletedTask;
+                });
+            }
+
+            using var second = DurableStore.Create(new DurableStoreOptions
+            {
+                Path = storePath,
+                Format = DurableStoreFormat.Jsonl,
+            });
+
+            var conversation2 = second.Conversation(conversationId);
+            Assert.NotNull(conversation2);
+            Assert.Single(second.Conversations);
+
+            var task2 = second.Task(taskId);
+            Assert.NotNull(task2);
+            Assert.Equal("reopen.task", task2!.Name);
+            Assert.Equal(TaskStatus.Pending, task2.Status);
+            Assert.Equal(conversationId, task2.OwnerConversationId);
+            Assert.Single(second.Tasks);
+
+            var document = second.Document("notes", conversationId);
+            Assert.NotNull(document);
+            Assert.Equal(2, document!.Versions.Count);
+            Assert.Equal(
+                new Dictionary<string, string> { ["text"] = "second" },
+                DurableJson.FromElement<Dictionary<string, string>>(document.Latest!.Value));
+
+            var entries = second.Entries(conversationId);
+            Assert.Equal(2, entries.Count);
+            Assert.Equal(document.Versions.Select(version => version.EntryId), entries);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task JsonlBackend_DiscardsTruncatedFinalLine()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"durable-test-torn-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var storePath = Path.Combine(dir, "state.jsonl");
+
+        try
+        {
+            var definition = new DocumentDefinition<Dictionary<string, string>>("notes");
+
+            string conversationId;
+            using (var first = DurableStore.Create(new DurableStoreOptions
+            {
+                Path = storePath,
+                Format = DurableStoreFormat.Jsonl,
+            }))
+            {
+                conversationId = await first.CommitAsync(async transaction =>
+                {
+                    var conversation = transaction.CreateConversation();
+                    var draft = transaction.Doc(definition, conversation.Id);
+                    draft.Value = new Dictionary<string, string> { ["text"] = "committed" };
+                    draft.Save(transaction.AppendEntry(conversation.Id, "notes.write"));
+                    await Task.CompletedTask;
+                    return conversation.Id;
+                });
+            }
+
+            // A crash mid-append leaves a partial record with no terminator.
+            var fragment = "{\"v\":1,\"seq\":9999,\"ty";
+            File.AppendAllText(storePath, fragment);
+            Assert.EndsWith(fragment, File.ReadAllText(storePath), StringComparison.Ordinal);
+
+            using var second = DurableStore.Create(new DurableStoreOptions
+            {
+                Path = storePath,
+                Format = DurableStoreFormat.Jsonl,
+            });
+
+            // The torn tail is gone from the file, and everything before it survived.
+            Assert.DoesNotContain(fragment, File.ReadAllText(storePath));
+            Assert.EndsWith("\n", File.ReadAllText(storePath), StringComparison.Ordinal);
+
+            var document = second.Document("notes", conversationId);
+            Assert.NotNull(document);
+            Assert.Single(document!.Versions);
+            Assert.Equal(
+                new Dictionary<string, string> { ["text"] = "committed" },
+                DurableJson.FromElement<Dictionary<string, string>>(document.Latest!.Value));
+
+            // The store is still writable after the truncation.
+            await second.CommitAsync(async transaction =>
+            {
+                var draft = transaction.Doc(definition, conversationId);
+                draft.Value = new Dictionary<string, string> { ["text"] = "after" };
+                draft.Save(transaction.AppendEntry(conversationId, "notes.write"));
+                await Task.CompletedTask;
+            });
+
+            Assert.Equal(2, second.Document("notes", conversationId)!.Versions.Count);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task DurableStoreOptions_ExplicitPathWinsOverDefaultPath()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"durable-test-explicit-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var explicitPath = Path.Combine(dir, "explicit.jsonl");
+        var fileName = $"durable-test-default-{Guid.NewGuid():N}.jsonl";
+        var defaultPath = DurableStore.DefaultStorePath(fileName);
+
+        try
+        {
+            string conversationId;
+            using (var store = DurableStore.Create(new DurableStoreOptions
+            {
+                Path = explicitPath,
+                FileName = fileName,
+            }))
+            {
+                Assert.True(store.IsPersistent);
+                conversationId = await store.CommitAsync(async transaction =>
+                {
+                    await Task.CompletedTask;
+                    return transaction.CreateConversation().Id;
+                });
+            }
+
+            // The writes landed in the explicit file, not in the per-user default one.
+            Assert.True(File.Exists(explicitPath));
+            Assert.Contains(conversationId, File.ReadAllText(explicitPath), StringComparison.Ordinal);
+            Assert.False(File.Exists(defaultPath));
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void DurableStoreOptions_DefaultPathResolvesUnderPerUserDirectory()
+    {
+        var fileName = $"durable-test-default-{Guid.NewGuid():N}.jsonl";
+        var root = OperatingSystem.IsWindows()
+            ? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
+            : Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".local",
+                "state");
+        var expected = Path.Combine(root, "durable", fileName);
+
+        var resolved = DurableStore.DefaultStorePath(fileName);
+
+        Assert.Equal(expected, resolved);
+        Assert.Equal("durable-store.jsonl", Path.GetFileName(DurableStore.DefaultStorePath()));
+        Assert.Equal("durable", Path.GetFileName(Path.GetDirectoryName(DurableStore.DefaultStorePath())!));
+    }
+
+    [Fact]
+    public async Task LegacyJsonStore_OpensAndRoundTrips()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"durable-test-legacy-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var storePath = Path.Combine(dir, "state.json");
+
+        try
+        {
+            var definition = new DocumentDefinition<Dictionary<string, string>>("notes");
+            var taskDefinition = DurableTask.Define<Dictionary<string, string>, Dictionary<string, string>, string>(
+                "legacy.task",
+                () => new Dictionary<string, string> { ["phase"] = "run" },
+                (_, _, runtime) => runtime.CommitAsync(
+                    () => TaskCommit.Completed(DurableJson.ToElement("done"))));
+
+            string conversationId;
+            string taskId;
+
+            using (var first = DurableStore.Create(new DurableStoreOptions
+            {
+                Path = storePath,
+                Format = DurableStoreFormat.LegacyJson,
+            }))
+            {
+                (conversationId, taskId) = await first.CommitAsync(async transaction =>
+                {
+                    var conversation = transaction.CreateConversation();
+                    var draft = transaction.Doc(definition, conversation.Id);
+                    draft.Value = new Dictionary<string, string> { ["text"] = "legacy" };
+                    draft.Save(transaction.AppendEntry(conversation.Id, "notes.write"));
+                    var task = transaction.CreateTask(
+                        taskDefinition,
+                        DurableJson.ToElement(new Dictionary<string, string> { ["input"] = "value" }),
+                        conversation.Id);
+                    await Task.CompletedTask;
+                    return (conversation.Id, task.Id);
+                });
+            }
+
+            // The legacy backend writes one JSON object for the whole file.
+            using (var parsed = JsonDocument.Parse(File.ReadAllText(storePath)))
+            {
+                Assert.Equal(JsonValueKind.Object, parsed.RootElement.ValueKind);
+                Assert.True(parsed.RootElement.TryGetProperty("sequence", out _));
+            }
+
+            using var second = DurableStore.Create(new DurableStoreOptions
+            {
+                Path = storePath,
+                Format = DurableStoreFormat.LegacyJson,
+            });
+
+            var conversation = second.Conversation(conversationId);
+            Assert.NotNull(conversation);
+            Assert.Single(second.Conversations);
+
+            var task = second.Task(taskId);
+            Assert.NotNull(task);
+            Assert.Equal("legacy.task", task!.Name);
+            Assert.Equal(TaskStatus.Pending, task.Status);
+            Assert.Equal(conversationId, task.OwnerConversationId);
+            Assert.Single(second.Tasks);
+
+            var document = second.Document("notes", conversationId);
+            Assert.NotNull(document);
+            Assert.Single(document!.Versions);
+            Assert.Equal(
+                new Dictionary<string, string> { ["text"] = "legacy" },
+                DurableJson.FromElement<Dictionary<string, string>>(document.Latest!.Value));
+            Assert.Single(second.Entries(conversationId));
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
     }
 }

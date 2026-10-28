@@ -1,6 +1,6 @@
 # Durable GitHub Copilot SDK agents in C#
 
-A suite of 31 self-contained C# examples that build **durable** agents on the
+A suite of 33 self-contained C# examples that build **durable** agents on the
 [GitHub Copilot SDK](https://github.com/github/copilot-sdk). Every example is a single
 file-based .NET app — no `.csproj`, no solution, no build step beyond `dotnet run`.
 
@@ -17,13 +17,52 @@ restart and binds to whatever code the new process installs.
 
 ---
 
+## Version and which ref to start from
+
+**Current version: `0.4.0`** — tag [`v0.4.0`](https://github.com/matthewcorven/github-copilot-sdk-durable/releases/tag/v0.4.0).
+The git tag, the [`CHANGELOG.md`](CHANGELOG.md) entry, and the `Copilot.Durable` package
+version are one number.
+
+**Start from `main`.** It is the repository's default branch and it holds the latest
+release, so a plain `git clone` gives you the released code with no further choices. To
+pin it explicitly:
+
+```bash
+git clone --branch v0.4.0 https://github.com/matthewcorven/github-copilot-sdk-durable
+```
+
+```xml
+<PackageReference Include="Copilot.Durable" Version="0.4.0" />
+```
+
+The examples are the documentation, and every one of them compiles and runs against the
+`lib/Durable.cs` in the same commit, so pinning the tag pins the examples too.
+
+### `main` and `dev`
+
+| Branch | What it is | When to use it |
+| --- | --- | --- |
+| `main` | **Release branch and default.** Every commit is part of a tag, or is the merge that creates one. | Reading, copying, pinning. This is the reference point. |
+| `dev` | **Integration branch.** All feature work lands here; it is newer than the last release and may be mid-refactor. | Tracking development, or contributing. |
+
+`dev` merges to `main` **only when a release is cut**, never continuously — so `dev` being
+ahead of `main` is normal. If you want unreleased code, ask for it by name
+(`git checkout dev`) and know that it carries no version.
+
+A release is one version of the `Copilot.Durable` package plus a git tag carrying the same
+version plus the matching changelog section. A tag without release notes is not a release.
+The full procedure, the cadence, and the `release:*` roadmap labels are in
+[`docs/RELEASING.md`](docs/RELEASING.md).
+
+---
+
 ## Architecture & Analysis Documentation
 
 In-depth technical reports, design notes, and audits are available in [`docs/`](docs/):
 
 - [**Comparative Architecture Analysis**](docs/COMPARATIVE_ANALYSIS.md): Comprehensive matrices comparing every storage and runtime subsystem of this project against Pi Durable.
 - [**Why this Layer is Necessary (Durability Analysis)**](docs/DURABILITY_ANALYSIS.md): Detailed breakdown of what the Copilot SDK provides natively, what it lacks, and what this library proves.
-- [**Example Suite Fidelity Audit**](docs/EXAMPLES_AUDIT.md): Complete audit verifying that all 31 examples run against real engine components rather than simulations or shortcuts.
+- [**Example Suite Fidelity Audit**](docs/EXAMPLES_AUDIT.md): Complete audit verifying that all 33 examples run against real engine components rather than simulations or shortcuts.
 - [**Copilot SDK Notes & Gotchas**](docs/COPILOT_SDK_NOTES.md): SDK behaviors, tool authoring pitfalls (silent tool shadowing, serialization limits, async deadlocks), and model billing pricing tables.
 - [**Architecture Design Document**](docs/DESIGN.md): The foundational specification and concept mapping between Pi Durable and the GitHub Copilot SDK (.NET).
 
@@ -35,7 +74,7 @@ In-depth technical reports, design notes, and audits are available in [`docs/`](
 |---|---|---|
 | .NET SDK | 10.0 or later | File-based apps (`dotnet run file.cs`) need .NET 10 |
 | GitHub Copilot CLI | 1.0.103 or later | The SDK drives the CLI over RPC |
-| GitHub Copilot access | an active subscription | The examples make live model calls |
+| GitHub Copilot access | an active subscription | 20 of the 33 examples need a signed-in CLI: 19 make live model calls, and `07` only queries `models.list` to confirm the model supports a reasoning effort |
 
 Check both:
 
@@ -124,14 +163,31 @@ machinery run in under a second.
 | [28](examples/28-sandbox-per-conversation.cs) | One sandbox per conversation | The app records each conversation's sandbox in its own document, and the tool looks it up for every call. |
 | [29](examples/29-tool-override.cs) | Tool override | Two extensions define a tool with the same name; the later one wins. A third wraps whichever won, so reloading either implementation keeps the wrapper. |
 | [30](examples/30-reload-and-restart.cs) | Reload and restart | Reload an extension while a call runs, then restart the process. Running work finishes on the code it started with; stored choices are names, so they bind to the new code. |
+| [31](examples/31-permissions.cs) | Permissions | A conversation is denied a tool, restarted, and denied again. Grants live in the store, so a restart cannot widen them. |
+| [32](examples/32-jsonl-store.cs) | The store file | Where a durable store lives and how it writes: an explicit path wins, no path resolves the per-user default, and the file is JSONL so a torn tail costs one record. |
 
 ---
 
 ## The shared library
 
-Every example includes one file, [`lib/Durable.cs`](lib/Durable.cs) (~2000 lines), with
-`#:include ../lib/Durable.cs`. It is the durable layer that the examples share; the
-examples themselves contain all the product code.
+The durable layer is one file, [`lib/Durable.cs`](lib/Durable.cs) (~2000 lines). It is
+published as the NuGet package **`Copilot.Durable`**, and it is also what every example
+includes directly, so a fresh clone runs with no package restore step.
+
+### Consuming it
+
+Downstream projects reference the package:
+
+```xml
+<PackageReference Include="Copilot.Durable" Version="0.4.0" />
+```
+
+```csharp
+using Durable;
+```
+
+The examples in this repository use the file-based app form instead, which keeps them
+self-contained and readable:
 
 ```csharp
 #:package GitHub.Copilot.SDK@1.0.26
@@ -140,11 +196,15 @@ examples themselves contain all the product code.
 #:include ../lib/Durable.cs
 ```
 
+Both paths compile the same source. `lib/Copilot.Durable.csproj` builds the package from
+`lib/Durable.cs`; `tests/Durable.Tests` references that project, so the test suite
+exercises the artifact consumers actually get.
+
 ### Core types
 
 | Type | Purpose |
 |---|---|
-| `DurableStore` | The durable state. Persists to a single JSON file atomically (temp file + move), or stays in memory. |
+| `DurableStore` | The durable state. Persists to an append-only JSONL file (explicit path, or the per-user default), or stays in memory. |
 | `DurableHarness` | Owns the client, the store, the registry, and the conversations. `OpenAsync`, `RootAsync`, `CreateConversationAsync`, `ForkAsync`, `CreateTaskAsync`. |
 | `DurableConversation` | A Copilot session bound to durable app state. `SubmitAsync`, `Snapshot`, `CommitAsync`, `ConfigureAsync`, `Agent`, `ForkAsync`. |
 | `Transaction` | The unit of atomicity. `CreateConversation`, `AppendEntry`, `Doc`, `CreateTask`. Everything written inside commits together, or not at all. |
@@ -231,8 +291,72 @@ process installs — that is the whole point of example 30.
 | `GenerationTask` | `CopilotSession` + `SessionHooks` | The SDK's own generation loop, with hooks for review loops and tool interception. |
 | `defineTask` / `TaskRuntime` | `DurableTask.Define` / `TaskRuntime` | Checkpointed state machines with `MemoAsync` and `SleepUntilAsync`. |
 | `wrapTool` | `ToolWrapper` | Wraps by name, so it decorates whichever implementation wins. |
-| `MemoryStorage` / `openNodeSqliteStorage` | `DurableStore` | In memory, or a single JSON file written atomically. |
+| `MemoryStorage` / `openNodeSqliteStorage` | `DurableStore` | In memory, or an append-only JSONL file. One writer per file. |
 | `fork` | `harness.ForkAsync` | Inherits the parent's transcript and documents up to the fork entry. |
+
+### Storage and concurrency
+
+A `DurableStore` is either ephemeral (in memory) or persistent (a file). A persistent store takes
+an **exclusive lock** on a sidecar file next to the store (`{path}.lock`) when it opens and holds
+it until the store is disposed. The operating system releases the lock when the process exits, so
+a crash does not leave a stale lock.
+
+**A store file has exactly one writer.** A second process that opens the same path is refused at
+open with an `InvalidOperationException` naming the store file, the lock file, and the process id
+that holds it. There is no retry and no queue — the second writer fails fast rather than
+interleaving appends with the first.
+
+That makes a store's lifetime a scope. Dispose the store before another process opens the same
+path, including before launching a child process that will read it:
+
+```csharp
+var store = new DurableStore(storePath);
+var harness = await DurableHarness.OpenAsync(store, registry);
+// ...
+await harness.DisposeAsync();
+store.Dispose();   // releases the file lock
+```
+
+`DurableHarness.DisposeAsync()` closes the Copilot client; it does **not** dispose the store. See
+[`docs/DESIGN.md`](docs/DESIGN.md#concurrency-contract) for the full contract.
+
+### Permissions
+
+A durable conversation is **fail-closed**: it may only use what it was explicitly granted. The
+grants live on `AgentChoices.Permissions` and are persisted with the conversation's choices, so a
+denial survives a restart and a fork inherits the parent's grants as a snapshot.
+
+```csharp
+var conversation = await harness.RootAsync(new AgentChoices
+{
+    Extensions = ["dangerous"],
+    Permissions = ["custom-tool:delete_everything"],
+});
+```
+
+A grant is `kind` or `kind:scope`:
+
+| Grant | Allows |
+| --- | --- |
+| `custom-tool:read_file` | the `read_file` tool, and nothing else |
+| `custom-tool` | every custom tool |
+| `read:/tmp/work` | reads under `/tmp/work` (a prefix only at a path boundary) |
+| `*` | everything |
+
+Kinds are the SDK's permission request kinds: `custom-tool`, `read`, `write`, `shell`, `url`,
+`mcp`, `hook`, `workflow`, `memory`, `extension-management`, `extension-permission-access`,
+`extension-env-access`. A scope is matched as a prefix only at a boundary, so `read:/tmp/work`
+does not grant `/tmp/workshop/file.txt` and `url:https://example.com` does not grant
+`https://example.com.evil.test`.
+
+The default is deliberate. The SDK's own default approves every request, which would make an
+agent's behaviour depend on state that is not in the store — the same conversation could do
+different things on two machines. Fail-closed keeps the grant set inside the durable record.
+
+Grants take effect when a session is created. The SDK has no per-session permission API, so
+`ConfigureAsync` cannot change grants on a live session; a new conversation, a restore, or a fork
+picks up the new set. See [`examples/31-permissions.cs`](examples/31-permissions.cs) for a
+conversation that is denied a tool, restarted, and denied again.
 
 ---
 
@@ -244,7 +368,7 @@ Validation runs in two complementary layers:
 2. **xUnit test suite (`tests/Durable.Tests`):** Focused unit and integration tests verifying `DurableStore` rollback semantics, fork entry filtering and state independence, store crash recovery with memo idempotency, and abort propagation.
 
 ```bash
-# Every example: compile, run xUnit suite, and run all 31 examples.
+# Every example: compile, run xUnit suite, and run all 33 examples.
 ./scripts/validate.sh
 
 # Fast offline validation: run xUnit suite + examples that do not call a model.
@@ -253,7 +377,7 @@ SKIP_LIVE=1 ./scripts/validate.sh
 # Run only the xUnit test suite for the library.
 dotnet test tests/Durable.Tests
 
-# Compile only, no model calls at all.
+# Compile only: build every example without running any of them.
 COMPILE_ONLY=1 ./scripts/validate.sh
 
 # A few specific examples.
@@ -261,6 +385,8 @@ COMPILE_ONLY=1 ./scripts/validate.sh
 ```
 
 The script reports `PASS`/`FAIL` per example and prints the output of each one.
+
+CI runs `dotnet test tests/Durable.Tests`, then `SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh`. Every example is compiled on every push, and the 13 that need no Copilot sign-in also execute with their assertions checked. The other 20 need a signed-in Copilot CLI and are not run in CI.
 
 ---
 
@@ -275,14 +401,17 @@ For token pricing tables, reasoning effort constraints, and SDK-specific tool-au
 ## Repository layout
 
 ```
-examples/                 31 self-contained file-based C# apps
+examples/                 33 self-contained file-based C# apps
 lib/Durable.cs            the shared durable layer every example includes
+lib/Copilot.Durable.csproj  builds the Copilot.Durable NuGet package from that file
 tests/Durable.Tests       xUnit test suite for the durable library
 scripts/validate.sh       compile-and-run validation for the whole suite
+CHANGELOG.md              what changed in each release
 docs/
+  RELEASING.md            release strategy: release unit, cadence, branch roles, tag procedure
   COMPARATIVE_ANALYSIS.md architecture comparison vs Pi Durable
   DURABILITY_ANALYSIS.md  what Copilot SDK provides vs what was added
-  EXAMPLES_AUDIT.md       rigorous fidelity audit of all 31 examples
+  EXAMPLES_AUDIT.md       rigorous fidelity audit of all 33 examples
   COPILOT_SDK_NOTES.md    SDK quirks, tool shadowing rules, and pricing
   DESIGN.md               original architecture design specification
 ```

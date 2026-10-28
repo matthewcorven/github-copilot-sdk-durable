@@ -70,6 +70,7 @@ var plain = await harness.RootAsync(new AgentChoices
 {
     Extensions = ["shell", "timing"],
     Tools = ["run_shell"],
+    Permissions = ["custom-tool:run_shell"],
 });
 
 // The python conversation selects the venv shell after the plain one, so the venv shell
@@ -78,6 +79,7 @@ var python = await harness.CreateConversationAsync(new AgentChoices
 {
     Extensions = ["shell", "timing", "venv"],
     Tools = ["run_shell"],
+    Permissions = ["custom-tool:run_shell"],
 });
 
 Console.WriteLine($"plain tools: [{string.Join(", ", plain.Agent().Tools.Select(tool => tool.Name))}]");

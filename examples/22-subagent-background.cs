@@ -145,9 +145,14 @@ var registryExtensions = new ExtensionRegistry();
 registryExtensions.Install(new Extension("subagent-tools", tools: [subagentTool]));
 
 // First process: start a subagent and message it.
-var first = await DurableHarness.OpenAsync(new DurableStore(storePath), registryExtensions);
+var firstStore = new DurableStore(storePath);
+var first = await DurableHarness.OpenAsync(firstStore, registryExtensions);
 host = first;
-main = await first.RootAsync(new AgentChoices { Extensions = ["subagent-tools"] });
+main = await first.RootAsync(new AgentChoices
+{
+    Extensions = ["subagent-tools"],
+    Permissions = ["custom-tool:subagent"],
+});
 
 var spawned = await main.SubmitAsync("Use the subagent tool to spawn a subagent named reader.");
 Console.WriteLine($"spawn: {spawned?.Data.Content}");
@@ -163,13 +168,19 @@ var before = main.Snapshot(Subagents)!;
 Console.WriteLine($"registry before restart: {string.Join(", ", before.Keys)}");
 
 await first.DisposeAsync();
+firstStore.Dispose();
 Console.WriteLine("(process restarts)");
 
 // Second process: the registry is still there, and the subagent's conversation
 // still exists.
-var second = await DurableHarness.OpenAsync(new DurableStore(storePath), registryExtensions);
+var secondStore = new DurableStore(storePath);
+var second = await DurableHarness.OpenAsync(secondStore, registryExtensions);
 host = second;
-main = await second.RootAsync(new AgentChoices { Extensions = ["subagent-tools"] });
+main = await second.RootAsync(new AgentChoices
+{
+    Extensions = ["subagent-tools"],
+    Permissions = ["custom-tool:subagent"],
+});
 
 var after = main.Snapshot(Subagents)!;
 Console.WriteLine($"registry after restart: {string.Join(", ", after.Keys)}");
@@ -194,4 +205,5 @@ Check.That(listedAgain is not null, "the restarted process can list the subagent
 Check.Contains(listedAgain!.Data.Content, "reader", "the restarted process still knows the subagent by name");
 
 await second.DisposeAsync();
+secondStore.Dispose();
 Directory.Delete(directory, recursive: true);

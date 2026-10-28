@@ -9,7 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="..\..\lib\Durable.cs" Link="Durable.cs" />
+    <ProjectReference Include="..\..\lib\Copilot.Durable.csproj" />
   </ItemGroup>
 
   <ItemGroup>

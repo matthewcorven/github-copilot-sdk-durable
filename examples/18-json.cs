@@ -26,7 +26,9 @@ registry.Install(new Extension(
     sections: [new PromptSection("preamble", _ => Task.FromResult<string?>("You are a concise coding assistant."), tag: false)]));
 
 await using var harness = await DurableHarness.OpenAsync(store, registry);
-var root = await harness.RootAsync(new AgentChoices { Extensions = ["coding"] });
+// Fail-closed: the prompt asks about the directory, so the conversation is granted
+// the built-in read tools and nothing else.
+var root = await harness.RootAsync(new AgentChoices { Extensions = ["coding"], Permissions = ["read"] });
 
 // Attach before submitting, so the stream covers the whole run.
 var lines = new List<string>();

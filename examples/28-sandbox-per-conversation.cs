@@ -74,6 +74,7 @@ async Task<(DurableConversation Conversation, string Path)> ConversationFor(stri
     {
         Extensions = ["sandbox"],
         Tools = ["write_file"],
+        Permissions = ["custom-tool:write_file"],
     });
 
     // The sandbox is assigned in its own commit, right after the conversation exists.

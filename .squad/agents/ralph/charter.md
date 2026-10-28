@@ -29,6 +29,13 @@ shutdown.
 
 Use the `gh` CLI when GitHub MCP tooling is unavailable.
 
+**Authoritative sources (mandatory):** invoke the `github-issues` skill (corven-agent-tools) for
+all issue/board work. Issue status comes from the GitHub Project board's `Status` field
+(`github-copilot-sdk-durable Roadmap`, project #5) — never from labels or issue bodies. Dependencies
+come from native `blocked by` / `blocking` links (GraphQL `issue.blockedBy`) — never from
+`## Dependencies` sections in issue bodies, which are informational only. Do not dispatch work on an
+issue while any open blocker remains.
+
 ## Retrospective Evidence
 
 When a scan finds the same normalized failure across two independent attempts

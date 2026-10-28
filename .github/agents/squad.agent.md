@@ -891,6 +891,33 @@ When an artifact is **rejected** by a Reviewer:
 
 Squad can connect to a GitHub repository's issues and manage the full issue → branch → PR → review → merge lifecycle.
 
+### Skill Declaration (always active when GitHub Issues Mode is used)
+
+**Skill:** `github-issues` (from the `corven-agent-tools` skill set).
+
+Agents working on issues, triage, backlog, or the project board MUST invoke the
+`github-issues` skill first — do not wait for the user to name it. If the skill is
+not available in the environment, fall back to `gh` CLI / GitHub MCP tools and note
+the fallback in the response.
+
+### Authoritative Status & Dependencies (mandatory)
+
+When determining an issue's status or its dependencies, use these sources **in order**:
+
+1. **GitHub Project board** (e.g. `github-copilot-sdk-durable Roadmap`, project #5) — the
+   authoritative source for issue status. The `Status` field (Todo / In Progress / Done)
+   overrides any inference from issue text, labels, or body content.
+2. **Native `blocked by` / `blocking` issue links** — the authoritative source for
+   dependencies. Query via GraphQL (`issue.blockedBy`, `issue.blocking`) or the issue
+   sidebar. An issue is not startable while any open blocker remains.
+3. **Issue body sections** (`## Dependencies`, "Depends on", prose) — **informational
+   only**. Never treat them as authoritative; they may be stale. When a body dependency
+   conflicts with a native link, the native link wins and the body should be corrected.
+
+Agents MUST NOT derive sequencing from issue bodies when native links exist. When
+creating new issues, add native `blocked by` links (GraphQL `addBlockedBy`) in addition
+to any prose description.
+
 ### Prerequisites
 
 Before connecting to a GitHub repository, verify that the `gh` CLI is available and authenticated:

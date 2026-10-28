@@ -76,7 +76,8 @@ registry.Install(new Extension("ticker", tasks: [Ticker]));
 // First run: start counting to 5, and stop the harness right after tick 2 is
 // printed, before its next checkpoint is saved. That is the same situation as
 // a crash between the effect and saving its outcome.
-var firstRun = await DurableHarness.OpenAsync(new DurableStore(storePath), registry);
+var firstStore = new DurableStore(storePath);
+var firstRun = await DurableHarness.OpenAsync(firstStore, registry);
 var firstRunCancellation = new CancellationTokenSource();
 var tickerId = await firstRun.CreateTaskAsync(
     Ticker,
@@ -99,23 +100,28 @@ await tickTwo.Task;
 // but its next checkpoint was never saved.
 await firstRunCancellation.CancelAsync();
 await firstRun.DisposeAsync();
+firstStore.Dispose();
 reachedTick = _ => { };
 
 // Read the saved record through a harness that never resumes, so nothing runs.
-var reader = await DurableHarness.OpenAsync(new DurableStore(storePath), registry);
+var readerStore = new DurableStore(storePath);
+var reader = await DurableHarness.OpenAsync(readerStore, registry);
 var saved = reader.Store.Task(tickerId.Id)!;
 Console.WriteLine($"closed; saved checkpoint: {saved.Checkpoint.GetProperty("phase").GetString()} n={saved.Checkpoint.GetProperty("n").GetString()}");
 Console.WriteLine($"saved memos: {saved.Memos.Count}");
 await reader.DisposeAsync();
+readerStore.Dispose();
 
 // Second run: nothing to restart by hand. Waiting for the unfinished task
 // enables scheduling and continues it. Tick 2 runs again because its outcome
 // was never saved, but its memo says it was already printed.
-var secondRun = await DurableHarness.OpenAsync(new DurableStore(storePath), registry);
+var secondStore = new DurableStore(storePath);
+var secondRun = await DurableHarness.OpenAsync(secondStore, registry);
 var counted = await secondRun.WaitForTaskAsync(tickerId.Id);
 Console.WriteLine($"after reopen: {counted.Status} {counted.Result!.Value.GetString()}");
 Console.WriteLine($"ticks printed in total: [{string.Join(", ", printed)}]");
 await secondRun.DisposeAsync();
+secondStore.Dispose();
 
 // ─── Assertions ─────────────────────────────────────────────────────────────
 //

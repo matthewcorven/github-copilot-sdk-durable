@@ -7,7 +7,7 @@
 
 A suite of **self-contained C# file-based apps** (`dotnet run app.cs`, .NET 10) that demonstrate
 durable GitHub Copilot SDK agents, with **breadth equal to the Pi Durable example set**
-(31 examples, `00`–`30`).
+(33 examples, `00`–`32`).
 
 Each example is a single `.cs` file plus, where it needs shared helpers, a `#:include`d
 support file. No `.csproj`.
@@ -84,9 +84,104 @@ sealed record DurableTask(string Id, string Name, string Phase, JsonElement Chec
                           string Status, JsonElement? Outcome, long Restarts);
 ```
 
-Written atomically (temp file + `File.Move` overwrite) so a crash never leaves a torn file.
+The store has two tiers. `DurableStore.CreateEphemeral()` keeps everything in the process and
+writes nothing. `DurableStore.Create(new DurableStoreOptions { Path = ... })` writes a file, and
+that file is what makes a conversation outlive the process.
+
+#### Where the file lives
+
+An explicit `Path` is honoured exactly. A store created with no path resolves the per-user default
+location instead, so an app that says nothing still gets a durable store:
+
+| Platform | Root |
+|---|---|
+| Windows | `%LOCALAPPDATA%` |
+| Linux / macOS | `$XDG_STATE_HOME` when set and non-empty, otherwise `~/.local/state` |
+
+The file is `Path.Combine(root, "durable", fileName)`, where `fileName` defaults to
+`durable-store.jsonl`. `DurableStore.DefaultStorePath(fileName)` exposes the resolution so an app
+can show the user where its state is. The default is deliberately *not* the current directory: a
+store that follows the working directory would give the same app a different history depending on
+where it was launched.
+
+#### How the file is written
+
+The file is JSONL — one record per line, appended on every commit. Each line is an envelope
+`{"v":1,"seq":<n>,"type":"<kind>","payload":{...}}` where `type` is one of `conversation`,
+`entry`, `entry-record`, `document`, `document-version`, or `task`. Appending is what makes a
+crash cheap: a process that dies mid-write leaves a torn final line, and the next open replays
+every complete record, truncates the file back to the last complete record's boundary, and
+continues. A torn tail costs one record, never the store.
+
+A line that fails to parse *and is not the final line* is a different matter — that is corruption
+in the middle of the file, and it is reported as an `InvalidDataException` naming the byte offset
+rather than silently dropping everything after it.
+
+`DurableStoreFormat` selects the backend explicitly:
+
+| Format | Behaviour |
+|---|---|
+| `Auto` (default) | Sniff the file. A first non-empty line that is a JSON object with a string `type` is JSONL; a file that parses whole as one JSON object is the legacy snapshot format; a missing or empty file is JSONL. `Auto` never converts — a legacy file is opened and written back in legacy format. |
+| `InMemory` | No file at all. |
+| `Jsonl` | JSONL, and only JSONL. Opening a legacy snapshot is the explicit "convert this store" case: the snapshot is read into memory on open and the first commit replaces the file with JSONL records. Opening alone never rewrites it. |
+| `LegacyJson` | The legacy single-file snapshot, written atomically (temp file + `File.Move` overwrite). Opening a JSONL file in this format is refused at open with an `InvalidDataException`, before the lock is taken. |
+
 This is the C# analogue of Pi's SQLite/JSONL storage, and it is what makes the *task* and
 *document* examples meaningful.
+
+#### Concurrency contract
+
+**A store file has exactly one writer.** A persistent store takes an exclusive lock on a sidecar
+file next to the store (`{path}.lock`) when it opens, and holds it until the store is disposed.
+The operating system releases the lock when the process exits, so a crash does not leave a stale
+lock behind. A second process that opens the same path is refused at open with an
+`InvalidOperationException` naming the store file, the lock file, and the process id that holds
+it. There is no retry, no timeout, and no queue: the second writer fails fast rather than
+interleaving appends with the first.
+
+The consequence for application code is that a store's lifetime is a scope. Dispose the store
+before another process opens the same path — including before launching a child process that
+will read it. `DurableHarness.DisposeAsync()` closes the Copilot client; it does **not** dispose
+the store, so a harness that is closed and reopened against the same path must dispose the store
+in between.
+
+Because the lock makes the holder the only writer, a store reads its file once at open and then
+serves from memory. `DurableStore.RefreshAsync()` is therefore a no-op for a persistent store;
+it exists for the ephemeral tier and for a future read-only tier that observes a file another
+process writes.
+
+The sequence number is the store's monotonic commit counter. It is minted per record, persisted
+with the record, and restored on replay as the maximum of the replayed values, so a reopened
+store always mints past every sequence it has already written. A document version carries the
+sequence it was minted with, not the sequence of the commit that happened to write it.
+
+#### Permissions
+
+A durable conversation is fail-closed. `AgentChoices.Permissions` is a list of `kind` or
+`kind:scope` grants, and `DurableHarness.BuildSessionConfig` installs
+`PermissionPolicy.Handler(resolved.Permissions)` as `SessionConfig.OnPermissionRequest` instead of
+the SDK's `PermissionHandler.ApproveAll`.
+
+The reason is the same reason the store exists. An approval that is not written down is not
+reproducible: the SDK's default approves every request, so the same conversation would be allowed
+to do different things depending on who ran it and when. Persisting the grant set with the
+conversation's choices makes the agent's authority part of the durable record, which means it
+survives a restart and is inherited by a fork as a snapshot.
+
+`PermissionPolicy.Describe` maps each of the SDK's twelve permission request variants to a
+`(kind, scope)` pair — `custom-tool` is scoped by tool name, `read`/`write` by resolved path,
+`shell` by full command text, `url` by URL, `mcp` by `server/tool`. `PermissionPolicy.IsGranted`
+then matches a grant against that pair, treating a scope as a prefix only at a boundary
+(`/ \ space : ; ,`) so `read:/tmp/work` does not grant `/tmp/workshop/file.txt`.
+
+Denial uses `PermissionDecisionReject` with a feedback string naming the missing grant. The SDK's
+`PermissionDecisionDeniedByRules` and `PermissionDecisionDeniedNoApprovalRuleAndCouldNotRequestFromUser`
+serialize to wire variants the Copilot CLI does not accept, so they fail at the runtime boundary
+with a malformed-payload error; `Reject` is the variant that actually denies.
+
+Grants are fixed at session creation. `CopilotSession` exposes no per-session permission API, so
+`ConfigureAsync` persists a new grant set but cannot apply it to a live session — the next
+conversation creation, restore, or fork picks it up.
 
 ### 3.2 `DurableTask<TInput, TCheckpoint, TResult>` — the task state machine
 
@@ -142,7 +237,7 @@ Wraps a `CopilotSession` plus the durable store, exposing Pi-shaped operations:
 - `ResumeAsync()` → re-enter running tasks
 - `CloseAsync()`
 
-## 4. Example suite (31 examples, mirroring Pi 00–30)
+## 4. Example suite (33 examples, mirroring Pi 00–30 plus two C#-only additions)
 
 | # | Pi example | C# example | Demonstrates |
 |---|---|---|---|
@@ -203,6 +298,10 @@ Every example must:
 
 `scripts/validate.sh` runs the whole suite. `SKIP_LIVE=1` skips the examples that call a
 model; `COMPILE_ONLY=1` builds without running.
+
+CI enforces requirements 1 and 2 for the 13 examples that need no Copilot sign-in by running
+`SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh` after the xUnit suite. The other 20 are
+compiled but not run in CI.
 
 Examples that need a live model use the signed-in Copilot CLI credentials. The library's
 default model is `gpt-6-luna` rather than `auto`: `auto` re-routes per request, which makes

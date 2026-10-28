@@ -69,7 +69,11 @@ var Todo = new Extension(
 
 registry.Install(Todo);
 
-chat = await harness.RootAsync(new AgentChoices { Extensions = ["todo"] });
+chat = await harness.RootAsync(new AgentChoices
+{
+    Extensions = ["todo"],
+    Permissions = ["custom-tool:todo"],
+});
 
 // The tool writes the document; the section shows it to the model before every request.
 var reply = await chat.SubmitAsync("Add 'fix the build' to my todo list, then confirm.");
