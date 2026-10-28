@@ -17,6 +17,45 @@ restart and binds to whatever code the new process installs.
 
 ---
 
+## Version and which ref to start from
+
+**Current version: `0.4.0`** — tag [`v0.4.0`](https://github.com/matthewcorven/github-copilot-sdk-durable/releases/tag/v0.4.0).
+The git tag, the [`CHANGELOG.md`](CHANGELOG.md) entry, and the `Copilot.Durable` package
+version are one number.
+
+**Start from `main`.** It is the repository's default branch and it holds the latest
+release, so a plain `git clone` gives you the released code with no further choices. To
+pin it explicitly:
+
+```bash
+git clone --branch v0.4.0 https://github.com/matthewcorven/github-copilot-sdk-durable
+```
+
+```xml
+<PackageReference Include="Copilot.Durable" Version="0.4.0" />
+```
+
+The examples are the documentation, and every one of them compiles and runs against the
+`lib/Durable.cs` in the same commit, so pinning the tag pins the examples too.
+
+### `main` and `dev`
+
+| Branch | What it is | When to use it |
+| --- | --- | --- |
+| `main` | **Release branch and default.** Every commit is part of a tag, or is the merge that creates one. | Reading, copying, pinning. This is the reference point. |
+| `dev` | **Integration branch.** All feature work lands here; it is newer than the last release and may be mid-refactor. | Tracking development, or contributing. |
+
+`dev` merges to `main` **only when a release is cut**, never continuously — so `dev` being
+ahead of `main` is normal. If you want unreleased code, ask for it by name
+(`git checkout dev`) and know that it carries no version.
+
+A release is one version of the `Copilot.Durable` package plus a git tag carrying the same
+version plus the matching changelog section. A tag without release notes is not a release.
+The full procedure, the cadence, and the `release:*` roadmap labels are in
+[`docs/RELEASING.md`](docs/RELEASING.md).
+
+---
+
 ## Architecture & Analysis Documentation
 
 In-depth technical reports, design notes, and audits are available in [`docs/`](docs/):
@@ -165,7 +204,7 @@ exercises the artifact consumers actually get.
 
 | Type | Purpose |
 |---|---|
-| `DurableStore` | The durable state. Persists to a single JSON file atomically (temp file + move), or stays in memory. |
+| `DurableStore` | The durable state. Persists to an append-only JSONL file (explicit path, or the per-user default), or stays in memory. |
 | `DurableHarness` | Owns the client, the store, the registry, and the conversations. `OpenAsync`, `RootAsync`, `CreateConversationAsync`, `ForkAsync`, `CreateTaskAsync`. |
 | `DurableConversation` | A Copilot session bound to durable app state. `SubmitAsync`, `Snapshot`, `CommitAsync`, `ConfigureAsync`, `Agent`, `ForkAsync`. |
 | `Transaction` | The unit of atomicity. `CreateConversation`, `AppendEntry`, `Doc`, `CreateTask`. Everything written inside commits together, or not at all. |
@@ -252,7 +291,7 @@ process installs — that is the whole point of example 30.
 | `GenerationTask` | `CopilotSession` + `SessionHooks` | The SDK's own generation loop, with hooks for review loops and tool interception. |
 | `defineTask` / `TaskRuntime` | `DurableTask.Define` / `TaskRuntime` | Checkpointed state machines with `MemoAsync` and `SleepUntilAsync`. |
 | `wrapTool` | `ToolWrapper` | Wraps by name, so it decorates whichever implementation wins. |
-| `MemoryStorage` / `openNodeSqliteStorage` | `DurableStore` | In memory, or a single JSON file written atomically. One writer per file. |
+| `MemoryStorage` / `openNodeSqliteStorage` | `DurableStore` | In memory, or an append-only JSONL file. One writer per file. |
 | `fork` | `harness.ForkAsync` | Inherits the parent's transcript and documents up to the fork entry. |
 
 ### Storage and concurrency
@@ -367,7 +406,9 @@ lib/Durable.cs            the shared durable layer every example includes
 lib/Copilot.Durable.csproj  builds the Copilot.Durable NuGet package from that file
 tests/Durable.Tests       xUnit test suite for the durable library
 scripts/validate.sh       compile-and-run validation for the whole suite
+CHANGELOG.md              what changed in each release
 docs/
+  RELEASING.md            release strategy: release unit, cadence, branch roles, tag procedure
   COMPARATIVE_ANALYSIS.md architecture comparison vs Pi Durable
   DURABILITY_ANALYSIS.md  what Copilot SDK provides vs what was added
   EXAMPLES_AUDIT.md       rigorous fidelity audit of all 33 examples
