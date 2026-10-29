@@ -135,6 +135,45 @@ public sealed class ReplayHostTests
     }
 
     [Fact]
+    public async Task RunAsync_GetMessagesReplaysEmittedEventsInOrder()
+    {
+        var transcript = await RunAsync(
+            Request(1, "session.create", new JsonObject()),
+            Request(2, "session.sendMessages", new JsonObject { ["sessionId"] = "s1" }),
+            Request(3, "session.getMessages", new JsonObject { ["sessionId"] = "s1" }),
+            Request(4, "session.sendMessages", new JsonObject { ["sessionId"] = "s1" }),
+            Request(5, "session.getMessages", new JsonObject { ["sessionId"] = "s1" }),
+            Request(6, "runtime.shutdown", new JsonObject()));
+
+        Assert.Equal(0, transcript.ExitCode);
+        Assert.Equal(string.Empty, transcript.Stderr);
+
+        var responses = transcript.Responses;
+        Assert.Equal(6, responses.Count);
+
+        var first = responses[2]["result"]!["events"]!.AsArray();
+        Assert.Single(first);
+        Assert.Equal("msg-1", first[0]!["data"]!["messageId"]!.GetValue<string>());
+
+        var second = responses[4]["result"]!["events"]!.AsArray();
+        Assert.Equal(2, second.Count);
+        Assert.Equal("msg-1", second[0]!["data"]!["messageId"]!.GetValue<string>());
+        Assert.Equal("msg-2", second[1]!["data"]!["messageId"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task RunAsync_GetMessagesBeforeAnySendReturnsEmptyArray()
+    {
+        var transcript = await RunAsync(
+            Request(1, "session.create", new JsonObject()),
+            Request(2, "session.getMessages", new JsonObject { ["sessionId"] = "s1" }),
+            Request(3, "runtime.shutdown", new JsonObject()));
+
+        Assert.Equal(0, transcript.ExitCode);
+        Assert.Empty(transcript.Responses[1]["result"]!["events"]!.AsArray());
+    }
+
+    [Fact]
     public async Task RunAsync_MissingFixtureExitsWithUsageError()
     {
         var stdout = new StringWriter();

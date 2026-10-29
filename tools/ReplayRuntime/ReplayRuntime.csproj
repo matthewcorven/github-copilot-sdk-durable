@@ -21,4 +21,10 @@
     <InternalsVisibleTo Include="ReplayRuntime.Tests" />
   </ItemGroup>
 
+  <!-- The default fixture path is fixtures/basic.json next to the executable, so the
+       checked-in fixtures must land beside the binary. -->
+  <ItemGroup>
+    <None Include="fixtures/**/*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

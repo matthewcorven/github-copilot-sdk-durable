@@ -18,7 +18,9 @@ public sealed class ReplayHost
     private readonly TextWriter _stdout;
     private readonly TextWriter _stderr;
     private readonly Dictionary<string, int> _turnCursor = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, JsonArray> _emittedEvents = new(StringComparer.Ordinal);
     private readonly HashSet<string> _createdSessions = new(StringComparer.Ordinal);
+    private int _createCursor;
     private int _eventSequence;
     private bool _shutdownRequested;
 
@@ -199,7 +201,7 @@ public sealed class ReplayHost
         "session.abort" => new JsonObject { ["aborted"] = true },
         "session.detach" => new JsonObject { ["detached"] = true },
         "session.delete" => SessionDelete(parameters),
-        "session.getMessages" => new JsonObject { ["events"] = new JsonArray() },
+        "session.getMessages" => SessionGetMessages(parameters),
         "session.model.list" => ModelsList(),
         "session.model.switchTo" => new JsonObject { ["modelId"] = parameters?["modelId"]?.DeepClone() },
         "session.tools.set" => new JsonObject { ["ok"] = true },
@@ -254,15 +256,29 @@ public sealed class ReplayHost
     private JsonNode SessionCreate(JsonObject? parameters)
     {
         var requestedId = parameters?["sessionId"]?.GetValue<string>();
-        var session = _fixture.FindSession(requestedId)
-            ?? (requestedId is null ? _fixture.Sessions.FirstOrDefault() : null)
-            ?? throw new FixtureException(
-                requestedId is null
-                    ? "fixture records no sessions to create"
-                    : $"fixture records no session '{requestedId}'");
+        FixtureSession session;
+        if (requestedId is not null)
+        {
+            session = _fixture.FindSession(requestedId)
+                ?? throw new FixtureException($"fixture records no session '{requestedId}'");
+        }
+        else
+        {
+            // Allocate from the fixture's session list in order, so repeated creates
+            // walk the recorded sessions deterministically.
+            if (_createCursor >= _fixture.Sessions.Count)
+            {
+                throw new FixtureException(
+                    $"fixture records no session at index {_createCursor}; the fixture is exhausted");
+            }
+
+            session = _fixture.Sessions[_createCursor];
+            _createCursor++;
+        }
 
         _createdSessions.Add(session.Id);
         _turnCursor.TryAdd(session.Id, 0);
+        _emittedEvents.TryAdd(session.Id, new JsonArray());
 
         return new JsonObject { ["sessionId"] = session.Id };
     }
@@ -325,7 +341,26 @@ public sealed class ReplayHost
         };
 
         _eventSequence++;
+
+        // Record what we emitted so getMessages replays the same transcript.
+        if (_emittedEvents.TryGetValue(sessionId, out var events))
+        {
+            events.Add(envelope["event"]!.DeepClone());
+        }
+
         WriteNotification("session.event", envelope);
+    }
+
+    private JsonNode SessionGetMessages(JsonObject? parameters)
+    {
+        var sessionId = parameters?["sessionId"]?.GetValue<string>()
+            ?? throw new FixtureException("request is missing sessionId");
+
+        var events = _emittedEvents.TryGetValue(sessionId, out var recorded)
+            ? new JsonArray(recorded.Select(e => e!.DeepClone()).ToArray())
+            : new JsonArray();
+
+        return new JsonObject { ["events"] = events };
     }
 
     private JsonNode SessionDelete(JsonObject? parameters)
