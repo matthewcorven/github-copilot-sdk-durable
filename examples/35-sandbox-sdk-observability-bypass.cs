@@ -314,6 +314,7 @@ Check.That(bypassPolicy.AllowBypass == true, "the second policy asks for the byp
 
 var hostInvocations = 0;
 var declinedBypasses = 0;
+var escalationPrompts = 0;
 var inspected = new List<string>();
 
 await using var bypassHarness = await DurableHarness.OpenAsync(
@@ -357,8 +358,9 @@ await using var bypassHarness = await DurableHarness.OpenAsync(
             inspected.Add(seen);
             Console.WriteLine($"  host handler saw {seen}");
 
-            if (bypassRequested || grant is not null || permissiveRequested)
+            if (bypassRequested || permissiveRequested || grant is not null)
             {
+                escalationPrompts++;
                 declinedBypasses++;
                 return Task.FromResult<PermissionDecision>(new PermissionDecisionReject
                 {
@@ -380,10 +382,22 @@ var bypassConversation = await bypassHarness.CreateConversationAsync(new AgentCh
 });
 
 var bypassPath = Path.Combine(secret, "bypass.txt");
+var bypassCommand = $"printf 'leaked' > '{bypassPath}'";
+
+// The model is asked to escalate: run the command, and if the sandbox refuses the write, request
+// the bypass for the same command. Whether the runtime offers that escalation at all is the
+// runtime's decision, not the host's — the CLI only surfaces a bypass prompt when its own sandbox
+// settings allow one, and the SDK has no call that forces the prompt. So the example asks for the
+// escalation and then asserts on what actually happened, rather than asserting that a prompt must
+// appear. A detached background command is included because it is the one shape the tool cannot
+// contain inside the sandbox, so it is the most likely to raise the escalation on its own.
 await bypassConversation.SubmitAsync(
-    $"Use the shell tool to run exactly this command, then report its output: " +
-    $"printf 'leaked' > '{bypassPath}'. If the sandbox refuses the write, request the sandbox " +
-    $"bypass for the same command and report what the host decides.");
+    $"Use the shell tool to run exactly this command, then report its output: {bypassCommand}. " +
+    $"If the sandbox refuses the write, request the sandbox bypass for the same command and " +
+    $"report what the host decides.");
+await bypassConversation.SubmitAsync(
+    $"Use the shell tool with mode=\"async\" and detach=true to start this command in the " +
+    $"background, then report what happened: {bypassCommand}");
 
 var bypassDecisions = bypassConversation.SandboxDecisions;
 Console.WriteLine();
@@ -393,17 +407,26 @@ foreach (var decision in bypassDecisions)
     Console.WriteLine($"  {decision.Data?.Kind ?? "?"}{Describe(decision.Data)}");
 }
 
-// Exactly one host-handler invocation declined a bypass request, and the request was the model's
-// own — not a prompt the runtime could not show, and not a user pressing a button.
-Check.Equal(1, declinedBypasses, "exactly one host-handler invocation declined the bypass");
-Check.That(hostInvocations >= declinedBypasses, "every declined bypass came from an inspected prompt");
-
+// The host handler is the only place a bypass request can be declined, so the decline assertion
+// is conditional on the runtime having actually offered an escalation prompt. An escalation prompt
+// is one whose request carried `RequestSandboxBypass`, `RequestSandboxPermissive`, or a
+// `SandboxPathGrant` — the three fields the handler inspects above. When such a prompt was seen,
+// the decline must be exactly one and must be visible in the decision stream as a `bypass_decided`
+// event whose source is the model. When none was seen, the example says so plainly instead of
+// failing on an event the runtime never had the chance to emit — a false failure would misreport
+// the SDK's behaviour.
 var bypassDecided = bypassDecisions
     .Select(decision => decision.Data)
     .OfType<SandboxDecisionDataBypassDecided>()
     .ToList();
-if (bypassDecided.Count > 0)
+var escalationOffered = escalationPrompts > 0 || bypassDecided.Count > 0;
+
+if (escalationOffered)
 {
+    Check.Equal(1, declinedBypasses, "exactly one host-handler invocation declined the bypass");
+    Check.That(hostInvocations >= declinedBypasses, "every declined bypass came from an inspected prompt");
+    Check.Equal(1, bypassDecided.Count, "the declined bypass is recorded as one bypass_decided event");
+
     var decided = bypassDecided[0];
     Check.Equal(SandboxOutcome.Declined, decided.Outcome, "the bypass decision records the host's decline");
     Check.Equal(SandboxBypassSource.ModelRequested, decided.Source, "the bypass was requested by the model");
@@ -411,13 +434,23 @@ if (bypassDecided.Count > 0)
 }
 else
 {
-    Console.WriteLine("notice: the runtime did not report a bypass_decided event for the declined request");
+    // The host handler was installed and the policy asked for the capability; the runtime simply
+    // never escalated. That is a finding about the SDK surface, not a failure of this example.
+    Check.Equal(0, declinedBypasses, "no bypass was declined because none was offered");
+    Check.Equal(0, bypassDecided.Count, "no bypass_decided event was reported because none was offered");
+    Console.WriteLine(
+        "notice: the runtime offered no sandbox-bypass escalation for this session, so the " +
+        "decline path was not exercised. The host handler was installed and the policy set " +
+        "AllowBypass = true; the runtime decides whether to surface the prompt, and the SDK " +
+        "exposes no call that forces it. The handler's decline branch is therefore unproven here.");
 }
 
 // ─── Which assertion set ran ───────────────────────────────────────────────
 Console.WriteLine();
 Console.WriteLine($"assertion set: {(report.Engaged ? "policy + enforcement" : "policy only")}");
-Console.WriteLine($"host-handler prompts inspected: {inspected.Count}, bypasses declined: {declinedBypasses}");
+Console.WriteLine(
+    $"host-handler prompts inspected: {inspected.Count}, escalation prompts seen: {escalationPrompts}, " +
+    $"bypasses declined: {declinedBypasses}");
 
 Directory.Delete(workspace, recursive: true);
 
