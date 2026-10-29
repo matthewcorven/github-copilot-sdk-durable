@@ -3293,6 +3293,10 @@ public sealed class DurableConversation
     private readonly List<SandboxDecisionEvent> _sandboxDecisions = [];
     private readonly List<(Func<SandboxDecisionEvent, bool> Match, TaskCompletionSource<SandboxDecisionEvent> Completion)> _sandboxWaiters = [];
     private readonly DurableModelTracker _modelTracker = new();
+    private readonly object _checkpointGate = new();
+
+    private Task _checkpointChain = Task.CompletedTask;
+    private Exception? _checkpointFailure;
 
     internal DurableConversation(DurableRuntime runtime, CopilotSession session, ConversationRecord record)
     {
