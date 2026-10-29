@@ -57,6 +57,33 @@ sequences. Document versions therefore carry their minted `sequence` in the payl
 replay takes the maximum of both counters so a reopened store always mints past every
 sequence it replayed.
 
+## Atomicity and isolation
+
+The in-memory and JSONL stores get atomicity from a compensating-action log: every mutation
+registers its inverse, and a failure runs the inverses most-recent-first. This provider gets
+atomicity from a database transaction instead. `Persist()` takes the pending writes, opens a
+transaction, writes sessions first (foreign-key ordering), then turns and events, and commits
+once. A failure rolls the whole thing back.
+
+These are different mechanisms, so the guarantee is demonstrated rather than assumed:
+`tests/Durable.EfCore.Tests/StoreAtomicityParityTests.cs` runs the same scenarios against both
+stores and compares the observable outcome — the same ids, the same sequence, the same record
+counts.
+
+`Persist()` calls `BeginTransaction()` with no argument, so the isolation level is the
+provider's default:
+
+| Provider | Isolation level | Notes |
+|---|---|---|
+| SQLite | `Serializable` | The default for `BeginTransaction()`. SQLite serialises writers: a write transaction takes the database write lock, so two writers cannot interleave. Readers see the last committed state. |
+| SQL Server | To be documented with #52 | Not wired up in this tree. |
+| PostgreSQL | To be documented with #52 | Not wired up in this tree. |
+| MySQL | To be documented with #52 | Not wired up in this tree. |
+
+The store also serialises writers within one process: `DurableStore.CommitAsync` holds a gate
+for the whole transaction, so the isolation level governs cross-process concurrency, not
+in-process concurrency.
+
 ## Registration
 
 The provider registers itself, so existing call sites keep the provider they had:
