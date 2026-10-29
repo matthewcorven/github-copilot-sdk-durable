@@ -4281,6 +4281,10 @@ internal sealed class DurableRuntime : IAsyncDisposable
             _disposed = true;
             client = _client;
             store = _store;
+            // Unbind, so IsInitialized reports false and the getters stop handing out
+            // resources that are about to be released.
+            _client = null;
+            _store = null;
         }
 
         foreach (var conversation in _conversations.Values)
@@ -4800,9 +4804,61 @@ public sealed class DurableClientBuilder
     /// </remarks>
     public DurableCopilotClient Build()
     {
-        // #7.1 declares the contract; #7.2 implements the runtime behind it.
-        throw new NotImplementedException(
-            "The durable client runtime behind DurableClientBuilder.Build is implemented in #7.2.");
+        var options = Options;
+
+        // Validate and construct only. Nothing here opens a store, starts a client, or
+        // touches the file system: everything that leaves the process happens in
+        // InitializeAsync.
+        if (options.Store is null && options.StoreOptions is null)
+        {
+            throw new InvalidOperationException(
+                "A durable client needs a store: call UseStore(DurableStore) to borrow one, or " +
+                "UseStore(DurableStoreOptions) to have the durable layer create and own one.");
+        }
+
+        if (options.Store is not null && options.StoreOptions is not null)
+        {
+            throw new InvalidOperationException(
+                "A durable client takes one store source: Store and StoreOptions are both set. " +
+                "UseStore replaces the previous choice, so this means the options were adjusted " +
+                "directly; clear one of them.");
+        }
+
+        if (options.Client is not null && options.ClientOptions is not null)
+        {
+            throw new InvalidOperationException(
+                "A durable client takes one SDK client source: Client and ClientOptions are both " +
+                "set. UseClient replaces the previous choice, so this means the options were " +
+                "adjusted directly; clear one of them.");
+        }
+
+        if (options.OwnsStore is true && options.Store is null)
+        {
+            throw new InvalidOperationException(
+                "OwnsStore is set but no store was supplied. A store the durable layer creates is " +
+                "always owned; the flag only decides the fate of a store the caller supplied.");
+        }
+
+        if (options.OwnsClient is true && options.Client is null)
+        {
+            throw new InvalidOperationException(
+                "OwnsClient is set but no SDK client was supplied. A client the durable layer " +
+                "creates is always owned; the flag only decides the fate of a client the caller " +
+                "supplied.");
+        }
+
+        if (options.Harness is null)
+        {
+            throw new InvalidOperationException("Harness options cannot be null; use the default.");
+        }
+
+        // Finding 1: the registry is resolved once, here, and the same instance is what
+        // Options.Registry and Registry both report. A getter that allocated a fresh empty
+        // registry per read would hand out a different object every time, so an extension
+        // installed through one read would be invisible to the next.
+        options.Registry ??= new ExtensionRegistry();
+
+        return new DurableCopilotClient(options);
     }
 }
 
@@ -4847,8 +4903,20 @@ public sealed class DurableClientBuilder
 public sealed class DurableCopilotClient : IAsyncDisposable
 {
     private readonly DurableClientOptions _options;
+    private readonly DurableRuntime _runtime;
+    private readonly object _initGate = new();
 
-    internal DurableCopilotClient(DurableClientOptions options) => _options = options;
+    private Task? _initialization;
+    private bool _disposed;
+
+    internal DurableCopilotClient(DurableClientOptions options)
+    {
+        _options = options;
+        // Finding 1: the registry is resolved once, by Build(), and this is that instance.
+        // Options.Registry and Registry therefore report the same object, so an extension
+        // installed through one is visible through the other.
+        _runtime = new DurableRuntime(options.Registry!, options.Harness);
+    }
 
     /// <summary>The options this client was built from.</summary>
     public DurableClientOptions Options => _options;
@@ -4859,15 +4927,13 @@ public sealed class DurableCopilotClient : IAsyncDisposable
     /// <see cref="DurableClientOptions.StoreOptions"/> is created during initialization, so
     /// reading this before then is an error.
     /// </remarks>
-    public DurableStore Store => _options.Store
-        ?? throw new InvalidOperationException(
-            "The store is created during InitializeAsync; await that first.");
+    public DurableStore Store => _runtime.Store;
 
     /// <summary>
     /// The extension registry the client resolves code from, or an empty registry when none was
     /// supplied.
     /// </summary>
-    public ExtensionRegistry Registry => _options.Registry ?? new ExtensionRegistry();
+    public ExtensionRegistry Registry => _runtime.Registry;
 
     /// <summary>
     /// The Copilot SDK client the durable layer drives.
@@ -4883,12 +4949,10 @@ public sealed class DurableCopilotClient : IAsyncDisposable
     /// was given.
     /// </para>
     /// </remarks>
-    public CopilotClient NativeClient => _options.Client
-        ?? throw new InvalidOperationException(
-            "The SDK client is created during InitializeAsync; await that first.");
+    public CopilotClient NativeClient => _runtime.Client;
 
     /// <summary>Whether initialization has completed and the client is ready for work.</summary>
-    public bool IsInitialized => throw NotYet("#7.2");
+    public bool IsInitialized => _runtime.IsAttached;
 
     /// <summary>Initializes the client, at most once, safely across concurrent callers.</summary>
     /// <param name="cancellationToken">Cancels the initialization attempt.</param>
@@ -4899,9 +4963,72 @@ public sealed class DurableCopilotClient : IAsyncDisposable
     /// itself. Concurrent calls, and concurrent first operations, share one initialization: the
     /// work happens once and every caller awaits the same result. A failed initialization is
     /// not retried implicitly; the caller decides whether to try again.
+    /// <para>
+    /// Because the attempt is shared, the first caller's cancellation token governs it: a
+    /// caller that arrives while initialization is running joins the attempt already in
+    /// progress rather than starting a second one.
+    /// </para>
     /// </remarks>
-    public Task InitializeAsync(CancellationToken cancellationToken = default) =>
-        throw NotYet("#7.2");
+    public Task InitializeAsync(CancellationToken cancellationToken = default)
+    {
+        lock (_initGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return _initialization ??= InitializeCoreAsync(cancellationToken);
+        }
+    }
+
+    private async Task InitializeCoreAsync(CancellationToken cancellationToken)
+    {
+        // Everything that leaves the process happens here, never in Build().
+        var ownsStore = _options.Store is null;
+        var ownsClient = _options.Client is null;
+
+        DurableStore? createdStore = null;
+        CopilotClient? createdClient = null;
+
+        try
+        {
+            var store = _options.Store;
+            if (store is null)
+            {
+                createdStore = DurableStore.Create(_options.StoreOptions!);
+                store = createdStore;
+            }
+
+            var client = _options.Client;
+            if (client is null)
+            {
+                createdClient = new CopilotClient(_options.ClientOptions ?? new CopilotClientOptions());
+                await createdClient.StartAsync(cancellationToken);
+                client = createdClient;
+            }
+
+            // A supplied resource is borrowed unless the caller handed it over explicitly; a
+            // created one is always owned.
+            _runtime.Attach(
+                client,
+                store,
+                ownsClient: ownsClient || _options.OwnsClient is true,
+                ownsStore: ownsStore || _options.OwnsStore is true);
+        }
+        catch
+        {
+            // A half-built client owns nothing: release what this attempt created, in the
+            // reverse order, and let the failure surface to every caller that joined it.
+            if (createdClient is not null)
+            {
+                await createdClient.DisposeAsync();
+            }
+
+            if (createdStore is not null)
+            {
+                createdStore.Dispose();
+            }
+
+            throw;
+        }
+    }
 
     /// <summary>Creates a conversation and its Copilot session.</summary>
     /// <param name="choices">
@@ -5080,7 +5207,37 @@ public sealed class DurableCopilotClient : IAsyncDisposable
     /// borrowed store against this client is the host's choice — but a persistent store must be
     /// disposed before another process opens the same path.
     /// </remarks>
-    public ValueTask DisposeAsync() => throw NotYet("#7.5");
+    public async ValueTask DisposeAsync()
+    {
+        Task? initialization;
+        lock (_initGate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            initialization = _initialization;
+        }
+
+        // An initialization that is still running has to finish before the runtime can be
+        // disposed, or disposal would race the attach. A failed one is not an error here: the
+        // runtime owns nothing, so there is nothing to release.
+        if (initialization is not null)
+        {
+            try
+            {
+                await initialization;
+            }
+            catch
+            {
+                return;
+            }
+        }
+
+        await _runtime.DisposeAsync();
+    }
 
     private static NotImplementedException NotYet(string issue) =>
         new($"The durable client facade is declared in #7.1 and implemented in {issue}.");
