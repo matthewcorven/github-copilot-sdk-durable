@@ -2010,10 +2010,55 @@ public sealed class DurableStore : IDisposable
     }
 
     /// <summary>
-    /// Schedules a task to run. The harness owns the runner, so the store asks it to
+    /// Schedules a task to run. The runtime owns the runner, so the store asks it to
     /// start the task rather than running it itself.
     /// </summary>
-    internal Action<string, CancellationToken>? TaskScheduler { get; set; }
+    /// <remarks>
+    /// A store has at most one runner. The slot is claimed by the runtime that drives the
+    /// store and released when that runtime is disposed, so two runtimes over one store
+    /// cannot both schedule the same task: the second claim fails instead of silently
+    /// replacing the first.
+    /// </remarks>
+    internal Action<string, CancellationToken>? TaskScheduler { get; private set; }
+
+    private readonly object _schedulerGate = new();
+    private object? _schedulerOwner;
+
+    /// <summary>Claims the store's single task-runner slot for <paramref name="owner"/>.</summary>
+    /// <exception cref="InvalidOperationException">
+    /// Another runtime already drives this store. A store has one task runner, so a second
+    /// runtime over the same store would compete with the first for the same tasks.
+    /// </exception>
+    internal void ClaimTaskScheduler(object owner, Action<string, CancellationToken> scheduler)
+    {
+        lock (_schedulerGate)
+        {
+            if (_schedulerOwner is not null && !ReferenceEquals(_schedulerOwner, owner))
+            {
+                throw new InvalidOperationException(
+                    "This store is already driven by another durable runtime. A store has one task "
+                    + "runner, so share the runtime instead of opening a second one over the same store.");
+            }
+
+            _schedulerOwner = owner;
+            TaskScheduler = scheduler;
+        }
+    }
+
+    /// <summary>Releases the task-runner slot, if <paramref name="owner"/> still holds it.</summary>
+    internal void ReleaseTaskScheduler(object owner)
+    {
+        lock (_schedulerGate)
+        {
+            if (!ReferenceEquals(_schedulerOwner, owner))
+            {
+                return;
+            }
+
+            _schedulerOwner = null;
+            TaskScheduler = null;
+        }
+    }
 
     internal void ScheduleTask(string taskId, CancellationToken cancellationToken) =>
         TaskScheduler?.Invoke(taskId, cancellationToken);
@@ -2842,14 +2887,14 @@ public sealed record ResolvedAgent(
 /// <summary>A conversation handle: a Copilot session bound to durable app state.</summary>
 public sealed class DurableConversation
 {
-    private readonly DurableHarness _harness;
+    private readonly DurableRuntime _runtime;
     private readonly List<string> _answers = [];
     private readonly List<SandboxDecisionEvent> _sandboxDecisions = [];
     private readonly List<(Func<SandboxDecisionEvent, bool> Match, TaskCompletionSource<SandboxDecisionEvent> Completion)> _sandboxWaiters = [];
 
-    internal DurableConversation(DurableHarness harness, CopilotSession session, ConversationRecord record)
+    internal DurableConversation(DurableRuntime runtime, CopilotSession session, ConversationRecord record)
     {
-        _harness = harness;
+        _runtime = runtime;
         Session = session;
         Record = record;
     }
@@ -2885,6 +2930,17 @@ public sealed class DurableConversation
     }
 
     private IDisposable? _subscription;
+
+    /// <summary>
+    /// Removes the permanent subscription installed by <see cref="Attach"/>. Called when the
+    /// runtime is disposed, so a session event that arrives during disposal cannot write into a
+    /// store that is going away. Idempotent.
+    /// </summary>
+    internal void Detach()
+    {
+        _subscription?.Dispose();
+        _subscription = null;
+    }
 
     /// <summary>
     /// The sandbox decisions this conversation has observed, oldest first.
@@ -3040,21 +3096,21 @@ public sealed class DurableConversation
 
     /// <summary>Reads the latest value of a document.</summary>
     public T? Snapshot<T>(DocumentDefinition<T> definition) =>
-        _harness.Store.Document(definition.Kind, Id)?.Latest is { } latest
+        _runtime.Store.Document(definition.Kind, Id)?.Latest is { } latest
             ? latest.Deserialize<T>(DurableJson.Options)
             : default;
 
     /// <summary>Reads the value a document had in the same transaction as the given entry.</summary>
     public T? SnapshotAsOf<T>(DocumentDefinition<T> definition, string entryId) =>
-        _harness.Store.Document(definition.Kind, Id)?.AsOf(entryId) is { } value
+        _runtime.Store.Document(definition.Kind, Id)?.AsOf(entryId) is { } value
             ? value.Deserialize<T>(DurableJson.Options)
             : default;
 
     /// <summary>Runs a transaction against the durable store.</summary>
-    public Task<T> CommitAsync<T>(Func<Transaction, Task<T>> body) => _harness.Store.CommitAsync(body);
+    public Task<T> CommitAsync<T>(Func<Transaction, Task<T>> body) => _runtime.Store.CommitAsync(body);
 
     /// <summary>Runs a transaction against the durable store.</summary>
-    public Task CommitAsync(Func<Transaction, Task> body) => _harness.Store.CommitAsync(body);
+    public Task CommitAsync(Func<Transaction, Task> body) => _runtime.Store.CommitAsync(body);
 
     /// <summary>Appends an entry to this conversation's transcript.</summary>
     public Task<string> AppendEntryAsync(string kind, string? data = null) =>
@@ -3091,7 +3147,7 @@ public sealed class DurableConversation
                     // configuration, not of the conversation. When the host asked for that to
                     // be tolerated, the turn's answer is returned and the denial stays visible
                     // in SandboxDecisions.
-                    if (_harness.Options.TolerateHostHookFailures && IsHostHookFailure(error.Data.Message))
+                    if (_runtime.Options.TolerateHostHookFailures && IsHostHookFailure(error.Data.Message))
                     {
                         completion.TrySetResult(last);
                         break;
@@ -3126,7 +3182,7 @@ public sealed class DurableConversation
 
     /// <summary>Reads the stored transcript entries, newest first.</summary>
     public IReadOnlyList<string> Entries(int limit = 20) =>
-        _harness.Store.Entries(Id).AsEnumerable().Reverse().Take(limit).ToList();
+        _runtime.Store.Entries(Id).AsEnumerable().Reverse().Take(limit).ToList();
 
     /// <summary>Reads the effective model context: the transcript as the model sees it.</summary>
     public Task<IReadOnlyList<SessionEvent>> ContextAsync(CancellationToken cancellationToken = default) =>
@@ -3137,7 +3193,7 @@ public sealed class DurableConversation
     {
         await CommitAsync(async tx =>
         {
-            var draft = tx.Doc(_harness.AgentDocument, Id);
+            var draft = tx.Doc(_runtime.AgentDocument, Id);
             draft.Value = choices;
             draft.Save(tx.AppendEntry(Id, "agent"));
             await Task.CompletedTask;
@@ -3153,14 +3209,14 @@ public sealed class DurableConversation
     }
 
     /// <summary>Reads the stored agent choices.</summary>
-    public AgentChoices? Choices() => Snapshot(_harness.AgentDocument);
+    public AgentChoices? Choices() => Snapshot(_runtime.AgentDocument);
 
     /// <summary>Resolves the stored choices against the registry.</summary>
     public ResolvedAgent Agent()
     {
         var choices = Choices() ?? new AgentChoices();
-        var extensions = _harness.ResolveExtensions(choices.Extensions);
-        var tools = _harness.ResolveTools(extensions, choices.Tools);
+        var extensions = _runtime.ResolveExtensions(choices.Extensions);
+        var tools = _runtime.ResolveTools(extensions, choices.Tools);
         return new ResolvedAgent(
             choices.Model,
             choices.ReasoningEffort,
@@ -3177,7 +3233,7 @@ public sealed class DurableConversation
 
     /// <summary>Forks this conversation at the given entry.</summary>
     public Task<DurableConversation> ForkAsync(string entryId, CancellationToken cancellationToken = default) =>
-        _harness.ForkAsync(this, entryId, cancellationToken);
+        _runtime.ForkAsync(this, entryId, cancellationToken);
 }
 
 /// <summary>Options for opening a <see cref="DurableHarness"/>.</summary>
@@ -3276,39 +3332,121 @@ public sealed class DurableHarnessOptions
     public string? RuntimePath { get; set; }
 }
 
-/// <summary>The harness: the durable host that owns the store, the registry, and the conversations.</summary>
-public sealed class DurableHarness : IAsyncDisposable
+/// <summary>
+/// The shared durable runtime: the one place that binds a store, an SDK client, a registry, and
+/// the conversations over them.
+/// </summary>
+/// <remarks>
+/// <see cref="DurableHarness"/> and <see cref="DurableCopilotClient"/> are two front doors onto
+/// this type, not two implementations. Everything that makes a conversation durable — the
+/// conversation binding, the session configuration, extension and tool resolution, task
+/// coordination, and the lifecycle — lives here, so a conversation created through either door
+/// is the same object with the same behaviour.
+/// <para>
+/// <b>Binding.</b> The runtime is constructed with the registry and the host options, which are
+/// known before anything is opened, and is bound to a store and a client by
+/// <see cref="Attach"/>. Binding is not I/O: it records two references, decides ownership, and
+/// claims the store's single task-scheduler slot. The harness binds in its constructor because
+/// it has already created both; the facade binds during
+/// <see cref="DurableCopilotClient.InitializeAsync"/> because creating them is the I/O.
+/// </para>
+/// <para>
+/// <b>One runner per store.</b> A store has at most one task scheduler, and the runtime claims
+/// it. A second runtime over the same store fails the claim instead of silently replacing the
+/// first, which is what keeps two hosts from running the same task twice.
+/// </para>
+/// </remarks>
+internal sealed class DurableRuntime : IAsyncDisposable
 {
     /// <summary>
     /// The model used when a conversation does not name one. It is a cheap,
     /// reasoning-capable model: the examples are about durable mechanics, not model
     /// quality, and a fixed model makes an example's behaviour reproducible.
     /// </summary>
-    public const string DefaultModel = "gpt-6-luna";
+    internal const string DefaultModel = "gpt-6-luna";
 
     private readonly Dictionary<string, DurableConversation> _conversations = [];
     private readonly ConcurrentDictionary<string, TaskCompletionSource<TaskOutcome>> _taskCompletions = [];
     private readonly ConcurrentDictionary<string, byte> _runningTasks = [];
+    private readonly ConcurrentDictionary<string, Task> _inFlight = [];
+    private readonly object _lifecycleGate = new();
 
-    private DurableHarness(
-        CopilotClient client,
-        DurableStore store,
-        ExtensionRegistry registry,
-        DurableHarnessOptions? options = null)
+    private CopilotClient? _client;
+    private DurableStore? _store;
+    private Dictionary<string, ModelInfo>? _models;
+    private bool _disposed;
+
+    internal DurableRuntime(ExtensionRegistry registry, DurableHarnessOptions? options = null)
     {
-        Client = client;
-        Store = store;
+        ArgumentNullException.ThrowIfNull(registry);
+
         Registry = registry;
         Options = options ?? new DurableHarnessOptions();
         // Rewindable with "asOf", so a fork starts with the agent choices its parent had at
         // the fork entry.
         AgentDocument = new DocumentDefinition<AgentChoices>("durable.agent", DocumentHistory.Rewindable, ForkPolicy.AsOf);
-
-        // A task created by another task asks the harness to schedule it.
-        store.TaskScheduler = (taskId, cancellationToken) => _ = RunTaskAsync(taskId, cancellationToken);
     }
 
-    private Dictionary<string, ModelInfo>? _models;
+    /// <summary>The Copilot client, once the runtime is bound.</summary>
+    internal CopilotClient Client => _client
+        ?? throw new InvalidOperationException(
+            "The SDK client is created during InitializeAsync; await that first.");
+
+    /// <summary>The durable store, once the runtime is bound.</summary>
+    internal DurableStore Store => _store
+        ?? throw new InvalidOperationException(
+            "The store is created during InitializeAsync; await that first.");
+
+    /// <summary>The extension registry. Never unavailable: an empty registry is a valid one.</summary>
+    internal ExtensionRegistry Registry { get; }
+
+    /// <summary>The host configuration applied to every session this runtime configures.</summary>
+    internal DurableHarnessOptions Options { get; }
+
+    /// <summary>The document holding per-conversation agent choices.</summary>
+    internal DocumentDefinition<AgentChoices> AgentDocument { get; }
+
+    /// <summary>The conversations this runtime knows about.</summary>
+    internal IReadOnlyCollection<DurableConversation> Conversations => _conversations.Values;
+
+    /// <summary>Whether the runtime is bound to a store and a client.</summary>
+    internal bool IsAttached => _store is not null && _client is not null;
+
+    /// <summary>Whether disposal disposes the SDK client.</summary>
+    internal bool OwnsClient { get; private set; }
+
+    /// <summary>Whether disposal disposes the store.</summary>
+    internal bool OwnsStore { get; private set; }
+
+    /// <summary>
+    /// Binds the runtime to a store and a client, deciding what disposal owns.
+    /// </summary>
+    /// <remarks>
+    /// Binding performs no I/O. It claims the store's task-scheduler slot, so a store that
+    /// another runtime already drives is rejected here rather than being silently taken over.
+    /// </remarks>
+    internal void Attach(CopilotClient client, DurableStore store, bool ownsClient, bool ownsStore)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(store);
+
+        lock (_lifecycleGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_store is not null || _client is not null)
+            {
+                throw new InvalidOperationException("The runtime is already bound to a store and a client.");
+            }
+
+            _client = client;
+            _store = store;
+            OwnsClient = ownsClient;
+            OwnsStore = ownsStore;
+        }
+
+        // A task created by another task asks the runtime to schedule it.
+        store.ClaimTaskScheduler(this, (taskId, cancellationToken) => _ = RunTaskAsync(taskId, cancellationToken));
+    }
 
     /// <summary>
     /// Whether the given model accepts a reasoning effort. The runtime rejects a session
@@ -3325,29 +3463,11 @@ public sealed class DurableHarness : IAsyncDisposable
         return _models.TryGetValue(model, out var info) && info.SupportedReasoningEfforts is { Count: > 0 };
     }
 
-    /// <summary>The Copilot client.</summary>
-    public CopilotClient Client { get; }
-
-    /// <summary>The durable store.</summary>
-    public DurableStore Store { get; }
-
-    /// <summary>The extension registry.</summary>
-    public ExtensionRegistry Registry { get; }
-
-    /// <summary>The options this harness was opened with.</summary>
-    public DurableHarnessOptions Options { get; }
-
-    /// <summary>The document holding per-conversation agent choices.</summary>
-    public DocumentDefinition<AgentChoices> AgentDocument { get; }
-
-    /// <summary>The conversations this harness knows about.</summary>
-    public IReadOnlyCollection<DurableConversation> Conversations => _conversations.Values;
-
     /// <summary>
-    /// Finds a conversation by id, restoring it from the store if the harness has not
+    /// Finds a conversation by id, restoring it from the store if the runtime has not
     /// opened it yet. A conversation that was created before a restart is still there.
     /// </summary>
-    public DurableConversation? FindConversation(string conversationId)
+    internal DurableConversation? FindConversation(string conversationId)
     {
         if (_conversations.TryGetValue(conversationId, out var existing))
         {
@@ -3432,7 +3552,7 @@ public sealed class DurableHarness : IAsyncDisposable
     }
 
     /// <summary>Creates a conversation and its Copilot session.</summary>
-    public async Task<DurableConversation> CreateConversationAsync(
+    internal async Task<DurableConversation> CreateConversationAsync(
         AgentChoices? choices = null,
         string? ownerTaskId = null,
         string? ownerConversationId = null,
@@ -3461,7 +3581,7 @@ public sealed class DurableHarness : IAsyncDisposable
     }
 
     /// <summary>Returns the root conversation, creating it on first use.</summary>
-    public async Task<DurableConversation> RootAsync(
+    internal async Task<DurableConversation> RootAsync(
         AgentChoices? choices = null,
         CancellationToken cancellationToken = default)
     {
@@ -3510,7 +3630,7 @@ public sealed class DurableHarness : IAsyncDisposable
     }
 
     /// <summary>Forks a conversation at an entry.</summary>
-    public async Task<DurableConversation> ForkAsync(
+    internal async Task<DurableConversation> ForkAsync(
         DurableConversation parent,
         string entryId,
         CancellationToken cancellationToken = default)
@@ -3537,7 +3657,7 @@ public sealed class DurableHarness : IAsyncDisposable
     }
 
     /// <summary>Creates a durable task and schedules it.</summary>
-    public async Task<DurableTaskRecord> CreateTaskAsync(
+    internal async Task<DurableTaskRecord> CreateTaskAsync(
         DurableTaskDefinition definition,
         JsonElement input,
         string? ownerConversationId = null,
@@ -3553,7 +3673,7 @@ public sealed class DurableHarness : IAsyncDisposable
     }
 
     /// <summary>Runs a task to completion, resuming from its last checkpoint.</summary>
-    public async Task<TaskOutcome> RunTaskAsync(string taskId, CancellationToken cancellationToken = default)
+    internal async Task<TaskOutcome> RunTaskAsync(string taskId, CancellationToken cancellationToken = default)
     {
         var completion = _taskCompletions.GetOrAdd(taskId, _ => new TaskCompletionSource<TaskOutcome>(
             TaskCreationOptions.RunContinuationsAsynchronously));
@@ -3572,12 +3692,16 @@ public sealed class DurableHarness : IAsyncDisposable
             return await completion.Task.WaitAsync(cancellationToken);
         }
 
+        var run = RunTaskCoreAsync(taskId, record, completion, cancellationToken);
+        // Recorded before the first await so disposal can drain a run that is mid-commit.
+        _inFlight[taskId] = run;
         try
         {
-            return await RunTaskCoreAsync(taskId, record, completion, cancellationToken);
+            return await run;
         }
         finally
         {
+            _inFlight.TryRemove(taskId, out _);
             _runningTasks.TryRemove(taskId, out _);
         }
     }
@@ -3676,7 +3800,6 @@ public sealed class DurableHarness : IAsyncDisposable
         return final;
     }
 
-    /// <summary>Waits for a task to finish.</summary>
     /// <summary>
     /// Waits for child tasks to finish, then resumes the waiting parent. The parent
     /// holds no invocation while it waits: its checkpoint says which children it is
@@ -3703,7 +3826,8 @@ public sealed class DurableHarness : IAsyncDisposable
         }
     }
 
-    public async Task<TaskOutcome> WaitForTaskAsync(string taskId, CancellationToken cancellationToken = default)
+    /// <summary>Waits for a task to finish.</summary>
+    internal async Task<TaskOutcome> WaitForTaskAsync(string taskId, CancellationToken cancellationToken = default)
     {
         var record = Store.Task(taskId);
         if (record is null)
@@ -3728,7 +3852,7 @@ public sealed class DurableHarness : IAsyncDisposable
     }
 
     /// <summary>Aborts a task, running its abort handler.</summary>
-    public async Task AbortTaskAsync(string taskId, CancellationToken cancellationToken = default)
+    internal async Task AbortTaskAsync(string taskId, CancellationToken cancellationToken = default)
     {
         var record = Store.Task(taskId);
         if (record is null || record.Status == TaskStatus.Terminal)
@@ -3754,7 +3878,7 @@ public sealed class DurableHarness : IAsyncDisposable
     }
 
     /// <summary>Resumes every task that was running when the process stopped.</summary>
-    public async Task ResumeAsync(CancellationToken cancellationToken = default)
+    internal async Task ResumeAsync(CancellationToken cancellationToken = default)
     {
         foreach (var record in Store.Tasks.Where(t => t.Status is TaskStatus.Running or TaskStatus.Pending))
         {
@@ -3765,13 +3889,13 @@ public sealed class DurableHarness : IAsyncDisposable
     }
 
     /// <summary>Reads the task graph: tasks and their owner edges.</summary>
-    public IReadOnlyList<(DurableTaskRecord Task, string? Owner)> TaskGraph() =>
+    internal IReadOnlyList<(DurableTaskRecord Task, string? Owner)> TaskGraph() =>
         Store.Tasks
             .Select(task => (task, Owner: task.OwnerTaskId ?? task.OwnerConversationId))
             .ToList();
 
     /// <summary>Resolves extension names against the registry.</summary>
-    public IReadOnlyList<Extension> ResolveExtensions(IReadOnlyList<string>? names)
+    internal IReadOnlyList<Extension> ResolveExtensions(IReadOnlyList<string>? names)
     {
         if (names is null)
         {
@@ -3787,7 +3911,7 @@ public sealed class DurableHarness : IAsyncDisposable
     /// place: the tool keeps its position in the list, but the later implementation wins.
     /// Wrappers are applied last, so a wrapper decorates whichever implementation won.
     /// </summary>
-    public IReadOnlyList<AIFunction> ResolveTools(IReadOnlyList<Extension> extensions, IReadOnlyList<string>? names)
+    internal IReadOnlyList<AIFunction> ResolveTools(IReadOnlyList<Extension> extensions, IReadOnlyList<string>? names)
     {
         // Later extensions replace earlier ones by name, keeping the original position.
         var available = new List<AIFunction>();
@@ -3837,7 +3961,7 @@ public sealed class DurableHarness : IAsyncDisposable
     /// reference null, so a field this method forgets is a field the runtime never sees — which
     /// is why the mapping is written out field by field rather than copied.
     /// </remarks>
-    public static SandboxConfig BuildSandboxConfig(DurableSandboxPolicy policy, string? workingDirectory)
+    internal static SandboxConfig BuildSandboxConfig(DurableSandboxPolicy policy, string? workingDirectory)
     {
         ArgumentNullException.ThrowIfNull(policy);
 
@@ -3927,7 +4051,7 @@ public sealed class DurableHarness : IAsyncDisposable
             : paths.Select(path => DurableSandboxPolicy.ExpandPath(path, workingDirectory)).ToList();
 
     /// <summary>Builds the Copilot session configuration for a set of choices.</summary>
-    public SessionConfig BuildSessionConfig(AgentChoices? choices, DurableConversation? conversation)
+    internal SessionConfig BuildSessionConfig(AgentChoices? choices, DurableConversation? conversation)
     {
         var resolved = new ResolvedAgent(
             choices?.Model,
@@ -3952,7 +4076,7 @@ public sealed class DurableHarness : IAsyncDisposable
             // Fail-closed: a durable conversation may only use what it was explicitly granted.
             // The SDK's own default approves everything, which would make the agent's behaviour
             // depend on state that is not in the store. A host that supplies its own handler
-            // takes over that decision for every conversation this harness opens.
+            // takes over that decision for every conversation this runtime opens.
             OnPermissionRequest = Options.PermissionHandler ?? PermissionPolicy.Handler(resolved.Permissions),
             WorkingDirectory = resolved.WorkingDirectory,
         };
@@ -4053,7 +4177,7 @@ public sealed class DurableHarness : IAsyncDisposable
     /// before each request. A section that reads a durable document sees the
     /// document's value at the time of the call.
     /// </summary>
-    public async Task<string> RenderSectionsAsync(DurableConversation conversation)
+    internal async Task<string> RenderSectionsAsync(DurableConversation conversation)
     {
         var resolved = conversation.Agent();
         var sections = resolved.Extensions.SelectMany(extension => extension.Sections).ToList();
@@ -4083,7 +4207,7 @@ public sealed class DurableHarness : IAsyncDisposable
     }
 
     /// <summary>Renders the system message from the selected extensions' sections.</summary>
-    public string BuildSystemMessage(
+    internal string BuildSystemMessage(
         ResolvedAgent agent,
         IReadOnlyList<PromptSection> sections,
         DurableConversation? conversation)
@@ -4109,13 +4233,251 @@ public sealed class DurableHarness : IAsyncDisposable
         return string.Join("\n\n", parts);
     }
 
-    /// <summary>Disposes the harness and its client.</summary>
+    /// <summary>
+    /// Waits for the task runs in flight to finish, so a checkpoint that is being written
+    /// completes before the store is closed.
+    /// </summary>
+    private async Task DrainTasksAsync()
+    {
+        while (true)
+        {
+            var pending = _inFlight.Values.ToArray();
+            if (pending.Length == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                await Task.WhenAll(pending);
+            }
+            catch
+            {
+                // A run's failure is recorded in the task's outcome, not thrown at disposal.
+            }
+        }
+    }
+
+    /// <summary>
+    /// Disposes what the runtime owns: at most once, and never a borrowed store or client.
+    /// </summary>
+    /// <remarks>
+    /// The order matters. Subscriptions are removed first, so a session event that arrives
+    /// during disposal cannot write into a store that is going away. Task runs in flight are
+    /// then drained, so a checkpoint that is mid-commit finishes. Only then is the store's
+    /// task-scheduler slot released and the owned resources disposed.
+    /// </remarks>
     public async ValueTask DisposeAsync()
     {
-        await Client.DisposeAsync();
+        CopilotClient? client;
+        DurableStore? store;
+        lock (_lifecycleGate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            client = _client;
+            store = _store;
+        }
+
+        foreach (var conversation in _conversations.Values)
+        {
+            conversation.Detach();
+        }
+
+        _conversations.Clear();
+
+        await DrainTasksAsync();
+
+        if (store is not null)
+        {
+            store.ReleaseTaskScheduler(this);
+        }
+
+        if (OwnsClient && client is not null)
+        {
+            await client.DisposeAsync();
+        }
+
+        if (OwnsStore && store is not null)
+        {
+            store.Dispose();
+        }
     }
 }
 
+/// <summary>The harness: the durable host that owns the store, the registry, and the conversations.</summary>
+/// <remarks>
+/// The harness is a front door onto <see cref="DurableRuntime"/>, not a second implementation of
+/// it. It creates and owns its SDK client, borrows the store and the registry the caller
+/// supplied, and delegates every durable operation to the runtime — which is the same runtime
+/// <see cref="DurableCopilotClient"/> drives, so a conversation opened here and one opened
+/// through the facade are the same object over the same store.
+/// </remarks>
+public sealed class DurableHarness : IAsyncDisposable
+{
+    /// <summary>
+    /// The model used when a conversation does not name one. It is a cheap,
+    /// reasoning-capable model: the examples are about durable mechanics, not model
+    /// quality, and a fixed model makes an example's behaviour reproducible.
+    /// </summary>
+    public const string DefaultModel = DurableRuntime.DefaultModel;
+
+    private readonly DurableRuntime _runtime;
+
+    private DurableHarness(
+        CopilotClient client,
+        DurableStore store,
+        ExtensionRegistry registry,
+        DurableHarnessOptions? options = null)
+    {
+        _runtime = new DurableRuntime(registry, options);
+        // The harness always created its client, so it always owns it. The store is the
+        // caller's: the harness never disposes it.
+        _runtime.Attach(client, store, ownsClient: true, ownsStore: false);
+    }
+
+    /// <summary>The Copilot client.</summary>
+    public CopilotClient Client => _runtime.Client;
+
+    /// <summary>The durable store.</summary>
+    public DurableStore Store => _runtime.Store;
+
+    /// <summary>The extension registry.</summary>
+    public ExtensionRegistry Registry => _runtime.Registry;
+
+    /// <summary>The options this harness was opened with.</summary>
+    public DurableHarnessOptions Options => _runtime.Options;
+
+    /// <summary>The document holding per-conversation agent choices.</summary>
+    public DocumentDefinition<AgentChoices> AgentDocument => _runtime.AgentDocument;
+
+    /// <summary>The conversations this harness knows about.</summary>
+    public IReadOnlyCollection<DurableConversation> Conversations => _runtime.Conversations;
+
+    /// <summary>
+    /// Finds a conversation by id, restoring it from the store if the harness has not
+    /// opened it yet. A conversation that was created before a restart is still there.
+    /// </summary>
+    public DurableConversation? FindConversation(string conversationId) =>
+        _runtime.FindConversation(conversationId);
+
+    /// <summary>Opens a harness over a store and a registry.</summary>
+    public static Task<DurableHarness> OpenAsync(
+        DurableStore store,
+        ExtensionRegistry registry,
+        CancellationToken cancellationToken = default) =>
+        OpenAsync(store, registry, new DurableHarnessOptions(), cancellationToken);
+
+    /// <summary>Opens a harness over a store and a registry with explicit options.</summary>
+    public static async Task<DurableHarness> OpenAsync(
+        DurableStore store,
+        ExtensionRegistry registry,
+        DurableHarnessOptions options,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        var client = new CopilotClient();
+        await client.StartAsync(cancellationToken);
+        return new DurableHarness(client, store, registry, options);
+    }
+
+    /// <summary>Creates a conversation and its Copilot session.</summary>
+    public Task<DurableConversation> CreateConversationAsync(
+        AgentChoices? choices = null,
+        string? ownerTaskId = null,
+        string? ownerConversationId = null,
+        CancellationToken cancellationToken = default) =>
+        _runtime.CreateConversationAsync(choices, ownerTaskId, ownerConversationId, cancellationToken);
+
+    /// <summary>Returns the root conversation, creating it on first use.</summary>
+    public Task<DurableConversation> RootAsync(
+        AgentChoices? choices = null,
+        CancellationToken cancellationToken = default) =>
+        _runtime.RootAsync(choices, cancellationToken);
+
+    /// <summary>Forks a conversation at an entry.</summary>
+    public Task<DurableConversation> ForkAsync(
+        DurableConversation parent,
+        string entryId,
+        CancellationToken cancellationToken = default) =>
+        _runtime.ForkAsync(parent, entryId, cancellationToken);
+
+    /// <summary>Creates a durable task and schedules it.</summary>
+    public Task<DurableTaskRecord> CreateTaskAsync(
+        DurableTaskDefinition definition,
+        JsonElement input,
+        string? ownerConversationId = null,
+        string? ownerTaskId = null,
+        bool background = false,
+        CancellationToken cancellationToken = default) =>
+        _runtime.CreateTaskAsync(definition, input, ownerConversationId, ownerTaskId, background, cancellationToken);
+
+    /// <summary>Runs a task to completion, resuming from its last checkpoint.</summary>
+    public Task<TaskOutcome> RunTaskAsync(string taskId, CancellationToken cancellationToken = default) =>
+        _runtime.RunTaskAsync(taskId, cancellationToken);
+
+    /// <summary>Waits for a task to finish.</summary>
+    public Task<TaskOutcome> WaitForTaskAsync(string taskId, CancellationToken cancellationToken = default) =>
+        _runtime.WaitForTaskAsync(taskId, cancellationToken);
+
+    /// <summary>Aborts a task, running its abort handler.</summary>
+    public Task AbortTaskAsync(string taskId, CancellationToken cancellationToken = default) =>
+        _runtime.AbortTaskAsync(taskId, cancellationToken);
+
+    /// <summary>Resumes every task that was running when the process stopped.</summary>
+    public Task ResumeAsync(CancellationToken cancellationToken = default) =>
+        _runtime.ResumeAsync(cancellationToken);
+
+    /// <summary>Reads the task graph: tasks and their owner edges.</summary>
+    public IReadOnlyList<(DurableTaskRecord Task, string? Owner)> TaskGraph() => _runtime.TaskGraph();
+
+    /// <summary>Resolves extension names against the registry.</summary>
+    public IReadOnlyList<Extension> ResolveExtensions(IReadOnlyList<string>? names) =>
+        _runtime.ResolveExtensions(names);
+
+    /// <summary>
+    /// Resolves tool names against the selected extensions. When two selected extensions
+    /// contribute a tool with the same name, the later one replaces the earlier one in
+    /// place: the tool keeps its position in the list, but the later implementation wins.
+    /// Wrappers are applied last, so a wrapper decorates whichever implementation won.
+    /// </summary>
+    public IReadOnlyList<AIFunction> ResolveTools(IReadOnlyList<Extension> extensions, IReadOnlyList<string>? names) =>
+        _runtime.ResolveTools(extensions, names);
+
+    /// <summary>
+    /// Maps a durable sandbox policy onto the SDK's wire type, expanding the
+    /// <see cref="DurableSandboxPolicy.WorkspaceToken"/> token against the working directory.
+    /// </summary>
+    public static SandboxConfig BuildSandboxConfig(DurableSandboxPolicy policy, string? workingDirectory) =>
+        DurableRuntime.BuildSandboxConfig(policy, workingDirectory);
+
+    /// <summary>Builds the Copilot session configuration for a set of choices.</summary>
+    public SessionConfig BuildSessionConfig(AgentChoices? choices, DurableConversation? conversation) =>
+        _runtime.BuildSessionConfig(choices, conversation);
+
+    /// <summary>
+    /// Renders the prompt sections for a conversation, the way they are rendered
+    /// before each request. A section that reads a durable document sees the
+    /// document's value at the time of the call.
+    /// </summary>
+    public Task<string> RenderSectionsAsync(DurableConversation conversation) =>
+        _runtime.RenderSectionsAsync(conversation);
+
+    /// <summary>Renders the system message from the selected extensions' sections.</summary>
+    public string BuildSystemMessage(
+        ResolvedAgent agent,
+        IReadOnlyList<PromptSection> sections,
+        DurableConversation? conversation) =>
+        _runtime.BuildSystemMessage(agent, sections, conversation);
+
+    /// <summary>Disposes the harness and the client it created.</summary>
+    public ValueTask DisposeAsync() => _runtime.DisposeAsync();
+}
 /// <summary>
 /// Everything a <see cref="DurableCopilotClient"/> is built from: the store, the caller's
 /// extension registry, the Copilot SDK client, and the ownership flags that decide what the
