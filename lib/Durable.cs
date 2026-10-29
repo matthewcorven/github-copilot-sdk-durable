@@ -3146,6 +3146,40 @@ public sealed class DurableHarnessOptions
     /// </para>
     /// </remarks>
     public bool TolerateHostHookFailures { get; set; }
+
+    /// <summary>
+    /// The name of the environment variable that selects the runtime executable when
+    /// <see cref="RuntimePath"/> is not set. Its value is a path, exactly like
+    /// <see cref="RuntimePath"/>.
+    /// </summary>
+    public const string RuntimePathEnvironmentVariable = "DURABLE_RUNTIME_PATH";
+
+    /// <summary>
+    /// The runtime executable the harness connects to over stdio, or <c>null</c> to spawn the
+    /// bundled runtime.
+    /// </summary>
+    /// <remarks>
+    /// When this is set, <see cref="DurableHarness.OpenAsync(DurableStore, ExtensionRegistry, DurableHarnessOptions, CancellationToken)"/>
+    /// connects to that executable with the SDK's
+    /// <see cref="RuntimeConnection.ForStdio"/> transport instead of the bundled runtime. When
+    /// it is <c>null</c>, the <see cref="RuntimePathEnvironmentVariable"/> environment variable
+    /// (<c>DURABLE_RUNTIME_PATH</c>) is consulted instead; when that is unset or empty too, the
+    /// harness spawns the bundled runtime exactly as it always has.
+    /// <para>
+    /// The environment variable exists so a script can select a runtime without editing the
+    /// examples: <c>DURABLE_RUNTIME_PATH=/path/to/runtime scripts/validate.sh</c>. A value set
+    /// here wins over the environment variable.
+    /// </para>
+    /// <para>
+    /// A path that names no existing file fails the open with an exception that names the path,
+    /// before any process is started.
+    /// </para>
+    /// <para>
+    /// This is host configuration, not durable state: it is not persisted with the
+    /// conversation, so it never travels with a fork.
+    /// </para>
+    /// </remarks>
+    public string? RuntimePath { get; set; }
 }
 
 /// <summary>The harness: the durable host that owns the store, the registry, and the conversations.</summary>
@@ -3259,9 +3293,48 @@ public sealed class DurableHarness : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        var client = new CopilotClient();
+        var runtimePath = ResolveRuntimePath(options);
+        var client = runtimePath is null
+            ? new CopilotClient()
+            : new CopilotClient(new CopilotClientOptions
+            {
+                Connection = RuntimeConnection.ForStdio(runtimePath, Array.Empty<string>()),
+            });
+
         await client.StartAsync(cancellationToken);
         return new DurableHarness(client, store, registry, options);
+    }
+
+    /// <summary>
+    /// The runtime executable the options select: the explicit path, else the environment
+    /// variable, else <c>null</c> for the bundled runtime. A named path that does not exist is
+    /// an error that names it, so the caller is never left guessing why the open failed.
+    /// </summary>
+    internal static string? ResolveRuntimePath(DurableHarnessOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        var path = options.RuntimePath;
+        var origin = $"DurableHarnessOptions.{nameof(DurableHarnessOptions.RuntimePath)}";
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            path = Environment.GetEnvironmentVariable(DurableHarnessOptions.RuntimePathEnvironmentVariable);
+            origin = $"the {DurableHarnessOptions.RuntimePathEnvironmentVariable} environment variable";
+        }
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        if (!File.Exists(path))
+        {
+            throw new FileNotFoundException(
+                $"The runtime executable named by {origin} does not exist: '{path}'.",
+                path);
+        }
+
+        return path;
     }
 
     /// <summary>Creates a conversation and its Copilot session.</summary>
