@@ -165,6 +165,7 @@ machinery run in under a second.
 | [30](examples/30-reload-and-restart.cs) | Reload and restart | Reload an extension while a call runs, then restart the process. Running work finishes on the code it started with; stored choices are names, so they bind to the new code. |
 | [31](examples/31-permissions.cs) | Permissions | A conversation is denied a tool, restarted, and denied again. Grants live in the store, so a restart cannot widen them. |
 | [32](examples/32-jsonl-store.cs) | The store file | Where a durable store lives and how it writes: an explicit path wins, no path resolves the per-user default, and the file is JSONL so a torn tail costs one record. |
+| [33](examples/33-sandbox-sdk-filesystem.cs) | The sandbox filesystem policy | A conversation carries a sandbox policy with a writable, a read-only, and a denied directory. The durable layer approves the shell call; the sandbox refuses the write. |
 
 ---
 

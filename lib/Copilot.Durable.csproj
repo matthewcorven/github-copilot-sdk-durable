@@ -13,7 +13,7 @@
     <AssemblyName>Copilot.Durable</AssemblyName>
 
     <PackageId>Copilot.Durable</PackageId>
-    <Version>0.4.0</Version>
+    <Version>0.5.0</Version>
     <Authors>Matthew Corven</Authors>
     <Description>Durable state for GitHub Copilot SDK agents: typed documents with rewindable history and fork policies, checkpointed task state machines with idempotency memos, an extension registry with reload semantics, and a pluggable store.</Description>
     <PackageTags>copilot;ai;agents;durable;state;dotnet</PackageTags>
@@ -31,6 +31,10 @@
 
   <ItemGroup>
     <Compile Include="Durable.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Durable.Tests" />
   </ItemGroup>
 
   <ItemGroup>

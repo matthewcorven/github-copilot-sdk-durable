@@ -2379,6 +2379,284 @@ public static class PermissionPolicy
     }
 }
 
+/// <summary>
+/// The durable sandbox policy for a conversation.
+/// </summary>
+/// <remarks>
+/// This is the durable layer's own shape, deliberately not the SDK's experimental
+/// <c>GitHub.Copilot.Rpc.SandboxConfig</c> wire type. The wire type is what the runtime
+/// accepts today; the stored type is what a conversation keeps meaning. A field the SDK
+/// renames or removes cannot change what a stored conversation means, and a mapping that
+/// drops a field is a visible bug in this file rather than a silent change in the store.
+/// <para>
+/// <c>null</c> on <see cref="AgentChoices.Sandbox"/> means "no sandbox": the session is
+/// created with no sandbox configuration at all, which is what every example before this
+/// one did.
+/// </para>
+/// <para>
+/// Paths in <see cref="Filesystem"/> may contain the <see cref="WorkspaceToken"/> token
+/// (<c>{workspace}</c>). The token is expanded when the session is built, against the
+/// conversation's working directory, so a fork keeps the policy's shape but not the
+/// parent's absolute grants.
+/// </para>
+/// </remarks>
+public sealed class DurableSandboxPolicy : IEquatable<DurableSandboxPolicy>
+{
+    /// <summary>The token that stands for the conversation's working directory.</summary>
+    public const string WorkspaceToken = "{workspace}";
+
+    /// <summary>Whether the sandbox is enabled for the session.</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>Whether the working directory is added to the readwrite paths automatically.</summary>
+    public bool? AddCurrentWorkingDirectory { get; set; }
+
+    /// <summary>
+    /// Whether the agent may ask for an individual command to run outside the sandbox.
+    /// Fail-closed: absent or <c>false</c> means no bypass.
+    /// </summary>
+    public bool? AllowBypass { get; set; }
+
+    /// <summary>
+    /// Whether the agent may read the dev tool directories. Fail-closed: absent or
+    /// <c>false</c> means no dev tool access.
+    /// </summary>
+    public bool? AllowDevToolAccess { get; set; }
+
+    /// <summary>Whether MCP servers are sandboxed. Only an explicit <c>false</c> opts out.</summary>
+    public bool? SandboxMcpServers { get; set; }
+
+    /// <summary>Whether LSP servers are sandboxed. Only an explicit <c>false</c> opts out.</summary>
+    public bool? SandboxLspServers { get; set; }
+
+    /// <summary>
+    /// Whether the working directory is trusted for the session. <c>null</c> leaves the
+    /// existing folder trust unchanged.
+    /// </summary>
+    public bool? TrustWorkingDirectory { get; set; }
+
+    /// <summary>GitHub and git credential forwarding.</summary>
+    public DurableSandboxAuth? Auth { get; set; }
+
+    /// <summary>Credentials injected into the sandboxed process.</summary>
+    public DurableSandboxCredentials? Credentials { get; set; }
+
+    /// <summary>The filesystem policy.</summary>
+    public DurableSandboxFilesystem? Filesystem { get; set; }
+
+    /// <summary>The network policy.</summary>
+    public DurableSandboxNetwork? Network { get; set; }
+
+    /// <summary>Whether the keychain is reachable. Seatbelt only.</summary>
+    public bool? KeychainAccess { get; set; }
+
+    /// <summary>
+    /// Expands the <see cref="WorkspaceToken"/> token in a policy path against a working
+    /// directory. A path without the token is returned unchanged, so an absolute grant
+    /// stays absolute.
+    /// </summary>
+    public static string ExpandPath(string path, string? workingDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        if (!path.Contains(WorkspaceToken, StringComparison.Ordinal))
+        {
+            return path;
+        }
+
+        return path.Replace(
+            WorkspaceToken,
+            workingDirectory ?? Environment.CurrentDirectory,
+            StringComparison.Ordinal);
+    }
+
+    /// <inheritdoc />
+    public bool Equals(DurableSandboxPolicy? other) =>
+        other is not null
+        && Enabled == other.Enabled
+        && AddCurrentWorkingDirectory == other.AddCurrentWorkingDirectory
+        && AllowBypass == other.AllowBypass
+        && AllowDevToolAccess == other.AllowDevToolAccess
+        && SandboxMcpServers == other.SandboxMcpServers
+        && SandboxLspServers == other.SandboxLspServers
+        && TrustWorkingDirectory == other.TrustWorkingDirectory
+        && KeychainAccess == other.KeychainAccess
+        && Equals(Auth, other.Auth)
+        && Equals(Credentials, other.Credentials)
+        && Equals(Filesystem, other.Filesystem)
+        && Equals(Network, other.Network);
+
+    /// <inheritdoc />
+    public override bool Equals(object? obj) => Equals(obj as DurableSandboxPolicy);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => HashCode.Combine(
+        Enabled,
+        AddCurrentWorkingDirectory,
+        AllowBypass,
+        AllowDevToolAccess,
+        SandboxMcpServers,
+        SandboxLspServers,
+        TrustWorkingDirectory,
+        KeychainAccess);
+}
+
+/// <summary>GitHub and git credential forwarding for a sandboxed session.</summary>
+public sealed class DurableSandboxAuth : IEquatable<DurableSandboxAuth>
+{
+    /// <summary>Whether the GitHub CLI's credentials are forwarded.</summary>
+    public bool? Gh { get; set; }
+
+    /// <summary>Whether git credentials are forwarded.</summary>
+    public bool? Git { get; set; }
+
+    /// <inheritdoc />
+    public bool Equals(DurableSandboxAuth? other) => other is not null && Gh == other.Gh && Git == other.Git;
+
+    /// <inheritdoc />
+    public override bool Equals(object? obj) => Equals(obj as DurableSandboxAuth);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => HashCode.Combine(Gh, Git);
+}
+
+/// <summary>Credentials injected into a sandboxed session.</summary>
+public sealed class DurableSandboxCredentials : IEquatable<DurableSandboxCredentials>
+{
+    /// <summary>
+    /// The environment variables to inject, and for each one the hosts it is injected into.
+    /// A value is a list of HTTPS hostnames or <c>*.example.com</c> patterns; a bare
+    /// <c>*</c> is not accepted, and an empty list is not a valid injection.
+    /// </summary>
+    public Dictionary<string, List<string>>? EnvVars { get; set; }
+
+    /// <inheritdoc />
+    public bool Equals(DurableSandboxCredentials? other) => other is not null && EnvVarsEqual(EnvVars, other.EnvVars);
+
+    private static bool EnvVarsEqual(Dictionary<string, List<string>>? left, Dictionary<string, List<string>>? right)
+    {
+        if (left is null || right is null)
+        {
+            return left is null && right is null;
+        }
+
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        foreach (var pair in left)
+        {
+            if (!right.TryGetValue(pair.Key, out var hosts) || !(pair.Value ?? []).SequenceEqual(hosts ?? []))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <inheritdoc />
+    public override bool Equals(object? obj) => Equals(obj as DurableSandboxCredentials);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => EnvVars?.Count ?? 0;
+}
+
+/// <summary>The filesystem policy of a sandbox.</summary>
+public sealed class DurableSandboxFilesystem : IEquatable<DurableSandboxFilesystem>
+{
+    /// <summary>Whether the policy is cleared when the session exits.</summary>
+    public bool? ClearPolicyOnExit { get; set; }
+
+    /// <summary>Paths the sandboxed process may not read at all.</summary>
+    public List<string>? DeniedPaths { get; set; }
+
+    /// <summary>Paths the sandboxed process may read but not write.</summary>
+    public List<string>? ReadonlyPaths { get; set; }
+
+    /// <summary>Paths the sandboxed process may read and write.</summary>
+    public List<string>? ReadwritePaths { get; set; }
+
+    /// <inheritdoc />
+    public bool Equals(DurableSandboxFilesystem? other) =>
+        other is not null
+        && ClearPolicyOnExit == other.ClearPolicyOnExit
+        && (DeniedPaths ?? []).SequenceEqual(other.DeniedPaths ?? [])
+        && (ReadonlyPaths ?? []).SequenceEqual(other.ReadonlyPaths ?? [])
+        && (ReadwritePaths ?? []).SequenceEqual(other.ReadwritePaths ?? []);
+
+    /// <inheritdoc />
+    public override bool Equals(object? obj) => Equals(obj as DurableSandboxFilesystem);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => HashCode.Combine(
+        ClearPolicyOnExit,
+        DeniedPaths?.Count,
+        ReadonlyPaths?.Count,
+        ReadwritePaths?.Count);
+}
+
+/// <summary>The network policy of a sandbox.</summary>
+public sealed class DurableSandboxNetwork : IEquatable<DurableSandboxNetwork>
+{
+    /// <summary>Hosts the sandboxed process may reach.</summary>
+    public List<string>? AllowedHosts { get; set; }
+
+    /// <summary>Hosts the sandboxed process may not reach.</summary>
+    public List<string>? BlockedHosts { get; set; }
+
+    /// <summary>Whether outbound network access is allowed. Fail-closed.</summary>
+    public bool? AllowOutbound { get; set; }
+
+    /// <summary>Whether the local network is reachable. Fail-closed.</summary>
+    public bool? AllowLocalNetwork { get; set; }
+
+    /// <summary>The proxy the sandboxed process is routed through.</summary>
+    public DurableSandboxProxy? Proxy { get; set; }
+
+    /// <inheritdoc />
+    public bool Equals(DurableSandboxNetwork? other) =>
+        other is not null
+        && AllowOutbound == other.AllowOutbound
+        && AllowLocalNetwork == other.AllowLocalNetwork
+        && (AllowedHosts ?? []).SequenceEqual(other.AllowedHosts ?? [])
+        && (BlockedHosts ?? []).SequenceEqual(other.BlockedHosts ?? [])
+        && Equals(Proxy, other.Proxy);
+
+    /// <inheritdoc />
+    public override bool Equals(object? obj) => Equals(obj as DurableSandboxNetwork);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => HashCode.Combine(
+        AllowOutbound,
+        AllowLocalNetwork,
+        AllowedHosts?.Count,
+        BlockedHosts?.Count);
+}
+
+/// <summary>The proxy a sandboxed network is routed through.</summary>
+public sealed class DurableSandboxProxy : IEquatable<DurableSandboxProxy>
+{
+    /// <summary>The proxy URL.</summary>
+    public string? Url { get; set; }
+
+    /// <summary>The proxy username.</summary>
+    public string? Username { get; set; }
+
+    /// <summary>The proxy password.</summary>
+    public string? Password { get; set; }
+
+    /// <inheritdoc />
+    public bool Equals(DurableSandboxProxy? other) =>
+        other is not null && Url == other.Url && Username == other.Username && Password == other.Password;
+
+    /// <inheritdoc />
+    public override bool Equals(object? obj) => Equals(obj as DurableSandboxProxy);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => HashCode.Combine(Url, Username, Password);
+}
+
 /// <summary>The per-conversation agent choices. Stored by name, so they outlive the code.</summary>
 public sealed class AgentChoices
 {
@@ -2429,6 +2707,22 @@ public sealed class AgentChoices
     public List<string>? Permissions { get; set; }
 
     /// <summary>
+    /// The sandbox policy for this conversation, or <c>null</c> for no sandbox.
+    /// </summary>
+    /// <remarks>
+    /// The policy is persisted with the choices, so a conversation that ran sandboxed before a
+    /// restart still runs sandboxed after, and a fork inherits the policy as a snapshot. Paths
+    /// may use the <see cref="DurableSandboxPolicy.WorkspaceToken"/> token, which is expanded
+    /// against the conversation's working directory when the session is built — so a fork
+    /// inherits the policy's shape but not the parent's absolute grants.
+    /// <para>
+    /// <c>null</c> is the default and means the session is created with no sandbox
+    /// configuration at all, which is what every example before this one did.
+    /// </para>
+    /// </remarks>
+    public DurableSandboxPolicy? Sandbox { get; set; }
+
+    /// <summary>
     /// Session hooks. Hooks are code-level configuration, so they are not persisted with the
     /// document; they are supplied when the conversation is created.
     /// </summary>
@@ -2447,13 +2741,16 @@ public sealed record ResolvedAgent(
     InfiniteSessionConfig? InfiniteSessions,
     IReadOnlyList<Extension> Extensions,
     IReadOnlyList<AIFunction> Tools,
-    IReadOnlyList<string>? Permissions);
+    IReadOnlyList<string>? Permissions,
+    DurableSandboxPolicy? Sandbox);
 
 /// <summary>A conversation handle: a Copilot session bound to durable app state.</summary>
 public sealed class DurableConversation
 {
     private readonly DurableHarness _harness;
     private readonly List<string> _answers = [];
+    private readonly List<SandboxDecisionEvent> _sandboxDecisions = [];
+    private readonly List<(Func<SandboxDecisionEvent, bool> Match, TaskCompletionSource<SandboxDecisionEvent> Completion)> _sandboxWaiters = [];
 
     internal DurableConversation(DurableHarness harness, CopilotSession session, ConversationRecord record)
     {
@@ -2481,10 +2778,135 @@ public sealed class DurableConversation
             {
                 RecordAnswer(message.Data.Content);
             }
+
+            // Sandbox decisions ride the same subscription: the runtime reports what the
+            // sandbox resolved, whether it engaged, and what it denied as ordinary session
+            // events, so a durable conversation can record them without a second stream.
+            if (evt is SandboxDecisionEvent decision)
+            {
+                RecordSandboxDecision(decision);
+            }
         });
     }
 
     private IDisposable? _subscription;
+
+    /// <summary>
+    /// The sandbox decisions this conversation has observed, oldest first.
+    /// </summary>
+    /// <remarks>
+    /// The list is fed by the permanent subscription installed in <see cref="Attach"/>, so it
+    /// holds every decision the runtime reported for this session — the resolved policy, the
+    /// spawn result, the enforcement state, and each access denial. It is in-memory: a decision
+    /// is an observation about a live session, not durable state, and a restored conversation
+    /// starts with an empty list.
+    /// </remarks>
+    public IReadOnlyList<SandboxDecisionEvent> SandboxDecisions
+    {
+        get
+        {
+            lock (_sandboxDecisions)
+            {
+                return _sandboxDecisions.ToList();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Waits for a sandbox decision that matches a predicate.
+    /// </summary>
+    /// <param name="match">The predicate a decision must satisfy.</param>
+    /// <param name="timeout">How long to wait. Defaults to 30 seconds.</param>
+    /// <param name="cancellationToken">Cancels the wait.</param>
+    /// <returns>The first matching decision, including one already observed.</returns>
+    /// <exception cref="TimeoutException">
+    /// No decision matched within the timeout. The message names the decisions that were
+    /// observed, so a caller can tell "the sandbox never reported" from "it reported something
+    /// else".
+    /// </exception>
+    public async Task<SandboxDecisionEvent> WaitForSandboxDecisionAsync(
+        Func<SandboxDecisionEvent, bool> match,
+        TimeSpan? timeout = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(match);
+
+        TaskCompletionSource<SandboxDecisionEvent> completion;
+        lock (_sandboxDecisions)
+        {
+            // A decision that already arrived satisfies the wait immediately: the caller may
+            // be looking at a turn that has already finished.
+            foreach (var observed in _sandboxDecisions)
+            {
+                if (match(observed))
+                {
+                    return observed;
+                }
+            }
+
+            completion = new TaskCompletionSource<SandboxDecisionEvent>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            _sandboxWaiters.Add((match, completion));
+        }
+
+        try
+        {
+            return await completion.Task.WaitAsync(timeout ?? TimeSpan.FromSeconds(30), cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            lock (_sandboxDecisions)
+            {
+                _sandboxWaiters.RemoveAll(waiter => ReferenceEquals(waiter.Completion, completion));
+            }
+
+            var observed = SandboxDecisions;
+            var summary = observed.Count == 0
+                ? "no sandbox decisions were reported at all"
+                : $"observed: {string.Join(", ", observed.Select(DescribeSandboxDecision))}";
+            throw new TimeoutException(
+                $"No sandbox decision matched within {(timeout ?? TimeSpan.FromSeconds(30)).TotalSeconds:0.###}s ({summary}). " +
+                "A sandbox that is not engaged reports no decisions; check the backend for this platform.");
+        }
+    }
+
+    private static string DescribeSandboxDecision(SandboxDecisionEvent decision) =>
+        decision.Data is null ? "(no data)" : $"{decision.Data.Kind ?? "?"}";
+
+    private void RecordSandboxDecision(SandboxDecisionEvent decision)
+    {
+        List<(Func<SandboxDecisionEvent, bool> Match, TaskCompletionSource<SandboxDecisionEvent> Completion)>? matched = null;
+        lock (_sandboxDecisions)
+        {
+            _sandboxDecisions.Add(decision);
+            for (var i = _sandboxWaiters.Count - 1; i >= 0; i--)
+            {
+                var waiter = _sandboxWaiters[i];
+                bool isMatch;
+                try
+                {
+                    isMatch = waiter.Match(decision);
+                }
+                catch (Exception)
+                {
+                    isMatch = false;
+                }
+
+                if (!isMatch)
+                {
+                    continue;
+                }
+
+                (matched ??= []).Add(waiter);
+                _sandboxWaiters.RemoveAt(i);
+            }
+        }
+
+        foreach (var waiter in matched ?? [])
+        {
+            waiter.Completion.TrySetResult(decision);
+        }
+    }
 
     /// <summary>The durable conversation record.</summary>
     public ConversationRecord Record { get; }
@@ -2570,6 +2992,16 @@ public sealed class DurableConversation
                     completion.TrySetResult(last);
                     break;
                 case SessionErrorEvent error:
+                    // A host hook the sandbox denied is a failure of the host's own
+                    // configuration, not of the conversation. When the host asked for that to
+                    // be tolerated, the turn's answer is returned and the denial stays visible
+                    // in SandboxDecisions.
+                    if (_harness.Options.TolerateHostHookFailures && IsHostHookFailure(error.Data.Message))
+                    {
+                        completion.TrySetResult(last);
+                        break;
+                    }
+
                     completion.TrySetException(new InvalidOperationException(error.Data.Message));
                     break;
             }
@@ -2585,6 +3017,17 @@ public sealed class DurableConversation
             SetBusy(false);
         }
     }
+
+    /// <summary>
+    /// Whether a session error is the runtime reporting that a host hook was denied by the
+    /// sandbox, rather than a failure of the turn itself.
+    /// </summary>
+    internal static bool IsHostHookFailure(string? message) =>
+        message is not null
+        && message.Contains("hook", StringComparison.OrdinalIgnoreCase)
+        && (message.Contains("sandbox", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("Operation not permitted", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("code 126", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Reads the stored transcript entries, newest first.</summary>
     public IReadOnlyList<string> Entries(int limit = 20) =>
@@ -2633,12 +3076,75 @@ public sealed class DurableConversation
             choices.InfiniteSessions,
             extensions,
             tools,
-            choices.Permissions);
+            choices.Permissions,
+            choices.Sandbox);
     }
 
     /// <summary>Forks this conversation at the given entry.</summary>
     public Task<DurableConversation> ForkAsync(string entryId, CancellationToken cancellationToken = default) =>
         _harness.ForkAsync(this, entryId, cancellationToken);
+}
+
+/// <summary>Options for opening a <see cref="DurableHarness"/>.</summary>
+public sealed class DurableHarnessOptions
+{
+    /// <summary>
+    /// The permission handler installed on every session the harness creates, or <c>null</c>
+    /// to keep the durable default.
+    /// </summary>
+    /// <remarks>
+    /// The durable default is <see cref="PermissionPolicy.Handler"/>, which is fail-closed
+    /// against the conversation's stored grants. Supplying a handler here replaces that
+    /// decision for every conversation the harness opens, so it is the escape hatch for a host
+    /// that has its own approval UI — not a way to widen a single conversation's authority.
+    /// <para>
+    /// The SDK's own default is <see cref="PermissionHandler.ApproveAll"/>, which approves
+    /// everything. Passing it here is possible and is exactly as unsafe as it sounds: the
+    /// agent's authority then lives outside the store.
+    /// </para>
+    /// </remarks>
+    public Func<PermissionRequest, PermissionInvocation, Task<PermissionDecision>>? PermissionHandler { get; set; }
+
+    /// <summary>
+    /// Whether repository-origin file hooks run for the sessions this harness creates, or
+    /// <c>null</c> to leave the SDK default.
+    /// </summary>
+    /// <remarks>
+    /// A host hook is host code, not sandboxed code: the runtime runs it inside the session's
+    /// sandbox, so a sandbox policy that does not grant the hook's own command denies it and
+    /// the tool call fails after it succeeded. A host that runs sandboxed conversations and
+    /// does not want to widen the policy for its own hooks turns them off here.
+    /// <para>
+    /// This flag only controls repository-origin hooks (<c>.github/hooks/</c> and trusted
+    /// repository-configured roots). A hook installed in the user's own configuration
+    /// directory — <c>~/.copilot/hooks/</c> — is not repository-origin, so it still runs with
+    /// this set to <c>false</c>. Turning that off is a host configuration decision outside
+    /// this harness; see <c>docs/SANDBOX_MATRIX.md</c>.
+    /// </para>
+    /// <para>
+    /// This is host configuration, not durable state: it is not persisted with the
+    /// conversation, so it never travels with a fork.
+    /// </para>
+    /// </remarks>
+    public bool? EnableFileHooks { get; set; }
+
+    /// <summary>
+    /// Whether a turn that fails only because a host hook was denied by the sandbox is
+    /// reported as an answer instead of an exception.
+    /// </summary>
+    /// <remarks>
+    /// The runtime runs host hooks inside the session's sandbox. A hook the policy does not
+    /// grant is denied, and the runtime reports the turn as a session error even though the
+    /// tool call itself succeeded. That failure is about the host's own configuration, not
+    /// about the conversation, so a host that runs sandboxed conversations can choose to
+    /// tolerate it: the turn's answer is returned and the denial is still visible in
+    /// <see cref="DurableConversation.SandboxDecisions"/>.
+    /// <para>
+    /// The default is <c>false</c>: a session error is an error. Only a failure the runtime
+    /// attributes to a hook is tolerated; a genuine tool or model failure still throws.
+    /// </para>
+    /// </remarks>
+    public bool TolerateHostHookFailures { get; set; }
 }
 
 /// <summary>The harness: the durable host that owns the store, the registry, and the conversations.</summary>
@@ -2655,11 +3161,16 @@ public sealed class DurableHarness : IAsyncDisposable
     private readonly ConcurrentDictionary<string, TaskCompletionSource<TaskOutcome>> _taskCompletions = [];
     private readonly ConcurrentDictionary<string, byte> _runningTasks = [];
 
-    private DurableHarness(CopilotClient client, DurableStore store, ExtensionRegistry registry)
+    private DurableHarness(
+        CopilotClient client,
+        DurableStore store,
+        ExtensionRegistry registry,
+        DurableHarnessOptions? options = null)
     {
         Client = client;
         Store = store;
         Registry = registry;
+        Options = options ?? new DurableHarnessOptions();
         // Rewindable with "asOf", so a fork starts with the agent choices its parent had at
         // the fork entry.
         AgentDocument = new DocumentDefinition<AgentChoices>("durable.agent", DocumentHistory.Rewindable, ForkPolicy.AsOf);
@@ -2693,6 +3204,9 @@ public sealed class DurableHarness : IAsyncDisposable
 
     /// <summary>The extension registry.</summary>
     public ExtensionRegistry Registry { get; }
+
+    /// <summary>The options this harness was opened with.</summary>
+    public DurableHarnessOptions Options { get; }
 
     /// <summary>The document holding per-conversation agent choices.</summary>
     public DocumentDefinition<AgentChoices> AgentDocument { get; }
@@ -2729,14 +3243,24 @@ public sealed class DurableHarness : IAsyncDisposable
     }
 
     /// <summary>Opens a harness over a store and a registry.</summary>
+    public static Task<DurableHarness> OpenAsync(
+        DurableStore store,
+        ExtensionRegistry registry,
+        CancellationToken cancellationToken = default) =>
+        OpenAsync(store, registry, new DurableHarnessOptions(), cancellationToken);
+
+    /// <summary>Opens a harness over a store and a registry with explicit options.</summary>
     public static async Task<DurableHarness> OpenAsync(
         DurableStore store,
         ExtensionRegistry registry,
+        DurableHarnessOptions options,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(options);
+
         var client = new CopilotClient();
         await client.StartAsync(cancellationToken);
-        return new DurableHarness(client, store, registry);
+        return new DurableHarness(client, store, registry, options);
     }
 
     /// <summary>Creates a conversation and its Copilot session.</summary>
@@ -3136,6 +3660,104 @@ public sealed class DurableHarness : IAsyncDisposable
             .ToList();
     }
 
+    /// <summary>
+    /// Maps a durable sandbox policy onto the SDK's wire type, expanding the
+    /// <see cref="DurableSandboxPolicy.WorkspaceToken"/> token against the working directory.
+    /// </summary>
+    /// <remarks>
+    /// Every nested object is constructed explicitly. The wire type's constructor leaves every
+    /// reference null, so a field this method forgets is a field the runtime never sees — which
+    /// is why the mapping is written out field by field rather than copied.
+    /// </remarks>
+    public static SandboxConfig BuildSandboxConfig(DurableSandboxPolicy policy, string? workingDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+
+        var config = new SandboxConfig
+        {
+            Enabled = policy.Enabled,
+            AddCurrentWorkingDirectory = policy.AddCurrentWorkingDirectory,
+            AllowBypass = policy.AllowBypass,
+            AllowDevToolAccess = policy.AllowDevToolAccess,
+            SandboxMcpServers = policy.SandboxMcpServers,
+            SandboxLspServers = policy.SandboxLspServers,
+        };
+
+        if (policy.Auth is { } auth)
+        {
+            config.Auth = new SandboxConfigAuth { Gh = auth.Gh, Git = auth.Git };
+        }
+
+        if (policy.Credentials?.EnvVars is { } envVars)
+        {
+            var credentials = new SandboxCredentialsConfig { EnvVars = new Dictionary<string, SandboxMaskedEnvVar>() };
+            foreach (var pair in envVars)
+            {
+                credentials.EnvVars[pair.Key] = new SandboxMaskedEnvVar
+                {
+                    InjectHosts = pair.Value?.ToList() ?? [],
+                };
+            }
+
+            config.Credentials = credentials;
+        }
+
+        if (policy.Filesystem is { } filesystem)
+        {
+            config.UserPolicy ??= new SandboxConfigUserPolicy();
+            config.UserPolicy.Filesystem = new SandboxConfigUserPolicyFilesystem
+            {
+                ClearPolicyOnExit = filesystem.ClearPolicyOnExit,
+                DeniedPaths = ExpandPaths(filesystem.DeniedPaths, workingDirectory),
+                ReadonlyPaths = ExpandPaths(filesystem.ReadonlyPaths, workingDirectory),
+                ReadwritePaths = ExpandPaths(filesystem.ReadwritePaths, workingDirectory),
+            };
+        }
+
+        if (policy.Network is { } network)
+        {
+            config.UserPolicy ??= new SandboxConfigUserPolicy();
+            config.UserPolicy.Network = new SandboxConfigUserPolicyNetwork
+            {
+                AllowedHosts = network.AllowedHosts?.ToList() ?? [],
+                BlockedHosts = network.BlockedHosts?.ToList() ?? [],
+                AllowOutbound = network.AllowOutbound,
+                AllowLocalNetwork = network.AllowLocalNetwork,
+            };
+
+            // A proxy without a URL is not a proxy: the wire type requires one, so a policy
+            // that names only credentials is dropped rather than sent as an empty URL.
+            if (network.Proxy is { Url: { } proxyUrl } proxy)
+            {
+                var wireProxy = new SandboxConfigUserPolicyNetworkProxy { Url = proxyUrl };
+                if (proxy.Username is { } username)
+                {
+                    wireProxy.Username = username;
+                }
+
+                if (proxy.Password is { } password)
+                {
+                    wireProxy.Password = password;
+                }
+
+                config.UserPolicy.Network.Proxy = wireProxy;
+            }
+        }
+
+        if (policy.KeychainAccess is { } keychainAccess)
+        {
+            config.UserPolicy ??= new SandboxConfigUserPolicy();
+            config.UserPolicy.Seatbelt = new SandboxConfigUserPolicySeatbelt { KeychainAccess = keychainAccess };
+        }
+
+        return config;
+    }
+
+    private static List<string> ExpandPaths(List<string>? paths, string? workingDirectory) =>
+        paths is null
+            ? []
+            : paths.Select(path => DurableSandboxPolicy.ExpandPath(path, workingDirectory)).ToList();
+
     /// <summary>Builds the Copilot session configuration for a set of choices.</summary>
     public SessionConfig BuildSessionConfig(AgentChoices? choices, DurableConversation? conversation)
     {
@@ -3149,7 +3771,8 @@ public sealed class DurableHarness : IAsyncDisposable
             choices?.InfiniteSessions,
             ResolveExtensions(choices?.Extensions),
             ResolveTools(ResolveExtensions(choices?.Extensions), choices?.Tools),
-            choices?.Permissions);
+            choices?.Permissions,
+            choices?.Sandbox);
 
         var config = new SessionConfig
         {
@@ -3160,10 +3783,29 @@ public sealed class DurableHarness : IAsyncDisposable
 
             // Fail-closed: a durable conversation may only use what it was explicitly granted.
             // The SDK's own default approves everything, which would make the agent's behaviour
-            // depend on state that is not in the store.
-            OnPermissionRequest = PermissionPolicy.Handler(resolved.Permissions),
+            // depend on state that is not in the store. A host that supplies its own handler
+            // takes over that decision for every conversation this harness opens.
+            OnPermissionRequest = Options.PermissionHandler ?? PermissionPolicy.Handler(resolved.Permissions),
             WorkingDirectory = resolved.WorkingDirectory,
         };
+
+        if (Options.EnableFileHooks is { } enableFileHooks)
+        {
+            config.EnableFileHooks = enableFileHooks;
+        }
+
+        // A null policy means "no sandbox": the session is created with no sandbox
+        // configuration at all, exactly as every example before this one did.
+        if (resolved.Sandbox is { } sandbox)
+        {
+            config.SandboxConfig = BuildSandboxConfig(sandbox, resolved.WorkingDirectory);
+            if (sandbox.TrustWorkingDirectory is { } trust)
+            {
+                config.TrustWorkingDirectory = trust
+                    ? WorkingDirectoryTrust.User
+                    : WorkingDirectoryTrust.Session;
+            }
+        }
 
         var sections = resolved.Extensions.SelectMany(extension => extension.Sections).ToList();
 
