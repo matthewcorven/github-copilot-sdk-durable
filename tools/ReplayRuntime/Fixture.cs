@@ -87,6 +87,32 @@ public sealed class Fixture
                 {
                     throw new FixtureException($"session '{session.Id}' has a turn without a messageId");
                 }
+
+                if (turn.ToolRequests is null)
+                {
+                    continue;
+                }
+
+                foreach (var request in turn.ToolRequests)
+                {
+                    if (request.ValueKind != JsonValueKind.Object)
+                    {
+                        throw new FixtureException(
+                            $"session '{session.Id}' turn '{turn.MessageId}' has a tool request that is not a JSON object");
+                    }
+
+                    if (!request.TryGetProperty("name", out var name) || string.IsNullOrWhiteSpace(name.GetString()))
+                    {
+                        throw new FixtureException(
+                            $"session '{session.Id}' turn '{turn.MessageId}' has a tool request without a name");
+                    }
+
+                    if (!request.TryGetProperty("toolCallId", out var callId) || string.IsNullOrWhiteSpace(callId.GetString()))
+                    {
+                        throw new FixtureException(
+                            $"session '{session.Id}' turn '{turn.MessageId}' has a tool request without a toolCallId");
+                    }
+                }
             }
         }
     }

@@ -62,7 +62,7 @@ In-depth technical reports, design notes, and audits are available in [`docs/`](
 
 - [**Comparative Architecture Analysis**](docs/COMPARATIVE_ANALYSIS.md): Comprehensive matrices comparing every storage and runtime subsystem of this project against Pi Durable.
 - [**Why this Layer is Necessary (Durability Analysis)**](docs/DURABILITY_ANALYSIS.md): Detailed breakdown of what the Copilot SDK provides natively, what it lacks, and what this library proves.
-- [**Example Suite Fidelity Audit**](docs/EXAMPLES_AUDIT.md): Complete audit verifying that all 33 examples run against real engine components rather than simulations or shortcuts.
+- [**Example Suite Fidelity Audit**](docs/EXAMPLES_AUDIT.md): Complete audit verifying that all 33 examples run against real engine components rather than shortcuts.
 - [**Copilot SDK Notes & Gotchas**](docs/COPILOT_SDK_NOTES.md): SDK behaviors, tool authoring pitfalls (silent tool shadowing, serialization limits, async deadlocks), and model billing pricing tables.
 - [**Architecture Design Document**](docs/DESIGN.md): The foundational specification and concept mapping between Pi Durable and the GitHub Copilot SDK (.NET).
 

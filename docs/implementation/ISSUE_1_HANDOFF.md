@@ -216,7 +216,7 @@ distinct sandbox epic, all OPEN, all on the board as `Todo`, all labelled `sandb
 | **#18** | Demonstrate sandbox observability, bypass, working-directory trust and keychain | `examples/35-sandbox-sdk-observability-bypass.cs` — the three-part enforcement proof, decision-event coverage, `AllowBypass` handling, `SandboxPathGrant` / `RequestSandboxPermissive`, `TrustWorkingDirectory`, and macOS-gated keychain access. |
 | **#19** | Make sandbox verification deterministic offline and wire it into CI | `Enforced` / `Replayed` run modes resolved in `lib/`, a policy-vs-enforcement assertion split, `scripts/validate.sh` integration with a `SKIP_SANDBOX=1` escape, a `sandboxMode` column in #6's parity manifest, and an advisory CI job across Linux/macOS/Windows. |
 
-Note: #19 depends on #3 (the deterministic mock runtime) and #6 (the parity manifest) for its
+Note: #19 depends on #3 (the deterministic replay runtime) and #6 (the parity manifest) for its
 vocabulary and manifest work. #16–#19 also assume `examples/33`–`35` numbering, which does not
 collide with #14's `examples/31-jsonl-store.cs`.
 
@@ -239,7 +239,7 @@ collide with #14's `examples/31-jsonl-store.cs`.
 |---|---|---|
 | #1 Add a pluggable durable-store provider abstraction… | **In Progress** | `PVTI_lAHOAajMkc4BobdZzhDDlZw` |
 | #2 EF Core-backed durable store providers | Todo | `PVTI_lAHOAajMkc4BobdZzhDDlcQ` |
-| #3 Deterministic mock Copilot runtime | Todo | `PVTI_lAHOAajMkc4BobdZzhDDlf4` |
+| #3 Deterministic replay Copilot runtime | Todo | `PVTI_lAHOAajMkc4BobdZzhDDlf4` |
 | #4 Port the example suite to TypeScript and Python | Todo | `PVTI_lAHOAajMkc4BobdZzhDDlh0` |
 | #5 Port the example suite to Go, Rust and Java | Todo | `PVTI_lAHOAajMkc4BobdZzhDDlkI` |
 | #6 Six-language CI matrix and parity manifest | Todo | `PVTI_lAHOAajMkc4BobdZzhDDlmc` |

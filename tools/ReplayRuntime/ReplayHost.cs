@@ -1,4 +1,4 @@
-using System.Text;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -14,21 +14,36 @@ public sealed class ReplayHost
     /// <summary>Fixed epoch so transcripts are byte-identical across runs.</summary>
     private static readonly DateTimeOffset Epoch = new(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
+    /// <summary>
+    /// How long a session may sit in the awaiting-tool-result state before the runtime gives
+    /// up. This is an explicit budget, never a framework default: a fixture that records a
+    /// tool call the client never answers must fail loudly instead of hanging.
+    /// </summary>
+    public static readonly TimeSpan DefaultToolResultTimeout = TimeSpan.FromSeconds(30);
+
     private readonly Fixture _fixture;
     private readonly TextWriter _stdout;
     private readonly TextWriter _stderr;
-    private readonly Dictionary<string, int> _turnCursor = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, JsonArray> _emittedEvents = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _createdSessions = new(StringComparer.Ordinal);
+    private readonly TimeSpan _toolResultTimeout;
+    private readonly Dictionary<string, SessionState> _sessions = new(StringComparer.Ordinal);
+    private readonly TaskCompletionSource _toolTimeout = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private CancellationTokenSource? _toolTimeoutSource;
+    private string? _toolTimeoutDiagnostic;
     private int _createCursor;
     private int _eventSequence;
     private bool _shutdownRequested;
 
     public ReplayHost(Fixture fixture, TextWriter stdout, TextWriter stderr)
+        : this(fixture, stdout, stderr, DefaultToolResultTimeout)
+    {
+    }
+
+    public ReplayHost(Fixture fixture, TextWriter stdout, TextWriter stderr, TimeSpan toolResultTimeout)
     {
         _fixture = fixture;
         _stdout = stdout;
         _stderr = stderr;
+        _toolResultTimeout = toolResultTimeout;
     }
 
     /// <summary>Methods this runtime answers. Anything else is an unrecorded request.</summary>
@@ -38,6 +53,7 @@ public sealed class ReplayHost
         "ping",
         "models.list",
         "session.create",
+        "session.send",
         "session.sendMessages",
         "session.sendAndWait",
         "session.abort",
@@ -47,15 +63,19 @@ public sealed class ReplayHost
         "session.model.list",
         "session.model.switchTo",
         "session.tools.set",
+        "session.tools.handlePendingToolCall",
+        "session.tools.listPendingRequests",
         "runtime.shutdown",
     ];
 
     public static async Task<int> RunAsync(string[] args, TextReader stdin, TextWriter stdout, TextWriter stderr)
     {
-        string? fixturePath;
+        string fixturePath;
+        TimeSpan toolResultTimeout;
         try
         {
             fixturePath = ResolveFixturePath(args);
+            toolResultTimeout = ResolveToolResultTimeout(args);
         }
         catch (FixtureException ex)
         {
@@ -74,7 +94,7 @@ public sealed class ReplayHost
             return 2;
         }
 
-        var host = new ReplayHost(fixture, stdout, stderr);
+        var host = new ReplayHost(fixture, stdout, stderr, toolResultTimeout);
         return await host.ServeAsync(stdin);
     }
 
@@ -107,7 +127,57 @@ public sealed class ReplayHost
         throw new FixtureException("no fixture supplied; pass --fixture <path>");
     }
 
+    private static TimeSpan ResolveToolResultTimeout(string[] args)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            string? value = null;
+            if (args[i] is "--tool-timeout" or "-t")
+            {
+                if (i + 1 >= args.Length)
+                {
+                    throw new FixtureException("--tool-timeout requires a value in seconds");
+                }
+
+                value = args[i + 1];
+            }
+            else if (args[i].StartsWith("--tool-timeout=", StringComparison.Ordinal))
+            {
+                value = args[i]["--tool-timeout=".Length..];
+            }
+
+            if (value is null)
+            {
+                continue;
+            }
+
+            if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds) || seconds <= 0)
+            {
+                throw new FixtureException($"--tool-timeout must be a positive number of seconds, got '{value}'");
+            }
+
+            return TimeSpan.FromSeconds(seconds);
+        }
+
+        return DefaultToolResultTimeout;
+    }
+
     private async Task<int> ServeAsync(TextReader stdin)
+    {
+        // The read loop blocks on stdin, so it runs on its own thread and the timeout
+        // watchdog races it. Whichever finishes first decides the exit code.
+        var loop = Task.Run(() => ServeLoop(stdin));
+        var completed = await Task.WhenAny(loop, _toolTimeout.Task);
+        if (completed == loop)
+        {
+            return await loop;
+        }
+
+        await _stderr.WriteLineAsync($"replay-runtime: {_toolTimeoutDiagnostic}");
+        return 1;
+    }
+
+    private int ServeLoop(TextReader stdin)
     {
         while (!_shutdownRequested)
         {
@@ -118,12 +188,20 @@ public sealed class ReplayHost
             }
             catch (FixtureException ex)
             {
-                await _stderr.WriteLineAsync($"replay-runtime: {ex.Message}");
+                _stderr.WriteLine($"replay-runtime: {ex.Message}");
                 return 1;
             }
 
             if (frame is null)
             {
+                var stalled = _sessions.Values.FirstOrDefault(s => s.AwaitingToolResult);
+                if (stalled is not null)
+                {
+                    _stderr.WriteLine(
+                        $"replay-runtime: {DescribeToolWait(stalled)}; the client closed the stream instead");
+                    return 1;
+                }
+
                 break;
             }
 
@@ -134,13 +212,13 @@ public sealed class ReplayHost
             }
             catch (JsonException ex)
             {
-                await _stderr.WriteLineAsync($"replay-runtime: failed to parse incoming JSON-RPC message: {ex.Message}");
+                _stderr.WriteLine($"replay-runtime: failed to parse incoming JSON-RPC message: {ex.Message}");
                 return 1;
             }
 
             if (request is null)
             {
-                await _stderr.WriteLineAsync("replay-runtime: failed to parse incoming JSON-RPC message: not a JSON object");
+                _stderr.WriteLine("replay-runtime: failed to parse incoming JSON-RPC message: not a JSON object");
                 return 1;
             }
 
@@ -155,13 +233,13 @@ public sealed class ReplayHost
 
             if (string.IsNullOrEmpty(method))
             {
-                await WriteErrorAsync(id, -32600, "Invalid Request: missing method");
+                WriteError(id, -32600, "Invalid Request: missing method");
                 continue;
             }
 
             if (!SupportedMethods.Contains(method, StringComparer.Ordinal))
             {
-                await _stderr.WriteLineAsync(
+                _stderr.WriteLine(
                     $"replay-runtime: unrecorded request '{method}' has no fixture entry; refusing to invent a response");
                 return 1;
             }
@@ -174,17 +252,17 @@ public sealed class ReplayHost
             }
             catch (FixtureException ex)
             {
-                await _stderr.WriteLineAsync($"replay-runtime: {method}: {ex.Message}");
+                _stderr.WriteLine($"replay-runtime: {method}: {ex.Message}");
                 return 1;
             }
 
             if (result is null)
             {
-                await WriteErrorAsync(id, -32601, $"Method not found: {method}");
+                WriteError(id, -32601, $"Method not found: {method}");
                 continue;
             }
 
-            await WriteResultAsync(id, result);
+            WriteResult(id, result);
         }
 
         return 0;
@@ -196,15 +274,18 @@ public sealed class ReplayHost
         "ping" => Ping(parameters),
         "models.list" => ModelsList(),
         "session.create" => SessionCreate(parameters),
-        "session.sendMessages" => SessionSend(parameters, wait: false),
-        "session.sendAndWait" => SessionSend(parameters, wait: true),
+        "session.send" => SessionSend(parameters, singleMessageId: true),
+        "session.sendMessages" => SessionSend(parameters, singleMessageId: false),
+        "session.sendAndWait" => SessionSend(parameters, singleMessageId: false),
         "session.abort" => new JsonObject { ["aborted"] = true },
-        "session.detach" => new JsonObject { ["detached"] = true },
+        "session.detach" => new JsonObject { ["success"] = true },
         "session.delete" => SessionDelete(parameters),
         "session.getMessages" => SessionGetMessages(parameters),
         "session.model.list" => ModelsList(),
         "session.model.switchTo" => new JsonObject { ["modelId"] = parameters?["modelId"]?.DeepClone() },
         "session.tools.set" => new JsonObject { ["ok"] = true },
+        "session.tools.handlePendingToolCall" => HandlePendingToolCall(parameters),
+        "session.tools.listPendingRequests" => ListPendingRequests(parameters),
         "runtime.shutdown" => Shutdown(),
         _ => null,
     };
@@ -276,39 +357,150 @@ public sealed class ReplayHost
             _createCursor++;
         }
 
-        _createdSessions.Add(session.Id);
-        _turnCursor.TryAdd(session.Id, 0);
-        _emittedEvents.TryAdd(session.Id, new JsonArray());
+        _sessions[session.Id] = new SessionState(session.Id);
 
         return new JsonObject { ["sessionId"] = session.Id };
     }
 
-    private JsonNode SessionSend(JsonObject? parameters, bool wait)
+    private JsonNode SessionSend(JsonObject? parameters, bool singleMessageId)
     {
-        var sessionId = parameters?["sessionId"]?.GetValue<string>()
-            ?? throw new FixtureException("request is missing sessionId");
-        var session = _fixture.FindSession(sessionId)
-            ?? throw new FixtureException($"fixture records no session '{sessionId}'");
+        var session = ResolveSession(parameters);
+        var state = GetState(session.Id);
 
-        var cursor = _turnCursor.TryGetValue(session.Id, out var current) ? current : 0;
-        if (cursor >= session.Turns.Count)
+        if (state.AwaitingToolResult)
         {
             throw new FixtureException(
-                $"session '{session.Id}' has no recorded turn at index {cursor}; the fixture is exhausted");
+                $"session '{session.Id}' turn {state.AwaitingTurnIndex} is still waiting for the result of tool call " +
+                $"'{state.PendingToolCalls[0].ToolCallId}'; the client sent another message instead of " +
+                "session.tools.handlePendingToolCall");
         }
 
-        var turn = session.Turns[cursor];
-        _turnCursor[session.Id] = cursor + 1;
+        var turn = TakeTurn(session, state);
+        EmitAssistantMessage(state, turn);
+        EnterToolWaitIfNeeded(state, turn);
 
-        EmitAssistantMessage(session.Id, turn);
-
-        return new JsonObject
-        {
-            ["messageIds"] = new JsonArray(turn.MessageId),
-        };
+        // session.send answers with a single message id; the legacy batch methods answer
+        // with the list shape they were defined with.
+        return singleMessageId
+            ? new JsonObject { ["messageId"] = turn.MessageId }
+            : new JsonObject { ["messageIds"] = new JsonArray(turn.MessageId) };
     }
 
-    private void EmitAssistantMessage(string sessionId, FixtureTurn turn)
+    private JsonNode HandlePendingToolCall(JsonObject? parameters)
+    {
+        var session = ResolveSession(parameters);
+        var requestId = parameters?["requestId"]?.GetValue<string>()
+            ?? throw new FixtureException("request is missing requestId");
+        var state = GetState(session.Id);
+
+        if (!state.AwaitingToolResult)
+        {
+            throw new FixtureException(
+                $"session '{session.Id}' received a tool result for request '{requestId}' but no tool call is pending");
+        }
+
+        var index = state.PendingToolCalls.FindIndex(
+            p => string.Equals(p.RequestId, requestId, StringComparison.Ordinal));
+        if (index < 0)
+        {
+            throw new FixtureException(
+                $"session '{session.Id}' turn {state.AwaitingTurnIndex} has no pending tool call with request id '{requestId}'");
+        }
+
+        var pending = state.PendingToolCalls[index];
+        state.PendingToolCalls.RemoveAt(index);
+
+        // The client's own result is recorded verbatim; the runtime never invents one.
+        EmitToolExecutionComplete(state, pending, parameters?["result"], parameters?["error"]?.GetValue<string>());
+
+        if (state.PendingToolCalls.Count == 0)
+        {
+            state.AwaitingToolResult = false;
+            DisarmToolTimeout();
+
+            var turn = TakeTurn(session, state);
+            EmitAssistantMessage(state, turn);
+            EnterToolWaitIfNeeded(state, turn);
+        }
+
+        return new JsonObject { ["success"] = true };
+    }
+
+    private JsonNode ListPendingRequests(JsonObject? parameters)
+    {
+        var session = ResolveSession(parameters);
+        var state = GetState(session.Id);
+
+        var items = new JsonArray();
+        foreach (var pending in state.PendingToolCalls)
+        {
+            items.Add(new JsonObject
+            {
+                ["requestId"] = pending.RequestId,
+                ["toolCallId"] = pending.ToolCallId,
+                ["toolName"] = pending.ToolName,
+                ["arguments"] = pending.Arguments?.DeepClone(),
+            });
+        }
+
+        return new JsonObject { ["items"] = items };
+    }
+
+    private static FixtureTurn TakeTurn(FixtureSession session, SessionState state)
+    {
+        if (state.TurnCursor >= session.Turns.Count)
+        {
+            throw new FixtureException(
+                $"session '{session.Id}' has no recorded turn at index {state.TurnCursor}; the fixture is exhausted");
+        }
+
+        var turn = session.Turns[state.TurnCursor];
+        state.TurnCursor++;
+        return turn;
+    }
+
+    /// <summary>
+    /// Moves the session into the awaiting-tool-result state when the recorded turn carries
+    /// tool requests, emitting one <c>external_tool.requested</c> event per call.
+    /// </summary>
+    private void EnterToolWaitIfNeeded(SessionState state, FixtureTurn turn)
+    {
+        if (turn.ToolRequests is not { Count: > 0 })
+        {
+            return;
+        }
+
+        var turnIndex = state.TurnCursor - 1;
+        state.AwaitingToolResult = true;
+        state.AwaitingTurnIndex = turnIndex;
+        state.PendingToolCalls.Clear();
+
+        for (var i = 0; i < turn.ToolRequests.Count; i++)
+        {
+            var request = turn.ToolRequests[i];
+            var toolName = request.GetProperty("name").GetString()!;
+            var toolCallId = request.GetProperty("toolCallId").GetString()!;
+            var arguments = request.TryGetProperty("arguments", out var recorded)
+                ? JsonNode.Parse(recorded.GetRawText())
+                : null;
+            var requestId = $"req-{state.Id}-{turnIndex}-{i}";
+
+            state.PendingToolCalls.Add(new PendingToolCall(requestId, toolCallId, toolName, arguments));
+
+            EmitEvent(state, "external_tool.requested", new JsonObject
+            {
+                ["requestId"] = requestId,
+                ["sessionId"] = state.Id,
+                ["toolCallId"] = toolCallId,
+                ["toolName"] = toolName,
+                ["arguments"] = arguments?.DeepClone(),
+            });
+        }
+
+        ArmToolTimeout(state);
+    }
+
+    private void EmitAssistantMessage(SessionState state, FixtureTurn turn)
     {
         var data = new JsonObject
         {
@@ -327,15 +519,45 @@ public sealed class ReplayHost
             data["toolRequests"] = requests;
         }
 
+        EmitEvent(state, "assistant.message", data);
+    }
+
+    private void EmitToolExecutionComplete(SessionState state, PendingToolCall pending, JsonNode? result, string? error)
+    {
+        var data = new JsonObject { ["toolCallId"] = pending.ToolCallId };
+
+        if (error is not null)
+        {
+            data["success"] = false;
+            data["error"] = new JsonObject { ["message"] = error };
+        }
+        else
+        {
+            var resultType = (result as JsonObject)?["resultType"]?.GetValue<string>();
+            data["success"] = resultType is null or "success";
+            data["result"] = new JsonObject
+            {
+                ["content"] = (result as JsonObject)?["textResultForLlm"]?.GetValue<string>()
+                    ?? result?.ToJsonString()
+                    ?? string.Empty,
+            };
+        }
+
+        EmitEvent(state, "tool.execution_complete", data);
+    }
+
+    private void EmitEvent(SessionState state, string type, JsonObject data)
+    {
+        var sequence = _eventSequence;
         var envelope = new JsonObject
         {
-            ["sessionId"] = sessionId,
+            ["sessionId"] = state.Id,
             ["event"] = new JsonObject
             {
-                ["id"] = $"evt-{_eventSequence:D4}",
+                ["id"] = EventId(sequence),
                 ["timestamp"] = Timestamp(),
-                ["parentId"] = _eventSequence == 0 ? null : $"evt-{_eventSequence - 1:D4}",
-                ["type"] = "assistant.message",
+                ["parentId"] = sequence == 0 ? null : EventId(sequence - 1),
+                ["type"] = type,
                 ["data"] = data,
             },
         };
@@ -343,10 +565,7 @@ public sealed class ReplayHost
         _eventSequence++;
 
         // Record what we emitted so getMessages replays the same transcript.
-        if (_emittedEvents.TryGetValue(sessionId, out var events))
-        {
-            events.Add(envelope["event"]!.DeepClone());
-        }
+        state.EmittedEvents.Add(envelope["event"]!.DeepClone());
 
         WriteNotification("session.event", envelope);
     }
@@ -356,8 +575,8 @@ public sealed class ReplayHost
         var sessionId = parameters?["sessionId"]?.GetValue<string>()
             ?? throw new FixtureException("request is missing sessionId");
 
-        var events = _emittedEvents.TryGetValue(sessionId, out var recorded)
-            ? new JsonArray(recorded.Select(e => e!.DeepClone()).ToArray())
+        var events = _sessions.TryGetValue(sessionId, out var state)
+            ? new JsonArray(state.EmittedEvents.Select(e => e!.DeepClone()).ToArray())
             : new JsonArray();
 
         return new JsonObject { ["events"] = events };
@@ -368,11 +587,10 @@ public sealed class ReplayHost
         var sessionId = parameters?["sessionId"]?.GetValue<string>();
         if (sessionId is not null)
         {
-            _createdSessions.Remove(sessionId);
-            _turnCursor.Remove(sessionId);
+            _sessions.Remove(sessionId);
         }
 
-        return new JsonObject { ["deleted"] = true };
+        return new JsonObject { ["success"] = true };
     }
 
     private JsonNode Shutdown()
@@ -380,6 +598,63 @@ public sealed class ReplayHost
         _shutdownRequested = true;
         return new JsonObject { ["ok"] = true };
     }
+
+    private FixtureSession ResolveSession(JsonObject? parameters)
+    {
+        var sessionId = parameters?["sessionId"]?.GetValue<string>()
+            ?? throw new FixtureException("request is missing sessionId");
+
+        return _fixture.FindSession(sessionId)
+            ?? throw new FixtureException($"fixture records no session '{sessionId}'");
+    }
+
+    private SessionState GetState(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var state))
+        {
+            state = new SessionState(sessionId);
+            _sessions[sessionId] = state;
+        }
+
+        return state;
+    }
+
+    private void ArmToolTimeout(SessionState state)
+    {
+        DisarmToolTimeout();
+
+        var source = new CancellationTokenSource();
+        _toolTimeoutSource = source;
+        source.CancelAfter(_toolResultTimeout);
+        source.Token.Register(() =>
+        {
+            _toolTimeoutDiagnostic =
+                $"{DescribeToolWait(state)}; timed out after " +
+                $"{_toolResultTimeout.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)}s";
+            _toolTimeout.TrySetResult();
+        });
+    }
+
+    private void DisarmToolTimeout()
+    {
+        var source = _toolTimeoutSource;
+        _toolTimeoutSource = null;
+        source?.Dispose();
+    }
+
+    private static string DescribeToolWait(SessionState state)
+    {
+        var callId = state.PendingToolCalls.Count > 0 ? state.PendingToolCalls[0].ToolCallId : "<none>";
+        return $"session '{state.Id}' turn {state.AwaitingTurnIndex} is waiting for the result of tool call '{callId}' " +
+               "but the client never sent session.tools.handlePendingToolCall";
+    }
+
+    /// <summary>
+    /// Deterministic, GUID-shaped event id. The SDK deserializes <c>SessionEvent.Id</c> as a
+    /// <see cref="Guid"/>, so the sequence number is packed into the first field.
+    /// </summary>
+    private static string EventId(int sequence) =>
+        new Guid(sequence, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0).ToString();
 
     private string Timestamp() => Epoch.AddSeconds(_eventSequence).ToString("O");
 
@@ -395,7 +670,7 @@ public sealed class ReplayHost
         JsonRpcFraming.WriteFrame(_stdout, notification.ToJsonString());
     }
 
-    private Task WriteResultAsync(JsonNode id, JsonNode result)
+    private void WriteResult(JsonNode id, JsonNode result)
     {
         var response = new JsonObject
         {
@@ -405,10 +680,9 @@ public sealed class ReplayHost
         };
 
         JsonRpcFraming.WriteFrame(_stdout, response.ToJsonString());
-        return Task.CompletedTask;
     }
 
-    private Task WriteErrorAsync(JsonNode id, int code, string message)
+    private void WriteError(JsonNode id, int code, string message)
     {
         var response = new JsonObject
         {
@@ -422,6 +696,27 @@ public sealed class ReplayHost
         };
 
         JsonRpcFraming.WriteFrame(_stdout, response.ToJsonString());
-        return Task.CompletedTask;
+    }
+
+    private sealed record PendingToolCall(string RequestId, string ToolCallId, string ToolName, JsonNode? Arguments);
+
+    /// <summary>
+    /// Per-session turn cursor plus the tool-dispatch state machine. A session is either
+    /// ready (the next recorded turn may be emitted) or awaiting a tool result (the recorded
+    /// turn carried tool requests and the client owes a result).
+    /// </summary>
+    private sealed class SessionState(string id)
+    {
+        public string Id { get; } = id;
+
+        public int TurnCursor { get; set; }
+
+        public bool AwaitingToolResult { get; set; }
+
+        public int AwaitingTurnIndex { get; set; }
+
+        public List<PendingToolCall> PendingToolCalls { get; } = [];
+
+        public JsonArray EmittedEvents { get; } = new();
     }
 }

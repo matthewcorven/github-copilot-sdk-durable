@@ -1,0 +1,41 @@
+{
+  "protocolVersion": 3,
+  "runtimeVersion": "0.0.0-replay",
+  "models": [
+    {
+      "id": "replay-model",
+      "name": "Replay Model",
+      "vendor": "replay",
+      "capabilities": {
+        "supports": {
+          "toolCalls": true
+        }
+      }
+    }
+  ],
+  "sessions": [
+    {
+      "id": "session-missing-tool-call",
+      "model": "replay-model",
+      "turns": [
+        {
+          "messageId": "msg-0001",
+          "content": "Reading the recorded file.",
+          "toolRequests": [
+            {
+              "name": "read_file",
+              "toolCallId": "call-0001",
+              "arguments": {
+                "path": "notes.txt"
+              }
+            }
+          ]
+        },
+        {
+          "messageId": "msg-0002",
+          "content": "This turn is never reached because the tool result never arrives."
+        }
+      ]
+    }
+  ]
+}
