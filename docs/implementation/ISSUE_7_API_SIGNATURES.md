@@ -5,6 +5,9 @@
 **Branch:** `squad/35-finalize-durable-client-signatures`
 **Date:** 2026-10-28
 **Status:** Declarations and docs only. Ready for Lead review before #7.2 starts.
+**Updated in #7.2:** the shared runtime, `Build()`, `InitializeAsync`, `IsInitialized`, and
+the `Store` / `NativeClient` / `Registry` availability rules are implemented. The two
+carry-forward findings from the #7.1 review are settled in §2.3 and §6.
 
 This document records the signatures that now exist in `lib/Durable.cs` and
 `lib/Durable.DependencyInjection.cs`, the two rules that are part of the contract rather
@@ -170,6 +173,23 @@ initialization they throw `InvalidOperationException` with a message naming
 `InitializeAsync`, rather than returning `null` and turning a lifetime bug into a
 `NullReferenceException` somewhere else. `Registry` is never unavailable — a client with
 none supplied gets an empty one.
+
+**Settled in #7.2 (carry-forward finding 2).** The getters read the runtime's bound state,
+not `DurableClientOptions`. `Options` stays the immutable description of what the client was
+built from: `InitializeAsync` never writes the store or the client it created back into
+`Options.Store` / `Options.Client`. The alternative — mutating the options during
+initialization — was rejected because it makes `Options` a moving target, so a caller
+reading it cannot tell what it supplied from what the durable layer created, and because a
+failed initialization would leave the options describing resources that no longer exist.
+The consequence is that `Options.Store` and `Options.Client` are `null` for a client that
+created its own, and `Store` / `NativeClient` are the only way to reach them.
+
+**Settled in #7.2 (carry-forward finding 1).** `Registry` is resolved exactly once, in
+`DurableClientBuilder.Build()`, which assigns an empty `ExtensionRegistry` into
+`Options.Registry` when the caller supplied none. `Options.Registry` and the `Registry`
+property therefore report the same instance, so an extension installed through one is
+visible through the other. A getter that allocated a fresh empty registry per read would
+hand out a different object every time and silently drop anything installed through it.
 
 `IsInitialized` is the non-throwing probe.
 
@@ -353,6 +373,17 @@ What that means for the implementation issues:
 - Anything the runtime learns about persistence, resume, and fork has to be reachable from
   both entry points from the start; retrofitting one onto the other is what this bullet is
   here to prevent.
+
+**Settled in #7.2.** The shared runtime is `DurableRuntime`, an internal type in
+`lib/Durable.cs`. It owns the conversation bindings, the session-configuration builder, the
+extension and tool resolution, the task coordination, and the lifecycle. It is bound to a
+store and a client by `Attach(client, store, ownsClient, ownsStore)`, which performs no I/O
+and claims the store's single task-scheduler slot. `DurableHarness` is now a thin front door
+that creates and owns its client, borrows the store, and forwards every member to the
+runtime; `DurableCopilotClient` creates the runtime in its constructor and binds it during
+`InitializeAsync`. Both therefore drive the same code, and a store has at most one runner:
+a second runtime over the same store fails the claim rather than silently replacing the
+first.
 
 ---
 
