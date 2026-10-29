@@ -3182,36 +3182,43 @@ public sealed class DurableConversation
         Session = session;
         // A permanent subscription records every answer the session produces, so a
         // review loop can look at the passes it has already made.
-        _subscription = session.On<SessionEvent>(evt =>
+        _subscription = session.On<SessionEvent>(Observe);
+    }
+
+    /// <summary>
+    /// Records what one session event says about this conversation. This is the body of the
+    /// permanent subscription <see cref="Attach"/> installs, kept separate so the observation
+    /// rules can be exercised without a live session.
+    /// </summary>
+    internal void Observe(SessionEvent evt)
+    {
+        if (evt is AssistantMessageEvent message)
         {
-            if (evt is AssistantMessageEvent message)
+            if (!string.IsNullOrEmpty(message.Data.Content))
             {
-                if (!string.IsNullOrEmpty(message.Data.Content))
-                {
-                    RecordAnswer(message.Data.Content);
-                }
-
-                // The answer ends the pass being recorded, so the next model report starts a
-                // new turn instead of refining this one.
-                CloseTurn();
+                RecordAnswer(message.Data.Content);
             }
 
-            // Sandbox decisions ride the same subscription: the runtime reports what the
-            // sandbox resolved, whether it engaged, and what it denied as ordinary session
-            // events, so a durable conversation can record them without a second stream.
-            if (evt is SandboxDecisionEvent decision)
-            {
-                RecordSandboxDecision(decision);
-            }
+            // The answer ends the pass being recorded, so the next model report starts a
+            // new turn instead of refining this one.
+            CloseTurn();
+        }
 
-            // The model the runtime actually used rides the same subscription too. It is
-            // recorded from the runtime's own reports, never from the requested model, so a
-            // substitution is visible.
-            if (_modelTracker.Record(evt) is { } report)
-            {
-                _runtime.PublishModel(report);
-            }
-        });
+        // Sandbox decisions ride the same subscription: the runtime reports what the
+        // sandbox resolved, whether it engaged, and what it denied as ordinary session
+        // events, so a durable conversation can record them without a second stream.
+        if (evt is SandboxDecisionEvent decision)
+        {
+            RecordSandboxDecision(decision);
+        }
+
+        // The model the runtime actually used rides the same subscription too. It is
+        // recorded from the runtime's own reports, never from the requested model, so a
+        // substitution is visible.
+        if (_modelTracker.Record(evt) is { } report)
+        {
+            _runtime.PublishModel(report);
+        }
     }
 
     private IDisposable? _subscription;

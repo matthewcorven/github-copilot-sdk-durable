@@ -164,74 +164,78 @@ public class EffectiveModelTests
     }
 
     [Fact]
-    public async Task Harness_WithARuntimeThatReportsNoModel_ReportsNoModelExplicitly()
+    public async Task Conversation_RuntimeThatReportsNoModel_LeavesTheModelExplicitlyAbsent()
     {
-        var wrapper = ScriptedRuntimeExecutable();
+        // A deterministic runtime only reports a model when its recording carries one. The
+        // replay runtime in this repo emits assistant messages and tool events and never a
+        // model, so this is the shape a session over it produces: events arrive, none of them
+        // names a model, and the harness must say so instead of echoing what it asked for.
+        await using var runtime = await UnstartedRuntimeAsync();
         using var store = DurableStore.CreateEphemeral();
-        await using var harness = await DurableHarness.OpenAsync(
-            store,
-            new ExtensionRegistry(),
-            new DurableHarnessOptions { RuntimePath = wrapper });
+        var record = await store.CommitAsync(async tx => tx.CreateConversation());
+        var conversation = new DurableConversation(runtime, null!, record);
 
-        await harness.CreateConversationAsync(new AgentChoices { Model = "requested-model" });
+        conversation.Observe(Event(
+            """{"type":"assistant.message","data":{"messageId":"m1","content":"hello"}}"""));
 
-        // The harness asks for "requested-model" and falls back to its own default only when
-        // nothing is requested; neither is evidence of what the runtime did. The runtime here
-        // reports nothing, so the harness must say so rather than echoing either value.
-        Assert.False(harness.EffectiveModel.HasModel);
-        Assert.Null(harness.EffectiveModel.Model);
-        Assert.NotEqual(DurableHarness.DefaultModel, harness.EffectiveModel.Model);
-        Assert.Throws<InvalidOperationException>(() => harness.EffectiveModel.RequiredModel);
+        Assert.False(conversation.EffectiveModel.HasModel);
+        Assert.Null(conversation.EffectiveModel.Model);
+        Assert.NotEqual(DurableHarness.DefaultModel, conversation.EffectiveModel.Model);
+        Assert.Throws<InvalidOperationException>(() => conversation.EffectiveModel.RequiredModel);
+
+        // Nothing in the transcript named a model, so no turn has a model to show either.
+        Assert.Empty(conversation.TurnModels);
+
+        Assert.Equal("hello", Assert.Single(conversation.Answers));
+    }
+
+    [Fact]
+    public async Task Conversation_ReportsTheModelTheRuntimeNamed_NotTheOneTheHostRequested()
+    {
+        await using var runtime = await UnstartedRuntimeAsync();
+        using var store = DurableStore.CreateEphemeral();
+        var record = await store.CommitAsync(async tx => tx.CreateConversation());
+        var conversation = new DurableConversation(runtime, null!, record);
+
+        conversation.Observe(Event(
+            """{"type":"session.start","data":{"sessionId":"s1","selectedModel":"reported-model","copilotVersion":"1.0.0","producer":"test","startTime":"2026-01-01T00:00:00Z","version":1}}"""));
+
+        Assert.Equal("reported-model", conversation.EffectiveModel.Model);
+        Assert.Equal("session", conversation.EffectiveModel.Source);
+
+        conversation.Observe(Event(
+            """{"type":"assistant.turn_start","data":{"turnId":"t1","model":"turn-model"}}"""));
+        conversation.Observe(Event(
+            """{"type":"assistant.usage","data":{"model":"turn-model"}}"""));
+        conversation.Observe(Event(
+            """{"type":"assistant.message","data":{"messageId":"m1","content":"hello"}}"""));
+
+        var turn = Assert.Single(conversation.TurnModels);
+        Assert.Equal("turn-model", turn.Model);
+        Assert.Equal("usage", turn.Source);
+        Assert.Equal("turn-model", conversation.EffectiveModel.Model);
+
+        // The conversation reports upward, so the runtime-level value follows the last
+        // session or turn rather than the model the host asked for.
+        Assert.Equal("turn-model", runtime.EffectiveModel.Model);
     }
 
     private static SessionEvent Event(string json) => SessionEvent.FromJson(json);
 
     /// <summary>
-    /// An executable the harness can launch as its runtime. It answers the handshake and the
-    /// two calls <see cref="DurableHarness.CreateConversationAsync"/> makes, then reports a
-    /// session start and one assistant message that carry no model. Staying silent about the
-    /// model is the case the harness has to distinguish from one that substitutes a model.
+    /// A runtime bound to an unstarted client. Nothing is spawned and no RPC is issued: the
+    /// observation rules these tests cover are in-process, so connecting a runtime would only
+    /// add a dependency that cannot change the result.
     /// </summary>
-    private static string ScriptedRuntimeExecutable()
+    private static Task<DurableRuntime> UnstartedRuntimeAsync()
     {
-        if (OperatingSystem.IsWindows())
+        var runtime = new DurableRuntime(new ExtensionRegistry());
+        var client = new CopilotClient(new CopilotClientOptions
         {
-            throw new PlatformNotSupportedException("The scripted runtime is a POSIX shell script.");
-        }
+            Connection = RuntimeConnection.ForUri("127.0.0.1:1"),
+        });
 
-        var directory = Directory.CreateTempSubdirectory("durable-model-");
-        var script = Path.Combine(directory.FullName, "runtime.sh");
-
-        // JSON-RPC 2.0 over Content-Length framing, one request per frame; the reply's id is
-        // copied from the request because the client matches replies by id.
-        const string Source = """
-                              #!/bin/sh
-                              reply() {
-                                body=$(printf '{"jsonrpc":"2.0","id":%s,"result":%s}' "$1" "$2")
-                                printf 'Content-Length: %s\r\n\r\n%s' "${#body}" "$body"
-                              }
-                              while IFS= read -r line; do
-                                case "$line" in
-                                  *'"method":"connect"'*)
-                                    reply "$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')" '{"ok":true}' ;;
-                                  *'"method":"session.create"'*)
-                                    reply "$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')" '{"sessionId":"session-scripted-1"}' ;;
-                                  *'"method":"session.send"'*)
-                                    reply "$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')" '{"messageId":"msg-0001"}' ;;
-                                esac
-                              done
-                              """;
-
-        File.WriteAllText(script, Source);
-        File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        return script;
-    }
-
-    private static string ReplayRuntimePath()
-    {
-        var name = OperatingSystem.IsWindows() ? "ReplayRuntime.exe" : "ReplayRuntime";
-        var path = Path.Combine(AppContext.BaseDirectory, name);
-        Assert.True(File.Exists(path), $"the replay runtime was not built next to the tests: {path}");
-        return path;
+        runtime.Attach(client, DurableStore.CreateEphemeral(), ownsClient: true, ownsStore: true);
+        return Task.FromResult(runtime);
     }
 }
