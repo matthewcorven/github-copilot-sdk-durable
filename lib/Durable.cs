@@ -3294,6 +3294,7 @@ public sealed class DurableConversation
     private readonly List<(Func<SandboxDecisionEvent, bool> Match, TaskCompletionSource<SandboxDecisionEvent> Completion)> _sandboxWaiters = [];
     private readonly DurableModelTracker _modelTracker = new();
     private readonly object _checkpointGate = new();
+    private readonly ConcurrentDictionary<string, (string? Name, JsonElement? Arguments)> _toolCalls = [];
 
     private Task _checkpointChain = Task.CompletedTask;
     private Exception? _checkpointFailure;
@@ -3585,13 +3586,214 @@ public sealed class DurableConversation
             return entryId;
         });
 
+    /// <summary>The binding recorded for this conversation, or null before one is written.</summary>
+    public SessionBinding? Binding() => Snapshot(_runtime.SessionBindingDocument);
+
+    /// <summary>The most recent input admission, or null before one is written.</summary>
+    public InputAdmission? Admission() => Snapshot(_runtime.AdmissionDocument);
+
+    /// <summary>The most recent checkpoint, or null before one is written.</summary>
+    public ConversationCheckpoint? Checkpoint() => Snapshot(_runtime.CheckpointDocument);
+
+    /// <summary>
+    /// Writes the binding that records which native session serves this conversation.
+    /// </summary>
+    /// <remarks>
+    /// The binding is written in one transaction with the entry that records it, so the
+    /// conversation's transcript and the session it names are never observed apart. Writing the
+    /// same binding twice is a no-op, so a re-attach does not grow the log.
+    /// </remarks>
+    internal async Task BindAsync(string? sessionId, string? model, CancellationToken cancellationToken = default)
+    {
+        await CommitAsync(async tx =>
+        {
+            var current = tx.Doc(_runtime.SessionBindingDocument, Id);
+            if (current.Value?.SessionId == sessionId)
+            {
+                await Task.CompletedTask;
+                return;
+            }
+
+            current.Value = new SessionBinding
+            {
+                SessionId = sessionId,
+                Model = model,
+                BoundAt = DateTimeOffset.UtcNow.ToString("O"),
+            };
+            current.Save(tx.AppendEntry(Id, "session-binding", sessionId));
+            await Task.CompletedTask;
+        });
+    }
+
+    /// <summary>
+    /// Commits an admission for a prompt before the prompt is sent.
+    /// </summary>
+    /// <remarks>
+    /// The commit happens before the send is issued, so a failure here surfaces to the caller
+    /// and nothing is sent: the durable record and the send are ordered, not concurrent. The
+    /// returned identifier settles the admission once the outcome is known.
+    /// </remarks>
+    internal async Task<string> AdmitAsync(string prompt)
+    {
+        var admissionId = $"a{Guid.NewGuid():N}";
+        await CommitAsync(async tx =>
+        {
+            var draft = tx.Doc(_runtime.AdmissionDocument, Id);
+            draft.Value = new InputAdmission
+            {
+                AdmissionId = admissionId,
+                Prompt = prompt,
+                State = "admitted",
+                AdmittedAt = DateTimeOffset.UtcNow.ToString("O"),
+            };
+            draft.Save(tx.AppendEntry(Id, "admission", admissionId));
+            await Task.CompletedTask;
+        });
+
+        return admissionId;
+    }
+
+    /// <summary>Settles an admission to its terminal state.</summary>
+    internal Task SettleAsync(string admissionId, string state) =>
+        CommitAsync(async tx =>
+        {
+            var draft = tx.Doc(_runtime.AdmissionDocument, Id);
+            var current = draft.Value;
+            if (current is null || current.AdmissionId != admissionId)
+            {
+                await Task.CompletedTask;
+                return;
+            }
+
+            draft.Value = new InputAdmission
+            {
+                AdmissionId = current.AdmissionId,
+                Prompt = current.Prompt,
+                State = state,
+                AdmittedAt = current.AdmittedAt,
+                SettledAt = DateTimeOffset.UtcNow.ToString("O"),
+            };
+            draft.Save(tx.AppendEntry(Id, "admission-settled", state));
+            await Task.CompletedTask;
+        });
+
+    /// <summary>
+    /// Queues a checkpoint write on this conversation's serial chain and returns the write.
+    /// </summary>
+    /// <remarks>
+    /// Checkpoint writes are serialized per conversation, so two events that arrive together
+    /// cannot interleave their read-then-write and lose one another's version. The chain is a
+    /// composition of tasks rather than a fire-and-forget continuation: the caller holds the
+    /// returned task, so a failed write is observed by whoever awaits the barrier instead of
+    /// being swallowed.
+    /// </remarks>
+    private Task QueueCheckpointAsync(Func<Task> write)
+    {
+        lock (_checkpointGate)
+        {
+            var next = _checkpointChain.ContinueWith(
+                async previous =>
+                {
+                    try
+                    {
+                        await previous;
+                    }
+                    catch (Exception error)
+                    {
+                        // A failed earlier write must not stop later checkpoints from being
+                        // attempted; the failure is kept for the barrier to report.
+                        _checkpointFailure ??= error;
+                    }
+
+                    await write();
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default).Unwrap();
+
+            _checkpointChain = next.ContinueWith(
+                previous =>
+                {
+                    try
+                    {
+                        previous.GetAwaiter().GetResult();
+                    }
+                    catch (Exception error)
+                    {
+                        _checkpointFailure ??= error;
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default);
+
+            return next;
+        }
+    }
+
+    /// <summary>
+    /// Writes a checkpoint unless the document's latest version already carries the same event.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ConversationCheckpoint.EventId"/> is the deduplication key. The comparison is
+    /// made inside the write's own transaction, on the same serial chain, so a duplicate
+    /// delivered twice concurrently is still written once.
+    /// </remarks>
+    internal Task CheckpointAsync(ConversationCheckpoint checkpoint) =>
+        QueueCheckpointAsync(() => CommitAsync(async tx =>
+        {
+            var draft = tx.Doc(_runtime.CheckpointDocument, Id);
+            if (draft.Value?.EventId == checkpoint.EventId)
+            {
+                await Task.CompletedTask;
+                return;
+            }
+
+            draft.Value = checkpoint;
+            draft.Save(tx.AppendEntry(Id, "checkpoint", checkpoint.EventId));
+            await Task.CompletedTask;
+        }));
+
+    /// <summary>
+    /// Awaits every checkpoint write queued so far and reports the first failure.
+    /// </summary>
+    /// <remarks>
+    /// This is the completion barrier: a durable submission does not report success until the
+    /// checkpoints its turn produced have committed. Failures are reported, never retried
+    /// silently, because a checkpoint that did not commit means the durable record is behind
+    /// what the caller was told.
+    /// </remarks>
+    internal async Task CheckpointBarrierAsync(CancellationToken cancellationToken = default)
+    {
+        Task pending;
+        lock (_checkpointGate)
+        {
+            pending = _checkpointChain;
+        }
+
+        await pending.WaitAsync(cancellationToken);
+
+        if (_checkpointFailure is { } failure)
+        {
+            throw new InvalidOperationException(
+                $"Conversation '{Id}' could not commit a checkpoint: {failure.Message}",
+                failure);
+        }
+    }
+
     /// <summary>Sends a prompt and waits for the assistant's answer.</summary>
     public async Task<AssistantMessageEvent?> SubmitAsync(string prompt, CancellationToken cancellationToken = default)
     {
         var completion = new TaskCompletionSource<AssistantMessageEvent?>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         AssistantMessageEvent? last = null;
+        string? answer = null;
         SetBusy(true);
+
+        // Admission is durable before the prompt is sent. A store failure here means the send
+        // never happens, so the caller sees the persistence failure rather than an unrecorded
+        // prompt.
+        var admissionId = await AdmitAsync(prompt);
 
         // A turn that calls tools emits an assistant message *before* the tool runs, and
         // the final answer comes after the tool result. Waiting for the session to go
@@ -3602,6 +3804,17 @@ public sealed class DurableConversation
             {
                 case AssistantMessageEvent message:
                     last = message;
+                    if (!string.IsNullOrEmpty(message.Data.Content))
+                    {
+                        answer = message.Data.Content;
+                    }
+
+                    break;
+                case ToolExecutionStartEvent start:
+                    _toolCalls[start.Data.ToolCallId] = (start.Data.ToolName, start.Data.Arguments);
+                    break;
+                case ToolExecutionCompleteEvent complete:
+                    RecordToolCheckpoint(complete);
                     break;
                 case SessionIdleEvent:
                     completion.TrySetResult(last);
@@ -3622,14 +3835,98 @@ public sealed class DurableConversation
             }
         });
 
-        await Session.SendAsync(new MessageOptions { Prompt = prompt }, cancellationToken);
         try
         {
-            return await completion.Task.WaitAsync(cancellationToken);
+            try
+            {
+                await Session.SendAsync(new MessageOptions { Prompt = prompt }, cancellationToken);
+            }
+            catch
+            {
+                // The send itself failed, so the prompt was not delivered: the admission is
+                // settled as failed rather than left looking like it might have run.
+                await SettleQuietlyAsync(admissionId, "failed");
+                throw;
+            }
+
+            var result = await completion.Task.WaitAsync(cancellationToken);
+
+            // The turn checkpoint is queued from the event that completed the turn, and the
+            // barrier below is what makes the submission durable: success is reported only
+            // after the checkpoint commits.
+            if (result is not null)
+            {
+                await CheckpointAsync(TurnCheckpoint(result, answer));
+            }
+
+            await CheckpointBarrierAsync(cancellationToken);
+            await SettleAsync(admissionId, "completed");
+            return result;
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // The send was issued and its outcome is not a clean failure: the turn may have
+            // run. The admission is marked uncertain and is never replayed automatically.
+            await SettleQuietlyAsync(admissionId, "uncertain");
+            throw;
         }
         finally
         {
             SetBusy(false);
+        }
+    }
+
+    /// <summary>
+    /// Records a completed tool call as a checkpoint, deduplicated on the tool call identifier.
+    /// </summary>
+    /// <remarks>
+    /// The write is queued on the conversation's serial chain and observed by the completion
+    /// barrier, so it is awaited before the turn reports success rather than being a
+    /// fire-and-forget continuation.
+    /// </remarks>
+    private void RecordToolCheckpoint(ToolExecutionCompleteEvent complete)
+    {
+        _toolCalls.TryRemove(complete.Data.ToolCallId, out var started);
+
+        var checkpoint = new ConversationCheckpoint
+        {
+            CheckpointId = $"c{Guid.NewGuid():N}",
+            Kind = "tool",
+            EventId = $"tool:{complete.Data.ToolCallId}",
+            ToolName = started.Name ?? complete.Data.ToolDescription?.Name,
+            ToolArgs = started.Arguments?.GetRawText(),
+            Success = complete.Data.Success,
+            Error = complete.Data.Error?.Message,
+            Content = complete.Data.Result?.Content,
+            RecordedAt = DateTimeOffset.UtcNow.ToString("O"),
+        };
+
+        _ = CheckpointAsync(checkpoint);
+    }
+
+    private static ConversationCheckpoint TurnCheckpoint(AssistantMessageEvent message, string? answer) => new()
+    {
+        CheckpointId = $"c{Guid.NewGuid():N}",
+        Kind = "turn",
+        EventId = message.Data.MessageId is { Length: > 0 } messageId
+            ? $"turn:{messageId}"
+            : $"turn:{message.Id:N}",
+        MessageId = message.Data.MessageId,
+        Content = answer ?? message.Data.Content,
+        RecordedAt = DateTimeOffset.UtcNow.ToString("O"),
+    };
+
+    private async Task SettleQuietlyAsync(string admissionId, string state)
+    {
+        try
+        {
+            await SettleAsync(admissionId, state);
+        }
+        catch (Exception)
+        {
+            // The failure that brought us here is the one worth reporting; a second failure
+            // while settling must not replace it. The admission stays at its committed state,
+            // which is exactly the "unknown outcome" the record exists to preserve.
         }
     }
 
