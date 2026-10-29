@@ -123,6 +123,74 @@ configuration the durable layer built, and assert only that the resolved mode is
 
 ---
 
+### Migration: `UserPolicy.Experimental.Seatbelt` is deprecated
+
+`SandboxConfigUserPolicy` carries seatbelt settings in **two** places:
+
+| Location | Wire type | Status |
+|---|---|---|
+| `UserPolicy.Seatbelt` | `SandboxConfigUserPolicySeatbelt` | Supported. What the durable mapper writes. |
+| `UserPolicy.Experimental.Seatbelt` | `SandboxConfigUserPolicyExperimentalSeatbelt` | Deprecated. Kept for older hosts. |
+
+The two are read in opposite directions: the runtime consults the deprecated block **only**
+when the top-level block is absent. That makes the migration one-way and quiet — a host that
+writes `experimental.seatbelt` and later adds the top-level block loses its legacy value
+without any error, because the runtime never looks at the legacy block again.
+
+Migrate by moving the value to the top-level block and deleting the experimental one. If
+both must exist for a transition, set them to the same value; never rely on the deprecated
+block being merged. `DurableHarness.BuildSandboxConfig` already writes only the top-level
+location, so a durable policy needs no change — the hazard is for hosts that set the wire
+type by hand.
+
+`examples/35-sandbox-sdk-observability-bypass.cs` asserts the rule at policy level: one
+policy per location, plus a config with the top-level `KeychainAccess = true` and a
+hand-set legacy `false`, which resolves to `true`.
+
+---
+
+## Sandbox decision events
+
+`SandboxDecisionEvent.Data` is a `SandboxDecisionData` with a string `Kind` and a closed set
+of subtypes. The durable layer records them per conversation on
+`DurableConversation.SandboxDecisions`, so a host reads evidence rather than inferring it.
+Kinds observed on a macOS seatbelt host, in order, for one denied shell call:
+
+```
+policy_resolved  spawn_completed  enforcement_state  access_denied
+```
+
+`policy_resolved` repeats per spawned process, so the stream has more than one. Read it as a
+stream of facts, not as one event per conversation.
+
+- `SandboxDecisionDataAccessDenied.DeniedResource` is frequently **empty**: the runtime
+  infers the denial from the denied process's output when the process did not name a path.
+  Assert on `Control`, `EnforcementPoint` and `DenialClass`, not on the resource string.
+- `SandboxDecisionDataAccessDenied.DenialClass` is what the *process tried*, not what the
+  command meant. A shell redirect that writes into a denied path is reported as
+  `filesystem_read` on seatbelt, because the failed `open` is what the sandbox saw.
+- `SandboxDecisionDataEnforcementState.Outcome` is the only evidence that the backend
+  actually engaged. A policy that maps cleanly can still run `inactive` or `degraded`.
+- `ToolExecutionCompleteData.Sandboxed` is the per-call flag. It is nullable, so read it as
+  an observation: assert it only when the runtime reported one.
+
+### `AllowBypass` grants a capability, not a prompt
+
+`SandboxConfig.AllowBypass = true` does not mean a session will be asked to escalate. The
+model must request it (the shell tool schema carries `requestSandboxBypass` and
+`requestSandboxPermissive`), and the runtime decides whether to surface the prompt at all.
+The SDK exposes no call that forces it, so a host cannot cause a bypass request
+deterministically. What arrives in the permission handler is a
+`PermissionPromptRequestCommands` whose `RequestSandboxBypass`, `RequestSandboxPermissive`
+or `SandboxPathGrant` is set — check those three, not `Kind`.
+
+A bypass that is declined is reported as `SandboxDecisionDataBypassDecided` with an
+`Outcome` and a `Source` (`SandboxBypassSource.ModelRequested` when the model asked). Both
+the prompt and the event are conditional on the runtime offering the escalation. The one
+unconditional fact is the negative: `AllowBypass = false` yields no `bypass_decided` event.
+
+---
+
 ## Event streaming quirks
 
 - **`AssistantStreamingDeltaEvent` carries no text:** Text deltas are provided on `AssistantMessageDeltaEvent.Data.DeltaContent`. The streaming delta event only provides `TotalResponseSizeBytes`.

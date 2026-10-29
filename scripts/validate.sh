@@ -18,7 +18,7 @@ EXAMPLES="$ROOT/examples"
 # Examples that need a signed-in Copilot CLI: they either make a live model call, or
 # they set a reasoning effort, which makes the harness query models.list to confirm the
 # model supports one.
-LIVE_EXAMPLES=(07 08 10 13 15 16 17 18 19 20 21 22 24 25 26 27 28 29 30 31 33 34)
+LIVE_EXAMPLES=(07 08 10 13 15 16 17 18 19 20 21 22 24 25 26 27 28 29 30 31 33 34 35)
 
 # Run the unit test suite first if present
 TESTS_DIR="$ROOT/tests/Durable.Tests"
