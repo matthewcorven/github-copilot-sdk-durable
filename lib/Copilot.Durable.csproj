@@ -31,6 +31,7 @@
 
   <ItemGroup>
     <Compile Include="Durable.cs" />
+    <Compile Include="Durable.DependencyInjection.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -39,6 +40,7 @@
 
   <ItemGroup>
     <PackageReference Include="GitHub.Copilot.SDK" Version="1.0.26" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.2" />
   </ItemGroup>
 
   <ItemGroup>

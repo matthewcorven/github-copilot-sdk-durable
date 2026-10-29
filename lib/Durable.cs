@@ -20,6 +20,7 @@ using System.Text.Json.Serialization.Metadata;
 using GitHub.Copilot;
 using GitHub.Copilot.Rpc;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Durable;
 
@@ -3946,6 +3947,614 @@ public sealed class DurableHarness : IAsyncDisposable
     {
         await Client.DisposeAsync();
     }
+}
+
+/// <summary>
+/// Everything a <see cref="DurableCopilotClient"/> is built from: the store, the caller's
+/// extension registry, the Copilot SDK client, and the ownership flags that decide what the
+/// durable layer disposes.
+/// </summary>
+/// <remarks>
+/// An options object is a description, not a resource. Constructing one touches nothing:
+/// no file is opened, no process is started, and no connection is made. The stores and
+/// clients it points at are created by the caller (or by
+/// <see cref="DurableClientOptions.StoreOptions"/> / <see cref="DurableClientOptions.ClientOptions"/>)
+/// before <see cref="DurableClientBuilder.Build"/> is called.
+/// <para>
+/// <b>Ownership.</b> The durable layer borrows what the caller supplies and owns what it
+/// creates. Concretely:
+/// </para>
+/// <list type="bullet">
+///   <item>
+///     <description>
+///     <see cref="Store"/> set by the caller is borrowed: the durable layer never disposes it.
+///     A store created from <see cref="StoreOptions"/> is owned, and
+///     <see cref="DurableCopilotClient.DisposeAsync"/> disposes it exactly once.
+///     </description>
+///   </item>
+///   <item>
+///     <description>
+///     <see cref="Client"/> set by the caller is borrowed: the durable layer never disposes it,
+///     and the caller remains responsible for calling <c>DisposeAsync</c> on it. A client
+///     created from <see cref="ClientOptions"/> is owned, and is disposed exactly once.
+///     </description>
+///   </item>
+///   <item>
+///     <description>
+///     <see cref="OwnsStore"/> and <see cref="OwnsClient"/> override the default for a
+///     resource the caller supplied. Set them to <c>true</c> to hand a supplied resource to
+///     the durable layer, or <c>false</c> to keep a resource the durable layer would otherwise
+///     own. <c>null</c> — the default — means "borrow what was supplied, own what was created".
+///     </description>
+///   </item>
+/// </list>
+/// <para>
+/// The registry is never disposed: it holds this process's code, not a resource, and nothing
+/// in it is persisted.
+/// </para>
+/// </remarks>
+public sealed class DurableClientOptions
+{
+    /// <summary>
+    /// The store the client reads and writes durable state through, or <c>null</c> when
+    /// <see cref="StoreOptions"/> describes one instead.
+    /// </summary>
+    /// <remarks>
+    /// A store supplied here is borrowed. Its lifetime — including the exclusive writer lock a
+    /// persistent store holds — stays with the caller, so a host that opens one store and hands
+    /// it to several clients disposes it once, after the last client is gone.
+    /// </remarks>
+    public DurableStore? Store { get; set; }
+
+    /// <summary>
+    /// How to create the store when <see cref="Store"/> is <c>null</c>, or <c>null</c> to
+    /// require a supplied store.
+    /// </summary>
+    /// <remarks>
+    /// A store created from these options is owned by the durable layer. The creation happens
+    /// during <see cref="DurableCopilotClient.InitializeAsync"/>, not during
+    /// <see cref="DurableClientBuilder.Build"/>: opening a persistent store is I/O, and
+    /// <c>Build()</c> performs none.
+    /// <para>
+    /// The options follow the settled store contract — <see cref="DurableStore.Create"/> is the
+    /// factory, an unspecified format means the persistent per-user path, and the ephemeral
+    /// tier is asked for explicitly with <see cref="DurableStoreFormat.InMemory"/>.
+    /// </para>
+    /// </remarks>
+    public DurableStoreOptions? StoreOptions { get; set; }
+
+    /// <summary>
+    /// The extension registry the client resolves tools, prompt sections, hooks, and task
+    /// definitions from, or <c>null</c> to build with an empty registry.
+    /// </summary>
+    /// <remarks>
+    /// The registry is this process's code, so it is never persisted and never disposed.
+    /// Installing an extension after <see cref="DurableClientBuilder.Build"/> is allowed and
+    /// takes effect the next time a session is configured or a section is rendered, exactly as
+    /// it does for <see cref="DurableHarness"/>.
+    /// </remarks>
+    public ExtensionRegistry? Registry { get; set; }
+
+    /// <summary>
+    /// The Copilot SDK client the durable layer drives, or <c>null</c> when
+    /// <see cref="ClientOptions"/> describes one instead.
+    /// </summary>
+    /// <remarks>
+    /// A client supplied here is borrowed: the durable layer never disposes it, and it never
+    /// starts it. The caller is responsible for the client's lifetime and for its own
+    /// <c>StartAsync</c> / <c>DisposeAsync</c> calls.
+    /// <para>
+    /// Supplying a client is how a host shares one SDK client across the durable layer and its
+    /// own code — a second client would mean a second process and a second runtime, so the
+    /// durable layer never creates one when the caller has already supplied it.
+    /// </para>
+    /// </remarks>
+    public CopilotClient? Client { get; set; }
+
+    /// <summary>
+    /// How to create the Copilot SDK client when <see cref="Client"/> is <c>null</c>, or
+    /// <c>null</c> to use the SDK's defaults.
+    /// </summary>
+    /// <remarks>
+    /// A client created from these options is owned by the durable layer, and is constructed
+    /// and started during <see cref="DurableCopilotClient.InitializeAsync"/> — never during
+    /// <see cref="DurableClientBuilder.Build"/>. Starting it is the first operation that leaves
+    /// the process, which is why it is asynchronous and why <c>Build()</c> does not do it.
+    /// </remarks>
+    public CopilotClientOptions? ClientOptions { get; set; }
+
+    /// <summary>
+    /// The harness options applied to every session the client configures.
+    /// </summary>
+    /// <remarks>
+    /// These are host configuration, not durable state: the permission handler, the
+    /// repository-hook switch, and the host-hook failure tolerance never travel with a
+    /// conversation and never change what a stored choice means. They are the same options
+    /// <see cref="DurableHarness.OpenAsync(DurableStore, ExtensionRegistry, DurableHarnessOptions, CancellationToken)"/>
+    /// takes, because the client drives the same runtime the harness does.
+    /// </remarks>
+    public DurableHarnessOptions Harness { get; set; } = new();
+
+    /// <summary>
+    /// Whether the durable layer disposes <see cref="Store"/>, or <c>null</c> to apply the
+    /// default policy.
+    /// </summary>
+    /// <remarks>
+    /// The default policy is "borrow what the caller supplied, own what the durable layer
+    /// created". Set this to <c>true</c> only when the caller obtained the store for this
+    /// client alone and wants the client's disposal to release it — including the exclusive
+    /// writer lock on a store file. Set it to <c>false</c> to keep the store open past the
+    /// client's lifetime.
+    /// <para>
+    /// Whatever the value, the store is disposed at most once: the client's disposal is
+    /// idempotent and a second call is a no-op.
+    /// </para>
+    /// </remarks>
+    public bool? OwnsStore { get; set; }
+
+    /// <summary>
+    /// Whether the durable layer disposes <see cref="Client"/>, or <c>null</c> to apply the
+    /// default policy.
+    /// </summary>
+    /// <remarks>
+    /// The default policy is "borrow what the caller supplied, own what the durable layer
+    /// created". A supplied client is typically shared with the host's own code, so the default
+    /// is to leave it alone; set this to <c>true</c> when the client was created for this
+    /// durable client alone.
+    /// <para>
+    /// Whatever the value, the client is disposed at most once: the client's disposal is
+    /// idempotent and a second call is a no-op.
+    /// </para>
+    /// </remarks>
+    public bool? OwnsClient { get; set; }
+}
+
+/// <summary>
+/// Builds a <see cref="DurableCopilotClient"/>: the facade that turns the Copilot SDK client
+/// into a durable host.
+/// </summary>
+/// <remarks>
+/// The builder exists so a host can state the pieces it already has — its store, its SDK
+/// client, its registry — and let the durable layer supply the rest. Every <c>Use…</c> method
+/// replaces what the previous call set; the builder is a description, so ordering does not
+/// matter beyond last-write-wins.
+/// <para>
+/// <b><see cref="Build"/> validates and constructs. It does not connect, and it performs no
+/// persistence I/O.</b> It opens no store file, starts no SDK client, resumes no task, and
+/// renders no prompt section. Everything that leaves the process happens in
+/// <see cref="DurableCopilotClient.InitializeAsync"/>, which is asynchronous and safe when
+/// several first operations race: the work happens once and every caller awaits the same
+/// result.
+/// </para>
+/// <para>
+/// The split matters because construction is cheap and fallible in only one way — a missing or
+/// contradictory option — while initialization is slow and fallible in many. A host can build a
+/// client during dependency-injection container construction without doing I/O there, and
+/// decide on its own terms when to pay for startup.
+/// </para>
+/// </remarks>
+public sealed class DurableClientBuilder
+{
+    /// <summary>Creates a builder with no pieces chosen yet.</summary>
+    public DurableClientBuilder()
+    {
+    }
+
+    /// <summary>The options describing the client that will be built.</summary>
+    /// <remarks>
+    /// Exposed so a host can inspect or adjust what the <c>Use…</c> methods set, and so a
+    /// dependency-injection registration can configure the same object a manual build would.
+    /// </remarks>
+    public DurableClientOptions Options { get; } = new();
+
+    /// <summary>Borrows a store the caller owns.</summary>
+    /// <param name="store">The store to read and write durable state through.</param>
+    /// <returns>This builder, so calls can be chained.</returns>
+    /// <remarks>
+    /// The store is borrowed unless <see cref="DurableClientOptions.OwnsStore"/> says otherwise.
+    /// Most hosts open one store for the process, hand it to the client, and dispose it after
+    /// the client — which is also the only safe order for a persistent store, whose exclusive
+    /// writer lock is released on disposal.
+    /// </remarks>
+    public DurableClientBuilder UseStore(DurableStore store)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        Options.Store = store;
+        Options.StoreOptions = null;
+        return this;
+    }
+
+    /// <summary>Asks the durable layer to create and own a store.</summary>
+    /// <param name="options">How to create the store.</param>
+    /// <returns>This builder, so calls can be chained.</returns>
+    /// <remarks>
+    /// The store is created during <see cref="DurableCopilotClient.InitializeAsync"/>, not here,
+    /// because opening a persistent store takes its writer lock and reads the file.
+    /// </remarks>
+    public DurableClientBuilder UseStore(DurableStoreOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        Options.Store = null;
+        Options.StoreOptions = options;
+        return this;
+    }
+
+    /// <summary>Borrows a Copilot SDK client the caller owns.</summary>
+    /// <param name="client">The client the durable layer drives.</param>
+    /// <returns>This builder, so calls can be chained.</returns>
+    /// <remarks>
+    /// The client is borrowed unless <see cref="DurableClientOptions.OwnsClient"/> says
+    /// otherwise, and the durable layer does not start it: a host that supplies a client has
+    /// already started it, or will start it before the first operation that needs it.
+    /// </remarks>
+    public DurableClientBuilder UseClient(CopilotClient client)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        Options.Client = client;
+        Options.ClientOptions = null;
+        return this;
+    }
+
+    /// <summary>Asks the durable layer to create, own, and start an SDK client.</summary>
+    /// <param name="options">How to create the client.</param>
+    /// <returns>This builder, so calls can be chained.</returns>
+    /// <remarks>
+    /// The client is constructed and started during
+    /// <see cref="DurableCopilotClient.InitializeAsync"/>. Passing options with a null
+    /// <paramref name="options"/> is allowed and means "create one with the SDK's defaults".
+    /// </remarks>
+    public DurableClientBuilder UseClient(CopilotClientOptions? options)
+    {
+        Options.Client = null;
+        Options.ClientOptions = options ?? new CopilotClientOptions();
+        return this;
+    }
+
+    /// <summary>Sets the extension registry the client resolves code from.</summary>
+    /// <param name="registry">The registry holding this process's extensions.</param>
+    /// <returns>This builder, so calls can be chained.</returns>
+    /// <remarks>
+    /// The registry is held by reference and never disposed, so extensions installed after the
+    /// build are visible to the next configuration the client performs.
+    /// </remarks>
+    public DurableClientBuilder UseRegistry(ExtensionRegistry registry)
+    {
+        ArgumentNullException.ThrowIfNull(registry);
+        Options.Registry = registry;
+        return this;
+    }
+
+    /// <summary>Sets the harness options applied to every session the client configures.</summary>
+    /// <param name="options">The host configuration for the sessions.</param>
+    /// <returns>This builder, so calls can be chained.</returns>
+    public DurableClientBuilder UseHarnessOptions(DurableHarnessOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        Options.Harness = options;
+        return this;
+    }
+
+    /// <summary>Adjusts the options in place.</summary>
+    /// <param name="configure">The adjustments to apply.</param>
+    /// <returns>This builder, so calls can be chained.</returns>
+    /// <remarks>
+    /// The escape hatch for the options no <c>Use…</c> method names — the ownership flags in
+    /// particular. It runs immediately, not at build time.
+    /// </remarks>
+    public DurableClientBuilder Configure(Action<DurableClientOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        configure(Options);
+        return this;
+    }
+
+    /// <summary>Validates the options and constructs the client.</summary>
+    /// <returns>A client that has not been initialized yet.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// The options cannot describe a client — for example when neither
+    /// <see cref="DurableClientOptions.Store"/> nor <see cref="DurableClientOptions.StoreOptions"/>
+    /// is set, or when both a supplied store and an ownership flag that contradicts it are
+    /// present.
+    /// </exception>
+    /// <remarks>
+    /// <b>Validate and construct only.</b> No connection is made, no store file is opened, no
+    /// task is resumed, and no persistence I/O of any kind happens here. The returned client is
+    /// inert until <see cref="DurableCopilotClient.InitializeAsync"/> runs, which is what makes
+    /// it safe to build during dependency-injection container construction or at the top of a
+    /// program that later decides not to do any work.
+    /// <para>
+    /// The return type is the facade, not the SDK's <c>CopilotClient</c>: what the caller gets
+    /// back is the durable host, and the SDK client is one of the things it drives. Use
+    /// <see cref="DurableCopilotClient.NativeClient"/> to reach the SDK client itself, on the
+    /// understanding described there.
+    /// </para>
+    /// </remarks>
+    public DurableCopilotClient Build()
+    {
+        // #7.1 declares the contract; #7.2 implements the runtime behind it.
+        throw new NotImplementedException(
+            "The durable client runtime behind DurableClientBuilder.Build is implemented in #7.2.");
+    }
+}
+
+/// <summary>
+/// The durable host: a Copilot SDK client bound to a store, a registry, and conversation
+/// handles that survive a restart.
+/// </summary>
+/// <remarks>
+/// A <see cref="DurableCopilotClient"/> is what <see cref="DurableClientBuilder.Build"/>
+/// returns, and it is the supported entry point for an application that wants durable
+/// conversations without assembling the pieces itself. It drives the same internal runtime
+/// <see cref="DurableHarness"/> drives — the same conversation binding, the same configuration
+/// building, the same task coordination, and the same lifecycle — so a conversation created
+/// through the facade is indistinguishable from one created through the harness, and the two
+/// can be used together over one store. Sharing configuration helpers alone would not be
+/// enough: the runtime, not the helpers, is what holds the bindings.
+/// <para>
+/// <b>Initialization.</b> A built client is inert. The first operation that needs the store or
+/// the SDK client — an explicit <see cref="InitializeAsync"/> or any conversation operation —
+/// initializes the client, and concurrent first operations share one initialization: the work
+/// happens once and every caller awaits the same result. Initialization is asynchronous because
+/// it may open a store, start an SDK client process, and re-enter running tasks, and because
+/// waiting synchronously for any of those would risk a deadlock in a host with a
+/// synchronization context.
+/// </para>
+/// <para>
+/// <b>Disposal.</b> Exactly once. The state is idempotent: a second
+/// <see cref="DisposeAsync"/> is a no-op. Borrowed stores and clients are left alone; created
+/// ones are disposed. See <see cref="DurableClientOptions"/> for the policy and its overrides.
+/// </para>
+/// <para>
+/// <b>Native SDK access.</b> <see cref="NativeClient"/> is an explicit escape hatch. Calls made
+/// through it — creating a session, resuming one, forking one, or any other SDK operation the
+/// facade does not expose — are the caller's own, and they sit outside the facade's durability
+/// guarantees. A session the caller creates that way is not a
+/// <see cref="DurableConversation"/>: its choices are not stored, its documents are not bound,
+/// its grants are not enforced by the durable permission policy, and it does not appear in
+/// <see cref="FindConversation(Func{DurableConversation, bool})"/>. Reach for it to configure
+/// the SDK, not to route around the facade.
+/// </para>
+/// </remarks>
+public sealed class DurableCopilotClient : IAsyncDisposable
+{
+    private readonly DurableClientOptions _options;
+
+    internal DurableCopilotClient(DurableClientOptions options) => _options = options;
+
+    /// <summary>The options this client was built from.</summary>
+    public DurableClientOptions Options => _options;
+
+    /// <summary>The store the client reads and writes durable state through.</summary>
+    /// <remarks>
+    /// Available as soon as the client is initialized. A store described by
+    /// <see cref="DurableClientOptions.StoreOptions"/> is created during initialization, so
+    /// reading this before then is an error.
+    /// </remarks>
+    public DurableStore Store => _options.Store
+        ?? throw new InvalidOperationException(
+            "The store is created during InitializeAsync; await that first.");
+
+    /// <summary>
+    /// The extension registry the client resolves code from, or an empty registry when none was
+    /// supplied.
+    /// </summary>
+    public ExtensionRegistry Registry => _options.Registry ?? new ExtensionRegistry();
+
+    /// <summary>
+    /// The Copilot SDK client the durable layer drives.
+    /// </summary>
+    /// <remarks>
+    /// This is the escape hatch: everything reachable from here is the SDK's own surface, and
+    /// operations performed through it are outside the facade's durability guarantees. Use it to
+    /// configure the SDK client — models, telemetry, logging — not to create or fork sessions;
+    /// a session created that way has none of the durable layer's state, choices, or grants.
+    /// <para>
+    /// A supplied client is returned as it was supplied; a created one exists once the client is
+    /// initialized. The durable layer never disposes a borrowed client, and never starts one it
+    /// was given.
+    /// </para>
+    /// </remarks>
+    public CopilotClient NativeClient => _options.Client
+        ?? throw new InvalidOperationException(
+            "The SDK client is created during InitializeAsync; await that first.");
+
+    /// <summary>Whether initialization has completed and the client is ready for work.</summary>
+    public bool IsInitialized => throw NotYet("#7.2");
+
+    /// <summary>Initializes the client, at most once, safely across concurrent callers.</summary>
+    /// <param name="cancellationToken">Cancels the initialization attempt.</param>
+    /// <returns>A task that completes when the client is ready.</returns>
+    /// <remarks>
+    /// The first operation that needs the store or the SDK client performs this, so calling it
+    /// is optional — but a host that wants startup cost and failures at a known point calls it
+    /// itself. Concurrent calls, and concurrent first operations, share one initialization: the
+    /// work happens once and every caller awaits the same result. A failed initialization is
+    /// not retried implicitly; the caller decides whether to try again.
+    /// </remarks>
+    public Task InitializeAsync(CancellationToken cancellationToken = default) =>
+        throw NotYet("#7.2");
+
+    /// <summary>Creates a conversation and its Copilot session.</summary>
+    /// <param name="choices">
+    /// The conversation's stored choices, or <c>null</c> for the defaults. The choices are
+    /// written to the store before the session is created, so a crash between the two leaves a
+    /// conversation whose choices are already durable.
+    /// </param>
+    /// <param name="ownerTaskId">The task that owns the conversation, if any.</param>
+    /// <param name="ownerConversationId">The conversation that spawned it, if any.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The durable conversation handle.</returns>
+    /// <remarks>
+    /// The handle is a <see cref="DurableConversation"/> — the same type the harness returns,
+    /// not a second durable-session abstraction. Its documents, entries, answers, and forks are
+    /// the store's, and its session configuration is built by the shared runtime.
+    /// </remarks>
+    public Task<DurableConversation> CreateConversationAsync(
+        AgentChoices? choices = null,
+        string? ownerTaskId = null,
+        string? ownerConversationId = null,
+        CancellationToken cancellationToken = default) =>
+        throw NotYet("#7.3");
+
+    /// <summary>Returns a conversation, creating it on first use.</summary>
+    /// <param name="choices">The choices to create it with, when it has to be created.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The store's root conversation.</returns>
+    /// <remarks>
+    /// A store reopened from disk already holds its conversations, and they are restored before
+    /// a new one is created, so the root is the conversation that was there before a restart
+    /// rather than a second one.
+    /// </remarks>
+    public Task<DurableConversation> RootAsync(
+        AgentChoices? choices = null,
+        CancellationToken cancellationToken = default) =>
+        throw NotYet("#7.3");
+
+    /// <summary>Rebinds a stored conversation to a live session.</summary>
+    /// <param name="conversationId">The stored conversation's identifier.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The conversation handle, with its session attached.</returns>
+    /// <remarks>
+    /// Resuming reads the conversation's stored choices and builds the session from them — the
+    /// precedence rule in <see cref="GetSessionConfig(AgentChoices?, DurableConversation?)"/>
+    /// applies — so a conversation resumed after a restart runs with the authority and the
+    /// sandbox policy it had when it was last configured.
+    /// </remarks>
+    public Task<DurableConversation> ResumeConversationAsync(
+        string conversationId,
+        CancellationToken cancellationToken = default) =>
+        throw NotYet("#7.4");
+
+    /// <summary>Forks a conversation at one of its entries.</summary>
+    /// <param name="parent">The conversation to fork from.</param>
+    /// <param name="entryId">The entry to fork at.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The new conversation handle.</returns>
+    /// <remarks>
+    /// The fork copies the parent's transcript up to the entry and each document's value under
+    /// its own <see cref="ForkPolicy"/>, and inherits the parent's choices as a snapshot — so a
+    /// fork can never silently widen the parent's grants. The isolation is in the store: the two
+    /// conversations hold independent copies, and a commit in one is not visible in the other.
+    /// </remarks>
+    public Task<DurableConversation> ForkAsync(
+        DurableConversation parent,
+        string entryId,
+        CancellationToken cancellationToken = default) =>
+        throw NotYet("#7.4");
+
+    /// <summary>Finds a live conversation handle by its identifier.</summary>
+    /// <param name="conversationId">The conversation's identifier.</param>
+    /// <returns>The handle, or <c>null</c> when it is not bound in this client.</returns>
+    /// <remarks>
+    /// Only conversations this client created or resumed are bound. A conversation in the store
+    /// that no session is attached to is not returned; resume it first.
+    /// </remarks>
+    public DurableConversation? FindConversation(string conversationId) =>
+        throw NotYet("#7.3");
+
+    /// <summary>Finds a live conversation handle by predicate.</summary>
+    /// <param name="match">The predicate a handle must satisfy.</param>
+    /// <returns>The first matching handle, or <c>null</c> when none matches.</returns>
+    public DurableConversation? FindConversation(Func<DurableConversation, bool> match) =>
+        throw NotYet("#7.3");
+
+    /// <summary>
+    /// Builds the Copilot session configuration for a set of stored choices, applying the
+    /// persisted-agent-choice precedence rule.
+    /// </summary>
+    /// <param name="choices">
+    /// The choices to build from, or <c>null</c> to use the client's defaults.
+    /// </param>
+    /// <param name="conversation">
+    /// The conversation the session belongs to, or <c>null</c> when the configuration is being
+    /// inspected outside a conversation. Sections that read durable documents need the
+    /// conversation; a configuration built without one has no document-bound sections.
+    /// </param>
+    /// <returns>The session configuration the runtime would use.</returns>
+    /// <remarks>
+    /// <b>Precedence.</b> The persisted agent choices are authoritative. They are the record of
+    /// what this conversation is: its model, reasoning effort, working directory, streaming
+    /// flag, extension and tool selection, permission grants, sandbox policy, and instructions.
+    /// Where a stored choice is set, it wins over anything the SDK configuration says about the
+    /// same thing. Where a stored choice is unset, the SDK configuration's value — or the
+    /// runtime's default when the configuration is silent too — applies.
+    /// <para>
+    /// The rule exists because the store is what makes a conversation reproducible: a grant that
+    /// lives only in host configuration is not part of the durable record, so it would change
+    /// across a restart and travel badly across a fork. Reading the configuration back through
+    /// this overload is how a host sees the effective result — the stored choices already
+    /// resolved against the registry's code and the runtime's defaults — rather than having to
+    /// reconstruct the merge itself.
+    /// </para>
+    /// <para>
+    /// Host-level options are not part of this merge and cannot be overridden by a stored
+    /// choice: <see cref="DurableHarnessOptions.PermissionHandler"/>,
+    /// <see cref="DurableHarnessOptions.EnableFileHooks"/>, and
+    /// <see cref="DurableHarnessOptions.TolerateHostHookFailures"/> describe the process, not
+    /// the conversation. Supplying a permission handler replaces the fail-closed durable policy
+    /// for every conversation, which moves the agent's authority out of the store and out of
+    /// these guarantees — see <see cref="DurableHarnessOptions.PermissionHandler"/>.
+    /// </para>
+    /// </remarks>
+    public SessionConfig GetSessionConfig(
+        AgentChoices? choices = null,
+        DurableConversation? conversation = null) =>
+        throw NotYet("#7.3");
+
+    /// <summary>
+    /// Builds the session configuration a stored conversation would be resumed with, without
+    /// creating a session.
+    /// </summary>
+    /// <param name="conversationId">The stored conversation's identifier.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The session configuration the runtime would use.</returns>
+    /// <remarks>
+    /// The asynchronous counterpart of <see cref="GetSessionConfig(AgentChoices?, DurableConversation?)"/>
+    /// for a conversation that is not bound to a live handle. The same precedence rule applies:
+    /// the stored choices are authoritative and the SDK configuration only fills what they leave
+    /// unset. This performs store reads but creates no session and no sandbox.
+    /// </remarks>
+    public Task<SessionConfig> GetSessionConfigAsync(
+        string conversationId,
+        CancellationToken cancellationToken = default) =>
+        throw NotYet("#7.3");
+
+    /// <summary>Re-enters the tasks the store records as running.</summary>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The outcome of each task that was re-entered, in store order.</returns>
+    /// <remarks>
+    /// A task is resumed from its last checkpoint, and its idempotency memo decides which of its
+    /// effects are replayed and which are skipped. This is the operation a host calls right after
+    /// startup, once the client is initialized, so work interrupted by the previous process
+    /// finishes.
+    /// </remarks>
+    public Task<IReadOnlyList<TaskOutcome>> ResumeTasksAsync(CancellationToken cancellationToken = default) =>
+        throw NotYet("#7.5");
+
+    /// <summary>Waits for a durable task to finish.</summary>
+    /// <param name="taskId">The task's identifier.</param>
+    /// <param name="cancellationToken">Cancels the wait.</param>
+    /// <returns>The task's outcome.</returns>
+    public Task<TaskOutcome> WaitForTaskAsync(string taskId, CancellationToken cancellationToken = default) =>
+        throw NotYet("#7.5");
+
+    /// <summary>
+    /// Disposes the resources the durable layer owns: at most once, and never a borrowed store
+    /// or client.
+    /// </summary>
+    /// <returns>A task that completes when disposal has finished.</returns>
+    /// <remarks>
+    /// Idempotent: a second call is a no-op, so a <c>using</c> statement, an explicit call, and a
+    /// container's disposal can all run without double-disposing anything. A created store is
+    /// disposed here, which releases its exclusive writer lock; a created SDK client is disposed
+    /// here too. Borrowed ones are left for their owner, and the order in which a host disposes a
+    /// borrowed store against this client is the host's choice — but a persistent store must be
+    /// disposed before another process opens the same path.
+    /// </remarks>
+    public ValueTask DisposeAsync() => throw NotYet("#7.5");
+
+    private static NotImplementedException NotYet(string issue) =>
+        new($"The durable client facade is declared in #7.1 and implemented in {issue}.");
 }
 
 /// <summary>
