@@ -3022,7 +3022,7 @@ public sealed class DurableConversation
     /// Whether a session error is the runtime reporting that a host hook was denied by the
     /// sandbox, rather than a failure of the turn itself.
     /// </summary>
-    private static bool IsHostHookFailure(string? message) =>
+    internal static bool IsHostHookFailure(string? message) =>
         message is not null
         && message.Contains("hook", StringComparison.OrdinalIgnoreCase)
         && (message.Contains("sandbox", StringComparison.OrdinalIgnoreCase)

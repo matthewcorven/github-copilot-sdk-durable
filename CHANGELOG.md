@@ -12,7 +12,47 @@ See [`docs/RELEASING.md`](docs/RELEASING.md) for the release procedure.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Durable sandbox policy.** `DurableSandboxPolicy` is a stored, per-conversation sandbox
+  grant: `SandboxMcpServers`, `SandboxLspServers`, `Auth` (`Gh`, `Git`), `Credentials`
+  (`EnvVars`), `Filesystem` (`ReadwritePaths`, `ReadonlyPaths`, `DeniedPaths`,
+  `ClearPolicyOnExit`), `Network` (`Proxy`), plus `Enabled`, `AddCurrentWorkingDirectory`,
+  `AllowBypass`, `AllowDevToolAccess`, `TrustWorkingDirectory`, and `KeychainAccess`. It
+  rides on `AgentChoices.Sandbox`; `null` means no sandbox, so every existing conversation
+  behaves exactly as before. `ResolvedAgent.Sandbox` is the resolved form. (#16)
+- **`DurableHarness.BuildSandboxConfig(policy, workingDirectory)`.** A public static mapper
+  from the durable policy to the SDK's `GitHub.Copilot.Rpc.SandboxConfig` wire type.
+  `SessionConfig` has no sandbox property, so the config is carried on
+  `SessionConfigBase.SandboxConfig`; `BuildSessionConfig` wires it in alongside
+  `TrustWorkingDirectory` and `EnableFileHooks`. (#16)
+- **`{workspace}` token expansion.** Paths written as `{workspace}/…`
+  (`DurableSandboxPolicy.WorkspaceToken`) are expanded against the conversation's
+  `WorkingDirectory` when the session is built, not when the policy is stored. A fork into a
+  different working directory resolves the same stored grant against its own directory. The
+  token never reaches the wire type. (#16)
+- **`SandboxDecisions` and `WaitForSandboxDecisionAsync`.** A conversation exposes the
+  `sandbox.decision` events its existing `Attach` subscription already receives, so a caller
+  can assert on what the runtime reported without a second subscription. (#16)
+- **`DurableHarnessOptions.TolerateHostHookFailures`** (opt-in, default `false`). The runtime
+  runs hooks inside the session's sandbox, and `EnableFileHooks` only controls
+  *repository-origin* hooks — user-level hooks in `~/.copilot/hooks/` still run and are
+  denied by a policy that does not grant them. With this option on, a session error that is
+  attributed to a hook and carries a sandbox denial signature (`sandbox`,
+  `Operation not permitted`, or `code 126`) becomes the turn's answer instead of an
+  `InvalidOperationException`. The default preserves existing behaviour, and the match is
+  narrow enough that a genuine tool failure still throws. (#16)
+- **`examples/33-sandbox-sdk-filesystem.cs`** — a real filesystem policy with a writable, a
+  read-only, and a denied directory; a permitted write that lands and a denied write that
+  does not; assertions on the `SandboxDecisionEvent` surface. (#16)
+- **`docs/SANDBOX_MATRIX.md`** — sandbox capability × platform/backend, what is enforced
+  versus advisory, what `SandboxFilesystemPolicyDetails` does and does not report, and the
+  host-hook limitation above. (#16)
+
+### Changed
+
+- `DurableHarnessOptions.EnableFileHooks` documentation now states that it controls
+  repository-origin hooks only and that user-level hooks still run inside the sandbox. (#16)
 
 ## [0.4.0] - 2026-10-28
 

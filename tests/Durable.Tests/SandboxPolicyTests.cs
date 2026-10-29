@@ -383,4 +383,27 @@ public class SandboxPolicyTests
         var config = harness.BuildSessionConfig(new AgentChoices(), null);
         Assert.Same(PermissionHandler.ApproveAll, config.OnPermissionRequest);
     }
+
+    [Fact]
+    public void HarnessOptions_HostHookToleranceIsOffByDefault()
+    {
+        Assert.False(new DurableHarnessOptions().TolerateHostHookFailures);
+    }
+
+    [Theory]
+    [InlineData(
+        "postToolUse hook from \"/Users/x/.copilot/hooks/telemetry.json\" failed in the session sandbox: " +
+        "Hook command failed with code 126 (bash: /Users/x/.aspire/hooks/track.sh: Operation not permitted)",
+        true)]
+    [InlineData("postToolUse hook from \"/Users/x/.copilot/hooks/telemetry.json\" failed in the session sandbox", true)]
+    [InlineData("Hook command failed with code 126", true)]
+    [InlineData("The model returned an invalid tool call", false)]
+    [InlineData("Operation not permitted", false)]
+    [InlineData("hook", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsHostHookFailure_OnlyMatchesHookAttributedSandboxDenials(string? message, bool expected)
+    {
+        Assert.Equal(expected, DurableConversation.IsHostHookFailure(message));
+    }
 }

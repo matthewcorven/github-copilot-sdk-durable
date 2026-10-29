@@ -15,7 +15,7 @@ using Durable;
 var store = new DurableStore();
 var registry = new ExtensionRegistry();
 
-// A fake bank: it declines an expired card at once, and confirms other charges
+// A local bank: it declines an expired card at once, and confirms other charges
 // after a moment.
 var charged = new HashSet<string>();
 

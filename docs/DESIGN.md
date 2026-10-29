@@ -237,6 +237,57 @@ Wraps a `CopilotSession` plus the durable store, exposing Pi-shaped operations:
 - `ResumeAsync()` → re-enter running tasks
 - `CloseAsync()`
 
+### 3.6 Sandbox policy — a durable, per-conversation grant
+
+The SDK's sandbox is a session-level thing: `SessionConfigBase.SandboxConfig` takes a
+`GitHub.Copilot.Rpc.SandboxConfig` and the runtime applies it to the session's processes.
+`SessionConfig` itself has no sandbox property. That is the right shape for the SDK and the
+wrong shape for us: a durable conversation's choices are stored, forked, and replayed, and a
+sandbox grant is part of what a conversation *is*.
+
+So the durable layer owns a policy object and maps it onto the wire type at session-build
+time:
+
+- **`DurableSandboxPolicy`** — an `IEquatable` value object holding `SandboxMcpServers`,
+  `SandboxLspServers`, `Auth` (`DurableSandboxAuth`: `Gh`, `Git`), `Credentials`
+  (`DurableSandboxCredentials`: `EnvVars`), `Filesystem` (`DurableSandboxFilesystem`:
+  `ReadwritePaths`, `ReadonlyPaths`, `DeniedPaths`, `ClearPolicyOnExit`), `Network`
+  (`DurableSandboxNetwork`: `Proxy`), plus `Enabled`, `AddCurrentWorkingDirectory`,
+  `AllowBypass`, `AllowDevToolAccess`, `TrustWorkingDirectory`, and `KeychainAccess`.
+- **`AgentChoices.Sandbox`** — the policy rides with the conversation's choices. `null`
+  means no sandbox, which is exactly the behaviour every existing conversation had, so the
+  feature is additive. `ResolvedAgent.Sandbox` is the resolved form.
+- **`DurableHarness.BuildSandboxConfig(policy, workingDirectory)`** — the mapper. It is
+  public and static so a host can inspect the wire type without opening a session, and it is
+  what the tests assert field-for-field.
+- **`{workspace}` token expansion.** Paths may be written as
+  `{workspace}/writable` (`DurableSandboxPolicy.WorkspaceToken`). The token is expanded
+  against the conversation's `WorkingDirectory` when the session is built, not when the
+  policy is stored. A fork into a different working directory therefore gets a different
+  resolved policy from the same stored grant — the stored policy describes the *shape* of
+  the grant, not one machine's layout. The token never reaches the wire type.
+- **`BuildSessionConfig`** wires the mapped config in alongside `TrustWorkingDirectory` and
+  `EnableFileHooks`.
+- **`SandboxDecisions` / `WaitForSandboxDecisionAsync`** — the conversation exposes the
+  `sandbox.decision` events the existing `Attach` subscription already receives, so a caller
+  can assert on what the runtime reported without a second subscription.
+
+The split that matters: the durable **permission** policy and the **sandbox** policy are
+different layers doing different jobs. A conversation granted `shell` has its shell call
+approved by the durable layer; the sandbox then refuses the write itself. A denial in a
+permission event would mean the layers disagreed. A denial in a sandbox decision means they
+each did their own job. `examples/33-sandbox-sdk-filesystem.cs` draws exactly that line.
+
+Two operational notes, both covered in [`SANDBOX_MATRIX.md`](SANDBOX_MATRIX.md):
+
+- `EnableFileHooks` controls **repository-origin** hooks only. User-level hooks in
+  `~/.copilot/hooks/` still run, and they run *inside* the sandbox, so a policy that does
+  not grant them denies them. `DurableHarnessOptions.TolerateHostHookFailures` (opt-in,
+  default `false`) turns a hook-attributed sandbox denial into the turn's answer instead of
+  an exception.
+- Sandbox types are annotated `GHCP001` (evaluation only). Examples that touch them carry
+  `#:property NoWarn=GHCP001`.
+
 ## 4. Example suite (33 examples, mirroring Pi 00–30 plus two C#-only additions)
 
 | # | Pi example | C# example | Demonstrates |
