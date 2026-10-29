@@ -3491,66 +3491,6 @@ internal sealed class DurableRuntime : IAsyncDisposable
         return conversation;
     }
 
-    /// <summary>Opens a harness over a store and a registry.</summary>
-    public static Task<DurableHarness> OpenAsync(
-        DurableStore store,
-        ExtensionRegistry registry,
-        CancellationToken cancellationToken = default) =>
-        OpenAsync(store, registry, new DurableHarnessOptions(), cancellationToken);
-
-    /// <summary>Opens a harness over a store and a registry with explicit options.</summary>
-    public static async Task<DurableHarness> OpenAsync(
-        DurableStore store,
-        ExtensionRegistry registry,
-        DurableHarnessOptions options,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(options);
-
-        var runtimePath = ResolveRuntimePath(options);
-        var client = runtimePath is null
-            ? new CopilotClient()
-            : new CopilotClient(new CopilotClientOptions
-            {
-                Connection = RuntimeConnection.ForStdio(runtimePath, Array.Empty<string>()),
-            });
-
-        await client.StartAsync(cancellationToken);
-        return new DurableHarness(client, store, registry, options);
-    }
-
-    /// <summary>
-    /// The runtime executable the options select: the explicit path, else the environment
-    /// variable, else <c>null</c> for the bundled runtime. A named path that does not exist is
-    /// an error that names it, so the caller is never left guessing why the open failed.
-    /// </summary>
-    internal static string? ResolveRuntimePath(DurableHarnessOptions options)
-    {
-        ArgumentNullException.ThrowIfNull(options);
-
-        var path = options.RuntimePath;
-        var origin = $"DurableHarnessOptions.{nameof(DurableHarnessOptions.RuntimePath)}";
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            path = Environment.GetEnvironmentVariable(DurableHarnessOptions.RuntimePathEnvironmentVariable);
-            origin = $"the {DurableHarnessOptions.RuntimePathEnvironmentVariable} environment variable";
-        }
-
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return null;
-        }
-
-        if (!File.Exists(path))
-        {
-            throw new FileNotFoundException(
-                $"The runtime executable named by {origin} does not exist: '{path}'.",
-                path);
-        }
-
-        return path;
-    }
-
     /// <summary>Creates a conversation and its Copilot session.</summary>
     internal async Task<DurableConversation> CreateConversationAsync(
         AgentChoices? choices = null,
@@ -4344,6 +4284,17 @@ public sealed class DurableHarness : IAsyncDisposable
         _runtime.Attach(client, store, ownsClient: true, ownsStore: false);
     }
 
+    /// <summary>
+    /// Binds a harness to a client the caller already started. The harness owns the client
+    /// from here on; the store stays the caller's.
+    /// </summary>
+    internal static DurableHarness Attach(
+        CopilotClient client,
+        DurableStore store,
+        ExtensionRegistry registry,
+        DurableHarnessOptions? options = null) =>
+        new(client, store, registry, options);
+
     /// <summary>The Copilot client.</summary>
     public CopilotClient Client => _runtime.Client;
 
@@ -4385,9 +4336,48 @@ public sealed class DurableHarness : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        var client = new CopilotClient();
+        var runtimePath = ResolveRuntimePath(options);
+        var client = runtimePath is null
+            ? new CopilotClient()
+            : new CopilotClient(new CopilotClientOptions
+            {
+                Connection = RuntimeConnection.ForStdio(runtimePath, Array.Empty<string>()),
+            });
+
         await client.StartAsync(cancellationToken);
         return new DurableHarness(client, store, registry, options);
+    }
+
+    /// <summary>
+    /// The runtime executable the options select: the explicit path, else the environment
+    /// variable, else <c>null</c> for the bundled runtime. A named path that does not exist is
+    /// an error that names it, so the caller is never left guessing why the open failed.
+    /// </summary>
+    internal static string? ResolveRuntimePath(DurableHarnessOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        var path = options.RuntimePath;
+        var origin = $"DurableHarnessOptions.{nameof(DurableHarnessOptions.RuntimePath)}";
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            path = Environment.GetEnvironmentVariable(DurableHarnessOptions.RuntimePathEnvironmentVariable);
+            origin = $"the {DurableHarnessOptions.RuntimePathEnvironmentVariable} environment variable";
+        }
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        if (!File.Exists(path))
+        {
+            throw new FileNotFoundException(
+                $"The runtime executable named by {origin} does not exist: '{path}'.",
+                path);
+        }
+
+        return path;
     }
 
     /// <summary>Creates a conversation and its Copilot session.</summary>
