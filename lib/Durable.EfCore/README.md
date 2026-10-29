@@ -77,9 +77,16 @@ provider's default:
 | Provider | Isolation level | Notes |
 |---|---|---|
 | SQLite | `Serializable` | The default for `BeginTransaction()`. SQLite serialises writers: a write transaction takes the database write lock, so two writers cannot interleave. Readers see the last committed state. |
-| SQL Server | To be documented with #52 | Not wired up in this tree. |
-| PostgreSQL | To be documented with #52 | Not wired up in this tree. |
-| MySQL | To be documented with #52 | Not wired up in this tree. |
+| SQL Server | `ReadCommitted` | `SqlConnection.BeginTransaction()` maps `IsolationLevel.Unspecified` to `ReadCommitted` before it issues `SET TRANSACTION ISOLATION LEVEL`, so the level is explicit rather than inherited from the server's `SET TRANSACTION ISOLATION LEVEL` default. |
+| PostgreSQL | `ReadCommitted` | `NpgsqlTransaction.Init` maps `IsolationLevel.Unspecified` to `ReadCommitted` and prepends `BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED`. This is also PostgreSQL's own default. |
+| MySQL | `RepeatableRead` | `MySqlConnection.BeginTransaction()` maps `IsolationLevel.Unspecified` to `RepeatableRead` and issues `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ` before `BEGIN`. This is also InnoDB's default. |
+
+The three server levels are read from the provider packages this repository references
+(`Microsoft.Data.SqlClient` 6.1.6, `Npgsql` 10.0.3, `MySql.Data` 26.10.0), not assumed from
+the server's own default — the two happen to agree, but the client is what sets the level.
+They are not asserted by a test: the parity suite compares the observable outcome of the same
+scenarios across stores, so it would catch a lost write or a partial commit, not a level that
+differs from the one named here.
 
 The store also serialises writers within one process: `DurableStore.CommitAsync` holds a gate
 for the whole transaction, so the isolation level governs cross-process concurrency, not

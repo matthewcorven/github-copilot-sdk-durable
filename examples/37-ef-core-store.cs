@@ -209,37 +209,37 @@ Check.That(
 
 // ─── The provider matrix ───────────────────────────────────────────────────
 
-// One model, four databases. Only the package and the connection string change; the
-// migration is generated from the same `DurableDbContext` for each. SQLite is wired end to
-// end today. The three server-backed providers are the same model over a different
-// connection string, and their packages and migrations land with #52.
+// One model, four databases. Only the package, the registered name and the connection
+// string change; the migration is generated from the same `DurableDbContext` for each and
+// checked in beside its provider. SQLite is the reference provider because it needs no
+// server. The three server-backed providers are wired the same way: register, point the
+// environment variable at a server, and open the store by registered name.
 
-var matrix = new (string Provider, string Package, string ConnectionString, string Migration, string Server)[]
+var matrix = new (string Provider, string Package, string Registered, string EnvVar, string Server)[]
 {
-    ("SQLite", "Microsoft.EntityFrameworkCore.Sqlite",
-        "Data Source=<absolute path>", "checked in: Migrations/20261029034106_InitialCreate", "no"),
-    ("SQL Server", "Microsoft.EntityFrameworkCore.SqlServer",
-        "Server=<host>;Database=<name>;...", "dotnet ef migrations add InitialCreate_SqlServer", "yes"),
-    ("PostgreSQL", "Npgsql.EntityFrameworkCore.PostgreSQL",
-        "Host=<host>;Database=<name>;...", "dotnet ef migrations add InitialCreate_PostgreSql", "yes"),
-    ("MySQL", "Pomelo.EntityFrameworkCore.MySql",
-        "Server=<host>;Database=<name>;...", "dotnet ef migrations add InitialCreate_MySql", "yes"),
+    ("SQLite", "Microsoft.EntityFrameworkCore.Sqlite", "efcore", "(the store path)", "no"),
+    ("SQL Server", "Microsoft.EntityFrameworkCore.SqlServer 10.0.12", "efcore-sqlserver",
+        "DURABLE_SQLSERVER_CONNECTION", "yes"),
+    ("PostgreSQL", "Npgsql.EntityFrameworkCore.PostgreSQL 10.0.3", "efcore-postgresql",
+        "DURABLE_POSTGRESQL_CONNECTION", "yes"),
+    ("MySQL", "MySql.EntityFrameworkCore 10.0.12", "efcore-mysql",
+        "DURABLE_MYSQL_CONNECTION", "yes"),
 };
 
 Console.WriteLine($"database: {databasePath}");
 Console.WriteLine($"tables:   {string.Join(", ", tables)}");
 Console.WriteLine();
-Console.WriteLine("provider    | package                                    | needs a server");
-Console.WriteLine("------------|--------------------------------------------|---------------");
+Console.WriteLine("provider    | package                                          | registered name   | connection string from        | needs a server");
+Console.WriteLine("------------|--------------------------------------------------|-------------------|-------------------------------|---------------");
 foreach (var row in matrix)
 {
-    Console.WriteLine($"{row.Provider,-11} | {row.Package,-42} | {row.Server}");
+    Console.WriteLine($"{row.Provider,-11} | {row.Package,-48} | {row.Registered,-17} | {row.EnvVar,-29} | {row.Server}");
 }
 
 Console.WriteLine();
 Console.WriteLine("SQLite is the reference provider: no server, no credentials, no setup step.");
 Console.WriteLine("The server-backed providers are the same model over a different connection string;");
-Console.WriteLine("their packages and migrations are planned in #52.");
+Console.WriteLine("register the provider, set its environment variable, and select it by registered name.");
 
 Directory.Delete(directory, recursive: true);
 
