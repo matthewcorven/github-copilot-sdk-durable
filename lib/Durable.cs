@@ -534,6 +534,130 @@ public sealed class ForkIntent
     public ForkIntentState State { get; set; }
 }
 
+/// <summary>
+/// The durable record binding a conversation to the native SDK session that serves it.
+/// </summary>
+/// <remarks>
+/// The binding is a document, not a store column: it is written in the same transaction as the
+/// entry that records it, so a conversation and the session it was bound to are never observed
+/// apart. It is declared with <see cref="ForkPolicy.Initial"/>, so a fork does not inherit its
+/// parent's session identifier — a fork is a new conversation and gets its own session.
+/// </remarks>
+public sealed class SessionBinding
+{
+    /// <summary>The native SDK session identifier.</summary>
+    public string? SessionId { get; set; }
+
+    /// <summary>The model the session was created with.</summary>
+    public string? Model { get; set; }
+
+    /// <summary>When the binding was recorded, as an ISO 8601 timestamp.</summary>
+    public string? BoundAt { get; set; }
+}
+
+/// <summary>
+/// The durable record of one prompt's admission, written before the prompt is sent.
+/// </summary>
+/// <remarks>
+/// Admission is the durable half of a send. It is committed before the prompt reaches the
+/// runtime, so a process that dies mid-send leaves a record of what it was trying to do. The
+/// <see cref="State"/> then says how far it got: <c>admitted</c> (committed, not yet sent),
+/// <c>completed</c> (the turn finished and its checkpoint committed), <c>failed</c> (the runtime
+/// reported an error), or <c>uncertain</c> (the send was issued but its outcome is unknown).
+/// An uncertain admission is never replayed automatically: the caller reconciles it.
+/// </remarks>
+public sealed class InputAdmission
+{
+    /// <summary>The admission's identifier.</summary>
+    public string? AdmissionId { get; set; }
+
+    /// <summary>The prompt that was admitted.</summary>
+    public string? Prompt { get; set; }
+
+    /// <summary>The admission's state.</summary>
+    public string? State { get; set; }
+
+    /// <summary>When the admission was committed, as an ISO 8601 timestamp.</summary>
+    public string? AdmittedAt { get; set; }
+
+    /// <summary>When the admission reached a terminal state, as an ISO 8601 timestamp.</summary>
+    public string? SettledAt { get; set; }
+}
+
+/// <summary>
+/// The durable record of one checkpoint: a turn that finished, or a tool call that completed.
+/// </summary>
+/// <remarks>
+/// Each checkpoint is a new version of the conversation's checkpoint document, so the document's
+/// history is the checkpoint log. <see cref="EventId"/> is the deduplication key: a checkpoint
+/// whose key is already the document's latest value is not written again, so a runtime that
+/// delivers the same event twice does not produce two checkpoints.
+/// </remarks>
+public sealed class ConversationCheckpoint
+{
+    /// <summary>The checkpoint's identifier.</summary>
+    public string? CheckpointId { get; set; }
+
+    /// <summary>What the checkpoint records: <c>turn</c> or <c>tool</c>.</summary>
+    public string? Kind { get; set; }
+
+    /// <summary>The deduplication key.</summary>
+    public string? EventId { get; set; }
+
+    /// <summary>The assistant message identifier, for a turn checkpoint.</summary>
+    public string? MessageId { get; set; }
+
+    /// <summary>The tool name, for a tool checkpoint.</summary>
+    public string? ToolName { get; set; }
+
+    /// <summary>The tool arguments, for a tool checkpoint.</summary>
+    public string? ToolArgs { get; set; }
+
+    /// <summary>Whether the tool call succeeded, for a tool checkpoint.</summary>
+    public bool? Success { get; set; }
+
+    /// <summary>The failure message, for a failed tool checkpoint.</summary>
+    public string? Error { get; set; }
+
+    /// <summary>The assistant's answer, for a turn checkpoint.</summary>
+    public string? Content { get; set; }
+
+    /// <summary>When the checkpoint was recorded, as an ISO 8601 timestamp.</summary>
+    public string? RecordedAt { get; set; }
+}
+
+/// <summary>
+/// Thrown when a conversation cannot be resumed because the native transcript of the session it
+/// was bound to is gone.
+/// </summary>
+/// <remarks>
+/// The durable conversation is intact — its entries, documents, and choices are all in the store.
+/// What is missing is the runtime's own transcript. Continuing with a fresh, empty session would
+/// silently discard the model's context, so the resume fails instead and the host decides what to
+/// do: re-create the session deliberately, or surface the loss.
+/// </remarks>
+public sealed class DurableRecoveryRequiredException : InvalidOperationException
+{
+    /// <summary>Creates the exception.</summary>
+    public DurableRecoveryRequiredException(string conversationId, string? sessionId, Exception? innerException = null)
+        : base(
+            $"Conversation '{conversationId}' cannot be resumed: the recorded SDK session "
+            + $"'{sessionId ?? "(none)"}' has no recoverable native transcript. The conversation "
+            + "itself is intact in the store; re-create its session deliberately rather than "
+            + "continuing with an empty replacement.",
+            innerException)
+    {
+        ConversationId = conversationId;
+        SessionId = sessionId;
+    }
+
+    /// <summary>The conversation that could not be resumed.</summary>
+    public string ConversationId { get; }
+
+    /// <summary>The session identifier that was recorded, when there was one.</summary>
+    public string? SessionId { get; }
+}
+
 /// <summary>The on-disk format of a durable store.</summary>
 public enum DurableStoreFormat
 {
@@ -3169,6 +3293,11 @@ public sealed class DurableConversation
     private readonly List<SandboxDecisionEvent> _sandboxDecisions = [];
     private readonly List<(Func<SandboxDecisionEvent, bool> Match, TaskCompletionSource<SandboxDecisionEvent> Completion)> _sandboxWaiters = [];
     private readonly DurableModelTracker _modelTracker = new();
+    private readonly object _checkpointGate = new();
+    private readonly ConcurrentDictionary<string, (string? Name, JsonElement? Arguments)> _toolCalls = [];
+
+    private Task _checkpointChain = Task.CompletedTask;
+    private Exception? _checkpointFailure;
 
     internal DurableConversation(DurableRuntime runtime, CopilotSession session, ConversationRecord record)
     {
@@ -3457,13 +3586,214 @@ public sealed class DurableConversation
             return entryId;
         });
 
+    /// <summary>The binding recorded for this conversation, or null before one is written.</summary>
+    public SessionBinding? Binding() => Snapshot(_runtime.SessionBindingDocument);
+
+    /// <summary>The most recent input admission, or null before one is written.</summary>
+    public InputAdmission? Admission() => Snapshot(_runtime.AdmissionDocument);
+
+    /// <summary>The most recent checkpoint, or null before one is written.</summary>
+    public ConversationCheckpoint? Checkpoint() => Snapshot(_runtime.CheckpointDocument);
+
+    /// <summary>
+    /// Writes the binding that records which native session serves this conversation.
+    /// </summary>
+    /// <remarks>
+    /// The binding is written in one transaction with the entry that records it, so the
+    /// conversation's transcript and the session it names are never observed apart. Writing the
+    /// same binding twice is a no-op, so a re-attach does not grow the log.
+    /// </remarks>
+    internal async Task BindAsync(string? sessionId, string? model, CancellationToken cancellationToken = default)
+    {
+        await CommitAsync(async tx =>
+        {
+            var current = tx.Doc(_runtime.SessionBindingDocument, Id);
+            if (current.Value?.SessionId == sessionId)
+            {
+                await Task.CompletedTask;
+                return;
+            }
+
+            current.Value = new SessionBinding
+            {
+                SessionId = sessionId,
+                Model = model,
+                BoundAt = DateTimeOffset.UtcNow.ToString("O"),
+            };
+            current.Save(tx.AppendEntry(Id, "session-binding", sessionId));
+            await Task.CompletedTask;
+        });
+    }
+
+    /// <summary>
+    /// Commits an admission for a prompt before the prompt is sent.
+    /// </summary>
+    /// <remarks>
+    /// The commit happens before the send is issued, so a failure here surfaces to the caller
+    /// and nothing is sent: the durable record and the send are ordered, not concurrent. The
+    /// returned identifier settles the admission once the outcome is known.
+    /// </remarks>
+    internal async Task<string> AdmitAsync(string prompt)
+    {
+        var admissionId = $"a{Guid.NewGuid():N}";
+        await CommitAsync(async tx =>
+        {
+            var draft = tx.Doc(_runtime.AdmissionDocument, Id);
+            draft.Value = new InputAdmission
+            {
+                AdmissionId = admissionId,
+                Prompt = prompt,
+                State = "admitted",
+                AdmittedAt = DateTimeOffset.UtcNow.ToString("O"),
+            };
+            draft.Save(tx.AppendEntry(Id, "admission", admissionId));
+            await Task.CompletedTask;
+        });
+
+        return admissionId;
+    }
+
+    /// <summary>Settles an admission to its terminal state.</summary>
+    internal Task SettleAsync(string admissionId, string state) =>
+        CommitAsync(async tx =>
+        {
+            var draft = tx.Doc(_runtime.AdmissionDocument, Id);
+            var current = draft.Value;
+            if (current is null || current.AdmissionId != admissionId)
+            {
+                await Task.CompletedTask;
+                return;
+            }
+
+            draft.Value = new InputAdmission
+            {
+                AdmissionId = current.AdmissionId,
+                Prompt = current.Prompt,
+                State = state,
+                AdmittedAt = current.AdmittedAt,
+                SettledAt = DateTimeOffset.UtcNow.ToString("O"),
+            };
+            draft.Save(tx.AppendEntry(Id, "admission-settled", state));
+            await Task.CompletedTask;
+        });
+
+    /// <summary>
+    /// Queues a checkpoint write on this conversation's serial chain and returns the write.
+    /// </summary>
+    /// <remarks>
+    /// Checkpoint writes are serialized per conversation, so two events that arrive together
+    /// cannot interleave their read-then-write and lose one another's version. The chain is a
+    /// composition of tasks rather than a fire-and-forget continuation: the caller holds the
+    /// returned task, so a failed write is observed by whoever awaits the barrier instead of
+    /// being swallowed.
+    /// </remarks>
+    private Task QueueCheckpointAsync(Func<Task> write)
+    {
+        lock (_checkpointGate)
+        {
+            var next = _checkpointChain.ContinueWith(
+                async previous =>
+                {
+                    try
+                    {
+                        await previous;
+                    }
+                    catch (Exception error)
+                    {
+                        // A failed earlier write must not stop later checkpoints from being
+                        // attempted; the failure is kept for the barrier to report.
+                        _checkpointFailure ??= error;
+                    }
+
+                    await write();
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default).Unwrap();
+
+            _checkpointChain = next.ContinueWith(
+                previous =>
+                {
+                    try
+                    {
+                        previous.GetAwaiter().GetResult();
+                    }
+                    catch (Exception error)
+                    {
+                        _checkpointFailure ??= error;
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default);
+
+            return next;
+        }
+    }
+
+    /// <summary>
+    /// Writes a checkpoint unless the document's latest version already carries the same event.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ConversationCheckpoint.EventId"/> is the deduplication key. The comparison is
+    /// made inside the write's own transaction, on the same serial chain, so a duplicate
+    /// delivered twice concurrently is still written once.
+    /// </remarks>
+    internal Task CheckpointAsync(ConversationCheckpoint checkpoint) =>
+        QueueCheckpointAsync(() => CommitAsync(async tx =>
+        {
+            var draft = tx.Doc(_runtime.CheckpointDocument, Id);
+            if (draft.Value?.EventId == checkpoint.EventId)
+            {
+                await Task.CompletedTask;
+                return;
+            }
+
+            draft.Value = checkpoint;
+            draft.Save(tx.AppendEntry(Id, "checkpoint", checkpoint.EventId));
+            await Task.CompletedTask;
+        }));
+
+    /// <summary>
+    /// Awaits every checkpoint write queued so far and reports the first failure.
+    /// </summary>
+    /// <remarks>
+    /// This is the completion barrier: a durable submission does not report success until the
+    /// checkpoints its turn produced have committed. Failures are reported, never retried
+    /// silently, because a checkpoint that did not commit means the durable record is behind
+    /// what the caller was told.
+    /// </remarks>
+    internal async Task CheckpointBarrierAsync(CancellationToken cancellationToken = default)
+    {
+        Task pending;
+        lock (_checkpointGate)
+        {
+            pending = _checkpointChain;
+        }
+
+        await pending.WaitAsync(cancellationToken);
+
+        if (_checkpointFailure is { } failure)
+        {
+            throw new InvalidOperationException(
+                $"Conversation '{Id}' could not commit a checkpoint: {failure.Message}",
+                failure);
+        }
+    }
+
     /// <summary>Sends a prompt and waits for the assistant's answer.</summary>
     public async Task<AssistantMessageEvent?> SubmitAsync(string prompt, CancellationToken cancellationToken = default)
     {
         var completion = new TaskCompletionSource<AssistantMessageEvent?>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         AssistantMessageEvent? last = null;
+        string? answer = null;
         SetBusy(true);
+
+        // Admission is durable before the prompt is sent. A store failure here means the send
+        // never happens, so the caller sees the persistence failure rather than an unrecorded
+        // prompt.
+        var admissionId = await AdmitAsync(prompt);
 
         // A turn that calls tools emits an assistant message *before* the tool runs, and
         // the final answer comes after the tool result. Waiting for the session to go
@@ -3474,6 +3804,17 @@ public sealed class DurableConversation
             {
                 case AssistantMessageEvent message:
                     last = message;
+                    if (!string.IsNullOrEmpty(message.Data.Content))
+                    {
+                        answer = message.Data.Content;
+                    }
+
+                    break;
+                case ToolExecutionStartEvent start:
+                    _toolCalls[start.Data.ToolCallId] = (start.Data.ToolName, start.Data.Arguments);
+                    break;
+                case ToolExecutionCompleteEvent complete:
+                    RecordToolCheckpoint(complete);
                     break;
                 case SessionIdleEvent:
                     completion.TrySetResult(last);
@@ -3494,14 +3835,98 @@ public sealed class DurableConversation
             }
         });
 
-        await Session.SendAsync(new MessageOptions { Prompt = prompt }, cancellationToken);
         try
         {
-            return await completion.Task.WaitAsync(cancellationToken);
+            try
+            {
+                await Session.SendAsync(new MessageOptions { Prompt = prompt }, cancellationToken);
+            }
+            catch
+            {
+                // The send itself failed, so the prompt was not delivered: the admission is
+                // settled as failed rather than left looking like it might have run.
+                await SettleQuietlyAsync(admissionId, "failed");
+                throw;
+            }
+
+            var result = await completion.Task.WaitAsync(cancellationToken);
+
+            // The turn checkpoint is queued from the event that completed the turn, and the
+            // barrier below is what makes the submission durable: success is reported only
+            // after the checkpoint commits.
+            if (result is not null)
+            {
+                await CheckpointAsync(TurnCheckpoint(result, answer));
+            }
+
+            await CheckpointBarrierAsync(cancellationToken);
+            await SettleAsync(admissionId, "completed");
+            return result;
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // The send was issued and its outcome is not a clean failure: the turn may have
+            // run. The admission is marked uncertain and is never replayed automatically.
+            await SettleQuietlyAsync(admissionId, "uncertain");
+            throw;
         }
         finally
         {
             SetBusy(false);
+        }
+    }
+
+    /// <summary>
+    /// Records a completed tool call as a checkpoint, deduplicated on the tool call identifier.
+    /// </summary>
+    /// <remarks>
+    /// The write is queued on the conversation's serial chain and observed by the completion
+    /// barrier, so it is awaited before the turn reports success rather than being a
+    /// fire-and-forget continuation.
+    /// </remarks>
+    private void RecordToolCheckpoint(ToolExecutionCompleteEvent complete)
+    {
+        _toolCalls.TryRemove(complete.Data.ToolCallId, out var started);
+
+        var checkpoint = new ConversationCheckpoint
+        {
+            CheckpointId = $"c{Guid.NewGuid():N}",
+            Kind = "tool",
+            EventId = $"tool:{complete.Data.ToolCallId}",
+            ToolName = started.Name ?? complete.Data.ToolDescription?.Name,
+            ToolArgs = started.Arguments?.GetRawText(),
+            Success = complete.Data.Success,
+            Error = complete.Data.Error?.Message,
+            Content = complete.Data.Result?.Content,
+            RecordedAt = DateTimeOffset.UtcNow.ToString("O"),
+        };
+
+        _ = CheckpointAsync(checkpoint);
+    }
+
+    private static ConversationCheckpoint TurnCheckpoint(AssistantMessageEvent message, string? answer) => new()
+    {
+        CheckpointId = $"c{Guid.NewGuid():N}",
+        Kind = "turn",
+        EventId = message.Data.MessageId is { Length: > 0 } messageId
+            ? $"turn:{messageId}"
+            : $"turn:{message.Id:N}",
+        MessageId = message.Data.MessageId,
+        Content = answer ?? message.Data.Content,
+        RecordedAt = DateTimeOffset.UtcNow.ToString("O"),
+    };
+
+    private async Task SettleQuietlyAsync(string admissionId, string state)
+    {
+        try
+        {
+            await SettleAsync(admissionId, state);
+        }
+        catch (Exception)
+        {
+            // The failure that brought us here is the one worth reporting; a second failure
+            // while settling must not replace it. The admission stays at its committed state,
+            // which is exactly the "unknown outcome" the record exists to preserve.
         }
     }
 
@@ -3697,6 +4122,16 @@ public sealed class DurableHarnessOptions
     /// </para>
     /// </remarks>
     public string? RuntimePath { get; set; }
+
+    /// <summary>
+    /// Arguments passed to the runtime executable named by <see cref="RuntimePath"/>.
+    /// </summary>
+    /// <remarks>
+    /// A runtime selected by path is started with these arguments, so a host can point the
+    /// harness at a runtime that needs its own configuration — a recorded transcript, for
+    /// instance. The bundled runtime is started with none.
+    /// </remarks>
+    public IList<string> RuntimeArguments { get; set; } = Array.Empty<string>();
 }
 
 /// <summary>
@@ -3764,7 +4199,21 @@ internal sealed class DurableRuntime : IAsyncDisposable
         // "initial", so a fork of a fork starts with a fresh intent instead of inheriting the
         // parent's completed one.
         ForkDocument = new DocumentDefinition<ForkIntent>("durable.fork", DocumentHistory.Rewindable, ForkPolicy.Initial);
+        // Initial, so a fork does not inherit its parent's SDK session id: the fork has its own
+        // native transcript, and resuming the parent's would replay the wrong conversation.
+        SessionBindingDocument = new DocumentDefinition<SessionBinding>("durable.session-binding", DocumentHistory.Rewindable, ForkPolicy.Initial);
+        AdmissionDocument = new DocumentDefinition<InputAdmission>("durable.admission", DocumentHistory.Rewindable, ForkPolicy.AsOf);
+        CheckpointDocument = new DocumentDefinition<ConversationCheckpoint>("durable.checkpoint", DocumentHistory.Rewindable, ForkPolicy.AsOf);
     }
+
+    /// <summary>The document that records which SDK session a durable conversation is bound to.</summary>
+    internal DocumentDefinition<SessionBinding> SessionBindingDocument { get; }
+
+    /// <summary>The document that records each prompt's admission, before it is sent.</summary>
+    internal DocumentDefinition<InputAdmission> AdmissionDocument { get; }
+
+    /// <summary>The document that records a checkpoint per completed turn or tool call.</summary>
+    internal DocumentDefinition<ConversationCheckpoint> CheckpointDocument { get; }
 
     /// <summary>The Copilot client, once the runtime is bound.</summary>
     internal CopilotClient Client => _client
@@ -3905,6 +4354,7 @@ internal sealed class DurableRuntime : IAsyncDisposable
         var session = Client.CreateSessionAsync(BuildSessionConfig(choices, null)).GetAwaiter().GetResult();
         var conversation = new DurableConversation(this, null!, record);
         conversation.Attach(session);
+        conversation.BindAsync(session.SessionId, choices?.Model ?? DefaultModel).GetAwaiter().GetResult();
         _conversations[conversationId] = conversation;
         return conversation;
     }
@@ -3934,6 +4384,7 @@ internal sealed class DurableRuntime : IAsyncDisposable
         var conversation = new DurableConversation(this, null!, record);
         var session = await Client.CreateSessionAsync(BuildSessionConfig(choices, conversation), cancellationToken);
         conversation.Attach(session);
+        await conversation.BindAsync(session.SessionId, choices?.Model ?? DefaultModel, cancellationToken);
         _conversations[record.Id] = conversation;
         return conversation;
     }
@@ -4001,6 +4452,7 @@ internal sealed class DurableRuntime : IAsyncDisposable
         var session = await Client.CreateSessionAsync(BuildSessionConfig(choices, null), cancellationToken);
         var conversation = new DurableConversation(this, null!, record);
         conversation.Attach(session);
+        await conversation.BindAsync(session.SessionId, choices?.Model ?? DefaultModel, cancellationToken);
         _conversations[record.Id] = conversation;
     }
 
@@ -4121,6 +4573,9 @@ internal sealed class DurableRuntime : IAsyncDisposable
         var conversation = new DurableConversation(this, null!, record);
         var session = await ForkSessionAsync(parent, conversation, choices, cancellationToken);
         conversation.Attach(session);
+        // A fork names its own session: the binding document is ForkPolicy.Initial, so a fork
+        // never inherits its parent's session id, and this write records the new one.
+        await conversation.BindAsync(session.SessionId, parent.Choices()?.Model ?? DefaultModel, cancellationToken);
         _conversations[record.Id] = conversation;
         return conversation;
     }
@@ -4216,8 +4671,24 @@ internal sealed class DurableRuntime : IAsyncDisposable
     }
 
     /// <summary>Whether a document kind belongs to the durable layer rather than to the app.</summary>
+    /// <remarks>
+    /// Derived from the documents this runtime defines rather than from a list of kind strings,
+    /// so a document the durable layer adds later is covered without a second edit here.
+    /// </remarks>
     private bool IsInternalDocument(string kind) =>
-        kind == ForkDocument.Kind || kind == AgentDocument.Kind;
+        InternalDocumentKinds.Contains(kind);
+
+    /// <summary>The kinds of the documents the durable layer owns.</summary>
+    private HashSet<string> InternalDocumentKinds => _internalDocumentKinds ??=
+    [
+        AgentDocument.Kind,
+        ForkDocument.Kind,
+        SessionBindingDocument.Kind,
+        AdmissionDocument.Kind,
+        CheckpointDocument.Kind,
+    ];
+
+    private HashSet<string>? _internalDocumentKinds;
 
     /// <summary>
     /// Gives a fork its native session: forks the parent's transcript, resumes the result, and
@@ -4495,6 +4966,88 @@ internal sealed class DurableRuntime : IAsyncDisposable
         var runtime = new TaskRuntime(Store, record, definition, cancellationToken);
         await definition.Abort(runtime);
     }
+
+    /// <summary>
+    /// Re-binds a stored conversation to the native session it recorded, or fails explicitly.
+    /// </summary>
+    /// <remarks>
+    /// The binding is the record of which SDK session served the conversation. Resuming reads it
+    /// and asks the client for that session: a native transcript that is still there is resumed,
+    /// so the conversation continues with its history. A transcript that is gone throws
+    /// <see cref="DurableRecoveryRequiredException"/> instead of quietly creating a new, empty
+    /// session — a replacement would answer with no memory of the conversation while looking
+    /// perfectly healthy. A conversation that never recorded a binding has nothing to recover,
+    /// so it is bound to a fresh session and that binding is written.
+    /// </remarks>
+    internal async Task<DurableConversation> ResumeConversationAsync(
+        string conversationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (_conversations.TryGetValue(conversationId, out var live))
+        {
+            return live;
+        }
+
+        var record = Store.Conversation(conversationId)
+            ?? throw new InvalidOperationException($"No conversation '{conversationId}' is stored.");
+
+        var choices = Store.Document(AgentDocument.Kind, conversationId)?.Latest is { } latest
+            ? latest.Deserialize<AgentChoices>(DurableJson.Options)
+            : null;
+
+        var binding = Store.Document(SessionBindingDocument.Kind, conversationId)?.Latest is { } bound
+            ? bound.Deserialize<SessionBinding>(DurableJson.Options)
+            : null;
+
+        var conversation = new DurableConversation(this, null!, record);
+
+        if (binding?.SessionId is { Length: > 0 } recordedSessionId)
+        {
+            // A null result is the SDK saying it has no such session: the native transcript this
+            // conversation's history lives in is gone, and only the host can decide what to do.
+            var metadata = await Client.GetSessionMetadataAsync(recordedSessionId, cancellationToken);
+            if (metadata is null)
+            {
+                throw new DurableRecoveryRequiredException(conversationId, recordedSessionId);
+            }
+
+            var resumeConfig = BuildResumeSessionConfig(BuildSessionConfig(choices, conversation));
+            var resumed = await Client.ResumeSessionAsync(recordedSessionId, resumeConfig, cancellationToken);
+            conversation.Attach(resumed);
+            _conversations[conversationId] = conversation;
+            return conversation;
+        }
+
+        var session = await Client.CreateSessionAsync(BuildSessionConfig(choices, conversation), cancellationToken);
+        conversation.Attach(session);
+        await conversation.BindAsync(session.SessionId, choices?.Model ?? DefaultModel, cancellationToken);
+        _conversations[conversationId] = conversation;
+        return conversation;
+    }
+
+    /// <summary>
+    /// Copies a session configuration into the shape resuming takes.
+    /// </summary>
+    /// <remarks>
+    /// Resuming accepts a <see cref="ResumeSessionConfig"/>, which carries every setting a new
+    /// session does but is a separate type. Copying rather than rebuilding keeps the two paths
+    /// from drifting: the resumed session runs with exactly the configuration a new session
+    /// would have been given.
+    /// </remarks>
+    private static ResumeSessionConfig BuildResumeSessionConfig(SessionConfig config) => new()
+    {
+        Model = config.Model,
+        ReasoningEffort = config.ReasoningEffort,
+        WorkingDirectory = config.WorkingDirectory,
+        Streaming = config.Streaming,
+        Hooks = config.Hooks,
+        InfiniteSessions = config.InfiniteSessions,
+        Tools = config.Tools,
+        SystemMessage = config.SystemMessage,
+        OnPermissionRequest = config.OnPermissionRequest,
+        SandboxConfig = config.SandboxConfig,
+        EnableFileHooks = config.EnableFileHooks,
+    };
 
     /// <summary>Resumes every task that was running when the process stopped.</summary>
     internal async Task ResumeAsync(CancellationToken cancellationToken = default)
@@ -5065,7 +5618,7 @@ public sealed class DurableHarness : IAsyncDisposable
             ? new CopilotClient()
             : new CopilotClient(new CopilotClientOptions
             {
-                Connection = RuntimeConnection.ForStdio(runtimePath, Array.Empty<string>()),
+                Connection = RuntimeConnection.ForStdio(runtimePath, options.RuntimeArguments),
             });
 
         await client.StartAsync(cancellationToken);
@@ -5117,6 +5670,12 @@ public sealed class DurableHarness : IAsyncDisposable
         AgentChoices? choices = null,
         CancellationToken cancellationToken = default) =>
         _runtime.RootAsync(choices, cancellationToken);
+
+    /// <summary>Rebinds a stored conversation to the native session it recorded.</summary>
+    public Task<DurableConversation> ResumeConversationAsync(
+        string conversationId,
+        CancellationToken cancellationToken = default) =>
+        _runtime.ResumeConversationAsync(conversationId, cancellationToken);
 
     /// <summary>Forks a conversation at an entry.</summary>
     /// <param name="parent">The conversation to fork from.</param>
@@ -5767,12 +6326,15 @@ public sealed class DurableCopilotClient : IAsyncDisposable
     /// not a second durable-session abstraction. Its documents, entries, answers, and forks are
     /// the store's, and its session configuration is built by the shared runtime.
     /// </remarks>
-    public Task<DurableConversation> CreateConversationAsync(
+    public async Task<DurableConversation> CreateConversationAsync(
         AgentChoices? choices = null,
         string? ownerTaskId = null,
         string? ownerConversationId = null,
-        CancellationToken cancellationToken = default) =>
-        throw NotYet("#7.3");
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+        return await _runtime.CreateConversationAsync(choices, ownerTaskId, ownerConversationId, cancellationToken);
+    }
 
     /// <summary>Returns a conversation, creating it on first use.</summary>
     /// <param name="choices">The choices to create it with, when it has to be created.</param>
@@ -5783,10 +6345,13 @@ public sealed class DurableCopilotClient : IAsyncDisposable
     /// a new one is created, so the root is the conversation that was there before a restart
     /// rather than a second one.
     /// </remarks>
-    public Task<DurableConversation> RootAsync(
+    public async Task<DurableConversation> RootAsync(
         AgentChoices? choices = null,
-        CancellationToken cancellationToken = default) =>
-        throw NotYet("#7.3");
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+        return await _runtime.RootAsync(choices, cancellationToken);
+    }
 
     /// <summary>Rebinds a stored conversation to a live session.</summary>
     /// <param name="conversationId">The stored conversation's identifier.</param>
@@ -5798,10 +6363,13 @@ public sealed class DurableCopilotClient : IAsyncDisposable
     /// applies — so a conversation resumed after a restart runs with the authority and the
     /// sandbox policy it had when it was last configured.
     /// </remarks>
-    public Task<DurableConversation> ResumeConversationAsync(
+    public async Task<DurableConversation> ResumeConversationAsync(
         string conversationId,
-        CancellationToken cancellationToken = default) =>
-        throw NotYet("#7.4");
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+        return await _runtime.ResumeConversationAsync(conversationId, cancellationToken);
+    }
 
     /// <summary>Forks a conversation at one of its entries.</summary>
     /// <param name="parent">The conversation to fork from.</param>
@@ -5840,14 +6408,23 @@ public sealed class DurableCopilotClient : IAsyncDisposable
     /// Only conversations this client created or resumed are bound. A conversation in the store
     /// that no session is attached to is not returned; resume it first.
     /// </remarks>
-    public DurableConversation? FindConversation(string conversationId) =>
-        throw NotYet("#7.3");
+    public DurableConversation? FindConversation(string conversationId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(conversationId);
+        // Deliberately not the runtime's store-backed lookup: this answers "is this client
+        // holding that conversation", and restoring one here would create a session as a side
+        // effect of a read.
+        return _runtime.Conversations.FirstOrDefault(c => c.Id == conversationId);
+    }
 
     /// <summary>Finds a live conversation handle by predicate.</summary>
     /// <param name="match">The predicate a handle must satisfy.</param>
     /// <returns>The first matching handle, or <c>null</c> when none matches.</returns>
-    public DurableConversation? FindConversation(Func<DurableConversation, bool> match) =>
-        throw NotYet("#7.3");
+    public DurableConversation? FindConversation(Func<DurableConversation, bool> match)
+    {
+        ArgumentNullException.ThrowIfNull(match);
+        return _runtime.Conversations.FirstOrDefault(match);
+    }
 
     /// <summary>
     /// Builds the Copilot session configuration for a set of stored choices, applying the
@@ -5889,8 +6466,14 @@ public sealed class DurableCopilotClient : IAsyncDisposable
     /// </remarks>
     public SessionConfig GetSessionConfig(
         AgentChoices? choices = null,
-        DurableConversation? conversation = null) =>
-        throw NotYet("#7.3");
+        DurableConversation? conversation = null)
+    {
+        // The stored choices are authoritative, so a conversation's own choices win over
+        // whatever the caller passed; the argument only supplies defaults for a conversation
+        // that has none stored.
+        var effective = conversation?.Choices() ?? choices;
+        return _runtime.BuildSessionConfig(effective, conversation);
+    }
 
     /// <summary>
     /// Builds the session configuration a stored conversation would be resumed with, without
@@ -5905,10 +6488,21 @@ public sealed class DurableCopilotClient : IAsyncDisposable
     /// the stored choices are authoritative and the SDK configuration only fills what they leave
     /// unset. This performs store reads but creates no session and no sandbox.
     /// </remarks>
-    public Task<SessionConfig> GetSessionConfigAsync(
+    public async Task<SessionConfig> GetSessionConfigAsync(
         string conversationId,
-        CancellationToken cancellationToken = default) =>
-        throw NotYet("#7.3");
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+
+        var stored = _runtime.Store.Document(_runtime.AgentDocument.Kind, conversationId)?.Latest;
+        var choices = stored is { } latest
+            ? latest.Deserialize<AgentChoices>(DurableJson.Options)
+            : null;
+
+        // No session is created and no sandbox is started: the configuration is built the way
+        // the runtime would build it, from the store's choices alone.
+        return _runtime.BuildSessionConfig(choices, null);
+    }
 
     /// <summary>Re-enters the tasks the store records as running.</summary>
     /// <param name="cancellationToken">Cancels the operation.</param>

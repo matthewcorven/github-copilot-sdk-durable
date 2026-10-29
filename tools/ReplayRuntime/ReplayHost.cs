@@ -60,6 +60,8 @@ public sealed class ReplayHost
         "session.detach",
         "session.delete",
         "session.getMessages",
+        "session.getMetadata",
+        "session.resume",
         "session.model.list",
         "session.model.switchTo",
         "session.tools.set",
@@ -280,7 +282,9 @@ public sealed class ReplayHost
         "session.abort" => new JsonObject { ["aborted"] = true },
         "session.detach" => new JsonObject { ["success"] = true },
         "session.delete" => SessionDelete(parameters),
+        "session.resume" => SessionResume(parameters),
         "session.getMessages" => SessionGetMessages(parameters),
+        "session.getMetadata" => SessionGetMetadata(parameters),
         "session.model.list" => ModelsList(),
         "session.model.switchTo" => new JsonObject { ["modelId"] = parameters?["modelId"]?.DeepClone() },
         "session.tools.set" => new JsonObject { ["ok"] = true },
@@ -340,8 +344,14 @@ public sealed class ReplayHost
         FixtureSession session;
         if (requestedId is not null)
         {
+            // A requested id that the fixture does not record is still served: the client asked
+            // for a session by name, and the recorded turns are what the runtime answers with.
+            // The first recorded session supplies them, so a client that names its own session
+            // does not have to know the recorded id.
             session = _fixture.FindSession(requestedId)
-                ?? throw new FixtureException($"fixture records no session '{requestedId}'");
+                ?? (_fixture.Sessions.Count > 0
+                    ? _fixture.Sessions[0]
+                    : throw new FixtureException($"fixture records no session '{requestedId}' and no sessions at all"));
         }
         else
         {
@@ -357,15 +367,17 @@ public sealed class ReplayHost
             _createCursor++;
         }
 
-        _sessions[session.Id] = new SessionState(session.Id);
+        // The state is keyed by the id the client asked for, so its later requests resolve.
+        var id = requestedId ?? session.Id;
+        _sessions[id] = new SessionState(id);
 
-        return new JsonObject { ["sessionId"] = session.Id };
+        return new JsonObject { ["sessionId"] = id };
     }
 
     private JsonNode SessionSend(JsonObject? parameters, bool singleMessageId)
     {
         var session = ResolveSession(parameters);
-        var state = GetState(session.Id);
+        var state = GetState(parameters?["sessionId"]?.GetValue<string>() ?? session.Id);
 
         if (state.AwaitingToolResult)
         {
@@ -379,6 +391,14 @@ public sealed class ReplayHost
         EmitAssistantMessage(state, turn);
         EnterToolWaitIfNeeded(state, turn);
 
+        // The idle notification is written after the response, so a client that awaits the send
+        // has already subscribed by the time the turn's completion is announced.
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(IdleDelay);
+            EmitIdleIfSettled(state);
+        });
+
         // session.send answers with a single message id; the legacy batch methods answer
         // with the list shape they were defined with.
         return singleMessageId
@@ -391,7 +411,7 @@ public sealed class ReplayHost
         var session = ResolveSession(parameters);
         var requestId = parameters?["requestId"]?.GetValue<string>()
             ?? throw new FixtureException("request is missing requestId");
-        var state = GetState(session.Id);
+        var state = GetState(parameters?["sessionId"]?.GetValue<string>() ?? session.Id);
 
         if (!state.AwaitingToolResult)
         {
@@ -421,6 +441,11 @@ public sealed class ReplayHost
             var turn = TakeTurn(session, state);
             EmitAssistantMessage(state, turn);
             EnterToolWaitIfNeeded(state, turn);
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(IdleDelay);
+                EmitIdleIfSettled(state);
+            });
         }
 
         return new JsonObject { ["success"] = true };
@@ -429,7 +454,7 @@ public sealed class ReplayHost
     private JsonNode ListPendingRequests(JsonObject? parameters)
     {
         var session = ResolveSession(parameters);
-        var state = GetState(session.Id);
+        var state = GetState(parameters?["sessionId"]?.GetValue<string>() ?? session.Id);
 
         var items = new JsonArray();
         foreach (var pending in state.PendingToolCalls)
@@ -498,6 +523,26 @@ public sealed class ReplayHost
         }
 
         ArmToolTimeout(state);
+    }
+
+    /// <summary>
+    /// How long the runtime waits before announcing that a turn has settled, so the notification
+    /// arrives after the response to the request that started the turn.
+    /// </summary>
+    private static readonly TimeSpan IdleDelay = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>
+    /// Emits <c>session.idle</c> once a turn has nothing left in flight, which is what a client
+    /// waiting for the turn to finish observes.
+    /// </summary>
+    private void EmitIdleIfSettled(SessionState state)
+    {
+        if (state.AwaitingToolResult)
+        {
+            return;
+        }
+
+        EmitEvent(state, "session.idle", new JsonObject { ["aborted"] = false });
     }
 
     private void EmitAssistantMessage(SessionState state, FixtureTurn turn)
@@ -582,6 +627,50 @@ public sealed class ReplayHost
         return new JsonObject { ["events"] = events };
     }
 
+    /// <summary>
+    /// Answers the metadata lookup a client makes before resuming. A session the runtime has
+    /// seen, or one the fixture records, has metadata; anything else is reported as absent,
+    /// which is what a deleted native transcript looks like.
+    /// </summary>
+    private JsonNode SessionGetMetadata(JsonObject? parameters)
+    {
+        var sessionId = parameters?["sessionId"]?.GetValue<string>()
+            ?? throw new FixtureException("request is missing sessionId");
+
+        var known = _sessions.ContainsKey(sessionId) || _fixture.FindSession(sessionId) is not null;
+        if (!known)
+        {
+            return new JsonObject();
+        }
+
+        return new JsonObject
+        {
+            ["session"] = new JsonObject
+            {
+                ["sessionId"] = sessionId,
+                ["startTime"] = Timestamp(),
+                ["modifiedTime"] = Timestamp(),
+                ["isRemote"] = false,
+            },
+        };
+    }
+
+    /// <summary>
+    /// Resumes a recorded session. The fixture has to record the session, because resuming is
+    /// exactly the case where the runtime is asked to continue a transcript it already holds.
+    /// </summary>
+    private JsonNode SessionResume(JsonObject? parameters)
+    {
+        var sessionId = parameters?["sessionId"]?.GetValue<string>()
+            ?? throw new FixtureException("request is missing sessionId");
+
+        var session = _fixture.FindSession(sessionId)
+            ?? throw new FixtureException($"fixture records no session '{sessionId}' to resume");
+
+        _sessions[sessionId] = new SessionState(sessionId);
+        return new JsonObject { ["sessionId"] = sessionId };
+    }
+
     private JsonNode SessionDelete(JsonObject? parameters)
     {
         var sessionId = parameters?["sessionId"]?.GetValue<string>();
@@ -604,7 +693,10 @@ public sealed class ReplayHost
         var sessionId = parameters?["sessionId"]?.GetValue<string>()
             ?? throw new FixtureException("request is missing sessionId");
 
+        // A session the client created under its own id is served by the recorded session that
+        // supplied its turns, so the id the client chose does not have to be the recorded one.
         return _fixture.FindSession(sessionId)
+            ?? _fixture.Sessions.FirstOrDefault()
             ?? throw new FixtureException($"fixture records no session '{sessionId}'");
     }
 
