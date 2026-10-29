@@ -9,7 +9,7 @@ host's business, not ours.
 - Policy type: `DurableSandboxPolicy` (`lib/Durable.cs`)
 - Wire type: `GitHub.Copilot.Rpc.SandboxConfig`
 - Mapper: `DurableHarness.BuildSandboxConfig(policy, workingDirectory)`
-- Example: `examples/33-sandbox-sdk-filesystem.cs`
+- Examples: `examples/33-sandbox-sdk-filesystem.cs` (filesystem), `examples/34-sandbox-sdk-network-credentials.cs` (network, credentials, dev tools, MCP/LSP)
 - SDK: `GitHub.Copilot.SDK` 1.0.26, sandbox types annotated `GHCP001` (evaluation only)
 
 ## 1. Backends by platform
@@ -48,6 +48,10 @@ the runtime does not tell us either way.
 | Bypass | `AllowBypass` | Advisory | Advisory | Advisory | `SandboxDecisionDataBypassDecided` |
 | Dev-tool access | `AllowDevToolAccess` | Advisory | Advisory | Advisory | `SandboxDecisionDataPolicyResolved` |
 | Trust working directory | `TrustWorkingDirectory` | Advisory | Advisory | Advisory | `SandboxDecisionDataPolicyResolved` |
+| Outbound network | `Network.AllowOutbound` | Enforced (see §8) | Enforced | Enforced | `SandboxDecisionDataPolicyResolved.AllowOutbound` |
+| Local network | `Network.AllowLocalNetwork` | Enforced (see §8) | Enforced | Enforced | `SandboxDecisionDataPolicyResolved.AllowLocalNetwork` |
+| Host allowlist | `Network.AllowedHosts` | Enforced | Enforced | Enforced | `SandboxDecisionDataAccessDenied` |
+| Host blocklist | `Network.BlockedHosts` | Enforced | Enforced | Enforced | `SandboxDecisionDataAccessDenied` |
 
 Advisory rows are not a gap in the durable layer: they are settings the runtime consults
 when it decides whether to spawn inside the sandbox at all. They change *whether* the
@@ -150,3 +154,55 @@ dotnet run examples/33-sandbox-sdk-filesystem.cs
 Exit 0 means the policy mapped and, if a backend engaged, the denial was observed. The
 example prints the resolved policy, the run mode, and every decision the runtime reported,
 so a host that degrades is visible in the output rather than silent.
+
+## 8. Network, credential, dev-tool and MCP/LSP options by example
+
+`examples/34-sandbox-sdk-network-credentials.cs` is the reference for every option in this
+section. "CI level" says what CI proves about the option: **policy** means the mapping and the
+resolved policy are asserted on every host, **enforcement** means a denial is also asserted when a
+backend engaged, and **observed** means the example prints what happened and asserts only what the
+backend reports.
+
+| Option | Example | Enforceable on | CI level |
+|---|---|---|---|
+| `Network.AllowOutbound` | 34 | macOS seatbelt, Linux bubblewrap, Windows process container | policy + observed enforcement |
+| `Network.AllowLocalNetwork` | 34 | macOS seatbelt, Linux bubblewrap, Windows process container (needs PSEC host-loopback for `network_filtering`) | policy |
+| `Network.AllowedHosts` | 34 | macOS seatbelt, Linux bubblewrap, Windows process container | policy + enforcement (not-denied) |
+| `Network.BlockedHosts` | 34 | macOS seatbelt, Linux bubblewrap, Windows process container | policy + enforcement (denied) |
+| `Network.Proxy` | 34 | macOS seatbelt, Linux bubblewrap, Windows process container | policy (mapping only) |
+| `Credentials.EnvVars` (masking + inject hosts) | 34 | macOS seatbelt, Linux bubblewrap, Windows process container | policy + enforcement (masked value observed in the shell) |
+| `Auth.Gh` | 34 | macOS seatbelt, Linux bubblewrap, Windows process container | policy + resolved `PolicyResolved.GhAuth` |
+| `Auth.Git` | 34 | macOS seatbelt, Linux bubblewrap, Windows process container | policy + resolved `PolicyResolved.GitAuth` |
+| `AllowDevToolAccess` | 34 | Advisory everywhere — it changes whether the sandbox engages, not what it blocks | policy |
+| `SandboxMcpServers` | 34 | macOS seatbelt, Linux bubblewrap, Windows process container | policy |
+| `SandboxLspServers` | 34 | macOS seatbelt, Linux bubblewrap, Windows process container | policy |
+
+### `network.allowOutbound` is not always reported as a denial
+
+On macOS seatbelt, `allowOutbound = false` is expressed by the backend as a failed `connect`, and
+the runtime reports `access_denied` only when it can classify the refusal. The locked session in
+example 34 therefore sees `curl: (7) Failed to connect ...` with no `access_denied` decision, while
+the same session with a host *blocklist* entry produces
+`denialClass: network_host, enforcementPoint: shell, control: network`.
+
+That is why example 34 treats the two cases differently:
+
+- A **blocked host** (`Network.BlockedHosts`) must be reported as `NetworkOutbound`/`NetworkHost`.
+  If the backend refuses the connection without naming a denial, the example prints a notice and
+  skips the assertion instead of claiming evidence it does not have.
+- An **allowed host** is asserted negatively: no `NetworkOutbound`/`NetworkHost`/`NetworkLocal`
+  denial may appear for it.
+
+A configured `Network.Proxy` is not echoed back either: a policy with a proxy URL resolved with
+`PolicyResolved.ProxyMode == none` on seatbelt. Assert the URL on the configuration
+(`DurableHarness.BuildSandboxConfig`) and assert only that the resolved mode is one of
+`none`/`loopback`/`external`.
+
+### Credential masking is observed, not asserted from configuration
+
+The masking assertion is behavioural: the example generates a value, sets it in its own
+environment, configures the variable for masking, and asks the sandboxed shell to write a digest
+and a length to a file. The value the shell sees must be non-empty and must not match the generated
+digest. It runs in every mode where a shell runs, `Enforced` or `Replayed`, because the sentinel is
+the runtime's, not the backend's. The value itself is never printed, never written to the
+workspace, and never part of the durable policy.
