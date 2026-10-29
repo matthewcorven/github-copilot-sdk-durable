@@ -48,7 +48,7 @@ A strict code audit of all 33 examples (`00` through `32`) in `examples/` agains
 ## Detailed Notes on Fidelity
 
 ### Real Components Across the Suite
-- **No Mock Engine:** No tests or examples use mocked in-memory stubs pretending to be the Copilot SDK. All live examples connect over JSON-RPC to the actual Copilot CLI runtime and stream real LLM completions from GitHub Copilot models (`gpt-6-luna`, `mai-code-1.1-flash`, etc.).
+- **No Placeholder Engine:** No tests or examples use in-memory stand-ins pretending to be the Copilot SDK. All live examples connect over JSON-RPC to the actual Copilot CLI runtime and stream real LLM completions from GitHub Copilot models (`gpt-6-luna`, `mai-code-1.1-flash`, etc.).
 - **Self-Asserting Verification:** Every example terminates with explicit programmatic `Check.*` assertions that enforce invariants (state values, task statuses, document history, and event presence). A regression causes the process to exit non-zero.
 
 ### The Single Simplification: Example 04 (`04-watches`)
