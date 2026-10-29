@@ -4098,6 +4098,16 @@ public sealed class DurableHarnessOptions
     /// </para>
     /// </remarks>
     public string? RuntimePath { get; set; }
+
+    /// <summary>
+    /// Arguments passed to the runtime executable named by <see cref="RuntimePath"/>.
+    /// </summary>
+    /// <remarks>
+    /// A runtime selected by path is started with these arguments, so a host can point the
+    /// harness at a runtime that needs its own configuration — a recorded transcript, for
+    /// instance. The bundled runtime is started with none.
+    /// </remarks>
+    public IList<string> RuntimeArguments { get; set; } = Array.Empty<string>();
 }
 
 /// <summary>
@@ -4144,7 +4154,6 @@ internal sealed class DurableRuntime : IAsyncDisposable
     private readonly ConcurrentDictionary<string, TaskCompletionSource<TaskOutcome>> _taskCompletions = [];
     private readonly ConcurrentDictionary<string, byte> _runningTasks = [];
     private readonly ConcurrentDictionary<string, Task> _inFlight = [];
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _checkpointGates = [];
     private readonly object _lifecycleGate = new();
 
     private CopilotClient? _client;
@@ -5487,7 +5496,7 @@ public sealed class DurableHarness : IAsyncDisposable
             ? new CopilotClient()
             : new CopilotClient(new CopilotClientOptions
             {
-                Connection = RuntimeConnection.ForStdio(runtimePath, Array.Empty<string>()),
+                Connection = RuntimeConnection.ForStdio(runtimePath, options.RuntimeArguments),
             });
 
         await client.StartAsync(cancellationToken);
