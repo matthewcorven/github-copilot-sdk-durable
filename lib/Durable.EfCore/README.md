@@ -71,15 +71,25 @@ These are different mechanisms, so the guarantee is demonstrated rather than ass
 stores and compares the observable outcome — the same ids, the same sequence, the same record
 counts.
 
-`Persist()` calls `BeginTransaction()` with no argument, so the isolation level is the
-provider's default:
+`Persist()` calls `_context.Database.BeginTransaction()` with no argument
+(`EfCoreStoreProvider.cs:204`), so the isolation level is whatever the provider picks as its
+default:
 
 | Provider | Isolation level | Notes |
 |---|---|---|
 | SQLite | `Serializable` | The default for `BeginTransaction()`. SQLite serialises writers: a write transaction takes the database write lock, so two writers cannot interleave. Readers see the last committed state. |
-| SQL Server | To be documented with #52 | Not wired up in this tree. |
-| PostgreSQL | To be documented with #52 | Not wired up in this tree. |
-| MySQL | To be documented with #52 | Not wired up in this tree. |
+| SQL Server | `ReadCommitted` | Documented as the default for `SqlTransaction.IsolationLevel` in `Microsoft.Data.SqlClient` 6.1.6. |
+| PostgreSQL | `ReadCommitted` | Documented as the default for `NpgsqlTransaction.IsolationLevel` in `Npgsql` 10.0.3, and the provider prepends `BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED`. This is also PostgreSQL's own default. |
+| MySQL | `ReadCommitted` | Documented as the default for `MySqlTransaction.IsolationLevel` in `MySql.Data` 26.10.0. |
+
+The three server levels are the defaults those client packages document for their own
+transaction objects — the packages this repository resolves: `Microsoft.Data.SqlClient`
+6.1.6, `Npgsql` 10.0.3 and `MySql.Data` 26.10.0, pinned transitively by the provider package
+references. They have **not** been verified against a live server: no test opens a transaction
+and reads the level back, and the parity suite compares the observable outcome of the same
+scenarios across stores, so it would catch a lost write or a partial commit, not a level that
+differs from the one named here. Treat this column as what the client library documents, not
+as a measured property of a running server.
 
 The store also serialises writers within one process: `DurableStore.CommitAsync` holds a gate
 for the whole transaction, so the isolation level governs cross-process concurrency, not

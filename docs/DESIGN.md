@@ -146,23 +146,49 @@ payloads stored as text rather than `jsonb`/`JSON`/`nvarchar(max)`, and no times
 all, so the same `DurableDbContext` is accepted by all four providers with no per-provider
 branch.
 
-| Provider | Package (all EF Core 10.0.12) | Connection-string shape | Migration | Needs a server |
-|---|---|---|---|---|
-| SQLite | `Microsoft.EntityFrameworkCore.Sqlite` | `Data Source=<absolute path>` — the store path *is* the database file, built with `SqliteConnectionStringBuilder` so a path containing a space, `;`, `=` or a quote is escaped | Checked in: `lib/Durable.EfCore/Migrations/20261029034106_InitialCreate`, applied by `Database.Migrate()` on open | No |
-| SQL Server | `Microsoft.EntityFrameworkCore.SqlServer` | `Server=<host>;Database=<name>;User Id=<user>;Password=<password>;TrustServerCertificate=...` — a connection string, not a path | `dotnet ef migrations add InitialCreate_SqlServer --project lib/Durable.EfCore --output-dir Migrations/SqlServer` | Yes |
-| PostgreSQL | `Npgsql.EntityFrameworkCore.PostgreSQL` | `Host=<host>;Database=<name>;Username=<user>;Password=<password>` | `dotnet ef migrations add InitialCreate_PostgreSql --project lib/Durable.EfCore --output-dir Migrations/PostgreSql` | Yes |
-| MySQL | `Pomelo.EntityFrameworkCore.MySql` | `Server=<host>;Database=<name>;User Id=<user>;Password=<password>` | `dotnet ef migrations add InitialCreate_MySql --project lib/Durable.EfCore --output-dir Migrations/MySql` | Yes |
+| Provider | Package (version) | Registered name | Connection-string env var | Migration (checked in) | Needs a server |
+|---|---|---|---|---|---|
+| SQLite | `Microsoft.EntityFrameworkCore.Sqlite` | `efcore` | — (the store path *is* the database file) | `lib/Durable.EfCore/Migrations/20261029034106_InitialCreate` | No |
+| SQL Server | `Microsoft.EntityFrameworkCore.SqlServer` 10.0.12 | `efcore-sqlserver` | `DURABLE_SQLSERVER_CONNECTION` | `lib/Durable.EfCore.SqlServer/Migrations/20261029135250_InitialCreate` | Yes |
+| PostgreSQL | `Npgsql.EntityFrameworkCore.PostgreSQL` 10.0.3 | `efcore-postgresql` | `DURABLE_POSTGRESQL_CONNECTION` | `lib/Durable.EfCore.PostgreSql/Migrations/20261029135238_InitialCreate` | Yes |
+| MySQL | `MySql.EntityFrameworkCore` 10.0.12 | `efcore-mysql` | `DURABLE_MYSQL_CONNECTION` | `lib/Durable.EfCore.MySql/Migrations/20261029135245_InitialCreate` | Yes |
 
-**SQLite is the only one wired end to end today.** It is the reference provider precisely
-because it needs no server: the suite and the examples run on a clean machine with nothing
-installed. The three server-backed rows are the intended convention — the same model over a
-different connection string, with a migration generated from the same `DurableDbContext` —
-and their packages, `Use*` factories, and migrations land with **#52**. Until then only
-SQLite is available; the table is the target, not a claim about the current build.
+The MySQL row is Oracle's `MySql.EntityFrameworkCore`, not `Pomelo.EntityFrameworkCore.MySql`.
+The PostgreSQL provider tracks its own release line, so it is 10.0.3 while the other two are
+10.0.12. Each migration is applied by `Database.Migrate()` when the store opens.
+
+**All four providers are wired.** SQLite is the reference provider because it needs no
+server: the store path *is* the database file, and the suite and the examples run on a clean
+machine with nothing installed. The three server-backed providers are the same model over a
+different connection string, each with its own package, `Use*` factory, and checked-in
+migration generated from the same `DurableDbContext`. The CI build runs `tests/Durable.Tests`
+only, so the server-backed integration tests in `tests/Durable.EfCore.Tests` are run by hand;
+on a machine with no server they skip with a message naming the endpoint, the real failure,
+and how to un-skip, rather than failing. The skip is decided by opening a real connection with
+a two-second timeout rather than by checking a port, because a port that accepts a connection
+but speaks another protocol is not a usable server. On a machine with no servers at all that
+suite reports 61 passed, 12 skipped, 73 total.
+
+Migrations live in each provider's own assembly rather than in `Durable.EfCore` because EF
+Core resolves a context's model snapshot as the first `ModelSnapshot` it finds in the
+migrations assembly: four snapshots in one assembly would be ambiguous, and
+`Database.Migrate()` would apply every provider's migration to every database. Each provider
+therefore sets `MigrationsAssembly` to its own assembly. A new migration is added against the
+provider project, with the output directory inside that provider's `Migrations/`:
+
+```
+dotnet ef migrations add <Name> --project lib/Durable.EfCore.SqlServer --output-dir Migrations
+```
 
 Because the connection string for a server-backed provider is not a file path, that case
 goes through `Provider` (or a `DbContextOptions<DurableDbContext>` factory) rather than
-`Path` + `ProviderName`; the `Path`-to-`Data Source` convention applies to SQLite only.
+`Path` + `ProviderName`; the `Path`-to-`Data Source` convention applies to SQLite only. Each
+provider also exposes `ConnectionStringFor(string)`, which normalises the string through its
+own builder (`SqlConnectionStringBuilder`, `NpgsqlConnectionStringBuilder`,
+`MySqlConnectionStringBuilder`) so a malformed string fails at the convention rather than at
+the first query, and a `ConnectionString` property that reads the environment variable above
+and otherwise falls back to a localhost container default (a throwaway credential, not a
+secret). `Register()` makes the provider selectable by its registered name.
 
 The persistent provider holds the same exclusive single-writer lock on its path that the
 JSONL provider does, and replays its `events` log on open, so a reopened store mints past
