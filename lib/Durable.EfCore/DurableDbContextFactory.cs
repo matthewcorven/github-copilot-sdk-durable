@@ -16,10 +16,6 @@ public sealed class DurableDbContextFactory : IDesignTimeDbContextFactory<Durabl
     /// <inheritdoc />
     public DurableDbContext CreateDbContext(string[] args)
     {
-        var options = new DbContextOptionsBuilder<DurableDbContext>()
-            .UseSqlite("Data Source=durable-design-time.sqlite")
-            .Options;
-
-        return new DurableDbContext(options);
+        return new DurableDbContext(EfCoreStoreProvider.ContextOptionsFor("durable-design-time.sqlite"));
     }
 }
