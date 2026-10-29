@@ -255,7 +255,12 @@ is_live() {
   return 1
 }
 
-selected=("${positional[@]}")
+# bash 3.2 treats an empty array as unbound under `set -u`, so expand it only when set.
+selected=()
+if [[ ${#positional[@]} -gt 0 ]]; then
+  selected=("${positional[@]}")
+fi
+
 if [[ ${#selected[@]} -eq 0 ]]; then
   # bash 3.2 on macOS has no mapfile, so read the list with a while loop.
   while IFS= read -r line; do
