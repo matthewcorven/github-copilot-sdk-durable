@@ -23,6 +23,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The provider implements Copilot.Durable's IDurableStoreProvider seam. -->
+    <ProjectReference Include="..\Copilot.Durable.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="Durable.EfCore.Tests" />
   </ItemGroup>
 

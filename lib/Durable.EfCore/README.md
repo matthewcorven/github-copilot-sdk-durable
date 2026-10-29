@@ -1,7 +1,8 @@
 # Durable.EfCore
 
-The durable store's schema as an EF Core model. This project owns the *model* only; the
-provider implementation is #2.2 and the per-provider wiring is #2.3 / #2.4.
+The durable store's schema as an EF Core model, and the provider that writes the store's
+state through it. Per-provider connection wiring (SQL Server, PostgreSQL, MySQL) is #2.3 /
+#2.4.
 
 ## What is mapped
 
@@ -30,6 +31,59 @@ model. That is possible because of four choices:
    unchanged.
 4. **No `DateTimeOffset`.** MySQL maps it differently from the other three, so the model
    carries no timestamps at all. Ordering is by the store's monotonic `Sequence`.
+
+## The provider
+
+`EfCoreStoreProvider` implements every member of `IDurableStoreProvider`. It derives from
+`InMemoryStoreProvider`, so the read and mutation members are the settled in-memory
+semantics, and overrides only what makes it persistent: `IsPersistent`, `Open`,
+`Persist()`, and `Dispose`.
+
+The mapping is a hybrid, because the store's state is not all transcript-shaped:
+
+| Store state | Written as |
+|---|---|
+| Conversations | `sessions` rows, `Version` incremented on every update |
+| Entries | `turns` rows, keyed by the entry id, `Sequence` = the sequence minted for the entry |
+| Documents, document versions, tasks, entry lists | `events` envelopes (`document`, `document-version`, `task`, `entry-append`, `entry-list`) |
+
+Consecutive appends write an `entry-append` event *and* a `turns` row. A fork that inherits
+its parent's entry ids writes only an `entry-list` event, because those ids already have
+`turns` rows under the parent — an entry id is one row, not one per session.
+
+`event.Sequence` is the envelope log's own counter, not the store's sequence: a single
+commit can write several envelopes, and a single commit can also mint several store
+sequences. Document versions therefore carry their minted `sequence` in the payload, and a
+replay takes the maximum of both counters so a reopened store always mints past every
+sequence it replayed.
+
+## Registration
+
+The provider registers itself, so existing call sites keep the provider they had:
+
+```csharp
+EfCoreStoreProvider.Register();
+
+using var store = DurableStore.Create(new DurableStoreOptions
+{
+    Path = "session.db",
+    ProviderName = EfCoreStoreProvider.RegisteredName, // "efcore"
+});
+```
+
+Alternatively, pass a context-options factory and skip the registry:
+
+```csharp
+using var store = DurableStore.Create(new DurableStoreOptions
+{
+    Provider = _ => new DbContextOptionsBuilder<DurableDbContext>()
+        .UseSqlite($"Data Source={path}")
+        .Options,
+});
+```
+
+`Provider` wins over `ProviderName`, which wins over `Format`. The seam is additive: no
+`DurableStoreFormat` arm, no constructor, and no settled member changed.
 
 ## Migrations
 
@@ -63,3 +117,8 @@ factories is #2.4, deliberately not done here.
 `tests/Durable.EfCore.Tests` covers model construction, the envelope shape, key and
 concurrency-token portability, applying the checked-in migration to a fresh in-memory
 database, and that the model and the migration snapshot agree (nothing left to generate).
+
+It also runs the behavioural contract the JSONL provider is held to — round-trip of every
+`IDurableStoreProvider` member, rollback in memory and across reopen, monotonic sequences
+after reopen, fork inheritance, task checkpoint and memo persistence, abort outcomes,
+single-writer locking, and provider registration.
