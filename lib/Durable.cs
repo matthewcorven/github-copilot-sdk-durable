@@ -516,6 +516,26 @@ public sealed class DurableStoreOptions
 
     /// <summary>The file name used under the per-user default directory.</summary>
     public string FileName { get; init; } = "durable-store.jsonl";
+
+    /// <summary>
+    /// A factory for the provider that backs the store. When set, it takes precedence
+    /// over <see cref="ProviderName"/> and over <see cref="Format"/>: the store is
+    /// built over the provider the factory returns instead of one of the built-in
+    /// file formats.
+    /// </summary>
+    /// <remarks>
+    /// The factory receives these options, so a provider can read whatever it needs
+    /// from them. It is called once per store, and the provider it returns is owned
+    /// and disposed by that store.
+    /// </remarks>
+    public Func<DurableStoreOptions, IDurableStoreProvider>? Provider { get; init; }
+
+    /// <summary>
+    /// The name of a provider registered with <see cref="DurableStore.RegisterProvider"/>.
+    /// When set and <see cref="Provider"/> is not, the store is built over the
+    /// registered provider.
+    /// </summary>
+    public string? ProviderName { get; init; }
 }
 
 /// <summary>
@@ -1451,10 +1471,54 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
 /// </remarks>
 public sealed class DurableStore : IDisposable
 {
+    private static readonly ConcurrentDictionary<string, Func<DurableStoreOptions, IDurableStoreProvider>> ProviderFactories =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private readonly IDurableStoreProvider _provider;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly string? _path;
     private readonly DurableStoreFormat _format;
+
+    /// <summary>
+    /// Registers a provider factory under a name, so a store can be opened over that
+    /// provider with <see cref="DurableStoreOptions.ProviderName"/>. Registering the
+    /// same name again replaces the factory.
+    /// </summary>
+    /// <remarks>
+    /// This is additive surface: the built-in formats keep the arms they had, and a
+    /// store that names no provider is created exactly as before. Registration is
+    /// process-wide, so a host that embeds the durable layer registers once at startup
+    /// — or references a package that registers on the host's behalf — and thereafter
+    /// selects the provider by name in the options it already passes to
+    /// <see cref="Create(DurableStoreOptions)"/>.
+    /// <para>
+    /// The factory is called once per store and receives the options the store was
+    /// created with. The provider it returns is owned and disposed by that store.
+    /// </para>
+    /// </remarks>
+    public static void RegisterProvider(string name, Func<DurableStoreOptions, IDurableStoreProvider> factory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(factory);
+        ProviderFactories[name] = factory;
+    }
+
+    /// <summary>
+    /// Removes a provider factory registered with <see cref="RegisterProvider"/>.
+    /// </summary>
+    /// <returns><c>true</c> when a factory was registered under the name.</returns>
+    public static bool UnregisterProvider(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        return ProviderFactories.TryRemove(name, out _);
+    }
+
+    /// <summary>Whether a provider is registered under the name.</summary>
+    public static bool IsProviderRegistered(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        return ProviderFactories.ContainsKey(name);
+    }
 
     /// <summary>Creates a store. When <paramref name="path"/> is given, state is persisted to that file.</summary>
     public DurableStore(string? path = null)
@@ -1494,19 +1558,49 @@ public sealed class DurableStore : IDisposable
                 Path = DefaultStorePath(options.FileName),
                 Format = options.Format,
                 FileName = options.FileName,
+                Provider = options.Provider,
+                ProviderName = options.ProviderName,
             };
         }
 
-        IDurableStoreProvider provider = options.Format switch
+        IDurableStoreProvider provider = SelectProvider(options);
+
+        provider.Open(options);
+        return new DurableStore(provider, options.Path, options.Format);
+    }
+
+    /// <summary>
+    /// Picks the provider the options select. An explicit factory wins, then a
+    /// registered provider name, then the built-in formats — so the seam only ever
+    /// adds a way to name a provider, and every existing caller keeps the provider
+    /// it had.
+    /// </summary>
+    private static IDurableStoreProvider SelectProvider(DurableStoreOptions options)
+    {
+        if (options.Provider is not null)
+        {
+            return options.Provider(options);
+        }
+
+        if (options.ProviderName is not null)
+        {
+            if (!ProviderFactories.TryGetValue(options.ProviderName, out var factory))
+            {
+                throw new InvalidOperationException(
+                    $"No durable store provider is registered under the name '{options.ProviderName}'. " +
+                    "Register one with DurableStore.RegisterProvider before creating the store.");
+            }
+
+            return factory(options);
+        }
+
+        return options.Format switch
         {
             DurableStoreFormat.InMemory => new InMemoryStoreProvider(),
             DurableStoreFormat.LegacyJson => new LegacyJsonStoreProvider(),
             DurableStoreFormat.Jsonl => new JsonlStoreProvider(),
             _ => CreateProviderForAuto(options.Path),
         };
-
-        provider.Open(options);
-        return new DurableStore(provider, options.Path, options.Format);
     }
 
     /// <summary>

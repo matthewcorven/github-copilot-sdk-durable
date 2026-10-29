@@ -36,6 +36,11 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Durable.Tests" />
+    <!-- A provider shares the store's exclusive file lock so two writers on one path
+         are refused the same way whatever the provider. -->
+    <InternalsVisibleTo Include="Durable.EfCore" />
+    <!-- The provider's tests assert the store built the provider the options selected. -->
+    <InternalsVisibleTo Include="Durable.EfCore.Tests" />
   </ItemGroup>
 
   <ItemGroup>

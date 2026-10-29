@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\lib\Durable.EfCore\Durable.EfCore.csproj" />
+    <ProjectReference Include="..\..\lib\Copilot.Durable.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -19,6 +20,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Using Include="Durable" />
     <Using Include="Xunit" />
   </ItemGroup>
 
