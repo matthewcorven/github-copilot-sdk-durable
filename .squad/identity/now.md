@@ -1,13 +1,13 @@
 ---
-updated_at: 2026-10-29T08:20:00-04:00
-focus_area: Ralph round 4 — five PRs merged (#55-#59), five issues closed, three newly unblocked issues dispatched (#36, #44, #50)
-active_issues: [2, 3, 4, 5, 6, 7, 8, 19, 36, 37, 38, 39, 40, 41, 44, 45, 46, 47, 48, 50, 51, 52, 53, 54]
+updated_at: 2026-10-29T09:22:51-04:00
+focus_area: Ralph round 5 — nine PRs merged (#55-#63), nine issues closed, wave 5 dispatched (#37, #38, #46, #47, #51)
+active_issues: [37, 38, 46, 47, 51]
 ---
 
 # What We're Focused On
 
-**Ralph round 4 — FIVE PRs MERGED (2026-10-29).** User granted merge approval for the session.
-All five green PRs squash-merged to `dev` in dependency order:
+**Ralph round 5 — NINE PRs MERGED, NINE ISSUES CLOSED (2026-10-29).** User granted merge approval
+for the session. All nine green PRs squash-merged to `dev` in dependency order:
 
 | PR | Issue | Squash commit | Unblocked |
 |----|-------|---------------|-----------|
@@ -16,94 +16,50 @@ All five green PRs squash-merged to `dev` in dependency order:
 | #57 | #49 | `50936a7` | #50 |
 | #55 | #17 | `7afb560` | — |
 | #59 | #18 | `86ea980` | — |
+| #60 | #44 | `7ebca4d` | #45 |
+| #61 | #50 | `6f90060` | #51 |
+| #63 | #45 | `121954e` | #46, #47 |
+| #62 | #36 | `8d13a83` | #37, #38 |
 
-**#59 needed a rebase.** It went `CONFLICTING/DIRTY` after #55 landed, as predicted. Three
-commits replayed onto `origin/dev`; `docs/COPILOT_SDK_NOTES.md` auto-merged. Two real conflicts:
+**All nine issues closed manually.** GitHub only auto-closes on `Closes #N` when the PR targets the
+*default* branch (`main`), not `dev` — so PRs that did carry the keyword left their issues open.
+Closed #17, #18, #35, #43, #49, #44, #50, #45, #36 with `--reason completed`.
 
-- `scripts/validate.sh` — resolved as a union: `LIVE_EXAMPLES` now carries both `34` and `35`.
-- `docs/SANDBOX_MATRIX.md` — both sides added a `## 8`. Kept #55's `## 8. Network, credential,
-  dev-tool and MCP/LSP options by example` and renumbered #59's to `## 9. Observability, bypass,
-  trust and keychain`. The Examples bullet at the top now names 33, 34 and 35.
+**Board flipped:** #36, #44, #45, #50 → Done. #37, #38, #46, #47, #51 → In Progress.
 
-**A merge-ordering regression was caught and fixed.** #59's README edit claimed "14 need no
-Copilot sign-in / 21 need a signed-in CLI" — correct against its own base, wrong once #55's
-example 34 landed. Ground truth after both merges: **36 examples, 23 live, 13 non-live**.
-Corrected in the same commit before pushing.
+**Wave 5 dispatched — five issues, all in background from `origin/dev` @ `8d13a83`:**
 
-Re-validated in the `-18` worktree after the rebase: build 0/0, suite **41/41**,
-`COMPILE_ONLY=1 ./scripts/validate.sh 35-...` PASS, vocabulary grep clean.
+| # | Slice | Owner | Worktree | Branch |
+|---|-------|-------|----------|--------|
+| 37 | 7.3 Identity binding, admission, checkpointing, resume | Core Engineer | `-37` | `squad/37-identity-binding-admission` |
+| 38 | 7.4 Coordinated transcript and document forks | Core Engineer | `-38` | `squad/38-coordinated-forks` |
+| 46 | 3.4 Deterministic replay docs + determinism check | Core Engineer | `-46` | `squad/46-replay-docs-determinism` |
+| 51 | 2.3 Provider-neutral store conformance suite | Core Engineer | `-51` | `squad/51-provider-conformance` |
+| 47 | 3.5 Polyglot attach verification | Polyglot Engineer | `-47` | `squad/47-polyglot-attach` |
 
-**All five issues closed manually.** GitHub only auto-closes on `Closes #N` when the PR targets
-the *default* branch (`main`), not `dev` — so four PRs that did carry the keyword left their
-issues open, and #58 carried no keyword at all. Closed all five with `--reason completed`.
+#37 and #38 carry the PR #56 review findings that name them (SDK configuration entry point;
+`ForkAsync` entry-id semantics). #51 builds on #50's provider seam — `Provider` > `ProviderName` >
+`Format`, process-wide registration, store-owned provider lifetime. #46 starts from a tree that
+already greps clean for banned vocabulary, so only new violations matter.
 
-**Board:** #17, #18, #35, #43, #49 → Done. #36, #44, #50 → In Progress.
-
-**Ralph round 4 dispatch — three newly unblocked issues, all `squad:core-engineer`:**
-
-| # | Slice | Worktree | Branch |
-|---|-------|----------|--------|
-| 36 | 7.2 Shared durable runtime behind harness + facade | `-36` | `squad/36-shared-durable-runtime` |
-| 44 | 3.2 Runtime connection from the environment | `-44` | `squad/44-runtime-connection-env` |
-| 50 | 2.2 EF Core store provider over `IDurableStoreProvider` | `-50` | `squad/50-efcore-store-provider` |
-
-#36 carries the PR #56 review findings 1 and 2 (the `Registry` fresh-instance-per-read defect
-and the owned-store/client storage question). #44 and #50 carry the provider-neutrality and
-vocabulary constraints from their parents.
-
-**Still blocked:** #4←3, #5←4,3, #6←5,4,3, #8←7,3, #19←6,3, #37←36, #38←36, #39←37,
-#40←39,38, #41←40, #45←44, #46←45, #47←45, #48←46, #51←50, #52←51, #53←51, #54←51.
-Epics #2, #3, #7 remain open by design — their children are in flight.
+**Still blocked:** #4←3, #5←4,3, #6←5,4,3, #8←7,3, #19←6,3, #39←37, #40←39,38, #41←40, #48←46,
+#52←51, #53←51, #54←51. Epics #2, #3, #7 remain open by design — their children are in flight.
 
 **Not granted:** release / `dev`→`main` promotion. Merge approval covers PRs only, this session.
 
+## Round-5 durable decisions
 
-**v0.4.0 — SHIPPED (2026-10-28).** Issue #30 (release strategy + changelog + starting ref)
-implemented by Lead, PR #33 merged to `dev`, `dev` promoted to `main`, tag `v0.4.0` cut,
-GitHub release published, **default branch switched `dev` → `main`**, issue closed, board Done.
-
-**#16 — durable sandbox policy — SHIPPED (2026-10-29).** PR #34 squash-merged to `dev` as
-`5147e25`, issue closed, board Done. Delivered `DurableSandboxPolicy` + nested
-`Auth`/`Credentials`/`Filesystem`/`Network`/`Proxy` types, `AgentChoices.Sandbox`,
-`BuildSandboxConfig` -> `GitHub.Copilot.Rpc.SandboxConfig`, `{workspace}` expansion,
-`SandboxDecisions` / `WaitForSandboxDecisionAsync`, `DurableHarnessOptions.TolerateHostHookFailures`,
-`lib/SandboxSupport.cs`, `examples/33-sandbox-sdk-filesystem.cs`, `docs/SANDBOX_MATRIX.md`,
-`docs/DESIGN.md` §3.6, `CHANGELOG.md` Unreleased entry, version 0.4.0 -> 0.5.0.
-
-Verified independently: build 0/0, suite **41/41**, `COMPILE_ONLY=1 ./scripts/validate.sh`
-33/33 PASS, and example 33 runs end-to-end to **exit 0** with real seatbelt enforcement
-(`run mode: Enforced (backend: seatbelt, platform: macos, outcome: engaged)`, 7 sandbox
-decisions including `access_denied` / `class: filesystem_read` / `point: shell`).
-
-**Epic #7 — DECOMPOSED (2026-10-29).** Lead created 7 native sub-issues, all on project #5
-with Status = Todo, all 16 acceptance criteria covered:
-
-| # | Slice | Owner | Blocked by |
-|---|-------|-------|------------|
-| 35 | 7.1 Finalize approved public signatures | Core Engineer | — |
-| 36 | 7.2 Extract the shared durable runtime | Core Engineer | #35 |
-| 37 | 7.3 Identity binding, admission, checkpointing, resume | Core Engineer | #36 |
-| 38 | 7.4 Coordinated transcript and document forks | Core Engineer | #36 |
-| 39 | 7.5 Propagate #16 sandbox policy + `AddDurableCopilotClient()` DI | Core Engineer | #37 |
-| 40 | 7.6 Public-path contract tests | Tester | #38, #39 |
-| 41 | 7.7 One-call example + builder/facade docs | Docs | #40 |
-
-Example number reserved: `examples/36-durable-client-builder.cs` (33/34/35 taken by #16/#17/#18).
-
-## Incident — runaway agent (2026-10-28/29)
-
-The first Core Engineer dispatch for #16 ran **11.2 hours continuously** with **zero commits**:
-1,353 bash calls, 99 `.scratch/probe*.cs` files, 73 context compactions, 2% of wall clock in
-actual tool execution. It was reverse-engineering the SDK XML in a loop it had already solved.
-
-- Work was salvaged and committed as `1046962` before the agent was stopped.
-- The agent was stopped via `write_agent` (the harness exposes **no hard-kill** for background
-  agents; subagents run inside the parent `copilot-runtime` process, so there is no PID to kill).
-- Re-dispatched with a **pre-researched brief** containing the full SDK sandbox API surface, an
-  explicit no-scratch-loop rule, and a commit-every-30-minutes rule. It finished in ~1 hour.
-
-**Lesson (new, keep applying):** a long-running agent is not evidence of progress. Check for
-commits, not elapsed time. `list_agents` duration is wall-clock, not work.
+- **#45 vocabulary doc edits are in scope and were accepted.** Three doc edits in
+  `docs/implementation/ISSUE_1_HANDOFF.md` fixed the last 4 pre-existing banned-vocabulary hits.
+  The whole source tree now greps clean for `mock|fake|stub|simulat`; #48's vocabulary obligation
+  is already satisfied and its scope should be re-read before dispatch.
+- **#50's provider seam was delivered additively, as the Lead required.** `DurableStoreOptions.Provider`
+  > `ProviderName` > `Format`; `RegisterProvider` / `UnregisterProvider` / `IsProviderRegistered`
+  over an `OrdinalIgnoreCase` dictionary; the settled store-creation surface was not changed.
+- **Regression: the #36 refactor silently deleted #44's `ResolveRuntimePath` feature.** A clean
+  build (0 errors) did not catch it; only 3 failing tests did. Binding lesson: after a conflict
+  resolution, grep the method name, verify the enclosing class is on the live call path, and run
+  the suite. A clean build does not prove a feature survived a rebase.
 
 ## Branch model
 
@@ -115,76 +71,31 @@ only at release. `origin` is SSH. **Squash-merge is the convention** (`gh pr mer
 ## Board
 
 GitHub-copilot-sdk-durable Roadmap (project 5, owner matthewcorven).
-Done: #1, #9-#16, #30.
-Todo: #2, #3, #4, #5, #6, #7, #8, #17, #18, #19, #35-#41.
+Done: #1, #9-#18, #30, #35, #36, #43, #44, #45, #49, #50.
+In Progress: #37, #38, #46, #47, #51.
+Todo: #2, #3, #4, #5, #6, #7, #8, #19, #39, #40, #41, #48, #52, #53, #54.
 
-**Native-unblocked:** #2, #3, #7 — all three are epics whose children are already in
-flight (PRs #56/#57/#58) or natively blocked. No leaf issue is startable.
-**Blocked (do not start):** #4, #5, #6, #8, #19, #36-#41, #44-#48, #50-#54.
+**Native-unblocked:** #2, #3, #7 — all three are epics whose children are already in flight or
+natively blocked. No leaf issue is startable beyond wave 5.
+**Blocked (do not start):** #4, #5, #6, #8, #19, #39, #40, #41, #48, #52, #53, #54.
 
 ## Next action
 
-**Ralph rounds 1-2 complete (2026-10-29).** Six issues delivered, five PRs open, all green.
-
-| PR | Issue | Branch | Size | Local verification |
-|---|---|---|---|---|
-| #55 | #17 | `squad/17-sandbox-network-credentials` | +604/-2, 4 files | build 0/0, suite 41/41, example 34 compile PASS |
-| #56 | #35 | `squad/35-finalize-durable-client-signatures` | +1142/-0, 4 files | build 0/0, suite 41/41 |
-| #57 | #49 | `squad/49-ef-core-dbcontext` | +927/-0, 13 files | build 0/0, suite 41/41, EfCore suite 8/8 |
-| #58 | #43 | `squad/43-deterministic-replay-runtime` | +1187/-0, 10 files | build 0/0, suite 41/41 |
-| #59 | #18 | `squad/18-sandbox-observability-bypass` | +619/-3, 5 files | build 0/0, suite 41/41, example 35 compile PASS |
-
-All five are `MERGEABLE` and target `dev`. **Only a human merges.** Squash-merge per the branch
-model: `gh pr merge <n> --squash --delete-branch`.
-
-Each PR body carries its required artifact: #58 enumerates the implemented JSON-RPC methods,
-#57 records the four provider-specific model decisions, #56 ships
-`docs/implementation/ISSUE_7_API_SIGNATURES.md`.
-
-**Board is now merge-gated.** Every remaining open issue is natively blocked:
-
-| Issue | Blocked by |
-|---|---|
-| #36 | #35 (PR #56) |
-| #44 | #43 (PR #58) |
-| #50 | #49 (PR #57) |
-| #4 | #3 |
-| #5 | #3, #4 |
-| #6 | #3, #4, #5 |
-| #8 | #3, #7 |
-| #19 | #3, #6 |
-| #2, #3, #7 | open epics (children in flight or blocked) |
-
-So the next startable work appears only after a human merges: merging #56 unblocks **#36**,
-merging #58 unblocks **#44**, merging #57 unblocks **#50**. Merging #17 and #18 closes the
-sandbox example pair with no dependents.
+**Ralph round 5 in flight (2026-10-29).** Five issues dispatched in background from `origin/dev` @
+`8d13a83`. Next startable work appears only after a human merges: merging #37 unblocks **#39**,
+merging #38 unblocks **#40** (with #39), merging #46 unblocks **#48**, merging #51 unblocks
+**#52**, **#53** and **#54**. #47 has no dependents.
 
 **Process lessons recorded** in `.squad/decisions.md` this round:
 
-- Delivery-gap lesson — a dispatched agent can report done with only a local commit. The #18
-  agent finished and re-ran its example successfully but never committed the final edit, pushed,
-  or opened a PR. Audit artifacts (commit SHA, remote branch, PR, CI), never the completion report.
-  Every implementation prompt now requires pushing the branch and opening the PR.
+- Delivery-gap lesson — a dispatched agent can report done with only a local commit. Audit
+  artifacts (commit SHA, remote branch, PR, CI), never the completion report.
 - PR evidence standard — CI `build=SUCCESS` is necessary but not sufficient. Verify locally with
   `dotnet build`, `dotnet test tests/Durable.Tests` (plus any new test project the PR added), and
   `COMPILE_ONLY=1 ./scripts/validate.sh <example>`.
-
-**PR #56 design review — APPROVE WITH COMMENTS (2026-10-29T09:55Z).** Lead reviewed the
-declarations in `lib/Durable.cs:3996-4680`, `lib/Durable.DependencyInjection.cs` and the
-`.csproj` against `docs/implementation/ISSUE_7_API_SIGNATURES.md` — not the document alone.
-No blocking issue; **#36 may start the moment a human merges #56.** Verdict posted with
-`gh pr review 56 --comment` (not `--approve`; a human owns merge approval).
-
-Eight non-blocking findings, each posted as a carry-forward comment on the issue that owns it:
-
-| Issue | Findings |
-|---|---|
-| #36 | `Registry` getter allocates a fresh instance per read (hidden installs); `Store`/`NativeClient` read `_options` directly so `InitializeAsync`-created resources have no home; `GetSessionConfig` ≡ `BuildSessionConfig` equivalence unnamed; bare DI overload's container-registered store requirement unstated |
-| #37 | no way to supply SDK configuration (§7 has no entry point, `BuildSessionConfig` merges nothing); state that #37's binding/admission/checkpoint surface is internal, so #37 adds no public API |
-| #38 | `ForkAsync(parent, entryId)` never says whether `entryId` is a durable entry id or an SDK event id; #38 needs the `ToEventId` mapping and a wrong guess is a public break |
-| #39 | `ResumeTasksAsync` awaits its outcomes while `DurableHarness.ResumeAsync` is fire-and-forget; §6 forbids the two paths diverging |
+- Rebase-survival lesson — a clean build does not prove a merged feature survived a conflict
+  resolution. Grep the deleted method, check the enclosing class, run the suite.
 
 **Open question — do not auto-release:** `lib/Copilot.Durable.csproj` is at `0.5.0` and
 `CHANGELOG.md` has an `## [Unreleased]` entry. Cutting `v0.5.0` is a separate `dev` -> `main`
-promotion per `docs/RELEASING.md` and needs user sign-off. `dev` will be well ahead of `main`
-once the five PRs land.
+promotion per `docs/RELEASING.md` and needs user sign-off. `dev` is now well ahead of `main`.

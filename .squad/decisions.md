@@ -390,3 +390,47 @@ The eight non-blocking findings, each with its owning issue:
 **Why:** These are design-review findings against the document that gates #36-#41. If they are not recorded, the next agents will re-discover them or, worse, encode a guess into a phase-2 issue where changing it becomes a public break.
 
 **How it applies:** Every spawn prompt for #36-#41 must carry the findings that name that issue. Findings 3 and 4 are documentation edits to `docs/implementation/ISSUE_7_API_SIGNATURES.md` and fold into #37 and #38 respectively.
+
+### 2026-10-24T03-13-55: Project board + native blocked-by links are authoritative for issue status/dependencies; github-issues skill declared in agent context files
+**By:** coordinator
+**What:** Project board + native blocked-by links are authoritative for issue status/dependencies; github-issues skill declared in agent context files
+**References:** lead, ralph, squad.agent.md, issue-lifecycle.md, routing.md, team.md
+**Why:** Decision: GitHub Project board and native blocked-by links are the authoritative sources for issue status and dependencies.
+
+1. **Status authority:** The GitHub Project board "github-copilot-sdk-durable Roadmap" (project #5, PVT_kwHOAajMkc4BobdZ) Status field (Todo / In Progress / Done) is the authoritative source for issue status. Labels, issue bodies, and inference are secondary.
+
+2. **Dependency authority:** Native GitHub `blocked by` / `blocking` issue links (GraphQL `issue.blockedBy` / `issue.blocking`) are the authoritative source for dependencies. The `## Dependencies` / "Depends on" sections in issue bodies are informational only and may be stale; on conflict the native link wins and the body should be corrected.
+
+3. **Skill declaration:** The `github-issues` skill (corven-agent-tools) must be invoked for any issue/board work — agents should not wait for the user to name it. If unavailable, fall back to `gh` CLI / GitHub MCP tools and note the fallback.
+
+Work completed:
+- Created 26 native `blocked by` links across issues #1-#19 (verified via GraphQL `issue.blockedBy`), replacing the informational body-only dependency model.
+- Verified project #5 board statuses: #9-#12 Done, #13 In Progress, all others Todo.
+- Declared the `github-issues` skill and the authoritative-source rules in: `.github/agents/squad.agent.md` (GitHub Issues Mode section), `.squad/templates/issue-lifecycle.md`, `.squad/routing.md` (Issue Routing), `.squad/team.md` (Issue Source), `.squad/agents/lead/charter.md`, `.squad/agents/ralph/charter.md`.
+
+Note: the `github-issues` skill itself is not registered in this environment (not in the available skills list, not under `.github/skills/` or `.squad/skills/`); the declarations instruct agents to invoke it and to fall back to gh CLI/MCP when it is absent.
+
+### 2026-10-29T09:22:51-04:00: #45 vocabulary doc edits are in scope and were accepted
+**By:** coordinator (verification of PR #63)
+**What:** During verification of PR #63 (#45), the branch carried three documentation edits fixing the last 4 pre-existing banned-vocabulary hits (in `docs/implementation/ISSUE_1_HANDOFF.md` around lines 219 and 242, replacing "mock runtime" prose). These had previously been flagged as belonging to #48. I judged them in-scope and kept them because they were correct, harmless, and shrank #48's remaining scope. Consequence: **the whole source tree (`examples/`, `lib/`, `docs/`, `README.md`, `tools/`, `scripts/`) now greps clean for `mock|fake|stub|simulat`.** #48's vocabulary obligation is therefore already satisfied and its scope should be re-read before it is dispatched.
+**References:** #45, #48, PR #63, `docs/implementation/ISSUE_1_HANDOFF.md`, `scripts/validate.sh`
+**Why:** A future agent reading #48 would otherwise re-do work already merged, or worse, "restore" the old prose.
+**How it applies:** Any vocabulary check for #48 starts from a clean tree; only new violations matter.
+
+### 2026-10-29T09:22:51-04:00: #50's provider seam was delivered additively, as the Lead required
+**By:** coordinator (verification of PR #61)
+**What:** The Lead flagged-not-decided (during #2 decomposition) that `DurableStore.Create` had no external-provider seam, and required #50 to add one **without touching the settled public surface**. Verified merged: `DurableStoreOptions.Provider` (`Func<DurableStoreOptions, IDurableStoreProvider>?`, `init`) taking precedence over `ProviderName` then `Format`; `DurableStoreOptions.ProviderName` (`string?`, `init`); and public statics `DurableStore.RegisterProvider` / `UnregisterProvider` / `IsProviderRegistered` over an `OrdinalIgnoreCase` `ConcurrentDictionary`. The settled `DurableStore(string?)` / `Create` / `CreateEphemeral` / `IsPersistent` surface was not changed. Registration is process-wide; the factory is called once per store; the provider is owned and disposed by that store.
+**References:** #50, #51, #2, PR #61, `lib/Durable.cs`, `lib/Durable.EfCore/EfCoreStoreProvider.cs`
+**Why:** #51, #52, #53 and #54 all build on this seam; if they don't know the exact precedence and ownership rules they will re-invent them or break them.
+**How it applies:** Provider work selects through `Provider` > `ProviderName` > `Format`; never mutate the settled store-creation surface; the store owns the provider lifetime.
+
+### 2026-10-29T09:22:51-04:00: Regression — the #36 refactor silently deleted #44's `ResolveRuntimePath` feature; a clean build did not catch it
+**By:** coordinator (rebase of PR #62)
+**What:** PR #62 (#36) was cut before #44 merged, so rebasing it onto `dev` conflicted in `lib/Durable.cs`. The refactor commit had **silently dropped #44's entire `ResolveRuntimePath` implementation** (`git show <refactor-sha>:lib/Durable.cs | grep ResolveRuntimePath` returned nothing). My first conflict resolution "kept HEAD's block" but stranded it inside `DurableRuntime` — a dead duplicate — while the real `DurableHarness.OpenAsync` still constructed `new CopilotClient()` with no `ResolveRuntimePath` call. That built with **0 errors** and shipped none of #44's feature. The only signal was 3 failing tests asserting "No exception was thrown": the missing-path `FileNotFoundException` and the two environment-precedence cases.
+
+Fix: removed the dead duplicate block, ported #44's logic into the real `DurableHarness.OpenAsync`, restored `internal static string? DurableHarness.ResolveRuntimePath(DurableHarnessOptions)`, reverted the 7 test references. Result: build 0/0, **65/65 passed**.
+
+**Lesson (binding on all future conflict resolutions):** after resolving a conflict by keeping a block, grep for the method name, verify the **enclosing class** is the one on the live call path, and confirm the live path actually invokes it. **A clean build does not prove a feature survived a rebase.** Run the test suite — it is the only signal.
+**References:** #36, #44, PR #60, PR #62, `lib/Durable.cs`, `tests/Durable.Tests/RuntimeConnectionTests.cs`
+**Why:** This cost a full diagnostic cycle and nearly shipped a silent feature regression on the exact feature #44 had just added.
+**How it applies:** Every future rebase or conflict resolution in the #36–#41 chain (all of which touch `lib/Durable.cs`) must verify that no merged feature vanished. Treat a deleted-method grep as a mandatory rebase step, not an optional one.
