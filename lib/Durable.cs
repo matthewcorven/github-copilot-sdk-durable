@@ -4022,7 +4022,27 @@ internal sealed class DurableRuntime : IAsyncDisposable
             : paths.Select(path => DurableSandboxPolicy.ExpandPath(path, workingDirectory)).ToList();
 
     /// <summary>Builds the Copilot session configuration for a set of choices.</summary>
-    internal SessionConfig BuildSessionConfig(AgentChoices? choices, DurableConversation? conversation)
+    internal SessionConfig BuildSessionConfig(AgentChoices? choices, DurableConversation? conversation) =>
+        (SessionConfig)BuildSessionConfig(choices, conversation, new SessionConfig());
+
+    /// <summary>
+    /// Builds the config used to resume a forked session. It is the same config a created
+    /// session gets, so the fork runs with the choices inherited at the fork boundary, plus
+    /// the resume-only switches: the fork is a new session, so it must not replay a resume
+    /// event, and it must not continue work the parent had pending.
+    /// </summary>
+    internal ResumeSessionConfig BuildResumeSessionConfig(AgentChoices? choices, DurableConversation? conversation)
+    {
+        var config = (ResumeSessionConfig)BuildSessionConfig(choices, conversation, new ResumeSessionConfig());
+        config.SuppressResumeEvent = true;
+        config.ContinuePendingWork = false;
+        return config;
+    }
+
+    private SessionConfigBase BuildSessionConfig(
+        AgentChoices? choices,
+        DurableConversation? conversation,
+        SessionConfigBase config)
     {
         var resolved = new ResolvedAgent(
             choices?.Model,
@@ -4037,20 +4057,17 @@ internal sealed class DurableRuntime : IAsyncDisposable
             choices?.Permissions,
             choices?.Sandbox);
 
-        var config = new SessionConfig
-        {
-            // The default is a cheap, reasoning-capable model rather than "auto": "auto"
-            // does not accept a reasoning effort, and it re-routes per request, which
-            // makes an example's behaviour less reproducible.
-            Model = resolved.Model ?? DefaultModel,
+        // The default is a cheap, reasoning-capable model rather than "auto": "auto"
+        // does not accept a reasoning effort, and it re-routes per request, which
+        // makes an example's behaviour less reproducible.
+        config.Model = resolved.Model ?? DefaultModel;
 
-            // Fail-closed: a durable conversation may only use what it was explicitly granted.
-            // The SDK's own default approves everything, which would make the agent's behaviour
-            // depend on state that is not in the store. A host that supplies its own handler
-            // takes over that decision for every conversation this runtime opens.
-            OnPermissionRequest = Options.PermissionHandler ?? PermissionPolicy.Handler(resolved.Permissions),
-            WorkingDirectory = resolved.WorkingDirectory,
-        };
+        // Fail-closed: a durable conversation may only use what it was explicitly granted.
+        // The SDK's own default approves everything, which would make the agent's behaviour
+        // depend on state that is not in the store. A host that supplies its own handler
+        // takes over that decision for every conversation this runtime opens.
+        config.OnPermissionRequest = Options.PermissionHandler ?? PermissionPolicy.Handler(resolved.Permissions);
+        config.WorkingDirectory = resolved.WorkingDirectory;
 
         if (Options.EnableFileHooks is { } enableFileHooks)
         {
@@ -4062,9 +4079,11 @@ internal sealed class DurableRuntime : IAsyncDisposable
         if (resolved.Sandbox is { } sandbox)
         {
             config.SandboxConfig = BuildSandboxConfig(sandbox, resolved.WorkingDirectory);
-            if (sandbox.TrustWorkingDirectory is { } trust)
+            // Trust is a create-time decision: a resumed session already has its working
+            // directory, so the resume config has no such property to set.
+            if (config is SessionConfig created && sandbox.TrustWorkingDirectory is { } trust)
             {
-                config.TrustWorkingDirectory = trust
+                created.TrustWorkingDirectory = trust
                     ? WorkingDirectoryTrust.User
                     : WorkingDirectoryTrust.Session;
             }
