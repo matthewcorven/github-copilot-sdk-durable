@@ -534,6 +534,130 @@ public sealed class ForkIntent
     public ForkIntentState State { get; set; }
 }
 
+/// <summary>
+/// The durable record binding a conversation to the native SDK session that serves it.
+/// </summary>
+/// <remarks>
+/// The binding is a document, not a store column: it is written in the same transaction as the
+/// entry that records it, so a conversation and the session it was bound to are never observed
+/// apart. It is declared with <see cref="ForkPolicy.Initial"/>, so a fork does not inherit its
+/// parent's session identifier — a fork is a new conversation and gets its own session.
+/// </remarks>
+public sealed class SessionBinding
+{
+    /// <summary>The native SDK session identifier.</summary>
+    public string? SessionId { get; set; }
+
+    /// <summary>The model the session was created with.</summary>
+    public string? Model { get; set; }
+
+    /// <summary>When the binding was recorded, as an ISO 8601 timestamp.</summary>
+    public string? BoundAt { get; set; }
+}
+
+/// <summary>
+/// The durable record of one prompt's admission, written before the prompt is sent.
+/// </summary>
+/// <remarks>
+/// Admission is the durable half of a send. It is committed before the prompt reaches the
+/// runtime, so a process that dies mid-send leaves a record of what it was trying to do. The
+/// <see cref="State"/> then says how far it got: <c>admitted</c> (committed, not yet sent),
+/// <c>completed</c> (the turn finished and its checkpoint committed), <c>failed</c> (the runtime
+/// reported an error), or <c>uncertain</c> (the send was issued but its outcome is unknown).
+/// An uncertain admission is never replayed automatically: the caller reconciles it.
+/// </remarks>
+public sealed class InputAdmission
+{
+    /// <summary>The admission's identifier.</summary>
+    public string? AdmissionId { get; set; }
+
+    /// <summary>The prompt that was admitted.</summary>
+    public string? Prompt { get; set; }
+
+    /// <summary>The admission's state.</summary>
+    public string? State { get; set; }
+
+    /// <summary>When the admission was committed, as an ISO 8601 timestamp.</summary>
+    public string? AdmittedAt { get; set; }
+
+    /// <summary>When the admission reached a terminal state, as an ISO 8601 timestamp.</summary>
+    public string? SettledAt { get; set; }
+}
+
+/// <summary>
+/// The durable record of one checkpoint: a turn that finished, or a tool call that completed.
+/// </summary>
+/// <remarks>
+/// Each checkpoint is a new version of the conversation's checkpoint document, so the document's
+/// history is the checkpoint log. <see cref="EventId"/> is the deduplication key: a checkpoint
+/// whose key is already the document's latest value is not written again, so a runtime that
+/// delivers the same event twice does not produce two checkpoints.
+/// </remarks>
+public sealed class ConversationCheckpoint
+{
+    /// <summary>The checkpoint's identifier.</summary>
+    public string? CheckpointId { get; set; }
+
+    /// <summary>What the checkpoint records: <c>turn</c> or <c>tool</c>.</summary>
+    public string? Kind { get; set; }
+
+    /// <summary>The deduplication key.</summary>
+    public string? EventId { get; set; }
+
+    /// <summary>The assistant message identifier, for a turn checkpoint.</summary>
+    public string? MessageId { get; set; }
+
+    /// <summary>The tool name, for a tool checkpoint.</summary>
+    public string? ToolName { get; set; }
+
+    /// <summary>The tool arguments, for a tool checkpoint.</summary>
+    public string? ToolArgs { get; set; }
+
+    /// <summary>Whether the tool call succeeded, for a tool checkpoint.</summary>
+    public bool? Success { get; set; }
+
+    /// <summary>The failure message, for a failed tool checkpoint.</summary>
+    public string? Error { get; set; }
+
+    /// <summary>The assistant's answer, for a turn checkpoint.</summary>
+    public string? Content { get; set; }
+
+    /// <summary>When the checkpoint was recorded, as an ISO 8601 timestamp.</summary>
+    public string? RecordedAt { get; set; }
+}
+
+/// <summary>
+/// Thrown when a conversation cannot be resumed because the native transcript of the session it
+/// was bound to is gone.
+/// </summary>
+/// <remarks>
+/// The durable conversation is intact — its entries, documents, and choices are all in the store.
+/// What is missing is the runtime's own transcript. Continuing with a fresh, empty session would
+/// silently discard the model's context, so the resume fails instead and the host decides what to
+/// do: re-create the session deliberately, or surface the loss.
+/// </remarks>
+public sealed class DurableRecoveryRequiredException : InvalidOperationException
+{
+    /// <summary>Creates the exception.</summary>
+    public DurableRecoveryRequiredException(string conversationId, string? sessionId, Exception? innerException = null)
+        : base(
+            $"Conversation '{conversationId}' cannot be resumed: the recorded SDK session "
+            + $"'{sessionId ?? "(none)"}' has no recoverable native transcript. The conversation "
+            + "itself is intact in the store; re-create its session deliberately rather than "
+            + "continuing with an empty replacement.",
+            innerException)
+    {
+        ConversationId = conversationId;
+        SessionId = sessionId;
+    }
+
+    /// <summary>The conversation that could not be resumed.</summary>
+    public string ConversationId { get; }
+
+    /// <summary>The session identifier that was recorded, when there was one.</summary>
+    public string? SessionId { get; }
+}
+
 /// <summary>The on-disk format of a durable store.</summary>
 public enum DurableStoreFormat
 {
@@ -3719,6 +3843,7 @@ internal sealed class DurableRuntime : IAsyncDisposable
     private readonly ConcurrentDictionary<string, TaskCompletionSource<TaskOutcome>> _taskCompletions = [];
     private readonly ConcurrentDictionary<string, byte> _runningTasks = [];
     private readonly ConcurrentDictionary<string, Task> _inFlight = [];
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _checkpointGates = [];
     private readonly object _lifecycleGate = new();
 
     private CopilotClient? _client;
@@ -3740,7 +3865,21 @@ internal sealed class DurableRuntime : IAsyncDisposable
         // "initial", so a fork of a fork starts with a fresh intent instead of inheriting the
         // parent's completed one.
         ForkDocument = new DocumentDefinition<ForkIntent>("durable.fork", DocumentHistory.Rewindable, ForkPolicy.Initial);
+        // Initial, so a fork does not inherit its parent's SDK session id: the fork has its own
+        // native transcript, and resuming the parent's would replay the wrong conversation.
+        SessionBindingDocument = new DocumentDefinition<SessionBinding>("durable.session-binding", DocumentHistory.Rewindable, ForkPolicy.Initial);
+        AdmissionDocument = new DocumentDefinition<InputAdmission>("durable.admission", DocumentHistory.Rewindable, ForkPolicy.AsOf);
+        CheckpointDocument = new DocumentDefinition<ConversationCheckpoint>("durable.checkpoint", DocumentHistory.Rewindable, ForkPolicy.AsOf);
     }
+
+    /// <summary>The document that records which SDK session a durable conversation is bound to.</summary>
+    internal DocumentDefinition<SessionBinding> SessionBindingDocument { get; }
+
+    /// <summary>The document that records each prompt's admission, before it is sent.</summary>
+    internal DocumentDefinition<InputAdmission> AdmissionDocument { get; }
+
+    /// <summary>The document that records a checkpoint per completed turn or tool call.</summary>
+    internal DocumentDefinition<ConversationCheckpoint> CheckpointDocument { get; }
 
     /// <summary>The Copilot client, once the runtime is bound.</summary>
     internal CopilotClient Client => _client
