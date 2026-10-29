@@ -1,7 +1,7 @@
 ---
-updated_at: 2026-10-29T03:45:00-04:00
-focus_area: v0.4.0 released; #16 merged; epic #7 decomposed into #35-#41; Ralph stopped by user request
-active_issues: [2, 3, 7, 35, 36, 37, 38, 39, 40, 41]
+updated_at: 2026-10-28T23:27:29-04:00
+focus_area: Ralph round 1 — #35, #17, #18 dispatched in parallel worktrees; #2 and #3 being decomposed by Lead
+active_issues: [2, 3, 7, 17, 18, 35, 36, 37, 38, 39, 40, 41]
 ---
 
 # What We're Focused On
@@ -71,16 +71,26 @@ Todo: #2, #3, #4, #5, #6, #7, #8, #17, #18, #19, #35-#41.
 
 ## Next action
 
-Ralph was **stopped by user request** on 2026-10-29 after #7 was decomposed. The user will
-start Ralph in a new session.
+**Ralph round 1 in flight (2026-10-28).** Four background agents dispatched in parallel, all on
+`deepseek/deepseek-v4.1-flash-1017` per user directive, each in its own worktree cut from
+`origin/dev` at `c548212`:
 
-1. **#35 (7.1)** — the only unblocked child of epic #7. Signature/design slice; gate is Lead
-   review of the public API before #36 starts.
-2. **#2** — EF Core-backed durable store providers (SQLite, SQL Server, PostgreSQL, MySQL).
-3. **#3** — deterministic runtime for examples. **Vocabulary constraint:** the issue title says
-   "mock" but the repo forbids that word in `examples/`; implementation must use other terms.
-4. **#17 / #18** — sandbox follow-up examples (network/credentials/dev-tools/MCP-LSP, and
-   observability/bypass/working-directory-trust/keychain).
+| Issue | Agent | Worktree | Branch |
+|---|---|---|---|
+| #35 | Core Engineer | `../github-copilot-sdk-durable-35` | `squad/35-finalize-durable-client-signatures` |
+| #17 | Core Engineer | `../github-copilot-sdk-durable-17` | `squad/17-sandbox-network-credentials` |
+| #18 | Core Engineer | `../github-copilot-sdk-durable-18` | `squad/18-sandbox-observability-bypass` |
+| #2, #3 | Lead (decompose only) | main checkout | — |
+
+Board housekeeping done before dispatch: #17 and #18 added to project #5 as Todo, all three
+implementation issues labeled `squad:core-engineer`.
+
+Every Core Engineer spawn carried the incident remedy: pre-researched SDK brief, no
+`.scratch/probe*.cs` loops, commit within 30 minutes, no `mock`/`fake`/`stub`/`simulat` vocabulary.
+
+**After round 1:** verify each PR with build + `dotnet test tests/Durable.Tests` +
+`COMPILE_ONLY=1 ./scripts/validate.sh`, report readiness, **do not merge** (only a human merges).
+Then rescan the board for round 2. #36 unblocks once #35's signatures are Lead-reviewed.
 
 **Open question — do not auto-release:** `lib/Copilot.Durable.csproj` is at `0.5.0` and
 `CHANGELOG.md` has an `## [Unreleased]` entry. `dev` is 1 commit ahead of `main`. Cutting
