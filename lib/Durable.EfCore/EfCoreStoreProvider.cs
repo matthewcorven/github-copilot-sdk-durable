@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Durable.EfCore.Entities;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace Durable.EfCore;
@@ -84,6 +85,39 @@ public sealed class EfCoreStoreProvider : InMemoryStoreProvider
     public override bool IsPersistent => true;
 
     /// <summary>
+    /// The connection-string convention for the SQLite provider: the store path is the
+    /// database file, and the connection is <c>Data Source=&lt;absolute path&gt;</c>.
+    /// </summary>
+    /// <remarks>
+    /// The path is resolved with <see cref="Path.GetFullPath(string)"/>, so a relative
+    /// store path is anchored at the process working directory rather than at whatever
+    /// directory the process happens to be in when the connection opens. The string is
+    /// built with <see cref="SqliteConnectionStringBuilder"/>, so a path containing
+    /// spaces, <c>;</c>, <c>=</c> or quotes is escaped instead of splitting the
+    /// connection string. The default <see cref="SqliteOpenMode.ReadWriteCreate"/> mode
+    /// creates the database file on first open.
+    /// </remarks>
+    /// <param name="path">The store path, absolute or relative to the working directory.</param>
+    /// <returns>The SQLite connection string for that store path.</returns>
+    public static string ConnectionStringFor(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        return new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.GetFullPath(path),
+        }.ToString();
+    }
+
+    /// <summary>Builds the SQLite context options for a store path.</summary>
+    /// <param name="path">The store path, absolute or relative to the working directory.</param>
+    /// <returns>The options the provider opens the database with.</returns>
+    public static DbContextOptions<DurableDbContext> ContextOptionsFor(string path) =>
+        new DbContextOptionsBuilder<DurableDbContext>()
+            .UseSqlite(ConnectionStringFor(path))
+            .Options;
+
+    /// <summary>
     /// Opens the database at the store path, creates or migrates the schema, and replays
     /// the persisted state into memory.
     /// </summary>
@@ -111,9 +145,7 @@ public sealed class EfCoreStoreProvider : InMemoryStoreProvider
 
         var contextOptions = _contextOptionsFactory is not null
             ? _contextOptionsFactory(options)
-            : new DbContextOptionsBuilder<DurableDbContext>()
-                .UseSqlite($"Data Source={Path.GetFullPath(path!)}")
-                .Options;
+            : ContextOptionsFor(path!);
 
         _context = new DurableDbContext(contextOptions);
         _context.Database.Migrate();

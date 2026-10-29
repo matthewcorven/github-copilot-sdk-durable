@@ -1,8 +1,8 @@
 # Durable.EfCore
 
 The durable store's schema as an EF Core model, and the provider that writes the store's
-state through it. Per-provider connection wiring (SQL Server, PostgreSQL, MySQL) is #2.3 /
-#2.4.
+state through it. SQLite is the reference provider and is wired end to end here; the
+server-backed providers (SQL Server, PostgreSQL, MySQL) are #2.4.
 
 ## What is mapped
 
@@ -85,6 +85,47 @@ using var store = DurableStore.Create(new DurableStoreOptions
 `Provider` wins over `ProviderName`, which wins over `Format`. The seam is additive: no
 `DurableStoreFormat` arm, no constructor, and no settled member changed.
 
+## The SQLite connection-string convention
+
+**The store path is the database file, and the connection string is
+`Data Source=<absolute path>`.** Nothing else is required: no server, no port, no
+credentials, no environment variable. That is why SQLite is the reference provider — the
+suite runs on a clean machine and in CI with no database installed.
+
+The convention is implemented once, in `EfCoreStoreProvider.ConnectionStringFor(path)`, and
+the provider's default `Open` uses it. The rules it encodes:
+
+| Rule | Why |
+|---|---|
+| The path is resolved with `Path.GetFullPath` | A relative store path is anchored at the process working directory, not at whatever directory the process is in when the connection opens. |
+| The string is built with `SqliteConnectionStringBuilder` | A path containing a space, `;`, `=` or a quote is escaped instead of splitting the connection string. |
+| `Mode` stays `ReadWriteCreate` (the default) | The database file is created on first open, so a new store path needs no setup step. |
+| The provider calls `Database.Migrate()` on open | The schema is the checked-in migration, applied on first use and idempotent on every later open. |
+| The store path is held with an exclusive lock for the store's lifetime | One writer per database file, exactly as the JSONL provider behaves. |
+
+So these two are the same database:
+
+```csharp
+// The convention, spelled out:
+var connectionString = EfCoreStoreProvider.ConnectionStringFor("session.db");
+// "Data Source=/absolute/working/directory/session.db"
+
+// The same thing, through the provider:
+using var store = DurableStore.Create(new DurableStoreOptions
+{
+    Path = "session.db",
+    ProviderName = EfCoreStoreProvider.RegisteredName,
+});
+```
+
+`EfCoreStoreProvider.ContextOptionsFor(path)` returns the matching
+`DbContextOptions<DurableDbContext>`, for a caller that wants the context without the store
+(the design-time factory uses it too).
+
+A connection that is not a file path — a shared-cache in-memory database, or a
+server-backed provider — goes through the context-options factory constructor instead, and
+then the convention above does not apply.
+
 ## Migrations
 
 `Migrations/` contains the SQLite baseline (`InitialCreate`), because SQLite needs no server
@@ -122,3 +163,21 @@ It also runs the behavioural contract the JSONL provider is held to — round-tr
 `IDurableStoreProvider` member, rollback in memory and across reopen, monotonic sequences
 after reopen, fork inheritance, task checkpoint and memo persistence, abort outcomes,
 single-writer locking, and provider registration.
+
+`SqliteIntegrationTests` is the file-backed half. `SqliteStoreFixture` creates a directory
+under the system temp path, applies the migration to a real database file in it, and deletes
+the directory on dispose — including the `-wal`/`-shm` sidecars and the store's lock files,
+and whether the test passed or failed. The tests then cover:
+
+- the fixture's database is a real SQLite file with the migration applied, and the fixture
+  deletes it on dispose;
+- write, dispose the store, open a **new** store over the same file, and read the
+  conversation, task, document and entry list back — the restart-persistence proof;
+- every commit survives a restart, and the reopened store mints past every replayed
+  sequence;
+- the provider selected by name through the registration seam persists across a restart;
+- the provider applies the migration on first use of a path that does not exist yet;
+- the connection-string convention: absolute `Data Source`, relative paths resolved,
+  separators escaped, empty path rejected.
+
+No test needs a database server, so the suite passes on a clean machine.
