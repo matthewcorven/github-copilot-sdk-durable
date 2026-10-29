@@ -2960,6 +2960,199 @@ public sealed record ResolvedAgent(
     IReadOnlyList<string>? Permissions,
     DurableSandboxPolicy? Sandbox);
 
+/// <summary>
+/// The model a runtime reported for a session or for one turn of it.
+/// </summary>
+/// <remarks>
+/// This is the model the runtime <i>reported</i>, not the model the host asked for. A runtime
+/// that substitutes a model — because the requested one is unavailable, because the request
+/// was routed, or because a recorded run was produced against another model — reports the
+/// substitute here, so the substitution is visible rather than hidden behind the request.
+/// <para>
+/// When the runtime reports no model at all, <see cref="Model"/> is <c>null</c> and
+/// <see cref="HasModel"/> is <c>false</c>. There is no fallback to
+/// <see cref="DurableHarness.DefaultModel"/>: "the runtime said nothing" and "the runtime said
+/// <c>gpt-6-luna</c>" are different facts, and silently turning the first into the second is
+/// exactly what this type exists to prevent.
+/// </para>
+/// </remarks>
+public sealed class DurableModelReport
+{
+    /// <summary>The report for a runtime that has not reported a model.</summary>
+    public static DurableModelReport NotReported { get; } = new(null, null);
+
+    private DurableModelReport(string? model, string? source)
+    {
+        Model = model;
+        Source = source;
+    }
+
+    /// <summary>The model identifier the runtime reported, or <c>null</c> when it reported none.</summary>
+    public string? Model { get; }
+
+    /// <summary>
+    /// Where the report came from: <c>session</c>, <c>turn</c>, or <c>usage</c>. It names the
+    /// event that carried the value, so a diagnosis can tell a session-level report from a
+    /// turn-level one. <c>null</c> when nothing was reported.
+    /// </summary>
+    public string? Source { get; }
+
+    /// <summary>Whether the runtime reported a model.</summary>
+    public bool HasModel => !string.IsNullOrEmpty(Model);
+
+    /// <summary>
+    /// The reported model, or an error when the runtime reported none. Use this where a model
+    /// is required and its absence should stop the run rather than pass silently.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The runtime reported no model.</exception>
+    public string RequiredModel => HasModel
+        ? Model!
+        : throw new InvalidOperationException(
+            "The runtime reported no model. Check the runtime's transcript: a deterministic " +
+            "runtime only reports a model when its recording carries one.");
+
+    /// <summary>Creates a report from a runtime event's model value, or the not-reported one.</summary>
+    internal static DurableModelReport From(string? model, string source) =>
+        string.IsNullOrWhiteSpace(model) ? NotReported : new DurableModelReport(model, source);
+
+    /// <inheritdoc />
+    public override string ToString() => HasModel ? Model! : "(no model reported)";
+}
+
+/// <summary>
+/// Accumulates the model reports a single conversation observes: the session-level report and
+/// one report per assistant turn.
+/// </summary>
+/// <remarks>
+/// The tracker is deliberately separate from <see cref="DurableConversation"/> so the
+/// sequencing rules can be exercised directly: a session can report a model when it starts or
+/// when it changes model, an assistant turn can report one through <c>assistant.turn_start</c>
+/// and again through <c>assistant.usage</c>, and a turn whose runtime names no model must stay
+/// visible as a gap rather than borrowing a neighbour's model.
+/// </remarks>
+internal sealed class DurableModelTracker
+{
+    private readonly List<DurableModelReport> _turns = [];
+    private DurableModelReport _effective = DurableModelReport.NotReported;
+    private bool _passOpen;
+
+    /// <summary>The most recent model the runtime reported, or not-reported.</summary>
+    internal DurableModelReport Effective
+    {
+        get
+        {
+            lock (_turns)
+            {
+                return _effective;
+            }
+        }
+    }
+
+    /// <summary>The model reported for each turn, oldest first.</summary>
+    internal IReadOnlyList<DurableModelReport> Turns
+    {
+        get
+        {
+            lock (_turns)
+            {
+                return _turns.ToList();
+            }
+        }
+    }
+
+    /// <summary>Records a session-level report from <c>session.start</c> or a model change.</summary>
+    /// <remarks>
+    /// A session-level report is not a turn: it describes the session, so it updates the
+    /// effective value but leaves the per-turn list alone.
+    /// </remarks>
+    internal DurableModelReport RecordSession(string? model, string source)
+    {
+        var report = DurableModelReport.From(model, source);
+        lock (_turns)
+        {
+            if (report.HasModel)
+            {
+                _effective = report;
+            }
+        }
+
+        return report;
+    }
+
+    /// <summary>Records a turn-level report from <c>assistant.turn_start</c> or usage.</summary>
+    /// <remarks>
+    /// A turn is one assistant pass, and a single pass can report its model twice — once at
+    /// <c>assistant.turn_start</c>, once with its usage — so a second report for the pass that
+    /// is still open refines the entry instead of adding another. A pass whose runtime reports
+    /// no model is still recorded, as <see cref="DurableModelReport.NotReported"/>, so the list
+    /// stays aligned with the turn sequence and silence never borrows a neighbour's model.
+    /// </remarks>
+    internal DurableModelReport RecordTurn(string? model, string source)
+    {
+        var report = DurableModelReport.From(model, source);
+        lock (_turns)
+        {
+            if (_passOpen)
+            {
+                // Refine the open pass. A pass that has already named a model keeps it: the
+                // later report belongs to the same pass, so swapping in a not-reported value
+                // would erase a fact the runtime did state.
+                if (report.HasModel)
+                {
+                    _turns[^1] = report;
+                }
+            }
+            else
+            {
+                _turns.Add(report);
+                _passOpen = true;
+            }
+
+            if (report.HasModel)
+            {
+                _effective = report;
+            }
+        }
+
+        return report;
+    }
+
+    /// <summary>
+    /// Closes the pass in flight. A pass that reported nothing stays recorded as not-reported.
+    /// </summary>
+    internal void CloseTurn()
+    {
+        lock (_turns)
+        {
+            _passOpen = false;
+        }
+    }
+
+    /// <summary>
+    /// Routes a session event's model report into this tracker.
+    /// </summary>
+    /// <remarks>
+    /// The runtime reports the model on the events it already emits: <c>session.start</c> and
+    /// <c>session.model_change</c> describe the session, <c>assistant.turn_start</c> and
+    /// <c>assistant.usage</c> describe a turn. Nothing here reads the requested model, so a
+    /// runtime that substitutes one is visible.
+    /// </remarks>
+    /// <returns>The report the event produced, or <c>null</c> when the event carries no model.</returns>
+    internal DurableModelReport? Record(SessionEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+
+        return evt switch
+        {
+            SessionStartEvent start => RecordSession(start.Data.SelectedModel, "session"),
+            SessionModelChangeEvent change => RecordSession(change.Data.NewModel, "session"),
+            AssistantTurnStartEvent turnStart => RecordTurn(turnStart.Data.Model, "turn"),
+            AssistantUsageEvent usage => RecordTurn(usage.Data.Model, "usage"),
+            _ => null,
+        };
+    }
+}
+
 /// <summary>A conversation handle: a Copilot session bound to durable app state.</summary>
 public sealed class DurableConversation
 {
@@ -2967,6 +3160,7 @@ public sealed class DurableConversation
     private readonly List<string> _answers = [];
     private readonly List<SandboxDecisionEvent> _sandboxDecisions = [];
     private readonly List<(Func<SandboxDecisionEvent, bool> Match, TaskCompletionSource<SandboxDecisionEvent> Completion)> _sandboxWaiters = [];
+    private readonly DurableModelTracker _modelTracker = new();
 
     internal DurableConversation(DurableRuntime runtime, CopilotSession session, ConversationRecord record)
     {
@@ -2988,21 +3182,43 @@ public sealed class DurableConversation
         Session = session;
         // A permanent subscription records every answer the session produces, so a
         // review loop can look at the passes it has already made.
-        _subscription = session.On<SessionEvent>(evt =>
+        _subscription = session.On<SessionEvent>(Observe);
+    }
+
+    /// <summary>
+    /// Records what one session event says about this conversation. This is the body of the
+    /// permanent subscription <see cref="Attach"/> installs, kept separate so the observation
+    /// rules can be exercised without a live session.
+    /// </summary>
+    internal void Observe(SessionEvent evt)
+    {
+        if (evt is AssistantMessageEvent message)
         {
-            if (evt is AssistantMessageEvent message && !string.IsNullOrEmpty(message.Data.Content))
+            if (!string.IsNullOrEmpty(message.Data.Content))
             {
                 RecordAnswer(message.Data.Content);
             }
 
-            // Sandbox decisions ride the same subscription: the runtime reports what the
-            // sandbox resolved, whether it engaged, and what it denied as ordinary session
-            // events, so a durable conversation can record them without a second stream.
-            if (evt is SandboxDecisionEvent decision)
-            {
-                RecordSandboxDecision(decision);
-            }
-        });
+            // The answer ends the pass being recorded, so the next model report starts a
+            // new turn instead of refining this one.
+            CloseTurn();
+        }
+
+        // Sandbox decisions ride the same subscription: the runtime reports what the
+        // sandbox resolved, whether it engaged, and what it denied as ordinary session
+        // events, so a durable conversation can record them without a second stream.
+        if (evt is SandboxDecisionEvent decision)
+        {
+            RecordSandboxDecision(decision);
+        }
+
+        // The model the runtime actually used rides the same subscription too. It is
+        // recorded from the runtime's own reports, never from the requested model, so a
+        // substitution is visible.
+        if (_modelTracker.Record(evt) is { } report)
+        {
+            _runtime.PublishModel(report);
+        }
     }
 
     private IDisposable? _subscription;
@@ -3099,6 +3315,42 @@ public sealed class DurableConversation
 
     private static string DescribeSandboxDecision(SandboxDecisionEvent decision) =>
         decision.Data is null ? "(no data)" : $"{decision.Data.Kind ?? "?"}";
+
+    /// <summary>
+    /// The model the runtime reported for this conversation: the session-level report when the
+    /// session started or changed model, otherwise the latest report from a turn or a usage
+    /// record.
+    /// </summary>
+    /// <remarks>
+    /// The value is the runtime's, not the host's request, so a runtime that substitutes a
+    /// model is visible here. A conversation whose runtime has not reported a model returns
+    /// <see cref="DurableModelReport.NotReported"/> — <see cref="DurableModelReport.HasModel"/>
+    /// is <c>false</c> and the value is <c>null</c>; it is never silently replaced with
+    /// <see cref="DurableHarness.DefaultModel"/>.
+    /// </remarks>
+    public DurableModelReport EffectiveModel => _modelTracker.Effective;
+
+    /// <summary>
+    /// The model the runtime reported for each completed turn, oldest first.
+    /// </summary>
+    /// <remarks>
+    /// A turn is one assistant pass: a turn that calls tools produces several, and each
+    /// records the model the runtime named for it. A pass whose runtime named no model is
+    /// recorded as <see cref="DurableModelReport.NotReported"/> rather than being dropped, so
+    /// the list stays aligned with the turn sequence.
+    /// <para>
+    /// The list is in-memory: a model report is an observation about a live session, so a
+    /// restored conversation starts with an empty list.
+    /// </para>
+    /// </remarks>
+    public IReadOnlyList<DurableModelReport> TurnModels => _modelTracker.Turns;
+
+    /// <summary>
+    /// Closes the turn in flight. Called when an assistant message arrives: the next model
+    /// report belongs to the next pass, and a pass that reported nothing stays recorded as
+    /// not-reported instead of borrowing the previous turn's model.
+    /// </summary>
+    private void CloseTurn() => _modelTracker.CloseTurn();
 
     private void RecordSandboxDecision(SandboxDecisionEvent decision)
     {
@@ -3465,6 +3717,8 @@ internal sealed class DurableRuntime : IAsyncDisposable
     private DurableStore? _store;
     private Dictionary<string, ModelInfo>? _models;
     private bool _disposed;
+    private DurableModelReport _effectiveModel = DurableModelReport.NotReported;
+    private readonly object _modelGate = new();
 
     internal DurableRuntime(ExtensionRegistry registry, DurableHarnessOptions? options = null)
     {
@@ -3504,6 +3758,42 @@ internal sealed class DurableRuntime : IAsyncDisposable
 
     /// <summary>The conversations this runtime knows about.</summary>
     internal IReadOnlyCollection<DurableConversation> Conversations => _conversations.Values;
+
+    /// <summary>
+    /// The most recent model any conversation over this runtime reported.
+    /// </summary>
+    /// <remarks>
+    /// It is <see cref="DurableModelReport.NotReported"/> until a session or a turn reports a
+    /// model. It never falls back to <see cref="DefaultModel"/>: the default is what the host
+    /// asked for, and this property reports only what the runtime said.
+    /// </remarks>
+    internal DurableModelReport EffectiveModel
+    {
+        get
+        {
+            lock (_modelGate)
+            {
+                return _effectiveModel;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Records the model a conversation observed. Conversations report here as well as in their
+    /// own list, so the runtime-level value follows the most recent session or turn.
+    /// </summary>
+    internal void PublishModel(DurableModelReport report)
+    {
+        if (!report.HasModel)
+        {
+            return;
+        }
+
+        lock (_modelGate)
+        {
+            _effectiveModel = report;
+        }
+    }
 
     /// <summary>Whether the runtime is bound to a store and a client.</summary>
     internal bool IsAttached => _store is not null && _client is not null;
@@ -4606,6 +4896,32 @@ public sealed class DurableHarness : IAsyncDisposable
 
     /// <summary>The conversations this harness knows about.</summary>
     public IReadOnlyCollection<DurableConversation> Conversations => _runtime.Conversations;
+
+    /// <summary>
+    /// The model the runtime reported for the most recent session or turn this harness opened.
+    /// </summary>
+    /// <remarks>
+    /// It is fed from the runtime's own reports — <c>session.start</c> and
+    /// <c>session.model_change</c> for the session's model, <c>assistant.turn_start</c> and
+    /// <c>assistant.usage</c> for each turn — never from the model the host requested, so a
+    /// runtime that substitutes a model is visible here.
+    /// <para>
+    /// <see cref="OpenAsync(DurableStore, ExtensionRegistry, DurableHarnessOptions, CancellationToken)"/>
+    /// only starts the client: no session exists yet, so the value is
+    /// <see cref="DurableModelReport.NotReported"/> immediately after it returns and becomes
+    /// populated once a conversation opens a session and the runtime reports. Read it again
+    /// after <see cref="CreateConversationAsync"/> or <see cref="RootAsync"/> to see the
+    /// session-level report, and after a turn completes to see the turn-level one.
+    /// </para>
+    /// <para>
+    /// When the runtime reports no model — a deterministic runtime whose recording carries none,
+    /// for instance — the value stays <see cref="DurableModelReport.NotReported"/> with
+    /// <see cref="DurableModelReport.Model"/> <c>null</c>. There is deliberately no fallback to
+    /// <see cref="DefaultModel"/>: "the runtime reported nothing" must not be indistinguishable
+    /// from "the runtime reported the default".
+    /// </para>
+    /// </remarks>
+    public DurableModelReport EffectiveModel => _runtime.EffectiveModel;
 
     /// <summary>
     /// Finds a conversation by id, restoring it from the store if the harness has not
