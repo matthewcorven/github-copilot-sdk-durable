@@ -59,6 +59,28 @@ public static class PostgreSqlProvider
         return new NpgsqlConnectionStringBuilder(connectionString).ConnectionString;
     }
 
+    /// <summary>
+    /// The connection-string convention for a named database on the same server: the
+    /// caller supplies a connection string and the database is replaced, so a caller that
+    /// holds a server-level connection string can point the store at one database without
+    /// rebuilding the string by hand.
+    /// </summary>
+    /// <param name="connectionString">A PostgreSQL connection string.</param>
+    /// <param name="database">The database the store should use.</param>
+    /// <returns>The same connection, pointed at <paramref name="database"/>.</returns>
+    public static string ConnectionStringFor(string connectionString, string database)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+        ArgumentException.ThrowIfNullOrWhiteSpace(database);
+
+        var builder = new NpgsqlConnectionStringBuilder(connectionString)
+        {
+            Database = database,
+        };
+
+        return builder.ConnectionString;
+    }
+
     /// <summary>Builds the PostgreSQL context options for a connection string.</summary>
     /// <param name="connectionString">A PostgreSQL connection string.</param>
     /// <returns>The options the provider opens the database with.</returns>
