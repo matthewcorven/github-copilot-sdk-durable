@@ -387,7 +387,7 @@ COMPILE_ONLY=1 ./scripts/validate.sh
 
 The script reports `PASS`/`FAIL` per example and prints the output of each one.
 
-CI runs `dotnet test tests/Durable.Tests`, then `SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh`. Every example is compiled on every push, and the 13 that need no Copilot sign-in also execute with their assertions checked. The other 20 need a signed-in Copilot CLI and are not run in CI.
+CI runs `dotnet test tests/Durable.Tests`, then `SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh`. Every example is compiled on every push, and the 13 that need no Copilot sign-in also execute with their assertions checked. The other 23 need a signed-in Copilot CLI and are not run in CI.
 
 ---
 

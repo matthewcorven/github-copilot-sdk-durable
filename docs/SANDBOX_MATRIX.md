@@ -9,7 +9,9 @@ host's business, not ours.
 - Policy type: `DurableSandboxPolicy` (`lib/Durable.cs`)
 - Wire type: `GitHub.Copilot.Rpc.SandboxConfig`
 - Mapper: `DurableHarness.BuildSandboxConfig(policy, workingDirectory)`
-- Examples: `examples/33-sandbox-sdk-filesystem.cs` (filesystem), `examples/34-sandbox-sdk-network-credentials.cs` (network, credentials, dev tools, MCP/LSP)
+- Examples: `examples/33-sandbox-sdk-filesystem.cs` (filesystem enforcement),
+  `examples/34-sandbox-sdk-network-credentials.cs` (network, credentials, dev tools, MCP/LSP),
+  `examples/35-sandbox-sdk-observability-bypass.cs` (observability, bypass, trust, keychain)
 - SDK: `GitHub.Copilot.SDK` 1.0.26, sandbox types annotated `GHCP001` (evaluation only)
 
 ## 1. Backends by platform
@@ -206,3 +208,53 @@ and a length to a file. The value the shell sees must be non-empty and must not 
 digest. It runs in every mode where a shell runs, `Enforced` or `Replayed`, because the sentinel is
 the runtime's, not the backend's. The value itself is never printed, never written to the
 workspace, and never part of the durable policy.
+
+`examples/35-sandbox-sdk-observability-bypass.cs` covers the half of the surface that
+only a host can decide. It resolves the same policy as example 34 and prints the same
+decision stream, so the two can be compared on one host.
+
+## 9. Observability, bypass, trust and keychain
+
+Example 35 covers the half of the surface that only a host can decide. Every row below is
+asserted, not merely configured — except where the runtime is the one that decides.
+
+| Option | Wire location | Example | Platform requirement | CI level |
+|---|---|---|---|---|
+| Decision-event stream | `SandboxDecisionEvent` subscription, recorded on `DurableConversation.SandboxDecisions` | 35 | any (needs a backend to populate it) | compile in CI; execute on a signed-in host |
+| Access denial | `SandboxDecisionDataAccessDenied` — `Control`, `EnforcementPoint`, `DenialClass` | 35, 33 | any backend | compile in CI; execute on a signed-in host |
+| Per-call sandbox flag | `ToolExecutionCompleteData.Sandboxed` | 35 | any backend | compile in CI; execute on a signed-in host |
+| Bypass capability | `SandboxConfig.AllowBypass` | 35 | any backend that reports `engaged` | compile in CI; execute on a signed-in host |
+| Bypass decision | `SandboxDecisionDataBypassDecided` — `Outcome`, `Source` | 35 | runtime must surface the prompt (see below) | compile in CI; execute on a signed-in host |
+| Path grant | `PermissionPromptRequestCommands.SandboxPathGrant` | 35 | any; host hook only | compile in CI; execute on a signed-in host |
+| Permissive retry | `PermissionPromptRequestCommands.RequestSandboxPermissive` | 35 | any; host hook only | compile in CI; execute on a signed-in host |
+| Working-directory trust | `SessionConfig.TrustWorkingDirectory` → `WorkingDirectoryTrust` | 35 | any | compile in CI; execute on a signed-in host |
+| Keychain access | `UserPolicy.Seatbelt.KeychainAccess` | 35 | macOS only; elsewhere the field is `false` by definition | compile in CI; execute on a signed-in host |
+| Deprecated keychain location | `UserPolicy.Experimental.Seatbelt.KeychainAccess` | 35 | policy-level assertion, so any | compile in CI; execute on a signed-in host |
+
+### The bypass prompt is the runtime's decision
+
+`AllowBypass = true` grants the *capability*, not the prompt. Whether a session is ever
+offered an escalation is decided by the runtime: the SDK exposes no call that forces it, and
+the CLI surfaces the prompt only when its own sandbox settings allow one. The model has to
+ask — by setting `requestSandboxBypass` (or `requestSandboxPermissive`) on a tool call — and
+on a given host it may simply run the command sandboxed, take the denial, and never escalate.
+
+Example 35 therefore counts escalation prompts in its permission handler (a prompt carrying
+`RequestSandboxBypass`, `RequestSandboxPermissive`, or a `SandboxPathGrant`) and asserts the
+decline only when one was observed. When none was offered it asserts zero declines and zero
+`bypass_decided` events and prints a notice. Treating the absent prompt as a failure would
+report the SDK's behaviour incorrectly, so the example distinguishes "the host declined" from
+"the runtime never asked".
+
+The half that is always assertable is the negative: a session with `AllowBypass = false`
+records no `SandboxDecisionDataBypassDecided` at all. Example 35 asserts that unconditionally.
+
+### The deprecated keychain location
+
+`UserPolicy.Seatbelt` is the supported location and the one the durable mapper writes.
+`UserPolicy.Experimental.Seatbelt` is the deprecated duplicate, and the two are read in
+opposite directions: the runtime consults the legacy block only when the top-level block is
+absent. A host that writes the legacy location and later adds the top-level one silently
+loses the legacy value. Example 35 builds one policy for each location and asserts the rule
+at policy level, so the hazard is visible on a host with no keychain at all. The migration
+note is in `docs/COPILOT_SDK_NOTES.md`.
