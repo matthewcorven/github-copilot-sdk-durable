@@ -2,7 +2,8 @@
 
 The durable store's schema as an EF Core model, and the provider that writes the store's
 state through it. SQLite is the reference provider and is wired end to end here; the
-server-backed providers (SQL Server, PostgreSQL, MySQL) are #2.4.
+server-backed providers (SQL Server, PostgreSQL, MySQL) are wired in their own assemblies,
+described under [Server providers](#server-providers).
 
 ## What is mapped
 
@@ -158,27 +159,99 @@ then the convention above does not apply.
 `Migrations/` contains the SQLite baseline (`InitialCreate`), because SQLite needs no server
 to generate or apply a migration.
 
-The other providers generate their own migrations from the same `DurableDbContext`; nothing
-in the model changes. From this directory:
+### One migration assembly per provider
+
+The server providers do **not** add their migrations here. Each is a project of its own:
+
+| Project | Provider package | Migration |
+|---|---|---|
+| `lib/Durable.EfCore.SqlServer` | `Microsoft.EntityFrameworkCore.SqlServer` | `Migrations/20261029135250_InitialCreate` |
+| `lib/Durable.EfCore.PostgreSql` | `Npgsql.EntityFrameworkCore.PostgreSQL` | `Migrations/20261029135238_InitialCreate` |
+| `lib/Durable.EfCore.MySql` | `MySql.EntityFrameworkCore` | `Migrations/20261029135245_InitialCreate` |
+
+The reason is EF Core's own resolution rule, not taste. A context's model snapshot is the
+**first** `ModelSnapshot` subclass the migrations assembly contains, and `Database.Migrate()`
+applies **every** migration in that assembly. Four providers' snapshots and migrations in
+one assembly would therefore be ambiguous: the snapshot picked would be whichever the
+loader saw first, and a SQL Server database would be handed PostgreSQL's `CREATE TABLE`
+statements. One assembly per provider makes the snapshot and the migration set unambiguous
+by construction, and `MigrationsAssembly(...)` in each provider's `ContextOptionsFor` is what
+selects it.
+
+The alternative — one assembly with per-provider output directories — was rejected for
+exactly that reason. Output directories separate the files on disk; they do not separate
+them in the assembly.
+
+### Generating a migration
+
+Each provider project is both the project and the startup project, so the tooling finds that
+provider's `IDesignTimeDbContextFactory` and no other:
 
 ```sh
-# SQL Server
-dotnet ef migrations add InitialCreate_SqlServer \
-  --project lib/Durable.EfCore --output-dir Migrations/SqlServer
-
-# PostgreSQL
-dotnet ef migrations add InitialCreate_PostgreSql \
-  --project lib/Durable.EfCore --output-dir Migrations/PostgreSql
-
-# MySQL
-dotnet ef migrations add InitialCreate_MySql \
-  --project lib/Durable.EfCore --output-dir Migrations/MySql
+dotnet ef migrations add InitialCreate \
+  --project lib/Durable.EfCore.PostgreSql \
+  --startup-project lib/Durable.EfCore.PostgreSql \
+  --output-dir Migrations
 ```
 
-Each command needs the matching provider package (`Microsoft.EntityFrameworkCore.SqlServer`,
-`Npgsql.EntityFrameworkCore.PostgreSQL`, `Pomelo.EntityFrameworkCore.MySql`) and a
-`DurableDbContextFactory` that calls the matching `Use*` method. Adding those packages and
-factories is #2.4, deliberately not done here.
+No server is contacted: the factory builds the model from the connection string without
+opening a connection. The connection string it uses is the provider's convention (below), so
+`DURABLE_POSTGRESQL_CONNECTION` and friends select the target when a migration is applied
+with `dotnet ef database update`.
+
+## Server providers
+
+Each server provider is a static class with the same shape as the SQLite convention:
+`RegisteredName`, `ConnectionStringVariable`, `DefaultConnectionString`, `ConnectionString`,
+`ConnectionStringFor`, `ContextOptionsFor`, `ContextOptions`, `CreateProvider`, `Register`.
+
+| Provider | `RegisteredName` | Environment variable | Default |
+|---|---|---|---|
+| SQL Server | `efcore-sqlserver` | `DURABLE_SQLSERVER_CONNECTION` | `Server=localhost,1433;Database=durable;User Id=sa;…` |
+| PostgreSQL | `efcore-postgresql` | `DURABLE_POSTGRESQL_CONNECTION` | `Host=localhost;Port=5432;Database=durable;Username=durable;…` |
+| MySQL | `efcore-mysql` | `DURABLE_MYSQL_CONNECTION` | `Server=localhost;Port=3306;Database=durable;User Id=root;…` |
+
+The defaults are throwaway credentials for a container on localhost. They are not secrets and
+are never used when the environment variable is set.
+
+### The connection-string convention
+
+**The caller supplies a connection string; the provider validates and normalizes it with the
+provider's own connection-string builder, and never rewrites it.** That is the whole
+convention, and it is implemented once per provider in `ConnectionStringFor`, which
+`ContextOptionsFor`, `ContextOptions`, `CreateProvider` and `Register` all route through —
+the same single-implementation rule the SQLite path follows.
+
+| Rule | Why |
+|---|---|
+| The string is parsed with `SqlConnectionStringBuilder` / `NpgsqlConnectionStringBuilder` / `MySqlConnectionStringBuilder` | A malformed string fails at the convention, not at the first query. |
+| An empty or whitespace string is rejected | A store with no connection string is a configuration error, not a store that silently writes nowhere. |
+| `ConnectionStringFor(connectionString, database)` replaces only the database | A caller holding a server-level string can point the store at one database without rebuilding the string by hand. The integration tests use it to create a database per run. |
+| The environment variable is read when the store opens, not when it registers | A process can set the variable after registering the provider. |
+| The provider calls `Database.Migrate()` on open | The schema is the provider's checked-in migration, applied on first use and idempotent on every later open. |
+
+```csharp
+PostgreSqlProvider.Register();
+
+using var store = DurableStore.Create(new DurableStoreOptions
+{
+    Path = "store.lock",                       // the store's exclusive lock, not a database
+    ProviderName = PostgreSqlProvider.RegisteredName,
+});
+```
+
+A server store has no file of its own, but the provider still takes its exclusive lock on
+`Path` when one is set, so a server store should set `Path` to a lock file. Leaving it null
+skips the lock and allows two processes to write the same database.
+
+### MySQL provider package
+
+MySQL uses Oracle's `MySql.EntityFrameworkCore`, not Pomelo. Pomelo's newest release is 9.0.0
+and has no EF Core 10 build, so it cannot be used with this repository's EF Core 10. Oracle's
+package targets `net10.0` and is licensed GPL-2.0-only WITH Universal-FOSS-exception-1.0,
+which is a different licence from this repository's MIT. That is a licensing decision for the
+maintainers, recorded here so it is not rediscovered: swapping to Pomelo is a package
+reference and a `UseMySQL` call once a Pomelo EF Core 10 build exists.
 
 ## Tests
 
@@ -207,4 +280,31 @@ and whether the test passed or failed. The tests then cover:
 - the connection-string convention: absolute `Data Source`, relative paths resolved,
   separators escaped, empty path rejected.
 
-No test needs a database server, so the suite passes on a clean machine.
+`SqliteIntegrationTests` needs no database server, so that half of the suite passes on a
+clean machine.
+
+### The server integration tests
+
+`SqlServerIntegrationTests`, `PostgreSqlIntegrationTests` and `MySqlIntegrationTests` run the
+same scenarios — `ServerStoreScenarios` — against a real server, plus the connection-string
+convention, which needs no server and always runs.
+
+`ServerStoreFixture` is the server counterpart of `SqliteStoreFixture`: it creates a database
+named for the run, applies the provider's checked-in migration, and drops the database and
+deletes the lock directory on dispose, whether the tests passed or failed.
+
+**When no server is reachable the server tests skip, and the suite still exits zero.** The
+skip is decided at discovery time by `ServerFactAttribute`, from a real connection attempt
+with a two-second timeout, and the reason names the endpoint and the failure:
+
+```
+SQL Server at localhost,1433, database 'durable' is not reachable, so this test was skipped
+rather than failed: SqlException: A network-related or instance-specific error occurred …
+Start the server, or point the provider's connection-string environment variable at one, to run it.
+```
+
+The probe is a connection attempt rather than a port check, because a port that accepts a
+connection but speaks another protocol is not a usable server. `ServerProbeTests` asserts the
+skip mechanism itself — that an unreachable endpoint produces that message, that a reachable
+one produces no reason, and that `ServerFactAttribute` skips exactly when the probe says so —
+so a skip is provable from the test output rather than inferred from a green suite.
