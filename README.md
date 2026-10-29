@@ -166,6 +166,7 @@ machinery run in under a second.
 | [31](examples/31-permissions.cs) | Permissions | A conversation is denied a tool, restarted, and denied again. Grants live in the store, so a restart cannot widen them. |
 | [32](examples/32-jsonl-store.cs) | The store file | Where a durable store lives and how it writes: an explicit path wins, no path resolves the per-user default, and the file is JSONL so a torn tail costs one record. |
 | [33](examples/33-sandbox-sdk-filesystem.cs) | The sandbox filesystem policy | A conversation carries a sandbox policy with a writable, a read-only, and a denied directory. The durable layer approves the shell call; the sandbox refuses the write. |
+| [37](examples/37-ef-core-store.cs) | The EF Core store | The store's state written through a relational schema instead of a JSONL file. The SQLite connection-string convention, the provider selected by name and by factory, the migration's tables, a reopen that reads the state back, and the four-provider matrix. No server needed. |
 
 ---
 
@@ -387,7 +388,7 @@ COMPILE_ONLY=1 ./scripts/validate.sh
 
 The script reports `PASS`/`FAIL` per example and prints the output of each one.
 
-CI runs `dotnet test tests/Durable.Tests`, then `SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh`. Every example is compiled on every push, and the 13 that need no Copilot sign-in also execute with their assertions checked. The other 23 need a signed-in Copilot CLI and are not run in CI.
+CI runs `dotnet test tests/Durable.Tests`, then `SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh`. Every example is compiled on every push, and the 14 that need no Copilot sign-in also execute with their assertions checked. The other 23 need a signed-in Copilot CLI and are not run in CI.
 
 ---
 
