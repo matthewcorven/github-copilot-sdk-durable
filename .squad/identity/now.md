@@ -1,7 +1,7 @@
 ---
-updated_at: 2026-10-29T05:58:00-04:00
-focus_area: Ralph rounds 1-2 complete — five PRs open and green (#55-#59); all remaining open issues natively blocked on human merges
-active_issues: [2, 3, 4, 5, 6, 7, 8, 17, 18, 19, 35, 36, 43, 44, 49, 50]
+updated_at: 2026-10-29T06:10:00-04:00
+focus_area: Ralph rounds 1-2 complete — five PRs open, green and clean (#55-#59), PR #56 reviewed APPROVE WITH COMMENTS; all remaining work natively blocked on human merges
+active_issues: [2, 3, 4, 5, 6, 7, 8, 17, 18, 19, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54]
 ---
 
 # What We're Focused On
@@ -66,8 +66,9 @@ GitHub-copilot-sdk-durable Roadmap (project 5, owner matthewcorven).
 Done: #1, #9-#16, #30.
 Todo: #2, #3, #4, #5, #6, #7, #8, #17, #18, #19, #35-#41.
 
-**Native-unblocked and startable:** #2, #3, #17, #18, #35.
-**Blocked (do not start):** #4, #5, #6, #8, #19, #36-#41.
+**Native-unblocked:** #2, #3, #7 — all three are epics whose children are already in
+flight (PRs #56/#57/#58) or natively blocked. No leaf issue is startable.
+**Blocked (do not start):** #4, #5, #6, #8, #19, #36-#41, #44-#48, #50-#54.
 
 ## Next action
 
@@ -115,6 +116,21 @@ sandbox example pair with no dependents.
 - PR evidence standard — CI `build=SUCCESS` is necessary but not sufficient. Verify locally with
   `dotnet build`, `dotnet test tests/Durable.Tests` (plus any new test project the PR added), and
   `COMPILE_ONLY=1 ./scripts/validate.sh <example>`.
+
+**PR #56 design review — APPROVE WITH COMMENTS (2026-10-29T09:55Z).** Lead reviewed the
+declarations in `lib/Durable.cs:3996-4680`, `lib/Durable.DependencyInjection.cs` and the
+`.csproj` against `docs/implementation/ISSUE_7_API_SIGNATURES.md` — not the document alone.
+No blocking issue; **#36 may start the moment a human merges #56.** Verdict posted with
+`gh pr review 56 --comment` (not `--approve`; a human owns merge approval).
+
+Eight non-blocking findings, each posted as a carry-forward comment on the issue that owns it:
+
+| Issue | Findings |
+|---|---|
+| #36 | `Registry` getter allocates a fresh instance per read (hidden installs); `Store`/`NativeClient` read `_options` directly so `InitializeAsync`-created resources have no home; `GetSessionConfig` ≡ `BuildSessionConfig` equivalence unnamed; bare DI overload's container-registered store requirement unstated |
+| #37 | no way to supply SDK configuration (§7 has no entry point, `BuildSessionConfig` merges nothing); state that #37's binding/admission/checkpoint surface is internal, so #37 adds no public API |
+| #38 | `ForkAsync(parent, entryId)` never says whether `entryId` is a durable entry id or an SDK event id; #38 needs the `ToEventId` mapping and a wrong guess is a public break |
+| #39 | `ResumeTasksAsync` awaits its outcomes while `DurableHarness.ResumeAsync` is fire-and-forget; §6 forbids the two paths diverging |
 
 **Open question — do not auto-release:** `lib/Copilot.Durable.csproj` is at `0.5.0` and
 `CHANGELOG.md` has an `## [Unreleased]` entry. Cutting `v0.5.0` is a separate `dev` -> `main`
