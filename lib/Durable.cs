@@ -2992,6 +2992,16 @@ public sealed class DurableConversation
                     completion.TrySetResult(last);
                     break;
                 case SessionErrorEvent error:
+                    // A host hook the sandbox denied is a failure of the host's own
+                    // configuration, not of the conversation. When the host asked for that to
+                    // be tolerated, the turn's answer is returned and the denial stays visible
+                    // in SandboxDecisions.
+                    if (_harness.Options.TolerateHostHookFailures && IsHostHookFailure(error.Data.Message))
+                    {
+                        completion.TrySetResult(last);
+                        break;
+                    }
+
                     completion.TrySetException(new InvalidOperationException(error.Data.Message));
                     break;
             }
@@ -3007,6 +3017,17 @@ public sealed class DurableConversation
             SetBusy(false);
         }
     }
+
+    /// <summary>
+    /// Whether a session error is the runtime reporting that a host hook was denied by the
+    /// sandbox, rather than a failure of the turn itself.
+    /// </summary>
+    private static bool IsHostHookFailure(string? message) =>
+        message is not null
+        && message.Contains("hook", StringComparison.OrdinalIgnoreCase)
+        && (message.Contains("sandbox", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("Operation not permitted", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("code 126", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Reads the stored transcript entries, newest first.</summary>
     public IReadOnlyList<string> Entries(int limit = 20) =>
@@ -3085,7 +3106,7 @@ public sealed class DurableHarnessOptions
     public Func<PermissionRequest, PermissionInvocation, Task<PermissionDecision>>? PermissionHandler { get; set; }
 
     /// <summary>
-    /// Whether the host's own file hooks run for the sessions this harness creates, or
+    /// Whether repository-origin file hooks run for the sessions this harness creates, or
     /// <c>null</c> to leave the SDK default.
     /// </summary>
     /// <remarks>
@@ -3094,11 +3115,36 @@ public sealed class DurableHarnessOptions
     /// the tool call fails after it succeeded. A host that runs sandboxed conversations and
     /// does not want to widen the policy for its own hooks turns them off here.
     /// <para>
+    /// This flag only controls repository-origin hooks (<c>.github/hooks/</c> and trusted
+    /// repository-configured roots). A hook installed in the user's own configuration
+    /// directory — <c>~/.copilot/hooks/</c> — is not repository-origin, so it still runs with
+    /// this set to <c>false</c>. Turning that off is a host configuration decision outside
+    /// this harness; see <c>docs/SANDBOX_MATRIX.md</c>.
+    /// </para>
+    /// <para>
     /// This is host configuration, not durable state: it is not persisted with the
     /// conversation, so it never travels with a fork.
     /// </para>
     /// </remarks>
     public bool? EnableFileHooks { get; set; }
+
+    /// <summary>
+    /// Whether a turn that fails only because a host hook was denied by the sandbox is
+    /// reported as an answer instead of an exception.
+    /// </summary>
+    /// <remarks>
+    /// The runtime runs host hooks inside the session's sandbox. A hook the policy does not
+    /// grant is denied, and the runtime reports the turn as a session error even though the
+    /// tool call itself succeeded. That failure is about the host's own configuration, not
+    /// about the conversation, so a host that runs sandboxed conversations can choose to
+    /// tolerate it: the turn's answer is returned and the denial is still visible in
+    /// <see cref="DurableConversation.SandboxDecisions"/>.
+    /// <para>
+    /// The default is <c>false</c>: a session error is an error. Only a failure the runtime
+    /// attributes to a hook is tolerated; a genuine tool or model failure still throws.
+    /// </para>
+    /// </remarks>
+    public bool TolerateHostHookFailures { get; set; }
 }
 
 /// <summary>The harness: the durable host that owns the store, the registry, and the conversations.</summary>

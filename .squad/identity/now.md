@@ -1,72 +1,65 @@
 ---
-updated_at: 2026-10-23T22:22:00-04:00
-focus_area: Issue #1 — #9/#10/#11/#12 Done; #13 next (legacy single-file JSON reader)
-active_issues: [1, 13, 14, 15, 16, 17, 18, 19]
+updated_at: 2026-10-29T03:20:00-04:00
+focus_area: v0.4.0 released; #16 (durable sandbox policy) in flight on squad/16-durable-sandbox-policy
+active_issues: [2, 3, 7, 16]
 ---
 
 # What We're Focused On
 
-**Progress this session (2026-10-23/24, continuing from ISSUE_1_HANDOFF.md):**
+**v0.4.0 — SHIPPED (2026-10-28).** Issue #30 (release strategy + changelog + starting ref)
+implemented by Lead, PR #33 merged to `dev`, `dev` promoted to `main`, tag `v0.4.0` cut,
+GitHub release published, **default branch switched `dev` → `main`**, issue closed, board Done.
 
-- **#9 + #10 — DONE.** PR #21 merged into `dev` as `644ae88`. #10 re-scoped and verified
-  against all acceptance criteria; both issues closed; board Done.
-- **#11 — DONE.** PR #22 merged as `e21abb9`. Two real bugs caught by independent scratch
-  verification beyond the compile/test gates and fixed before merge: (1) NRE on every first
-  commit with an entry + missing committed-baseline seeding after open/Replay; (2) torn-tail
-  guard was dead code (`JsonSerializer.Deserialize` throws rather than returning null) so
-  torn tails crashed `Open`. Six-point scratch verification fully green.
-- **#12 — DONE.** Two PRs merged 2026-10-24:
-  - PR #23 → `f4d7601` — `DurableStore.DefaultStorePath()`, explicit Path wins, directory
-    created on first write not on open, InMemory never touches the filesystem.
-  - PR #24 → `a1ba1cd` — the Lead's "loud ephemeral tier" decision: `CreateEphemeral()`,
-    `IsPersistent` (backed by a new `IDurableStoreProvider.IsPersistent` member),
-    `Create(new DurableStoreOptions())` is persistent at the per-user default path, and
-    `Auto` on a non-existent/empty file writes **JSONL** (discriminator = the envelope's
-    top-level `type` property, which a legacy snapshot never carries).
-  - PR #24 was stacked on #23 and showed CONFLICTING; resolved by rebasing onto the merged
-    `dev` (the `1173c75` commit was skipped as already-applied, and the squad-state commit
-    was dropped as already upstream). Gates re-verified on the rebased tree before merging.
-  - Independently verified on the rebased tree: `CreateEphemeral().IsPersistent` false;
-    `new DurableStore(path)` true; default path's first line is a JSONL envelope; legacy
-    files still reopen under `Auto` without being rewritten.
-- **Architecture decision recorded** (Lead, merged into `.squad/decisions.md`): keep the
-  in-memory backend as an explicitly-named **ephemeral tier**; make the persistent tier the
-  default of the options/factory API; migrate the examples to explicit names. Decision #7
-  stands as a capability conclusion but its rationale is superseded. Tier ladder going
-  forward: ephemeral → local-file (JSONL) → shared-database (EF Core, #2).
-- **Lesson (keep applying):** compile-only gates do NOT cover new providers; every spine item
-  needs an end-to-end scratch roundtrip before "green" is believed.
+Independently verified: tag `v0.4.0` present; release listed as Latest; default branch `main`;
+`origin/main` and `origin/dev` in sync; `CHANGELOG.md` and `docs/RELEASING.md` on `main`;
+README states "Current version: 0.4.0".
 
-**Spine (serial):** #9 ✅ #10 ✅ #11 ✅ #12 ✅ → **#13 (next)**.
-**Consumers:** #14 (example + README + docs prose + example migration to explicit tiers),
-#15 (xUnit facts, target 9/0 — the tier model adds ~3 more).
+**#16 — durable sandbox policy — IN FLIGHT.** Branch `squad/16-durable-sandbox-policy`,
+1 commit ahead of `origin/dev`.
 
-**Parallel line (separate initiative, not part of #1):** #16–#19, the sandbox epic.
+- The library layer is **done and verified**: `DurableSandboxPolicy` + nested
+  `Auth`/`Credentials`/`Filesystem`/`Network`/`Proxy` types, `AgentChoices.Sandbox`
+  (null = no sandbox), `BuildSandboxConfig` -> `GitHub.Copilot.Rpc.SandboxConfig`,
+  `{workspace}` expansion, `SandboxDecisions` / `WaitForSandboxDecisionAsync`,
+  `DurableHarnessOptions`. Builds 0/0; suite 32/32.
+- Remaining: `examples/33-sandbox-sdk-filesystem.cs`, `docs/SANDBOX_MATRIX.md`,
+  `docs/DESIGN.md` section 3, `CHANGELOG.md` Unreleased entry, version bump 0.4.0 -> 0.5.0,
+  `33` added to `LIVE_EXAMPLES`, end-to-end roundtrip, PR -> `dev`.
+
+## Incident — runaway agent (2026-10-28/29)
+
+The first Core Engineer dispatch for #16 ran **11.2 hours continuously** with **zero commits**:
+1,353 bash calls, 99 `.scratch/probe*.cs` files, 73 context compactions, 2% of wall clock in
+actual tool execution. It was reverse-engineering the SDK XML in a loop it had already solved.
+
+- Work was salvaged and committed as `1046962` before the agent was stopped.
+- The agent was stopped via `write_agent` (the harness exposes **no hard-kill** for background
+  agents; subagents run inside the parent `copilot-runtime` process, so there is no PID to kill).
+- Re-dispatched with a **pre-researched brief** containing the full SDK sandbox API surface, an
+  explicit no-scratch-loop rule, and a commit-every-30-minutes rule.
+
+**Lesson (new, keep applying):** a long-running agent is not evidence of progress. Check for
+commits, not elapsed time. `list_agents` duration is wall-clock, not work.
 
 ## Branch model
 
-`dev` is the integration branch and the repo default. Feature work branches from
-`origin/dev` and PRs target `dev`. `main` is release-only. `origin` is SSH.
-Direct pushes to `dev` are rule-bypassed only for squad-state commits (observed, not a pattern).
+`main` is the **release branch and the repo default** (changed 2026-10-28). `dev` is the
+integration branch. Feature work branches from `origin/dev` and PRs target `dev`. `dev` -> `main`
+only at release. `origin` is SSH.
 
 ## Board
 
 GitHub-copilot-sdk-durable Roadmap (project 5, owner matthewcorven).
-#1 In Progress; #9/#10/#11/#12 Done; #13–#19 Todo.
+#1, #9-#15, #30 Done. #2, #3, #4, #5, #6, #7, #8, #16, #17, #18, #19 Todo.
+
+**Native-unblocked and startable:** #2, #3, #7, #16.
+**Blocked (do not start):** #4, #5, #6, #8, #17, #18, #19.
 
 ## Next action
 
-Route **#13** (legacy single-file JSON reader) to Core Engineer on `squad/13-{slug}` from
-`origin/dev`. Requirements it must satisfy:
-- Detect and read the legacy single-file JSON shape without data loss; convert the snapshot
-  into the new backend's state **at open**; the legacy file is **read-only by default** — no
-  implicit write-back (plan §5 decision #4).
-- Keep the `StoreSnapshot` / `DocumentSnapshot` / `DocumentVersionSnapshot` public types in
-  place (they stay until #13 completes).
-- **Close the gap PR #24 left open:** a file that is *neither* JSONL nor a legacy
-  `StoreSnapshot` currently opens as an empty legacy store (silent data loss) instead of
-  raising an actionable error. #13 must raise a clear error naming the path and the reason.
-- `Auto` sniffing must not destroy data: a legacy file is opened by the legacy provider and
-  written back in the legacy format; forcing `Format = Jsonl` on a legacy path is the
-  explicit "convert this store" action; forcing `Format = LegacyJson` on a JSONL file is
-  rejected with a clear error rather than silently discarding the JSONL records.
+1. Land #16 (in flight) — PR -> `dev`.
+2. Then #7 (unified extension library). **Note the dependency inversion:** #7's acceptance
+   criteria require #16's sandbox policy, but #16 is **not** a native `blocked by` link on #7 —
+   only the issue body mentions it. Per charter, body prose is not authoritative, so the board
+   reads #7 as unblocked while it is functionally dependent on #16. Add the native link.
+3. Then #2 (shared-database tier, EF Core) and #3.

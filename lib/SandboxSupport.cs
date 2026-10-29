@@ -163,13 +163,22 @@ public static class SandboxSupport
     /// command's output, so this asserts the classification and the enforcement point and
     /// prints the resource when the runtime did name one.
     /// </para>
+    /// <para>
+    /// More than one class may be acceptable for the same denial. A shell redirect into a
+    /// denied path is reported as <c>filesystem_read</c> on macOS seatbelt even though the
+    /// command was writing, because the runtime classifies the denial from the process's
+    /// failed open rather than from the redirect operator. Callers that only care that the
+    /// filesystem was the thing denied pass both classes.
+    /// </para>
     /// </remarks>
     public static void AssertDenied(
         IReadOnlyList<SandboxDecisionEvent> decisions,
-        SandboxDenialClass denialClass,
-        string because)
+        string because,
+        params SandboxDenialClass[] denialClasses)
     {
         ArgumentNullException.ThrowIfNull(decisions);
+        ArgumentNullException.ThrowIfNull(denialClasses);
+        Check.That(denialClasses.Length > 0, $"{because}: at least one denial class is expected");
 
         var denials = decisions
             .Select(decision => decision.Data)
@@ -178,8 +187,9 @@ public static class SandboxSupport
 
         Check.That(denials.Count > 0, $"{because}: the sandbox reported at least one access denial");
         Check.That(
-            denials.Any(denial => denial.DenialClass == denialClass),
-            $"{because}: a denial is classified as {denialClass.Value} " +
+            denials.Any(denial => denialClasses.Contains(denial.DenialClass)),
+            $"{because}: a denial is classified as " +
+            $"{string.Join(" or ", denialClasses.Select(denialClass => denialClass.Value))} " +
             $"(saw: {string.Join(", ", denials.Select(denial => denial.DenialClass.Value))})");
         Check.That(
             denials.Any(denial => denial.Outcome == SandboxOutcome.Denied),
