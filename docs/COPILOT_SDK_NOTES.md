@@ -93,6 +93,34 @@ constructor and `required` members. `Kind` is a plain `string`, not an enum.
 `PermissionRequest`, `PermissionInvocation`, and the request variants are in `GitHub.Copilot`;
 `PermissionDecision` and its variants are in `GitHub.Copilot.Rpc`.
 
+### Sandbox credential masking and MCP/LSP confinement
+
+`SandboxCredentialsConfig.EnvVars` maps a **variable name** to its injection hosts. The value is
+never part of the wire type and never part of the durable policy (`DurableSandboxCredentials`
+carries the same name-to-hosts shape). The runtime reads the value from the host process's
+environment, replaces it inside the sandbox with a random sentinel, and substitutes the real value
+only into HTTPS request headers addressed to an injection host. Consequences worth remembering:
+
+- A sandboxed command that echoes the variable sees the sentinel, not the secret — a length and a
+  digest that do not match the real value, and never an empty string. `examples/34-sandbox-sdk-network-credentials.cs`
+  proves masking that way, without ever printing the value.
+- Substitution does not apply to plaintext HTTP, URLs, request bodies, encoded credentials, or
+  signed requests, so a masked variable is not a general-purpose secret channel.
+- Injection grants never widen the network policy: `Network.AllowOutbound = false` still refuses
+  the connection, and `Network.AllowedHosts`/`BlockedHosts` still apply.
+
+`SandboxConfig.SandboxMcpServers` and `SandboxLspServers` **default to on**: an MCP or LSP server
+the session starts runs inside the session sandbox unless the policy explicitly sets the flag to
+`false`. Opting out is not just "run this server outside the sandbox" — it also lets that server's
+own remote-MCP egress leave the sandbox, which is why the flag is read together with `Enabled`.
+`SandboxConfig.ManagedMcpRoutingLocked`/`ManagedLspRoutingLocked` are the runtime's own routing
+locks and are not part of the durable policy surface.
+
+A policy's configured `Network.Proxy` is not echoed back: on macOS seatbelt a policy with a proxy
+URL resolved with `SandboxDecisionDataPolicyResolved.ProxyMode == none`. Assert the URL on the
+configuration the durable layer built, and assert only that the resolved mode is one of
+`none`/`loopback`/`external`.
+
 ---
 
 ## Event streaming quirks
