@@ -366,3 +366,27 @@ Roadmap board: project 5 (project id `PVT_kwHOAajMkc4BobdZ`), Status field `PVTS
 **Why:** CI proves the build compiles; it does not prove the changed projects build in isolation, that the test suite passes, or that touched examples still compile.
 
 **How it applies:** Applies to every PR before it is declared ready for a human to merge.
+
+### 2026-10-29T06:05:00-04:00: PR #56 (issue #35) approved with eight carry-forward findings
+
+**Date:** 2026-10-29
+**Author:** lead (design review of PR #56)
+
+**What:** PR #56 (issue #35, "7.1 Finalize approved public signatures") was reviewed and the verdict is APPROVE WITH COMMENTS. The review was posted via `gh pr review 56 --comment`, not `--approve`, because a human owns merge approval. There is no blocking issue and no public signature must change before #36. The lead verified the actual declarations in `lib/Durable.cs` (3996-4680), `lib/Durable.DependencyInjection.cs`, and `lib/Copilot.Durable.csproj` against `docs/implementation/ISSUE_7_API_SIGNATURES.md` — not the document alone. Confirmed passing: `Build()` returns `DurableCopilotClient` and is a bare throw with no I/O; `DurableConversation` is reused everywhere; the one-runtime requirement is documented in §6 and in the type remarks; the escape hatch is complete in three places; DI lives in a package-owned namespace with both overloads; naming is consistent with `Durable.cs`. #36 may start the moment a human merges PR #56.
+
+The eight non-blocking findings, each with its owning issue:
+
+1. The `Registry` getter (`lib/Durable.cs:4341`) allocates a fresh `ExtensionRegistry` on every read when none was supplied. This breaks reference identity and hides extensions installed through one reference from another. It must cache a single instance. Owner: #36.
+2. `Store` and `NativeClient` (`lib/Durable.cs:4333` and `:4357`) read `_options` directly. Resources the durable layer itself creates in `InitializeAsync` have no home in that model. The §8 entry for 7.2 must state whether these are written back into options or held as runtime state. Owner: #36.
+3. §7 "SDK configuration" of `docs/implementation/ISSUE_7_API_SIGNATURES.md` (line ~379) has no way in: no builder or constructor overload accepts an SDK configuration object, and `BuildSessionConfig` merges nothing. This must be settled before #37. Owner: #37.
+4. `ForkAsync(parent, entryId)` (`lib/Durable.cs:4439`) never states whether `entryId` is a durable entry id or an SDK event id. #38 requires mapping to `ToEventId`. Guessing wrong is a public API break. This must be settled before #38. Owner: #38.
+5. `ResumeTasksAsync` awaits its outcomes, but `DurableHarness.ResumeAsync` (`lib/Durable.cs:3590`) is fire-and-forget. §6 forbids the public and harness paths diverging. #7.5 owns reconciling both. Owner: #39.
+6. `GetSessionConfig` is exactly equivalent to `BuildSessionConfig`; the equivalence is unnamed and undocumented. Owner: #36.
+7. The bare `AddDurableCopilotClient()` DI overload requires a container-registered `DurableStore`. The lead believes this is deliberate but it is stated nowhere; both overloads must document it. Owner: #36.
+8. State explicitly that #37's binding/admission/checkpoint surface is internal, so #37 adds no public API. Owner: #37.
+
+**References:** #35, #36, #37, #38, #39, #40, #41, PR #56, `lib/Durable.cs`, `lib/Durable.DependencyInjection.cs`, `lib/Copilot.Durable.csproj`, `docs/implementation/ISSUE_7_API_SIGNATURES.md`
+
+**Why:** These are design-review findings against the document that gates #36-#41. If they are not recorded, the next agents will re-discover them or, worse, encode a guess into a phase-2 issue where changing it becomes a public break.
+
+**How it applies:** Every spawn prompt for #36-#41 must carry the findings that name that issue. Findings 3 and 4 are documentation edits to `docs/implementation/ISSUE_7_API_SIGNATURES.md` and fold into #37 and #38 respectively.
