@@ -266,7 +266,7 @@ public sealed class EfCoreStoreProvider : InMemoryStoreProvider
         {
             case DocumentType:
                 var document = JsonSerializer.Deserialize<DocumentPayload>(payload, DurableJson.Options)!;
-                EnsureDocument(document.Kind, document.OwnerId, document.Fork);
+                EnsureDocument(document.Kind, document.OwnerId, document.Fork, document.Initial?.Clone());
                 break;
 
             case DocumentVersionType:
@@ -368,7 +368,7 @@ public sealed class EfCoreStoreProvider : InMemoryStoreProvider
             {
                 pending.Events.Add(NewEvent(
                     DocumentType,
-                    new DocumentPayload(document.Kind, document.OwnerId, document.Fork)));
+                    new DocumentPayload(document.Kind, document.OwnerId, document.Fork, document.Initial?.Clone())));
             }
 
             var persisted = _committedVersions.TryGetValue(key, out var count) ? count : 0;
@@ -464,7 +464,7 @@ public sealed class EfCoreStoreProvider : InMemoryStoreProvider
     }
 
     /// <summary>The payload of a <c>document</c> event.</summary>
-    private sealed record DocumentPayload(string Kind, string OwnerId, ForkPolicy Fork);
+    private sealed record DocumentPayload(string Kind, string OwnerId, ForkPolicy Fork, JsonElement? Initial = null);
 
     /// <summary>The payload of a <c>document-version</c> event.</summary>
     private sealed record DocumentVersionPayload(

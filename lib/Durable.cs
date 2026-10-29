@@ -612,6 +612,14 @@ public interface IDurableStoreProvider : IDisposable
     /// <summary>Reads a document's state, creating it on first use.</summary>
     DocumentState EnsureDocument(string kind, string ownerId, ForkPolicy fork);
 
+    /// <summary>
+    /// Reads a document's state, creating it on first use and remembering the document's
+    /// initial value. The initial value is what a <see cref="ForkPolicy.Initial"/> fork
+    /// inherits, so it has to be recorded alongside the document, not recomputed later.
+    /// </summary>
+    DocumentState EnsureDocument(string kind, string ownerId, ForkPolicy fork, JsonElement? initial) =>
+        EnsureDocument(kind, ownerId, fork);
+
     /// <summary>Records a committed version of a document.</summary>
     void RecordDocumentVersion(DocumentState state, string entryId, JsonElement value);
 
@@ -809,12 +817,16 @@ public class InMemoryStoreProvider : IDurableStoreProvider
     }
 
     /// <summary>Reads a document's state, creating it on first use.</summary>
-    public DocumentState EnsureDocument(string kind, string ownerId, ForkPolicy fork)
+    public DocumentState EnsureDocument(string kind, string ownerId, ForkPolicy fork) =>
+        EnsureDocument(kind, ownerId, fork, initial: null);
+
+    /// <summary>Reads a document's state, creating it on first use and remembering its initial value.</summary>
+    public DocumentState EnsureDocument(string kind, string ownerId, ForkPolicy fork, JsonElement? initial)
     {
         var key = DocumentKey(kind, ownerId);
         if (!_documents.TryGetValue(key, out var state))
         {
-            state = new DocumentState(kind, ownerId, fork);
+            state = new DocumentState(kind, ownerId, fork, initial?.Clone());
             _documents[key] = state;
             _undo?.Remove(_documents, key);
         }
@@ -832,11 +844,12 @@ public class InMemoryStoreProvider : IDurableStoreProvider
     /// <summary>Copies a document into another owner, honouring its fork policy.</summary>
     public void CopyDocument(DocumentState source, string toOwner, string? forkEntryId)
     {
-        var target = EnsureDocument(source.Kind, toOwner, source.Fork);
+        var target = EnsureDocument(source.Kind, toOwner, source.Fork, source.Initial);
         JsonElement? value = source.Fork switch
         {
             ForkPolicy.AsOf => forkEntryId is null ? source.Latest : source.AsOfOrBefore(forkEntryId, SequenceOf),
             ForkPolicy.Current => source.Latest,
+            ForkPolicy.Initial => source.Initial,
             _ => null,
         };
 
@@ -891,6 +904,7 @@ public class InMemoryStoreProvider : IDurableStoreProvider
             Kind = d.Kind,
             OwnerId = d.OwnerId,
             Fork = d.Fork,
+            Initial = d.Initial?.Clone(),
             Versions = d.Versions.Select(v => new DocumentVersionSnapshot
             {
                 EntryId = v.EntryId,
@@ -919,7 +933,7 @@ public class InMemoryStoreProvider : IDurableStoreProvider
 
         foreach (var document in snapshot.Documents)
         {
-            var state = new DocumentState(document.Kind, document.OwnerId, document.Fork);
+            var state = new DocumentState(document.Kind, document.OwnerId, document.Fork, document.Initial?.Clone());
             foreach (var version in document.Versions)
             {
                 state.Versions.Add(new DocumentVersion(version.EntryId, version.Value.Clone(), version.Sequence));
@@ -1319,7 +1333,9 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
                 EnsureDocument(
                     record.Payload.GetProperty("kind").GetString()!,
                     record.Payload.GetProperty("ownerId").GetString()!,
-                    record.Payload.GetProperty("fork").Deserialize<ForkPolicy>(DurableJson.Options));
+                    record.Payload.GetProperty("fork").Deserialize<ForkPolicy>(DurableJson.Options),
+                    // Older records predate the initial value; a missing property is not an error.
+                    record.Payload.TryGetProperty("initial", out var initial) ? initial.Clone() : null);
                 break;
             case "document-version":
                 // A version carries the sequence RecordDocumentVersion minted for it,
@@ -1389,7 +1405,7 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
             if (_emittedDocuments.Add(key))
             {
                 records.Add(JsonlRecord.For("document", Sequence, new JsonlDocumentRef(
-                    document.Kind, document.OwnerId, document.Fork)));
+                    document.Kind, document.OwnerId, document.Fork, document.Initial?.Clone())));
             }
 
             var committed = _committedVersions.GetValueOrDefault(key);
@@ -1454,7 +1470,7 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
 
     private sealed record JsonlEntryRef(string ConversationId, string EntryId);
 
-    private sealed record JsonlDocumentRef(string Kind, string OwnerId, ForkPolicy Fork);
+    private sealed record JsonlDocumentRef(string Kind, string OwnerId, ForkPolicy Fork, JsonElement? Initial);
 
     private sealed record JsonlDocumentVersion(
         string Kind, string OwnerId, ForkPolicy Fork, string EntryId, long Sequence, JsonElement Value);
@@ -2150,12 +2166,24 @@ public sealed class Transaction
     /// <summary>Reads an editable copy of a document, creating it on first use.</summary>
     public DocumentDraft<T> Doc<T>(DocumentDefinition<T> definition, string ownerId)
     {
-        var state = _provider.EnsureDocument(definition.Kind, ownerId, definition.Fork);
+        var state = EnsureDocumentWithInitial(definition, ownerId);
         var current = state.Latest is { } latest
             ? latest.Deserialize<T>(DurableJson.Options)!
             : definition.Initial();
         return new DocumentDraft<T>(this, definition, ownerId, current);
     }
+
+    /// <summary>
+    /// Ensures the document exists, recording the definition's initial value the first time
+    /// it is seen. A <see cref="ForkPolicy.Initial"/> fork inherits that value, so it has to
+    /// be captured while the definition is in hand.
+    /// </summary>
+    private DocumentState EnsureDocumentWithInitial<T>(DocumentDefinition<T> definition, string ownerId) =>
+        _provider.EnsureDocument(
+            definition.Kind,
+            ownerId,
+            definition.Fork,
+            DurableJson.ToElement(definition.Initial()));
 
     /// <summary>Creates a task and returns its record.</summary>
     public DurableTaskRecord CreateTask(
@@ -2177,7 +2205,7 @@ public sealed class Transaction
 
     internal void CommitDocument<T>(DocumentDefinition<T> definition, string ownerId, T value, string entryId)
     {
-        var state = _provider.EnsureDocument(definition.Kind, ownerId, definition.Fork);
+        var state = EnsureDocumentWithInitial(definition, ownerId);
         _provider.RecordDocumentVersion(state, entryId, DurableJson.ToElement(value));
     }
 }
@@ -2242,6 +2270,9 @@ public sealed class DocumentSnapshot
 
     /// <summary>The fork policy.</summary>
     public ForkPolicy Fork { get; set; }
+
+    /// <summary>The document's initial value, inherited by a <see cref="ForkPolicy.Initial"/> fork.</summary>
+    public JsonElement? Initial { get; set; }
 
     /// <summary>The committed versions.</summary>
     public List<DocumentVersionSnapshot> Versions { get; set; } = [];
