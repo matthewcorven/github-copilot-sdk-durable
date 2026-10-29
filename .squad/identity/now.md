@@ -1,10 +1,62 @@
 ---
-updated_at: 2026-10-29T06:10:00-04:00
-focus_area: Ralph rounds 1-2 complete — five PRs open, green and clean (#55-#59), PR #56 reviewed APPROVE WITH COMMENTS; all remaining work natively blocked on human merges
-active_issues: [2, 3, 4, 5, 6, 7, 8, 17, 18, 19, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54]
+updated_at: 2026-10-29T08:20:00-04:00
+focus_area: Ralph round 4 — five PRs merged (#55-#59), five issues closed, three newly unblocked issues dispatched (#36, #44, #50)
+active_issues: [2, 3, 4, 5, 6, 7, 8, 19, 36, 37, 38, 39, 40, 41, 44, 45, 46, 47, 48, 50, 51, 52, 53, 54]
 ---
 
 # What We're Focused On
+
+**Ralph round 4 — FIVE PRs MERGED (2026-10-29).** User granted merge approval for the session.
+All five green PRs squash-merged to `dev` in dependency order:
+
+| PR | Issue | Squash commit | Unblocked |
+|----|-------|---------------|-----------|
+| #56 | #35 | `e53bddf` | #36 |
+| #58 | #43 | `65ef760` | #44 |
+| #57 | #49 | `50936a7` | #50 |
+| #55 | #17 | `7afb560` | — |
+| #59 | #18 | `86ea980` | — |
+
+**#59 needed a rebase.** It went `CONFLICTING/DIRTY` after #55 landed, as predicted. Three
+commits replayed onto `origin/dev`; `docs/COPILOT_SDK_NOTES.md` auto-merged. Two real conflicts:
+
+- `scripts/validate.sh` — resolved as a union: `LIVE_EXAMPLES` now carries both `34` and `35`.
+- `docs/SANDBOX_MATRIX.md` — both sides added a `## 8`. Kept #55's `## 8. Network, credential,
+  dev-tool and MCP/LSP options by example` and renumbered #59's to `## 9. Observability, bypass,
+  trust and keychain`. The Examples bullet at the top now names 33, 34 and 35.
+
+**A merge-ordering regression was caught and fixed.** #59's README edit claimed "14 need no
+Copilot sign-in / 21 need a signed-in CLI" — correct against its own base, wrong once #55's
+example 34 landed. Ground truth after both merges: **36 examples, 23 live, 13 non-live**.
+Corrected in the same commit before pushing.
+
+Re-validated in the `-18` worktree after the rebase: build 0/0, suite **41/41**,
+`COMPILE_ONLY=1 ./scripts/validate.sh 35-...` PASS, vocabulary grep clean.
+
+**All five issues closed manually.** GitHub only auto-closes on `Closes #N` when the PR targets
+the *default* branch (`main`), not `dev` — so four PRs that did carry the keyword left their
+issues open, and #58 carried no keyword at all. Closed all five with `--reason completed`.
+
+**Board:** #17, #18, #35, #43, #49 → Done. #36, #44, #50 → In Progress.
+
+**Ralph round 4 dispatch — three newly unblocked issues, all `squad:core-engineer`:**
+
+| # | Slice | Worktree | Branch |
+|---|-------|----------|--------|
+| 36 | 7.2 Shared durable runtime behind harness + facade | `-36` | `squad/36-shared-durable-runtime` |
+| 44 | 3.2 Runtime connection from the environment | `-44` | `squad/44-runtime-connection-env` |
+| 50 | 2.2 EF Core store provider over `IDurableStoreProvider` | `-50` | `squad/50-efcore-store-provider` |
+
+#36 carries the PR #56 review findings 1 and 2 (the `Registry` fresh-instance-per-read defect
+and the owned-store/client storage question). #44 and #50 carry the provider-neutrality and
+vocabulary constraints from their parents.
+
+**Still blocked:** #4←3, #5←4,3, #6←5,4,3, #8←7,3, #19←6,3, #37←36, #38←36, #39←37,
+#40←39,38, #41←40, #45←44, #46←45, #47←45, #48←46, #51←50, #52←51, #53←51, #54←51.
+Epics #2, #3, #7 remain open by design — their children are in flight.
+
+**Not granted:** release / `dev`→`main` promotion. Merge approval covers PRs only, this session.
+
 
 **v0.4.0 — SHIPPED (2026-10-28).** Issue #30 (release strategy + changelog + starting ref)
 implemented by Lead, PR #33 merged to `dev`, `dev` promoted to `main`, tag `v0.4.0` cut,
