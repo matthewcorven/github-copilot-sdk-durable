@@ -288,3 +288,81 @@ Roadmap board: project 5 (project id `PVT_kwHOAajMkc4BobdZ`), Status field `PVTS
 4. **Scope was respected.** `examples/` (#14) and `tests/` (#15) are untouched. `new DurableStore()` behaviour is unchanged and carries no `[Obsolete]` attribute. `DurableStoreFormat` members are unchanged.
 
 **How it applies:** PR #24 is open as a draft against `dev`, based on `origin/squad/12-default-path` (`1173c75`) because #12's PR #23 is still open and unmerged. Gates green: build 0 warnings / 0 errors, tests 4 passed / 0 failed, all 31 examples compile. Verified end-to-end in a scratch console project against the real `lib/Durable.cs` with a hermetic `XDG_STATE_HOME` — the default path's first line is `{"v":1,"seq":1,"type":"conversation","payload":{"id":"c1"}}`, a JSONL envelope, not a legacy snapshot.
+
+### 2026-10-29T05:52:00-04:00: Epic #3 (deterministic runtime) decomposed into 43→44→45→{46→48, 47}
+
+**Date:** 2026-10-29
+**Author:** lead (Ralph rounds 1–2)
+
+**What:** Epic #3 is decomposed into a single startable chain: #43 → #44 → #45 → {#46 → #48, #47}. #43 merges the "runtime process" and "response script" slices because neither ships alone. #48 owns the docs plus the determinism check. #47 (polyglot attach verification) is a separate child of #45 so non-.NET toolchains do not gate the .NET chain.
+
+**References:** #3, #43, #44, #45, #46, #47, #48
+
+**Why:** Language-neutrality must not block the primary chain. Folding the polyglot attach verification into the .NET sequence would make every .NET milestone wait on toolchains that are not part of the deliverable, so it hangs off #45 as a sibling of #46 instead.
+
+**How it applies:** Exactly one startable child at a time; the ordering is enforced with native GitHub `blocked by` links, not prose.
+
+### 2026-10-29T05:52:00-04:00: Epic #2 (EF Core providers) decomposed into 49→50→51→{52, 53, 54}
+
+**Date:** 2026-10-29
+**Author:** lead (Ralph rounds 1–2)
+
+**What:** Epic #2 is decomposed into #49 → #50 → #51 → {#52, #53, #54}.
+
+**References:** #2, #49, #50, #51, #52, #53, #54
+
+**Why:** Exactly one startable child per epic at any time keeps the board unambiguous and prevents parallel agents from colliding on the same provider surface.
+
+**How it applies:** The chain is enforced with native GitHub `blocked by` links and verified by GraphQL read-back, not by prose in the issue bodies.
+
+### 2026-10-29T05:52:00-04:00: EF Core example renumbered from 32 to 37
+
+**Date:** 2026-10-29
+**Author:** lead (Ralph rounds 1–2)
+
+**What:** The EF Core example is numbered 37, not 32. `examples/32-jsonl-store.cs` already exists; 34 and 35 are reserved by #17 and #18, and 36 by #41.
+
+**References:** #2, #17, #18, #41, `examples/32-jsonl-store.cs`
+
+**Why:** Example numbers are a shared namespace across epics; assigning 32 would have collided with an existing file.
+
+**How it applies:** Future example numbering must check `examples/` before assigning a number.
+
+### 2026-10-29T05:52:00-04:00: `DurableStore.Create` has no external-provider seam; #50 adds one additively
+
+**Date:** 2026-10-29
+**Author:** lead (Ralph rounds 1–2)
+
+**What:** `DurableStore.Create` currently has no seam for an external provider. #50 must add one additively. The settled surface — `DurableStore(string?)`, `Create`, `CreateEphemeral`, `IsPersistent` — is explicitly out of scope for change.
+
+**References:** #2, #50, `lib/Durable.cs`
+
+**Why:** The EF Core provider cannot be injected without a seam, but the existing factory surface is already settled and shipped; changing it would be a breaking change for no gain.
+
+**How it applies:** #50 adds new surface only. Any change to the four settled members is out of scope and must be raised as a separate decision.
+
+### 2026-10-29T05:52:00-04:00: Delivery-gap lesson — audit artifacts, do not trust completion reports
+
+**Date:** 2026-10-29
+**Author:** lead (Ralph rounds 1–2)
+
+**What:** A dispatched agent can report "done" while having produced only a local commit: no pushed branch, no PR. In round 1 the #18 agent completed and re-ran its example successfully but stopped before committing the final edit, pushing, or opening a PR.
+
+**References:** #18, Ralph round 1
+
+**Why:** The completion report described the work the agent had done, not the artifacts it had delivered. The gap was only visible by inspecting the remote.
+
+**How it applies:** The coordinator must audit artifacts — commit SHA, remote branch, PR number, CI status — rather than trust an agent's completion report. Every implementation spawn prompt must explicitly instruct the agent to push the branch and open the PR.
+
+### 2026-10-29T05:52:00-04:00: PR review evidence standard — CI green is necessary but not sufficient
+
+**Date:** 2026-10-29
+**Author:** lead (Ralph rounds 1–2)
+
+**What:** GitHub CI `build=SUCCESS` is necessary but not sufficient. Before declaring a PR ready for a human to merge, the coordinator verifies locally in the PR's worktree: `dotnet build` of the changed projects, `dotnet test tests/Durable.Tests` (and any new test project the PR added), and `COMPILE_ONLY=1 ./scripts/validate.sh <example>` for examples the PR touched.
+
+**References:** Ralph rounds 1–2, `tests/Durable.Tests`, `scripts/validate.sh`
+
+**Why:** CI proves the build compiles; it does not prove the changed projects build in isolation, that the test suite passes, or that touched examples still compile.
+
+**How it applies:** Applies to every PR before it is declared ready for a human to merge.

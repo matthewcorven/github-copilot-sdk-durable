@@ -1,7 +1,7 @@
 ---
-updated_at: 2026-10-28T23:27:29-04:00
-focus_area: Ralph round 1 — #35, #17, #18 dispatched in parallel worktrees; #2 and #3 being decomposed by Lead
-active_issues: [2, 3, 7, 17, 18, 35, 36, 37, 38, 39, 40, 41]
+updated_at: 2026-10-29T05:58:00-04:00
+focus_area: Ralph rounds 1-2 complete — five PRs open and green (#55-#59); all remaining open issues natively blocked on human merges
+active_issues: [2, 3, 4, 5, 6, 7, 8, 17, 18, 19, 35, 36, 43, 44, 49, 50]
 ---
 
 # What We're Focused On
@@ -71,27 +71,52 @@ Todo: #2, #3, #4, #5, #6, #7, #8, #17, #18, #19, #35-#41.
 
 ## Next action
 
-**Ralph round 1 in flight (2026-10-28).** Four background agents dispatched in parallel, all on
-`deepseek/deepseek-v4.1-flash-1017` per user directive, each in its own worktree cut from
-`origin/dev` at `c548212`:
+**Ralph rounds 1-2 complete (2026-10-29).** Six issues delivered, five PRs open, all green.
 
-| Issue | Agent | Worktree | Branch |
-|---|---|---|---|
-| #35 | Core Engineer | `../github-copilot-sdk-durable-35` | `squad/35-finalize-durable-client-signatures` |
-| #17 | Core Engineer | `../github-copilot-sdk-durable-17` | `squad/17-sandbox-network-credentials` |
-| #18 | Core Engineer | `../github-copilot-sdk-durable-18` | `squad/18-sandbox-observability-bypass` |
-| #2, #3 | Lead (decompose only) | main checkout | — |
+| PR | Issue | Branch | Size | Local verification |
+|---|---|---|---|---|
+| #55 | #17 | `squad/17-sandbox-network-credentials` | +604/-2, 4 files | build 0/0, suite 41/41, example 34 compile PASS |
+| #56 | #35 | `squad/35-finalize-durable-client-signatures` | +1142/-0, 4 files | build 0/0, suite 41/41 |
+| #57 | #49 | `squad/49-ef-core-dbcontext` | +927/-0, 13 files | build 0/0, suite 41/41, EfCore suite 8/8 |
+| #58 | #43 | `squad/43-deterministic-replay-runtime` | +1187/-0, 10 files | build 0/0, suite 41/41 |
+| #59 | #18 | `squad/18-sandbox-observability-bypass` | +619/-3, 5 files | build 0/0, suite 41/41, example 35 compile PASS |
 
-Board housekeeping done before dispatch: #17 and #18 added to project #5 as Todo, all three
-implementation issues labeled `squad:core-engineer`.
+All five are `MERGEABLE` and target `dev`. **Only a human merges.** Squash-merge per the branch
+model: `gh pr merge <n> --squash --delete-branch`.
 
-Every Core Engineer spawn carried the incident remedy: pre-researched SDK brief, no
-`.scratch/probe*.cs` loops, commit within 30 minutes, no `mock`/`fake`/`stub`/`simulat` vocabulary.
+Each PR body carries its required artifact: #58 enumerates the implemented JSON-RPC methods,
+#57 records the four provider-specific model decisions, #56 ships
+`docs/implementation/ISSUE_7_API_SIGNATURES.md`.
 
-**After round 1:** verify each PR with build + `dotnet test tests/Durable.Tests` +
-`COMPILE_ONLY=1 ./scripts/validate.sh`, report readiness, **do not merge** (only a human merges).
-Then rescan the board for round 2. #36 unblocks once #35's signatures are Lead-reviewed.
+**Board is now merge-gated.** Every remaining open issue is natively blocked:
+
+| Issue | Blocked by |
+|---|---|
+| #36 | #35 (PR #56) |
+| #44 | #43 (PR #58) |
+| #50 | #49 (PR #57) |
+| #4 | #3 |
+| #5 | #3, #4 |
+| #6 | #3, #4, #5 |
+| #8 | #3, #7 |
+| #19 | #3, #6 |
+| #2, #3, #7 | open epics (children in flight or blocked) |
+
+So the next startable work appears only after a human merges: merging #56 unblocks **#36**,
+merging #58 unblocks **#44**, merging #57 unblocks **#50**. Merging #17 and #18 closes the
+sandbox example pair with no dependents.
+
+**Process lessons recorded** in `.squad/decisions.md` this round:
+
+- Delivery-gap lesson — a dispatched agent can report done with only a local commit. The #18
+  agent finished and re-ran its example successfully but never committed the final edit, pushed,
+  or opened a PR. Audit artifacts (commit SHA, remote branch, PR, CI), never the completion report.
+  Every implementation prompt now requires pushing the branch and opening the PR.
+- PR evidence standard — CI `build=SUCCESS` is necessary but not sufficient. Verify locally with
+  `dotnet build`, `dotnet test tests/Durable.Tests` (plus any new test project the PR added), and
+  `COMPILE_ONLY=1 ./scripts/validate.sh <example>`.
 
 **Open question — do not auto-release:** `lib/Copilot.Durable.csproj` is at `0.5.0` and
-`CHANGELOG.md` has an `## [Unreleased]` entry. `dev` is 1 commit ahead of `main`. Cutting
-`v0.5.0` is a separate `dev` -> `main` promotion per `docs/RELEASING.md` and needs user sign-off.
+`CHANGELOG.md` has an `## [Unreleased]` entry. Cutting `v0.5.0` is a separate `dev` -> `main`
+promotion per `docs/RELEASING.md` and needs user sign-off. `dev` will be well ahead of `main`
+once the five PRs land.
