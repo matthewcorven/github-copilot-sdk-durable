@@ -9,6 +9,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\lib\Durable.EfCore\Durable.EfCore.csproj" />
+    <ProjectReference Include="..\..\lib\Durable.EfCore.MySql\Durable.EfCore.MySql.csproj" />
+    <ProjectReference Include="..\..\lib\Durable.EfCore.PostgreSql\Durable.EfCore.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\lib\Durable.EfCore.SqlServer\Durable.EfCore.SqlServer.csproj" />
     <ProjectReference Include="..\..\lib\Copilot.Durable.csproj" />
   </ItemGroup>
 

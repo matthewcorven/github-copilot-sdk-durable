@@ -18,7 +18,8 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <!-- The SQLite provider is the migration baseline. The model itself is provider-neutral;
-         the other providers are added by #2.4. -->
+         the server providers live in their own assemblies (Durable.EfCore.SqlServer,
+         Durable.EfCore.PostgreSql, Durable.EfCore.MySql) so each carries its own migration. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
   </ItemGroup>
 
