@@ -400,11 +400,14 @@ invocation also runs the vocabulary check: it fails when a source file under `ex
 describes itself with a placeholder term instead of naming what it really does.
 
 The deterministic run executes the recorded runtime's own test suite, the durable tool round
-trip against it, a recorded conversation end to end, and the two store-only examples
-(`32-jsonl-store`, `37-ef-core-store`). It does **not** run the other 35 examples: they create
-a Copilot session, and the recorded runtime only answers the sessions its fixture names, so
-they still need a sign-in. It proves the suite runs reproducibly without credentials; it does
-not prove that a live model answers. `docs/DESIGN.md` §6.1 is the full statement.
+trip against it, a recorded conversation end to end, and 16 of the 37 examples. Two of those
+(`32-jsonl-store`, `37-ef-core-store`) never open a Copilot session; the other fourteen create
+one, and the recorded runtime serves it from the recording and marks the pass as
+`synthesised session — not a recorded transcript`. The remaining 21 examples are printed by
+name with the reason they cannot run: they need a request the runtime does not answer, or they
+assert a tool call, a model answer, or a host event the recording does not contain. It proves
+the suite runs reproducibly without credentials; it does not prove that a live model answers.
+`docs/DESIGN.md` §6.1 is the full statement.
 
 CI runs `dotnet test tests/Durable.Tests`, then `SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh`. Every example is compiled on every push, and the 14 that need no Copilot sign-in also execute with their assertions checked. The other 23 need a signed-in Copilot CLI and are not run in CI.
 

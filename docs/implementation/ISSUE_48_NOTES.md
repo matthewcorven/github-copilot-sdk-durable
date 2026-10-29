@@ -1,5 +1,11 @@
 # Issue #48 — determinism check: findings and decisions
 
+> **Superseded by [`ISSUE_78_NOTES.md`](ISSUE_78_NOTES.md).** The measured table below is the
+> state before #78. #78 lifted the refusal described here: the recorded runtime now serves an
+> unrecorded `session.create` from the recording and marks the pass as synthesised, and the
+> deterministic mode runs 16 of 37 examples rather than 2. Read #78's notes for the current
+> numbers; this file is kept as the record of what #48 found and why it deferred the fix.
+
 Re-derived counts on `origin/dev` @ `2499e49` (the issue body's 34 examples / 21
 `LIVE_EXAMPLES` are stale — they predate #54, #64 and #71):
 

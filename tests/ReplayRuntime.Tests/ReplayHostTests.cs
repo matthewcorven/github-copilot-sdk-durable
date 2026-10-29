@@ -125,13 +125,105 @@ public sealed class ReplayHostTests
     }
 
     [Fact]
-    public async Task RunAsync_UnknownSessionExitsNonZero()
+    public async Task RunAsync_UnknownSessionIsServedFromTheRecordingAndAnnouncedAsSynthesised()
     {
         var transcript = await RunAsync(
-            Request(1, "session.sendMessages", new JsonObject { ["sessionId"] = "nope" }));
+            Request(1, "session.sendMessages", new JsonObject { ["sessionId"] = "nope" }),
+            Request(2, "runtime.shutdown", new JsonObject()));
 
-        Assert.NotEqual(0, transcript.ExitCode);
-        Assert.Contains("nope", transcript.Stderr, StringComparison.Ordinal);
+        Assert.Equal(0, transcript.ExitCode);
+        Assert.Contains(ReplayHost.SynthesisedSessionMarker, transcript.Stderr, StringComparison.Ordinal);
+        Assert.Contains("'nope'", transcript.Stderr, StringComparison.Ordinal);
+        Assert.Equal("msg-1", transcript.Responses[0]["result"]!["messageIds"]![0]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task RunAsync_CreateWithUnrecordedIdAnnouncesSynthesisedSession()
+    {
+        var transcript = await RunAsync(
+            Request(1, "session.create", new JsonObject { ["sessionId"] = "client-chosen" }),
+            Request(2, "session.sendMessages", new JsonObject { ["sessionId"] = "client-chosen" }),
+            Request(3, "runtime.shutdown", new JsonObject()));
+
+        Assert.Equal(0, transcript.ExitCode);
+        Assert.Equal("client-chosen", transcript.Responses[0]["result"]!["sessionId"]!.GetValue<string>());
+        Assert.Contains(ReplayHost.SynthesisedSessionMarker, transcript.Stderr, StringComparison.Ordinal);
+        Assert.Contains("'client-chosen'", transcript.Stderr, StringComparison.Ordinal);
+        Assert.Contains("'s1'", transcript.Stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunAsync_CreateWithRecordedIdAnnouncesNothing()
+    {
+        var transcript = await RunAsync(
+            Request(1, "session.create", new JsonObject { ["sessionId"] = "s1" }),
+            Request(2, "session.sendMessages", new JsonObject { ["sessionId"] = "s1" }),
+            Request(3, "runtime.shutdown", new JsonObject()));
+
+        Assert.Equal(0, transcript.ExitCode);
+        Assert.Equal(string.Empty, transcript.Stderr);
+    }
+
+    [Fact]
+    public async Task RunAsync_ResumeOfUnrecordedSessionAnnouncesSynthesisedSession()
+    {
+        var transcript = await RunAsync(
+            Request(1, "session.resume", new JsonObject { ["sessionId"] = "gone" }),
+            Request(2, "session.sendMessages", new JsonObject { ["sessionId"] = "gone" }),
+            Request(3, "runtime.shutdown", new JsonObject()));
+
+        Assert.Equal(0, transcript.ExitCode);
+        Assert.Contains(ReplayHost.SynthesisedSessionMarker, transcript.Stderr, StringComparison.Ordinal);
+        Assert.Contains("'gone'", transcript.Stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunAsync_WritesSynthesisedMarkerToTheMarkerFileWhenOneIsNamed()
+    {
+        var markerPath = Path.Combine(Path.GetTempPath(), $"replay-markers-{Guid.NewGuid():N}.txt");
+        var previous = Environment.GetEnvironmentVariable(ReplayHost.MarkerPathEnvironmentVariable);
+        Environment.SetEnvironmentVariable(ReplayHost.MarkerPathEnvironmentVariable, markerPath);
+
+        try
+        {
+            var transcript = await RunAsync(
+                Request(1, "session.sendMessages", new JsonObject { ["sessionId"] = "nope" }),
+                Request(2, "runtime.shutdown", new JsonObject()));
+
+            Assert.Equal(0, transcript.ExitCode);
+            var written = await File.ReadAllTextAsync(markerPath);
+            Assert.Contains(ReplayHost.SynthesisedSessionMarker, written, StringComparison.Ordinal);
+            Assert.Contains("'nope'", written, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(ReplayHost.MarkerPathEnvironmentVariable, previous);
+            File.Delete(markerPath);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_WritesNoMarkerFileWhenTheRunIsFullyRecorded()
+    {
+        var markerPath = Path.Combine(Path.GetTempPath(), $"replay-markers-{Guid.NewGuid():N}.txt");
+        var previous = Environment.GetEnvironmentVariable(ReplayHost.MarkerPathEnvironmentVariable);
+        Environment.SetEnvironmentVariable(ReplayHost.MarkerPathEnvironmentVariable, markerPath);
+
+        try
+        {
+            var transcript = await RunAsync(
+                Request(1, "session.create", new JsonObject { ["sessionId"] = "s1" }),
+                Request(2, "session.sendMessages", new JsonObject { ["sessionId"] = "s1" }),
+                Request(3, "runtime.shutdown", new JsonObject()));
+
+            Assert.Equal(0, transcript.ExitCode);
+            Assert.False(File.Exists(markerPath));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(ReplayHost.MarkerPathEnvironmentVariable, previous);
+            File.Delete(markerPath);
+        }
     }
 
     [Fact]
