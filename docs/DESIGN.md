@@ -410,6 +410,59 @@ an example's behaviour less reproducible, and it does not accept a reasoning eff
 reasoning effort is only sent when `ModelInfo.SupportedReasoningEfforts` says the chosen
 model supports one, because the runtime rejects the session outright otherwise.
 
+### 6.1 The deterministic run
+
+`scripts/validate.sh --deterministic` runs the parts of the suite that need no Copilot
+sign-in and no credentials. It is a second mode over the same example sources — nothing is
+recompiled differently, and no example knows which runtime it is talking to.
+
+**What it runs.**
+
+- The vocabulary check: no source under `examples/` may describe itself with the placeholder
+  terms (see below). The same check runs on every invocation, deterministic or not.
+- `tests/ReplayRuntime.Tests`: the recorded runtime's fixture loading, framing, host dispatch,
+  and tool-round-trip behaviour.
+- `ReplayToolDispatchTests` from `tests/Durable.Tests`: a real `CopilotClient` over
+  `RuntimeConnection.ForStdio` against the recorded runtime, with a real tool handler whose
+  result is not recorded anywhere.
+- A recorded conversation end to end: `tools/polyglot-attach/python/attach.py` drives
+  `tools/ReplayRuntime` through `connect`, `session.create`, `session.sendMessages`, and
+  `session.getMessages` against `tools/ReplayRuntime/fixtures/basic.json`.
+- The store-only examples, `32-jsonl-store` and `37-ef-core-store`, which never open a
+  Copilot session.
+
+**What it does not run, and why.** The other 35 examples create a conversation, and the
+durable layer does not name the session it asks for, so the recorded runtime is handed back a
+session id its fixture does not record. It refuses rather than inventing an answer, and the
+example fails with `ConnectionLostException`. Lifting that limit means either recording one
+transcript per example or letting the recorded runtime allocate a session for an unnamed
+`session.create`; both are changes to `tools/ReplayRuntime/`, tracked separately. The mode
+prints the count of examples it ran and excluded, so a shrinking deterministic set is visible
+rather than silent.
+
+**What it proves.** The example sources and the runtime protocol are exercised with no
+network access, no Copilot sign-in, and no ambient state: the recorded runtime answers from a
+fixed epoch with sequential event ids, so a passing run is reproducible on any machine.
+
+**What it does not prove.** It is not a substitute for the live runs. It says nothing about
+whether a real model answers, whether a prompt produces the expected text, or whether the
+signed-in runtime accepts the session configuration. Requirements 1–3 above still mean a live
+run; the deterministic mode is the floor CI can enforce everywhere, not the ceiling.
+
+**How the runtime is selected.** `DurableHarnessOptions.RuntimePath`, or the
+`DURABLE_RUNTIME_PATH` environment variable when the option is unset, makes the harness
+connect over `RuntimeConnection.ForStdio` instead of spawning the bundled runtime. The
+variable exists so a script can select a runtime without editing an example:
+`DURABLE_RUNTIME_PATH=/path/to/runtime scripts/validate.sh`. A path that names no file fails
+the open and names the path. The setting is host configuration, not durable state, so it
+never travels with a fork.
+
+**Vocabulary.** A small set of placeholder terms is banned from source under `examples/`,
+`lib/`, `docs/`, `README.md`, `tools/`, and `scripts/`; the list lives in `BANNED_TERMS` in
+`scripts/validate.sh`. Describe recorded behaviour as *deterministic*, *recorded*, *replay*,
+*scripted*, *canned*, or a *fixture*. The script fails when a banned term appears under
+`examples/`; the broader rule is enforced in review.
+
 ## 7. SDK behaviours worth knowing
 
 These cost the most time to discover and are all exercised by the examples:

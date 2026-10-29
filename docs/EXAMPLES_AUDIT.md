@@ -48,7 +48,8 @@ A strict code audit of examples `00` through `33` (34 of the 37 in the suite) in
 ## Detailed Notes on Fidelity
 
 ### Real Components Across the Suite
-- **No Placeholder Engine:** No tests or examples use in-memory stand-ins pretending to be the Copilot SDK. All live examples connect over JSON-RPC to the actual Copilot CLI runtime and stream real LLM completions from GitHub Copilot models (`gpt-6-luna`, `mai-code-1.1-flash`, etc.).
+- **No Placeholder Engine:** No example substitutes a hand-written transcript for the Copilot SDK. The live examples connect over JSON-RPC to the actual Copilot CLI runtime and stream real LLM completions from GitHub Copilot models (`gpt-6-luna`, `mai-code-1.1-flash`, etc.).
+- **The Recorded Runtime Is a Separate Process, Not an In-Example Stand-In:** `tools/ReplayRuntime/` speaks the same runtime protocol over stdio and answers it from a recorded transcript in `tools/ReplayRuntime/fixtures/`, so the suite can be exercised with no sign-in. An example is never pointed at a recorded answer inside its own source: the harness selects the runtime from `DURABLE_RUNTIME_PATH`, and the same example binary runs unchanged against the real runtime. Because the recorded runtime only answers the sessions its fixture names, the credential-free run covers the store-only examples (`32`, `37`) plus the recorded-runtime test suites; the 35 examples that create a Copilot session still need a sign-in. `scripts/validate.sh --deterministic` is the entry point, and `docs/DESIGN.md` §6 states exactly what it does and does not prove.
 - **Self-Asserting Verification:** Every example terminates with explicit programmatic `Check.*` assertions that enforce invariants (state values, task statuses, document history, and event presence). A regression causes the process to exit non-zero.
 
 ### The Single Simplification: Example 04 (`04-watches`)

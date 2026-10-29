@@ -109,6 +109,10 @@ dotnet run examples/00-conversation.cs
 Examples that call a model take 30–90 seconds. The ones that only exercise the durable
 machinery run in under a second.
 
+No sign-in? `./scripts/validate.sh --deterministic` runs the suite's credential-free layer
+against the recorded runtime in `tools/ReplayRuntime/`. See
+[Validating the suite](#validating-the-suite).
+
 ---
 
 ## The examples
@@ -384,11 +388,23 @@ dotnet test tests/Durable.Tests
 # Compile only: build every example without running any of them.
 COMPILE_ONLY=1 ./scripts/validate.sh
 
+# Deterministic run: no Copilot sign-in, no credentials, no network.
+./scripts/validate.sh --deterministic
+
 # A few specific examples.
 ./scripts/validate.sh 00 05 12
 ```
 
-The script reports `PASS`/`FAIL` per example and prints the output of each one.
+The script reports `PASS`/`FAIL` per example and prints the output of each one. Every
+invocation also runs the vocabulary check: it fails when a source file under `examples/`
+describes itself with a placeholder term instead of naming what it really does.
+
+The deterministic run executes the recorded runtime's own test suite, the durable tool round
+trip against it, a recorded conversation end to end, and the two store-only examples
+(`32-jsonl-store`, `37-ef-core-store`). It does **not** run the other 35 examples: they create
+a Copilot session, and the recorded runtime only answers the sessions its fixture names, so
+they still need a sign-in. It proves the suite runs reproducibly without credentials; it does
+not prove that a live model answers. `docs/DESIGN.md` §6.1 is the full statement.
 
 CI runs `dotnet test tests/Durable.Tests`, then `SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh`. Every example is compiled on every push, and the 14 that need no Copilot sign-in also execute with their assertions checked. The other 23 need a signed-in Copilot CLI and are not run in CI.
 
