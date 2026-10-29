@@ -129,6 +129,45 @@ rather than silently dropping everything after it.
 This is the C# analogue of Pi's SQLite/JSONL storage, and it is what makes the *task* and
 *document* examples meaningful.
 
+#### Which provider writes it
+
+The file formats above are the built-in backend. A store can also be written by a provider
+that implements the `IDurableStoreProvider` seam, selected through `DurableStoreOptions`:
+`Provider` (a factory) wins over `ProviderName` (a name in the process-wide registry, via
+`RegisterProvider` / `UnregisterProvider` / `IsProviderRegistered`) which wins over `Format`
+(the built-in file formats). A `ProviderName` that nothing registered is refused at open with
+an `InvalidOperationException` naming it, rather than silently falling back to a file.
+
+`Durable.EfCore` is that provider for relational databases. It maps the store's state onto
+three tables — `sessions`, `turns`, and the append-only `events` envelope log — and
+registers itself under the name `efcore`. The model is deliberately provider-neutral:
+application-assigned keys, a plain integer concurrency token instead of `rowversion`, JSON
+payloads stored as text rather than `jsonb`/`JSON`/`nvarchar(max)`, and no timestamps at
+all, so the same `DurableDbContext` is accepted by all four providers with no per-provider
+branch.
+
+| Provider | Package (all EF Core 10.0.12) | Connection-string shape | Migration | Needs a server |
+|---|---|---|---|---|
+| SQLite | `Microsoft.EntityFrameworkCore.Sqlite` | `Data Source=<absolute path>` — the store path *is* the database file, built with `SqliteConnectionStringBuilder` so a path containing a space, `;`, `=` or a quote is escaped | Checked in: `lib/Durable.EfCore/Migrations/20261029034106_InitialCreate`, applied by `Database.Migrate()` on open | No |
+| SQL Server | `Microsoft.EntityFrameworkCore.SqlServer` | `Server=<host>;Database=<name>;User Id=<user>;Password=<password>;TrustServerCertificate=...` — a connection string, not a path | `dotnet ef migrations add InitialCreate_SqlServer --project lib/Durable.EfCore --output-dir Migrations/SqlServer` | Yes |
+| PostgreSQL | `Npgsql.EntityFrameworkCore.PostgreSQL` | `Host=<host>;Database=<name>;Username=<user>;Password=<password>` | `dotnet ef migrations add InitialCreate_PostgreSql --project lib/Durable.EfCore --output-dir Migrations/PostgreSql` | Yes |
+| MySQL | `Pomelo.EntityFrameworkCore.MySql` | `Server=<host>;Database=<name>;User Id=<user>;Password=<password>` | `dotnet ef migrations add InitialCreate_MySql --project lib/Durable.EfCore --output-dir Migrations/MySql` | Yes |
+
+**SQLite is the only one wired end to end today.** It is the reference provider precisely
+because it needs no server: the suite and the examples run on a clean machine with nothing
+installed. The three server-backed rows are the intended convention — the same model over a
+different connection string, with a migration generated from the same `DurableDbContext` —
+and their packages, `Use*` factories, and migrations land with **#52**. Until then only
+SQLite is available; the table is the target, not a claim about the current build.
+
+Because the connection string for a server-backed provider is not a file path, that case
+goes through `Provider` (or a `DbContextOptions<DurableDbContext>` factory) rather than
+`Path` + `ProviderName`; the `Path`-to-`Data Source` convention applies to SQLite only.
+
+The persistent provider holds the same exclusive single-writer lock on its path that the
+JSONL provider does, and replays its `events` log on open, so a reopened store mints past
+every sequence it replayed. `examples/37-ef-core-store.cs` is the runnable demonstration.
+
 #### Concurrency contract
 
 **A store file has exactly one writer.** A persistent store takes an exclusive lock on a sidecar
@@ -323,6 +362,7 @@ Two operational notes, both covered in [`SANDBOX_MATRIX.md`](SANDBOX_MATRIX.md):
 | 28 | sandbox-per-conversation | `28-sandbox-per-conversation.cs` | One sandbox per conversation. |
 | 29 | tool-override | `29-tool-override.cs` | Replace a tool for some conversations; decorate whichever wins. |
 | 30 | reload-and-restart | `30-reload-and-restart.cs` | Reload an extension mid-call, then restart the process. |
+| 37 | — (C#-only) | `37-ef-core-store.cs` | The EF Core provider: the SQLite connection-string convention, selection by name and by factory, the migration's tables, reopen-and-read-back, and the four-provider matrix. |
 
 ## 5. File-based app conventions
 
@@ -333,6 +373,11 @@ Two operational notes, both covered in [`SANDBOX_MATRIX.md`](SANDBOX_MATRIX.md):
 ```
 
 - `#:include ../lib/Durable.cs` for shared support code.
+- `#:project ../lib/Durable.EfCore/Durable.EfCore.csproj` instead of `#:include` when the example
+  needs the EF Core provider. It is a separate assembly with its own package references and a
+  checked-in migration, so it is consumed the way an app consumes it; `Durable` then arrives
+  transitively. That example also sets `#:property PublishAot=false`, because file-based apps
+  default to the NativeAOT runtime configuration and EF Core refuses to build a model under it.
 - Top-level statements; `await using` for the client and session.
 - Tool handlers return `string` or `Dictionary<string, object?>` by default. **Anonymous types and
   custom records fail** with the SDK's source-generated serializer unless a custom
@@ -350,7 +395,7 @@ Every example must:
 `scripts/validate.sh` runs the whole suite. `SKIP_LIVE=1` skips the examples that call a
 model; `COMPILE_ONLY=1` builds without running.
 
-CI enforces requirements 1 and 2 for the 13 examples that need no Copilot sign-in by running
+CI enforces requirements 1 and 2 for the 14 examples that need no Copilot sign-in by running
 `SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh` after the xUnit suite. The other 20 are
 compiled but not run in CI.
 
