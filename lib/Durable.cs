@@ -489,6 +489,51 @@ public sealed class ConversationRecord
     public string? OwnerConversationId { get; set; }
 }
 
+/// <summary>How far a fork has got.</summary>
+public enum ForkIntentState
+{
+    /// <summary>
+    /// The fork's durable half exists — the conversation record, the inherited transcript, and
+    /// the inherited documents — but the native session has not been created yet. A fork found
+    /// in this state was interrupted, and is completed or abandoned on the next open.
+    /// </summary>
+    Pending,
+
+    /// <summary>The fork is complete: its native session exists and is recorded here.</summary>
+    Completed,
+
+    /// <summary>
+    /// The fork was abandoned. Its durable half is kept — a conversation record cannot be
+    /// removed from a store — but it is never given a session, so it is inert.
+    /// </summary>
+    Abandoned,
+}
+
+/// <summary>
+/// The durable record of a fork in progress, owned by the fork itself.
+/// </summary>
+/// <remarks>
+/// It is written in the same transaction that creates the fork's conversation record and
+/// before the native fork RPC, so a crash between the two is detectable: a fork whose intent
+/// is still <see cref="ForkIntentState.Pending"/> has no session, and reopening the store
+/// either completes it or abandons it. The document uses <see cref="ForkPolicy.Initial"/> so a
+/// fork of a fork starts with a fresh intent rather than inheriting its parent's.
+/// </remarks>
+public sealed class ForkIntent
+{
+    /// <summary>The conversation the fork was taken from.</summary>
+    public string ParentConversationId { get; set; } = string.Empty;
+
+    /// <summary>The parent's durable entry the fork was taken at.</summary>
+    public string ForkEntryId { get; set; } = string.Empty;
+
+    /// <summary>The native session the fork was given, once it has one.</summary>
+    public string? SessionId { get; set; }
+
+    /// <summary>How far the fork has got.</summary>
+    public ForkIntentState State { get; set; }
+}
+
 /// <summary>The on-disk format of a durable store.</summary>
 public enum DurableStoreFormat
 {
@@ -3263,6 +3308,13 @@ public sealed class DurableConversation
     }
 
     /// <summary>Forks this conversation at the given entry.</summary>
+    /// <param name="entryId">
+    /// This conversation's <b>durable entry id</b> — the value <see cref="Transaction.AppendEntry"/>
+    /// returns, e.g. <c>e7</c> — never an SDK event id. The fork holds that entry and everything
+    /// before it.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The forked conversation, with its session attached.</returns>
     public Task<DurableConversation> ForkAsync(string entryId, CancellationToken cancellationToken = default) =>
         _runtime.ForkAsync(this, entryId, cancellationToken);
 }
@@ -3396,6 +3448,13 @@ internal sealed class DurableRuntime : IAsyncDisposable
     /// </summary>
     internal const string DefaultModel = "gpt-6-luna";
 
+    /// <summary>
+    /// JSON-RPC 2.0's reserved "method not found" code. The SDK exposes it as
+    /// <c>RemoteRpcException.MethodNotFoundErrorCode</c>, but that member is not public in the
+    /// referenced package, so the value is repeated here.
+    /// </summary>
+    private const int MethodNotFoundErrorCode = -32601;
+
     private readonly Dictionary<string, DurableConversation> _conversations = [];
     private readonly ConcurrentDictionary<string, TaskCompletionSource<TaskOutcome>> _taskCompletions = [];
     private readonly ConcurrentDictionary<string, byte> _runningTasks = [];
@@ -3416,6 +3475,9 @@ internal sealed class DurableRuntime : IAsyncDisposable
         // Rewindable with "asOf", so a fork starts with the agent choices its parent had at
         // the fork entry.
         AgentDocument = new DocumentDefinition<AgentChoices>("durable.agent", DocumentHistory.Rewindable, ForkPolicy.AsOf);
+        // "initial", so a fork of a fork starts with a fresh intent instead of inheriting the
+        // parent's completed one.
+        ForkDocument = new DocumentDefinition<ForkIntent>("durable.fork", DocumentHistory.Rewindable, ForkPolicy.Initial);
     }
 
     /// <summary>The Copilot client, once the runtime is bound.</summary>
@@ -3436,6 +3498,9 @@ internal sealed class DurableRuntime : IAsyncDisposable
 
     /// <summary>The document holding per-conversation agent choices.</summary>
     internal DocumentDefinition<AgentChoices> AgentDocument { get; }
+
+    /// <summary>The document holding a fork's intent, owned by the fork.</summary>
+    internal DocumentDefinition<ForkIntent> ForkDocument { get; }
 
     /// <summary>The conversations this runtime knows about.</summary>
     internal IReadOnlyCollection<DurableConversation> Conversations => _conversations.Values;
@@ -3580,32 +3645,133 @@ internal sealed class DurableRuntime : IAsyncDisposable
     /// Restores the conversations a reopened store already holds, giving each one a
     /// Copilot session again.
     /// </summary>
+    /// <remarks>
+    /// Parents are restored before forks, because completing an interrupted fork forks its
+    /// parent's session and so needs the parent to have one.
+    /// </remarks>
     private async Task RestoreConversationsAsync(CancellationToken cancellationToken)
     {
-        foreach (var record in Store.Conversations.ToList())
+        var records = Store.Conversations.ToList();
+
+        foreach (var record in records.Where(record => ForkIntentOf(record.Id) is null))
         {
-            if (_conversations.ContainsKey(record.Id))
-            {
-                continue;
-            }
+            await RestoreConversationAsync(record, cancellationToken);
+        }
 
-            var choices = Store.Document(AgentDocument.Kind, record.Id)?.Latest is { } latest
-                ? latest.Deserialize<AgentChoices>(DurableJson.Options)
-                : null;
-
-            var session = await Client.CreateSessionAsync(BuildSessionConfig(choices, null), cancellationToken);
-            var conversation = new DurableConversation(this, null!, record);
-            conversation.Attach(session);
-            _conversations[record.Id] = conversation;
+        foreach (var record in records.Where(record => ForkIntentOf(record.Id) is not null))
+        {
+            await RestoreForkAsync(record, cancellationToken);
         }
     }
 
+    /// <summary>Gives a restored conversation a fresh session.</summary>
+    private async Task RestoreConversationAsync(ConversationRecord record, CancellationToken cancellationToken)
+    {
+        if (_conversations.ContainsKey(record.Id))
+        {
+            return;
+        }
+
+        var choices = Store.Document(AgentDocument.Kind, record.Id)?.Latest is { } latest
+            ? latest.Deserialize<AgentChoices>(DurableJson.Options)
+            : null;
+
+        var session = await Client.CreateSessionAsync(BuildSessionConfig(choices, null), cancellationToken);
+        var conversation = new DurableConversation(this, null!, record);
+        conversation.Attach(session);
+        _conversations[record.Id] = conversation;
+    }
+
+    /// <summary>
+    /// Restores a fork, completing it when its creation was interrupted and abandoning it when
+    /// it can no longer be completed.
+    /// </summary>
+    private async Task RestoreForkAsync(ConversationRecord record, CancellationToken cancellationToken)
+    {
+        if (_conversations.ContainsKey(record.Id))
+        {
+            return;
+        }
+
+        var intent = ForkIntentOf(record.Id)!;
+        if (intent.State is ForkIntentState.Abandoned)
+        {
+            return;
+        }
+
+        if (intent.State is ForkIntentState.Completed)
+        {
+            // A reopened store starts every conversation on a fresh session, forks included.
+            await RestoreConversationAsync(record, cancellationToken);
+            return;
+        }
+
+        // Pending: the durable half exists but the native fork never finished. Complete it if
+        // the parent is available; otherwise abandon it, because a fork with no session and no
+        // parent can never be completed.
+        if (!_conversations.TryGetValue(intent.ParentConversationId, out var parent))
+        {
+            await AbandonForkAsync(record.Id);
+            return;
+        }
+
+        var choices = Store.Document(AgentDocument.Kind, record.Id)?.Latest is { } latest
+            ? latest.Deserialize<AgentChoices>(DurableJson.Options)
+            : null;
+
+        var conversation = new DurableConversation(this, null!, record);
+        var session = await ForkSessionAsync(parent, conversation, choices, cancellationToken);
+        conversation.Attach(session);
+        _conversations[record.Id] = conversation;
+    }
+
     /// <summary>Forks a conversation at an entry.</summary>
+    /// <param name="parent">The conversation to fork from.</param>
+    /// <param name="entryId">
+    /// The parent's <b>durable entry id</b> (the value <see cref="Transaction.AppendEntry"/>
+    /// returns, e.g. <c>e7</c>) to fork at — never an SDK event id. The durable transcript is
+    /// the boundary the store can map, so it is the one the fork is defined by.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The forked conversation, with its session attached.</returns>
+    /// <remarks>
+    /// <para>
+    /// <b>Boundary asymmetry.</b> The durable transcript is copied <i>inclusively</i> — the fork
+    /// holds <paramref name="entryId"/> and everything before it — while the native fork RPC
+    /// takes an exclusive event boundary. The two are not the same coordinate space, and no
+    /// durable-entry-to-event mapping exists, so the native fork is taken over the whole
+    /// transcript and the durable copy is what bounds the fork. The fork's own entries are
+    /// appended after the inherited ones, so the inherited prefix is exactly the parent's
+    /// transcript up to <paramref name="entryId"/>.
+    /// </para>
+    /// <para>
+    /// <b>Choices.</b> The fork is configured from the choices the parent had at
+    /// <paramref name="entryId"/>, not the ones it has now, so a fork can never silently widen
+    /// the parent's grants.
+    /// </para>
+    /// <para>
+    /// <b>Recoverability.</b> The fork's durable half — record, transcript, documents, and a
+    /// <see cref="ForkIntentState.Pending"/> intent — is committed before the native fork is
+    /// attempted. A crash in between leaves a fork that the next open completes or abandons.
+    /// </para>
+    /// </remarks>
     internal async Task<DurableConversation> ForkAsync(
         DurableConversation parent,
         string entryId,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(parent);
+
+        if (!Store.Entries(parent.Id).Contains(entryId))
+        {
+            throw new ArgumentException(
+                $"'{entryId}' is not an entry of conversation '{parent.Id}'.",
+                nameof(entryId));
+        }
+
+        // The choices the parent had at the boundary, not the ones it has now.
+        var choices = ChoicesAsOf(parent.Id, entryId);
+
         var record = await Store.CommitAsync(tx =>
         {
             var created = tx.CreateConversation(parentConversationId: parent.Id, forkEntryId: entryId);
@@ -3617,15 +3783,93 @@ internal sealed class DurableRuntime : IAsyncDisposable
                 Store.Provider.CopyDocument(document, created.Id, entryId);
             }
 
+            // Durable before the native fork, so a crash between the two is detectable.
+            var intent = tx.Doc(ForkDocument, created.Id);
+            intent.Value = new ForkIntent
+            {
+                ParentConversationId = parent.Id,
+                ForkEntryId = entryId,
+                State = ForkIntentState.Pending,
+            };
+            intent.Save(tx.AppendEntry(created.Id, "fork"));
+
             return Task.FromResult(created);
         });
 
         var conversation = new DurableConversation(this, null!, record);
-        var session = await Client.CreateSessionAsync(BuildSessionConfig(parent.Choices(), conversation), cancellationToken);
+        var session = await ForkSessionAsync(parent, conversation, choices, cancellationToken);
         conversation.Attach(session);
         _conversations[record.Id] = conversation;
         return conversation;
     }
+
+    /// <summary>Reads the agent choices a conversation had at an entry.</summary>
+    private AgentChoices? ChoicesAsOf(string conversationId, string entryId) =>
+        Store.Document(AgentDocument.Kind, conversationId)?.AsOfOrBefore(entryId, Store.Provider.SequenceOf) is { } value
+            ? value.Deserialize<AgentChoices>(DurableJson.Options)
+            : null;
+
+    /// <summary>Reads a conversation's fork intent, or <c>null</c> when it is not a fork.</summary>
+    private ForkIntent? ForkIntentOf(string conversationId) =>
+        Store.Document(ForkDocument.Kind, conversationId)?.Latest is { } latest
+            ? latest.Deserialize<ForkIntent>(DurableJson.Options)
+            : null;
+
+    /// <summary>
+    /// Gives a fork its native session: forks the parent's transcript, resumes the result, and
+    /// records the session on the intent so a later open can find it again.
+    /// </summary>
+    private async Task<CopilotSession> ForkSessionAsync(
+        DurableConversation parent,
+        DurableConversation conversation,
+        AgentChoices? choices,
+        CancellationToken cancellationToken)
+    {
+        string? forkedSessionId = null;
+        try
+        {
+            var forked = await Client.Rpc.Sessions.ForkAsync(
+                parent.SessionId,
+                toEventId: null,
+                name: null,
+                cancellationToken);
+            forkedSessionId = forked.SessionId;
+        }
+        catch (IOException ex) when (ex.InnerException is RemoteRpcException { ErrorCode: MethodNotFoundErrorCode })
+        {
+            // A runtime without sessions.fork cannot fork natively. The durable half of the
+            // fork is already committed, so it continues as a new session over the inherited
+            // transcript rather than failing outright.
+        }
+
+        var session = forkedSessionId is null
+            ? await Client.CreateSessionAsync(BuildSessionConfig(choices, conversation), cancellationToken)
+            : await Client.ResumeSessionAsync(
+                forkedSessionId,
+                BuildResumeSessionConfig(choices, conversation),
+                cancellationToken);
+
+        await Store.CommitAsync(tx =>
+        {
+            var intent = tx.Doc(ForkDocument, conversation.Id);
+            intent.Value.SessionId = session.SessionId;
+            intent.Value.State = ForkIntentState.Completed;
+            intent.Save(tx.AppendEntry(conversation.Id, "fork"));
+            return Task.CompletedTask;
+        });
+
+        return session;
+    }
+
+    /// <summary>Marks a fork abandoned, so it is never given a session.</summary>
+    private Task AbandonForkAsync(string conversationId) =>
+        Store.CommitAsync(tx =>
+        {
+            var intent = tx.Doc(ForkDocument, conversationId);
+            intent.Value.State = ForkIntentState.Abandoned;
+            intent.Save(tx.AppendEntry(conversationId, "fork"));
+            return Task.CompletedTask;
+        });
 
     /// <summary>Creates a durable task and schedules it.</summary>
     internal async Task<DurableTaskRecord> CreateTaskAsync(
@@ -4445,6 +4689,14 @@ public sealed class DurableHarness : IAsyncDisposable
         _runtime.RootAsync(choices, cancellationToken);
 
     /// <summary>Forks a conversation at an entry.</summary>
+    /// <param name="parent">The conversation to fork from.</param>
+    /// <param name="entryId">
+    /// The parent's <b>durable entry id</b> — the value <see cref="Transaction.AppendEntry"/>
+    /// returns, e.g. <c>e7</c> — never an SDK event id. The fork holds that entry and everything
+    /// before it.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The forked conversation, with its session attached.</returns>
     public Task<DurableConversation> ForkAsync(
         DurableConversation parent,
         string entryId,
@@ -5123,20 +5375,33 @@ public sealed class DurableCopilotClient : IAsyncDisposable
 
     /// <summary>Forks a conversation at one of its entries.</summary>
     /// <param name="parent">The conversation to fork from.</param>
-    /// <param name="entryId">The entry to fork at.</param>
+    /// <param name="entryId">
+    /// The parent's <b>durable entry id</b> — the value <see cref="Transaction.AppendEntry"/>
+    /// returns, e.g. <c>e7</c> — never an SDK event id. The fork holds that entry and everything
+    /// before it.
+    /// </param>
     /// <param name="cancellationToken">Cancels the operation.</param>
     /// <returns>The new conversation handle.</returns>
     /// <remarks>
+    /// <para>
     /// The fork copies the parent's transcript up to the entry and each document's value under
     /// its own <see cref="ForkPolicy"/>, and inherits the parent's choices as a snapshot — so a
     /// fork can never silently widen the parent's grants. The isolation is in the store: the two
     /// conversations hold independent copies, and a commit in one is not visible in the other.
+    /// </para>
+    /// <para>
+    /// The fork's durable half is committed before the native fork is attempted, so an
+    /// interrupted fork is completed or abandoned the next time the store is opened.
+    /// </para>
     /// </remarks>
-    public Task<DurableConversation> ForkAsync(
+    public async Task<DurableConversation> ForkAsync(
         DurableConversation parent,
         string entryId,
-        CancellationToken cancellationToken = default) =>
-        throw NotYet("#7.4");
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+        return await _runtime.ForkAsync(parent, entryId, cancellationToken);
+    }
 
     /// <summary>Finds a live conversation handle by its identifier.</summary>
     /// <param name="conversationId">The conversation's identifier.</param>
