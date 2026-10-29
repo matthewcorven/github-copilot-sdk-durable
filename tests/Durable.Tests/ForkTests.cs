@@ -170,6 +170,93 @@ public class ForkTests
     }
 
     [Fact]
+    public async Task Fork_TranscriptHoldsTheInheritedPrefixAndItsOwnEntriesOnly()
+    {
+        var store = new DurableStore();
+        await using var harness = await DurableHarness.OpenAsync(store, new ExtensionRegistry());
+
+        // Choices are stored as an internal document, so creating the parent writes a durable
+        // entry of its own. That entry is bookkeeping, not conversation.
+        var parent = await harness.CreateConversationAsync(new AgentChoices { Instructions = "parent" });
+
+        var first = await parent.AppendEntryAsync("note", "first");
+        var second = await parent.AppendEntryAsync("note", "second");
+
+        var fork = await harness.ForkAsync(parent, first);
+
+        // The fork writes an entry of its own, and it deliberately uses the kind the durable
+        // layer uses for its fork intent: the kind is caller-supplied, so it must not be what
+        // decides whether an entry is visible.
+        var own = await fork.AppendEntryAsync("fork", "the app's own fork note");
+
+        // The fork's transcript is the inherited prefix — the entry it was forked at, and
+        // nothing after it — plus what the fork wrote itself. The fork intent entries the
+        // durable layer wrote to make the fork crash-detectable are not part of it.
+        Assert.Equal(new[] { own, first }, fork.Entries(10));
+
+        // The parent's transcript is its own entries, without the entry its choices were
+        // written to.
+        Assert.Equal(new[] { second, first }, parent.Entries(10));
+    }
+
+    [Fact]
+    public async Task Fork_TranscriptIsUnchangedAfterReopen()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"durable-test-fork-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var storePath = Path.Combine(dir, "state.jsonl");
+
+        try
+        {
+            var registry = new ExtensionRegistry();
+            string forkId;
+            string first;
+
+            using (var store = DurableStore.Create(new DurableStoreOptions
+            {
+                Path = storePath,
+                Format = DurableStoreFormat.Jsonl,
+            }))
+            {
+                await using (var harness = await DurableHarness.OpenAsync(store, registry))
+                {
+                    var parent = await harness.CreateConversationAsync(new AgentChoices { Instructions = "parent" });
+                    first = await parent.AppendEntryAsync("note", "first");
+                    await parent.AppendEntryAsync("note", "second");
+
+                    var fork = await harness.ForkAsync(parent, first);
+                    await fork.AppendEntryAsync("fork", "the app's own fork note");
+                    forkId = fork.Id;
+                }
+            }
+
+            using var reopened = DurableStore.Create(new DurableStoreOptions
+            {
+                Path = storePath,
+                Format = DurableStoreFormat.Jsonl,
+            });
+
+            await using var harness2 = await DurableHarness.OpenAsync(reopened, registry);
+            await harness2.RootAsync();
+
+            var fork2 = Assert.Single(harness2.Conversations, conversation => conversation.Id == forkId);
+
+            // The exclusion is derived from persisted document state, so a reopened store shows
+            // the same transcript: the inherited entry and the fork's own entry, and neither of
+            // the intent entries the durable layer wrote.
+            Assert.Equal(2, fork2.Entries(10).Count);
+            Assert.Equal(first, fork2.Entries(10)[^1]);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task Fork_RejectsAnEntryThatIsNotTheParents()
     {
         var store = new DurableStore();
