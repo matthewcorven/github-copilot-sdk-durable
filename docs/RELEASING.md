@@ -118,7 +118,7 @@ COMPILE_ONLY=1 ./scripts/validate.sh
 ```
 
 CI (`.github/workflows/build.yml`) runs the equivalent on every push to `main` and `dev`:
-it builds and packs the package, runs the xUnit suite, and compiles all 33 examples while
+it builds and packs the package, runs the xUnit suite, and compiles all 37 examples while
 executing the ones that need no Copilot sign-in. A green CI run on `dev` is a necessary
 but not sufficient condition — run the three commands above locally before tagging.
 

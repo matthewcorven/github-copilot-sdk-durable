@@ -1,6 +1,6 @@
 # Durable GitHub Copilot SDK agents in C#
 
-A suite of 33 self-contained C# examples that build **durable** agents on the
+A suite of 37 self-contained C# examples that build **durable** agents on the
 [GitHub Copilot SDK](https://github.com/github/copilot-sdk). Every example is a single
 file-based .NET app — no `.csproj`, no solution, no build step beyond `dotnet run`.
 
@@ -62,7 +62,7 @@ In-depth technical reports, design notes, and audits are available in [`docs/`](
 
 - [**Comparative Architecture Analysis**](docs/COMPARATIVE_ANALYSIS.md): Comprehensive matrices comparing every storage and runtime subsystem of this project against Pi Durable.
 - [**Why this Layer is Necessary (Durability Analysis)**](docs/DURABILITY_ANALYSIS.md): Detailed breakdown of what the Copilot SDK provides natively, what it lacks, and what this library proves.
-- [**Example Suite Fidelity Audit**](docs/EXAMPLES_AUDIT.md): Complete audit verifying that all 33 examples run against real engine components rather than shortcuts.
+- [**Example Suite Fidelity Audit**](docs/EXAMPLES_AUDIT.md): Strict code audit of examples `00` through `33`, verifying that each runs against real engine components rather than shortcuts.
 - [**Copilot SDK Notes & Gotchas**](docs/COPILOT_SDK_NOTES.md): SDK behaviors, tool authoring pitfalls (silent tool shadowing, serialization limits, async deadlocks), and model billing pricing tables.
 - [**Architecture Design Document**](docs/DESIGN.md): The foundational specification and concept mapping between Pi Durable and the GitHub Copilot SDK (.NET).
 
@@ -74,7 +74,7 @@ In-depth technical reports, design notes, and audits are available in [`docs/`](
 |---|---|---|
 | .NET SDK | 10.0 or later | File-based apps (`dotnet run file.cs`) need .NET 10 |
 | GitHub Copilot CLI | 1.0.103 or later | The SDK drives the CLI over RPC |
-| GitHub Copilot access | an active subscription | 20 of the 33 examples need a signed-in CLI: 19 make live model calls, and `07` only queries `models.list` to confirm the model supports a reasoning effort |
+| GitHub Copilot access | an active subscription | 23 of the 37 examples need a signed-in CLI: 22 make live model calls, and `07` only queries `models.list` to confirm the model supports a reasoning effort |
 
 Check both:
 
@@ -166,6 +166,8 @@ machinery run in under a second.
 | [31](examples/31-permissions.cs) | Permissions | A conversation is denied a tool, restarted, and denied again. Grants live in the store, so a restart cannot widen them. |
 | [32](examples/32-jsonl-store.cs) | The store file | Where a durable store lives and how it writes: an explicit path wins, no path resolves the per-user default, and the file is JSONL so a torn tail costs one record. |
 | [33](examples/33-sandbox-sdk-filesystem.cs) | The sandbox filesystem policy | A conversation carries a sandbox policy with a writable, a read-only, and a denied directory. The durable layer approves the shell call; the sandbox refuses the write. |
+| [34](examples/34-sandbox-sdk-network-credentials.cs) | The sandbox network and credential policy | The other half of the sandbox policy: network egress, credential masking and injection, dev-toolchain access, and MCP/LSP confinement. |
+| [35](examples/35-sandbox-sdk-observability-bypass.cs) | Sandbox observability and bypass | Enforcement rather than configuration: a blocked call, the denial it produced, and the bypass, working-directory-trust and keychain settings around it. |
 | [37](examples/37-ef-core-store.cs) | The EF Core store | The store's state written through a relational schema instead of a JSONL file. The SQLite connection-string convention, the provider selected by name and by factory, the migration's tables, a reopen that reads the state back, and the four-provider matrix. No server needed. |
 
 ---
@@ -370,7 +372,7 @@ Validation runs in two complementary layers:
 2. **xUnit test suite (`tests/Durable.Tests`):** Focused unit and integration tests verifying `DurableStore` rollback semantics, fork entry filtering and state independence, store crash recovery with memo idempotency, and abort propagation.
 
 ```bash
-# Every example: compile, run xUnit suite, and run all 33 examples.
+# Every example: compile, run xUnit suite, and run all 37 examples.
 ./scripts/validate.sh
 
 # Fast offline validation: run xUnit suite + examples that do not call a model.
@@ -403,7 +405,7 @@ For token pricing tables, reasoning effort constraints, and SDK-specific tool-au
 ## Repository layout
 
 ```
-examples/                 33 self-contained file-based C# apps
+examples/                 37 self-contained file-based C# apps
 lib/Durable.cs            the shared durable layer every example includes
 lib/Copilot.Durable.csproj  builds the Copilot.Durable NuGet package from that file
 tests/Durable.Tests       xUnit test suite for the durable library
@@ -413,7 +415,7 @@ docs/
   RELEASING.md            release strategy: release unit, cadence, branch roles, tag procedure
   COMPARATIVE_ANALYSIS.md architecture comparison vs Pi Durable
   DURABILITY_ANALYSIS.md  what Copilot SDK provides vs what was added
-  EXAMPLES_AUDIT.md       rigorous fidelity audit of all 33 examples
+  EXAMPLES_AUDIT.md       rigorous fidelity audit of examples 00 through 33
   COPILOT_SDK_NOTES.md    SDK quirks, tool shadowing rules, and pricing
   DESIGN.md               original architecture design specification
 ```

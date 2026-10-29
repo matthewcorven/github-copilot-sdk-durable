@@ -7,7 +7,7 @@
 
 A suite of **self-contained C# file-based apps** (`dotnet run app.cs`, .NET 10) that demonstrate
 durable GitHub Copilot SDK agents, with **breadth equal to the Pi Durable example set**
-(33 examples, `00`–`32`).
+(37 examples, `00`–`35` and `37`).
 
 Each example is a single `.cs` file plus, where it needs shared helpers, a `#:include`d
 support file. No `.csproj`.
@@ -327,7 +327,7 @@ Two operational notes, both covered in [`SANDBOX_MATRIX.md`](SANDBOX_MATRIX.md):
 - Sandbox types are annotated `GHCP001` (evaluation only). Examples that touch them carry
   `#:property NoWarn=GHCP001`.
 
-## 4. Example suite (33 examples, mirroring Pi 00–30 plus two C#-only additions)
+## 4. Example suite (37 examples: Pi `00`–`30` mirrored one-to-one, plus six C#-only additions)
 
 | # | Pi example | C# example | Demonstrates |
 |---|---|---|---|
@@ -362,6 +362,11 @@ Two operational notes, both covered in [`SANDBOX_MATRIX.md`](SANDBOX_MATRIX.md):
 | 28 | sandbox-per-conversation | `28-sandbox-per-conversation.cs` | One sandbox per conversation. |
 | 29 | tool-override | `29-tool-override.cs` | Replace a tool for some conversations; decorate whichever wins. |
 | 30 | reload-and-restart | `30-reload-and-restart.cs` | Reload an extension mid-call, then restart the process. |
+| 31 | — (C#-only) | `31-permissions.cs` | A durable permission policy: grants stored with the conversation, fail-closed by default, inherited by forks. |
+| 32 | — (C#-only) | `32-jsonl-store.cs` | The store file: explicit path vs. per-user default, and the JSONL append-on-commit format. |
+| 33 | — (C#-only) | `33-sandbox-sdk-filesystem.cs` | The sandbox filesystem policy: writable, read-only and denied directories, enforced below the permission layer. |
+| 34 | — (C#-only) | `34-sandbox-sdk-network-credentials.cs` | The rest of the sandbox policy: network egress, credential masking and injection, dev-tool access, MCP/LSP confinement. |
+| 35 | — (C#-only) | `35-sandbox-sdk-observability-bypass.cs` | Sandbox observability, bypass, working-directory trust and keychain — asserted from enforcement, not configuration. |
 | 37 | — (C#-only) | `37-ef-core-store.cs` | The EF Core provider: the SQLite connection-string convention, selection by name and by factory, the migration's tables, reopen-and-read-back, and the four-provider matrix. |
 
 ## 5. File-based app conventions
@@ -396,7 +401,7 @@ Every example must:
 model; `COMPILE_ONLY=1` builds without running.
 
 CI enforces requirements 1 and 2 for the 14 examples that need no Copilot sign-in by running
-`SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh` after the xUnit suite. The other 20 are
+`SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh` after the xUnit suite. The other 23 are
 compiled but not run in CI.
 
 Examples that need a live model use the signed-in Copilot CLI credentials. The library's
