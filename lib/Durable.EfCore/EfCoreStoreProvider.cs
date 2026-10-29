@@ -18,8 +18,8 @@ namespace Durable.EfCore;
 /// <item><c>sessions</c>: one row per conversation, including fork lineage and ownership.</item>
 /// <item><c>turns</c>: one row per transcript entry, keyed by the entry id the store minted.</item>
 /// <item><c>events</c>: the append-only write log the provider replays on open —
-/// <c>document</c>, <c>document-version</c>, <c>task</c>, <c>entry-append</c> and
-/// <c>entry-list</c>.</item>
+/// <c>document</c>, <c>document-version</c>, <c>task</c>, <c>entry-append</c>,
+/// <c>entry-list</c> and <c>sequence</c>.</item>
 /// </list>
 /// <para>
 /// The <c>turns</c> table is the durable form of one entry and is what a reader queries
@@ -45,6 +45,7 @@ public sealed class EfCoreStoreProvider : InMemoryStoreProvider
     private const string TaskType = "task";
     private const string EntryAppendType = "entry-append";
     private const string EntryListType = "entry-list";
+    private const string SequenceType = "sequence";
 
     private readonly Func<DurableStoreOptions, DbContextOptions<DurableDbContext>>? _contextOptionsFactory;
 
@@ -161,7 +162,12 @@ public sealed class EfCoreStoreProvider : InMemoryStoreProvider
         _lock = null;
     }
 
-    /// <summary>Writes the state this commit changed, as one database transaction.</summary>
+    /// <summary>
+    /// Writes the state this commit changed, as one database transaction. A write that
+    /// fails leaves the provider exactly as it was before the commit: the database
+    /// transaction rolls back, the change tracker is cleared so the failed entities are
+    /// not re-attempted, and the provider's own bookkeeping is restored.
+    /// </summary>
     protected override void Persist()
     {
         if (_context is null)
@@ -169,9 +175,33 @@ public sealed class EfCoreStoreProvider : InMemoryStoreProvider
             return;
         }
 
+        // Capturing the writes has side effects — it claims the turn ids it builds rows
+        // for and numbers the event envelopes — so both are restored if the write fails.
+        var persistedTurnIds = _persistedTurnIds.ToArray();
+        var envelopeSequence = _envelopeSequence;
+
+        try
+        {
+            WritePendingWrites();
+        }
+        catch
+        {
+            // The failed entities are still tracked as Added, so every later SaveChanges()
+            // would re-attempt the same failing insert. Clearing the tracker drops them.
+            _context.ChangeTracker.Clear();
+            _persistedTurnIds.Clear();
+            _persistedTurnIds.UnionWith(persistedTurnIds);
+            _envelopeSequence = envelopeSequence;
+            throw;
+        }
+    }
+
+    /// <summary>Writes the pending state as one database transaction.</summary>
+    private void WritePendingWrites()
+    {
         var pending = TakePendingWrites();
 
-        using var transaction = _context.Database.BeginTransaction();
+        using var transaction = _context!.Database.BeginTransaction();
 
         // Sessions first: the turn and event rows carry a foreign key to the session
         // they belong to, so the row has to exist before the records that cite it.
@@ -220,6 +250,26 @@ public sealed class EfCoreStoreProvider : InMemoryStoreProvider
         _context.SaveChanges();
         transaction.Commit();
         RememberCommitted();
+    }
+
+    /// <summary>
+    /// Ends the transaction and flushes the state to the backend. The undo log is kept
+    /// until the write has been accepted, so a failed write is undone rather than left
+    /// half-applied in the in-memory state the store reads.
+    /// </summary>
+    public override void Commit()
+    {
+        try
+        {
+            Persist();
+        }
+        catch
+        {
+            Rollback();
+            throw;
+        }
+
+        EndTransaction();
     }
 
     /// <summary>Applies the persisted state to the in-memory state the store reads.</summary>
@@ -296,6 +346,14 @@ public sealed class EfCoreStoreProvider : InMemoryStoreProvider
             case EntryListType:
                 var list = JsonSerializer.Deserialize<EntryListPayload>(payload, DurableJson.Options)!;
                 _entries[list.ConversationId] = [.. list.EntryIds];
+                break;
+
+            case SequenceType:
+                // The sequence a commit reached. A task or a conversation consumes a
+                // sequence value that no row of its own carries, so the commit records
+                // the counter itself; without it a restart would mint an id twice.
+                var reached = JsonSerializer.Deserialize<SequencePayload>(payload, DurableJson.Options)!;
+                _sequence = Math.Max(_sequence, reached.Sequence);
                 break;
 
             default:
@@ -397,6 +455,15 @@ public sealed class EfCoreStoreProvider : InMemoryStoreProvider
             pending.Events.Add(NewEvent(TaskType, task));
         }
 
+        // The sequence the commit reached is written last, so a replay that stops at any
+        // earlier event never claims a sequence the commit did not reach. It is written
+        // whenever the commit consumed a sequence value, which is not the same as writing
+        // an event: a task or a conversation consumes one without an event of its own.
+        if (pending.Events.Count > 0 || Sequence > _committedSequence)
+        {
+            pending.Events.Add(NewEvent(SequenceType, new SequencePayload(Sequence)));
+        }
+
         return pending;
     }
 
@@ -416,6 +483,7 @@ public sealed class EfCoreStoreProvider : InMemoryStoreProvider
         _committedTasks = Tasks.ToDictionary(
             task => task.Id,
             task => JsonSerializer.Serialize(task, DurableJson.Options));
+        _committedSequence = Sequence;
     }
 
     /// <summary>Builds the turn row for an appended entry.</summary>
@@ -452,6 +520,7 @@ public sealed class EfCoreStoreProvider : InMemoryStoreProvider
     private HashSet<string> _committedDocuments = [];
     private Dictionary<string, int> _committedVersions = [];
     private Dictionary<string, string> _committedTasks = [];
+    private long _committedSequence;
 
     /// <summary>The writes one commit has to persist, captured before it touches the database.</summary>
     private sealed class PendingWrites
@@ -480,4 +549,7 @@ public sealed class EfCoreStoreProvider : InMemoryStoreProvider
 
     /// <summary>The payload of an <c>entry-list</c> event: a conversation's whole entry list.</summary>
     private sealed record EntryListPayload(string ConversationId, List<string> EntryIds);
+
+    /// <summary>The payload of a <c>sequence</c> event: the sequence the commit reached.</summary>
+    private sealed record SequencePayload(long Sequence);
 }

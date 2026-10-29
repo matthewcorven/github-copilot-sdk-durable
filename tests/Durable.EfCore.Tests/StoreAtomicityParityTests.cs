@@ -169,8 +169,7 @@ public sealed class StoreAtomicityParityTests : IAsyncLifetime
     /// <para>
     /// This asserts the row-level half of the contract, which the database transaction does
     /// deliver. The sequence half is asserted by
-    /// <see cref="EfCore_FailedWrite_LeavesTheSequenceUnchanged_AndTheStoreUsable"/>, which
-    /// is blocked on #68.
+    /// <see cref="EfCore_FailedWrite_LeavesTheSequenceUnchanged_AndTheStoreUsable"/>.
     /// </para>
     /// </remarks>
     [Fact]
@@ -213,19 +212,19 @@ public sealed class StoreAtomicityParityTests : IAsyncLifetime
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Blocked on #68.</b> The EF Core store fails both halves of this today: the
-    /// sequence advances even though the transaction rolled back, and the failed entities
-    /// stay in the <c>DbContext</c> change tracker so every later <c>SaveChanges()</c>
-    /// re-attempts the same failing insert. The in-memory store passes the equivalent
-    /// assertion in <see cref="FailedTransaction_LeavesTheSequenceAndEveryCollectionUnchanged"/>,
-    /// which is the divergence this test records.
+    /// This is the parity assertion for #68. The EF Core store used to fail both halves:
+    /// the sequence advanced even though the transaction rolled back, and the failed
+    /// entities stayed in the <c>DbContext</c> change tracker so every later
+    /// <c>SaveChanges()</c> re-attempted the same failing insert. The in-memory store
+    /// passes the equivalent assertion in
+    /// <see cref="FailedTransaction_LeavesTheSequenceAndEveryCollectionUnchanged"/>.
     /// </para>
     /// <para>
-    /// The assertions are the contract, not the current behaviour, so un-skipping this test
-    /// is the proof that #68 is fixed.
+    /// The assertions are the contract, not the current behaviour, so this test running
+    /// un-skipped is the proof that #68 is fixed.
     /// </para>
     /// </remarks>
-    [Fact(Skip = "Blocked on #68: a failed Persist() advances the sequence and poisons the store.")]
+    [Fact]
     public async Task EfCore_FailedWrite_LeavesTheSequenceUnchanged_AndTheStoreUsable()
     {
         using var harness = Open(StoreKind.EfCore);
@@ -462,8 +461,7 @@ public sealed class StoreAtomicityParityTests : IAsyncLifetime
     /// </summary>
     /// <remarks>
     /// The sequence half of the restart contract is asserted by
-    /// <see cref="EfCore_RestartBetweenCommitAndRead_ContinuesTheSequence"/>, which is
-    /// blocked on #69.
+    /// <see cref="EfCore_RestartBetweenCommitAndRead_ContinuesTheSequence"/>.
     /// </remarks>
     [Fact]
     public async Task EfCore_RestartBetweenCommitAndRead_ReturnsTheCommittedState()
@@ -495,17 +493,18 @@ public sealed class StoreAtomicityParityTests : IAsyncLifetime
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Blocked on #69.</b> <c>Replay()</c> rebuilds the sequence from <c>turns.Sequence</c>
-    /// and document-version event sequences only. A task id consumes a sequence value that
-    /// no row carries, so after a restart the sequence goes backwards and the reopened store
-    /// mints <c>t1</c> a second time — overwriting the task the first store committed.
+    /// This is the parity assertion for #69. <c>Replay()</c> used to rebuild the sequence
+    /// from <c>turns.Sequence</c> and document-version event sequences only. A task id
+    /// consumes a sequence value that no row carries, so after a restart the sequence went
+    /// backwards and the reopened store minted <c>t1</c> a second time — overwriting the
+    /// task the first store committed. The commit now records the sequence it reached.
     /// </para>
     /// <para>
-    /// The assertions are the contract, not the current behaviour, so un-skipping this test
-    /// is the proof that #69 is fixed.
+    /// The assertions are the contract, not the current behaviour, so this test running
+    /// un-skipped is the proof that #69 is fixed.
     /// </para>
     /// </remarks>
-    [Fact(Skip = "Blocked on #69: the sequence is not persisted for task-only commits, so a restart mints a duplicate id.")]
+    [Fact]
     public async Task EfCore_RestartBetweenCommitAndRead_ContinuesTheSequence()
     {
         long sequenceAfterCommit;

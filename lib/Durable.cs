@@ -785,6 +785,14 @@ public class InMemoryStoreProvider : IDurableStoreProvider
         Persist();
     }
 
+    /// <summary>
+    /// Ends the transaction in flight without undoing it. A provider whose
+    /// <see cref="Persist"/> can fail keeps the undo log until the backend has accepted
+    /// the write, then calls this to discard it; a failed write is undone with
+    /// <see cref="Rollback"/> instead, so the provider is left exactly as it was.
+    /// </summary>
+    protected void EndTransaction() => _undo = null;
+
     /// <summary>The monotonic write sequence.</summary>
     public long Sequence => _sequence;
 
