@@ -1,6 +1,6 @@
 # Example Suite Fidelity Audit
 
-A strict code audit of all 33 examples (`00` through `32`) in `examples/` against the original reference implementations in Pi Durable (`packages/durable/test/examples/`).
+A strict code audit of examples `00` through `33` (34 of the 37 in the suite) in `examples/` against the original reference implementations in Pi Durable (`packages/durable/test/examples/`). Examples `34`, `35` and `37` are not covered by this audit.
 
 ---
 
