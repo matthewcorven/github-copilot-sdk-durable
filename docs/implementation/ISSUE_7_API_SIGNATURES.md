@@ -477,10 +477,20 @@ The declarations in §2 are final. These are the bodies, in dependency order.
 **#7.5 — lifecycle, DI, and tasks**
 
 - `ResumeTasksAsync` and `WaitForTaskAsync` over the runtime's task coordination.
+  `ResumeTasksAsync` awaits each re-entered task and returns the outcomes in store order;
+  `DurableHarness.ResumeAsync` has the same shape, so the two entry points cannot diverge
+  into one that waits and one that starts work and returns.
 - `DisposeAsync`: idempotent, dispose exactly what is owned per §4, in an order that lets a
   created store's lock go last.
 - `AddDurableCopilotClient` (both overloads): delegate to the builder, register a singleton,
   wire container disposal, stay idempotent, never take ownership of a supplied instance.
+  The factory borrows a `DurableStore`, `ExtensionRegistry`, or `CopilotClient` the container
+  already holds, runs the options delegate at resolve time, and calls
+  `DurableClientBuilder.Build()` — the same validate-and-construct path a manual build uses,
+  so there is one runtime implementation, not two.
+- The stored sandbox policy is applied in the shared `BuildSessionConfig`, which both the
+  harness and the facade reach, and a policy that cannot be applied throws
+  `DurableSandboxPolicyException` before any session is created or resumed.
 - Extension and tool resolution stays in the shared runtime, which is what satisfies §6:
   a facade-created session resolves the same code a harness-created one does.
 

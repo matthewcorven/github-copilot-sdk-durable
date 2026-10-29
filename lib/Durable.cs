@@ -658,6 +658,44 @@ public sealed class DurableRecoveryRequiredException : InvalidOperationException
     public string? SessionId { get; }
 }
 
+/// <summary>
+/// Thrown when a stored sandbox policy cannot be applied to a session as written.
+/// </summary>
+/// <remarks>
+/// The alternative to failing is worse than failing. A policy that is silently narrowed, or
+/// silently dropped, produces a session that looks protected and is not: the conversation runs
+/// with more authority than the store says it has, and nothing in the transcript records the
+/// difference. So the session is not created and not resumed, and the host decides what to do —
+/// correct the stored policy, or clear it deliberately to run the conversation unsandboxed.
+/// </remarks>
+public sealed class DurableSandboxPolicyException : InvalidOperationException
+{
+    /// <summary>Creates the exception.</summary>
+    /// <param name="reason">What about the policy cannot be applied.</param>
+    /// <param name="policy">The stored policy that could not be applied.</param>
+    /// <param name="innerException">The failure underneath, when there is one.</param>
+    public DurableSandboxPolicyException(
+        string reason,
+        DurableSandboxPolicy policy,
+        Exception? innerException = null)
+        : base(
+            $"The stored sandbox policy cannot be applied: {reason} The session was not created "
+            + "or resumed, because running it without the protection the policy asks for would be "
+            + "a silent downgrade. Correct the stored policy, or clear it deliberately to run the "
+            + "conversation unsandboxed.",
+            innerException)
+    {
+        Reason = reason;
+        Policy = policy;
+    }
+
+    /// <summary>What about the policy cannot be applied.</summary>
+    public string Reason { get; }
+
+    /// <summary>The stored policy that could not be applied.</summary>
+    public DurableSandboxPolicy Policy { get; }
+}
+
 /// <summary>The on-disk format of a durable store.</summary>
 public enum DurableStoreFormat
 {
@@ -4366,6 +4404,14 @@ internal sealed class DurableRuntime : IAsyncDisposable
         string? ownerConversationId = null,
         CancellationToken cancellationToken = default)
     {
+        // Checked before the record is committed: a conversation whose policy cannot be applied
+        // must not be written at all, or the store would hold a conversation that can never be
+        // opened while claiming the protection it does not have.
+        if (choices?.Sandbox is { } requested)
+        {
+            ValidateSandboxPolicy(requested);
+        }
+
         var record = await Store.CommitAsync(tx =>
         {
             var created = tx.CreateConversation(ownerTaskId, ownerConversationId);
@@ -5003,6 +5049,11 @@ internal sealed class DurableRuntime : IAsyncDisposable
 
         if (binding?.SessionId is { Length: > 0 } recordedSessionId)
         {
+            // The configuration is built before the metadata probe, so a stored policy that
+            // cannot be applied fails here — before any RPC — rather than after the runtime has
+            // already been asked to continue the session.
+            var resumeConfig = BuildResumeSessionConfig(BuildSessionConfig(choices, conversation));
+
             // A null result is the SDK saying it has no such session: the native transcript this
             // conversation's history lives in is gone, and only the host can decide what to do.
             var metadata = await Client.GetSessionMetadataAsync(recordedSessionId, cancellationToken);
@@ -5011,7 +5062,6 @@ internal sealed class DurableRuntime : IAsyncDisposable
                 throw new DurableRecoveryRequiredException(conversationId, recordedSessionId);
             }
 
-            var resumeConfig = BuildResumeSessionConfig(BuildSessionConfig(choices, conversation));
             var resumed = await Client.ResumeSessionAsync(recordedSessionId, resumeConfig, cancellationToken);
             conversation.Attach(resumed);
             _conversations[conversationId] = conversation;
@@ -5050,14 +5100,25 @@ internal sealed class DurableRuntime : IAsyncDisposable
     };
 
     /// <summary>Resumes every task that was running when the process stopped.</summary>
-    internal async Task ResumeAsync(CancellationToken cancellationToken = default)
+    /// <remarks>
+    /// The tasks are awaited, not started and forgotten: a caller that resumes work needs to
+    /// know when the work is done, and a fire-and-forget start would report success before a
+    /// single phase had run. Each task is re-entered from its last checkpoint, and the outcomes
+    /// come back in store order so a caller can pair them with the records it read.
+    /// </remarks>
+    internal async Task<IReadOnlyList<TaskOutcome>> ResumeAsync(CancellationToken cancellationToken = default)
     {
-        foreach (var record in Store.Tasks.Where(t => t.Status is TaskStatus.Running or TaskStatus.Pending))
+        var resumable = Store.Tasks
+            .Where(t => t.Status is TaskStatus.Running or TaskStatus.Pending)
+            .ToList();
+
+        var outcomes = new List<TaskOutcome>(resumable.Count);
+        foreach (var record in resumable)
         {
-            _ = RunTaskAsync(record.Id, cancellationToken);
+            outcomes.Add(await RunTaskAsync(record.Id, cancellationToken));
         }
 
-        await Task.CompletedTask;
+        return outcomes;
     }
 
     /// <summary>Reads the task graph: tasks and their owner edges.</summary>
@@ -5136,6 +5197,7 @@ internal sealed class DurableRuntime : IAsyncDisposable
     internal static SandboxConfig BuildSandboxConfig(DurableSandboxPolicy policy, string? workingDirectory)
     {
         ArgumentNullException.ThrowIfNull(policy);
+        ValidateSandboxPolicy(policy);
 
         var config = new SandboxConfig
         {
@@ -5217,6 +5279,77 @@ internal sealed class DurableRuntime : IAsyncDisposable
         return config;
     }
 
+    /// <summary>
+    /// Rejects a stored policy the wire type cannot express faithfully.
+    /// </summary>
+    /// <remarks>
+    /// Each rule here guards a field the mapping would otherwise have to narrow. Narrowing is
+    /// the failure mode this method exists to prevent: a policy that asks for one thing and a
+    /// session that gets another is a silent downgrade, and the store would go on claiming the
+    /// protection the session does not have.
+    /// </remarks>
+    private static void ValidateSandboxPolicy(DurableSandboxPolicy policy)
+    {
+        // A disabled sandbox enforces nothing, so a policy that disables it while still naming
+        // restrictions describes a session that would run unsandboxed while the store claims
+        // otherwise. That is the silent downgrade this method exists to refuse.
+        if (!policy.Enabled
+            && (policy.Auth is not null
+                || policy.Credentials is not null
+                || policy.Filesystem is not null
+                || policy.Network is not null
+                || policy.KeychainAccess is not null))
+        {
+            throw new DurableSandboxPolicyException(
+                "the policy disables the sandbox but still names credential, filesystem, network, "
+                + "or keychain restrictions, which a disabled sandbox cannot enforce. Enable the "
+                + "sandbox, or clear the restrictions to opt out deliberately.",
+                policy);
+        }
+
+        if (policy.Credentials?.EnvVars is not { } envVars)
+        {
+            return;
+        }
+
+        foreach (var pair in envVars)
+        {
+            if (string.IsNullOrWhiteSpace(pair.Key))
+            {
+                throw new DurableSandboxPolicyException(
+                    "a credential is listed under an empty environment variable name.",
+                    policy);
+            }
+
+            var hosts = pair.Value;
+            if (hosts is null || hosts.Count == 0)
+            {
+                throw new DurableSandboxPolicyException(
+                    $"the credential '{pair.Key}' names no inject hosts, so it would be injected "
+                    + "nowhere. Name at least one HTTPS host or host pattern.",
+                    policy);
+            }
+
+            foreach (var host in hosts)
+            {
+                if (string.IsNullOrWhiteSpace(host))
+                {
+                    throw new DurableSandboxPolicyException(
+                        $"the credential '{pair.Key}' names an empty inject host.",
+                        policy);
+                }
+
+                if (host.Trim() == "*")
+                {
+                    throw new DurableSandboxPolicyException(
+                        $"the credential '{pair.Key}' names a bare '*' inject host, which would "
+                        + "send the value to every host. Name the hosts it may reach.",
+                        policy);
+                }
+            }
+        }
+    }
+
     private static List<string> ExpandPaths(List<string>? paths, string? workingDirectory) =>
         paths is null
             ? []
@@ -5281,7 +5414,9 @@ internal sealed class DurableRuntime : IAsyncDisposable
         {
             config.SandboxConfig = BuildSandboxConfig(sandbox, resolved.WorkingDirectory);
             // Trust is a create-time decision: a resumed session already has its working
-            // directory, so the resume config has no such property to set.
+            // directory, so the resume config has no such property to set. Nothing is lost by
+            // leaving it alone — the trust in force is the one this same stored policy set when
+            // the session was created.
             if (config is SessionConfig created && sandbox.TrustWorkingDirectory is { } trust)
             {
                 created.TrustWorkingDirectory = trust
@@ -5715,7 +5850,15 @@ public sealed class DurableHarness : IAsyncDisposable
         _runtime.AbortTaskAsync(taskId, cancellationToken);
 
     /// <summary>Resumes every task that was running when the process stopped.</summary>
-    public Task ResumeAsync(CancellationToken cancellationToken = default) =>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The outcome of each task that was re-entered, in store order.</returns>
+    /// <remarks>
+    /// The tasks are awaited rather than started and forgotten, so the returned task completes
+    /// when the resumed work does. This is the same shape
+    /// <see cref="DurableCopilotClient.ResumeTasksAsync"/> has: one operation, one way to await
+    /// it, whichever entry point a host uses.
+    /// </remarks>
+    public Task<IReadOnlyList<TaskOutcome>> ResumeAsync(CancellationToken cancellationToken = default) =>
         _runtime.ResumeAsync(cancellationToken);
 
     /// <summary>Reads the task graph: tasks and their owner edges.</summary>
@@ -6513,15 +6656,22 @@ public sealed class DurableCopilotClient : IAsyncDisposable
     /// startup, once the client is initialized, so work interrupted by the previous process
     /// finishes.
     /// </remarks>
-    public Task<IReadOnlyList<TaskOutcome>> ResumeTasksAsync(CancellationToken cancellationToken = default) =>
-        throw NotYet("#7.5");
+    public async Task<IReadOnlyList<TaskOutcome>> ResumeTasksAsync(CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+        return await _runtime.ResumeAsync(cancellationToken);
+    }
 
     /// <summary>Waits for a durable task to finish.</summary>
     /// <param name="taskId">The task's identifier.</param>
     /// <param name="cancellationToken">Cancels the wait.</param>
     /// <returns>The task's outcome.</returns>
-    public Task<TaskOutcome> WaitForTaskAsync(string taskId, CancellationToken cancellationToken = default) =>
-        throw NotYet("#7.5");
+    public async Task<TaskOutcome> WaitForTaskAsync(string taskId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(taskId);
+        await InitializeAsync(cancellationToken);
+        return await _runtime.WaitForTaskAsync(taskId, cancellationToken);
+    }
 
     /// <summary>
     /// Disposes the resources the durable layer owns: at most once, and never a borrowed store
@@ -6567,9 +6717,6 @@ public sealed class DurableCopilotClient : IAsyncDisposable
 
         await _runtime.DisposeAsync();
     }
-
-    private static NotImplementedException NotYet(string issue) =>
-        new($"The durable client facade is declared in #7.1 and implemented in {issue}.");
 }
 
 /// <summary>
