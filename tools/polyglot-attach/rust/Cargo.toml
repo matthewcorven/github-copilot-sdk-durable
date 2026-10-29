@@ -1,0 +1,13 @@
+[package]
+name = "polyglot-attach"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# No dependencies: the check must run with a bare Rust toolchain and no network
+# access, so JSON parsing and the JSON-RPC framing are implemented here.
+[dependencies]
+
+[[bin]]
+name = "attach"
+path = "src/main.rs"
