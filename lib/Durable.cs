@@ -3942,8 +3942,32 @@ public sealed class DurableConversation
             || message.Contains("code 126", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Reads the stored transcript entries, newest first.</summary>
-    public IReadOnlyList<string> Entries(int limit = 20) =>
-        _runtime.Store.Entries(Id).AsEnumerable().Reverse().Take(limit).ToList();
+    /// <remarks>
+    /// The transcript is the conversation's own entries: the ones the app wrote, plus the
+    /// inherited prefix a fork was taken at. The entries the durable layer writes to anchor its
+    /// own bookkeeping — the fork intent, and the agent choices a conversation was created or
+    /// reconfigured with — are not part of it, so a fork's transcript is the parent's transcript
+    /// up to the fork entry plus whatever the fork wrote itself.
+    /// <para>
+    /// The exclusion is derived from the store's document state, not from an entry's kind: the
+    /// kind is caller-supplied, so an app may legitimately write a <c>"fork"</c> entry of its
+    /// own. An entry is bookkeeping when every document version anchored to it belongs to an
+    /// internal document kind and it is not an entry a fork in the conversation's ancestry was
+    /// taken at. Because documents are persisted, the answer is the same after the store is
+    /// reopened.
+    /// </para>
+    /// </remarks>
+    public IReadOnlyList<string> Entries(int limit = 20)
+    {
+        var entries = _runtime.Store.Entries(Id);
+        var bookkeeping = _runtime.BookkeepingEntries(Id, entries);
+        return entries
+            .AsEnumerable()
+            .Reverse()
+            .Where(entry => !bookkeeping.Contains(entry))
+            .Take(limit)
+            .ToList();
+    }
 
     /// <summary>Reads the effective model context: the transcript as the model sees it.</summary>
     public Task<IReadOnlyList<SessionEvent>> ContextAsync(CancellationToken cancellationToken = default) =>
@@ -4567,6 +4591,88 @@ internal sealed class DurableRuntime : IAsyncDisposable
         Store.Document(ForkDocument.Kind, conversationId)?.Latest is { } latest
             ? latest.Deserialize<ForkIntent>(DurableJson.Options)
             : null;
+
+    /// <summary>
+    /// The entries of a conversation that exist only to anchor the durable layer's own
+    /// bookkeeping, and so are not part of the conversation's transcript.
+    /// </summary>
+    /// <remarks>
+    /// The durable layer writes an entry whenever it commits one of its internal documents: the
+    /// fork intent, and the agent choices a conversation was created or reconfigured with. Those
+    /// entries are durable state, not conversation, so they are kept out of
+    /// <see cref="DurableConversation.Entries"/>.
+    /// <para>
+    /// The set is derived from the store's document state rather than from an entry's kind,
+    /// because the kind is caller-supplied: an app may write a <c>"fork"</c> entry of its own and
+    /// must still see it. An entry is bookkeeping when it is anchored by at least one document
+    /// version and every version anchored to it belongs to an internal document kind. The entry a
+    /// fork was taken at is never bookkeeping: it is inherited transcript, and a fork's copy of
+    /// the parent's agent document is anchored to it.
+    /// </para>
+    /// <para>
+    /// A fork inherits the parent's entries verbatim, including the ones that were bookkeeping in
+    /// the parent, so the answer is the union over the conversation and its ancestors. Each
+    /// conversation in the chain contributes its own documents, and every fork entry in the chain
+    /// is inherited transcript rather than bookkeeping.
+    /// </para>
+    /// <para>
+    /// Documents are persisted, so a reopened store derives the same set.
+    /// </para>
+    /// </remarks>
+    internal HashSet<string> BookkeepingEntries(string conversationId, IReadOnlyList<string> entries)
+    {
+        var bookkeeping = new HashSet<string>(StringComparer.Ordinal);
+        var boundaries = new HashSet<string>(StringComparer.Ordinal);
+        var userAnchored = new HashSet<string>(StringComparer.Ordinal);
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+
+        for (var current = conversationId; current is not null && visited.Add(current);)
+        {
+            var record = Store.Conversation(current);
+            if (record?.ForkEntryId is { } boundary)
+            {
+                boundaries.Add(boundary);
+            }
+
+            var anchored = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var document in Store.Documents.Where(document => document.OwnerId == current))
+            {
+                var isInternal = IsInternalDocument(document.Kind);
+                foreach (var version in document.Versions)
+                {
+                    if (version.EntryId.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    anchored.Add(version.EntryId);
+                    if (!isInternal)
+                    {
+                        userAnchored.Add(version.EntryId);
+                    }
+                }
+            }
+
+            foreach (var entry in entries)
+            {
+                if (anchored.Contains(entry))
+                {
+                    bookkeeping.Add(entry);
+                }
+            }
+
+            current = record?.ParentConversationId;
+        }
+
+        bookkeeping.ExceptWith(userAnchored);
+        bookkeeping.ExceptWith(boundaries);
+        return bookkeeping;
+    }
+
+    /// <summary>Whether a document kind belongs to the durable layer rather than to the app.</summary>
+    private bool IsInternalDocument(string kind) =>
+        kind == ForkDocument.Kind || kind == AgentDocument.Kind;
 
     /// <summary>
     /// Gives a fork its native session: forks the parent's transcript, resumes the result, and
