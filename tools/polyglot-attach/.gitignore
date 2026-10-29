@@ -1,0 +1,11 @@
+# Runner scratch output: compiled clients and captured logs.
+target/
+
+# Rust build artifacts.
+target/
+
+# Go build artifacts.
+*.exe
+
+# Java class files.
+*.class
