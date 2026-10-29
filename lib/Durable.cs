@@ -4671,8 +4671,24 @@ internal sealed class DurableRuntime : IAsyncDisposable
     }
 
     /// <summary>Whether a document kind belongs to the durable layer rather than to the app.</summary>
+    /// <remarks>
+    /// Derived from the documents this runtime defines rather than from a list of kind strings,
+    /// so a document the durable layer adds later is covered without a second edit here.
+    /// </remarks>
     private bool IsInternalDocument(string kind) =>
-        kind == ForkDocument.Kind || kind == AgentDocument.Kind;
+        InternalDocumentKinds.Contains(kind);
+
+    /// <summary>The kinds of the documents the durable layer owns.</summary>
+    private HashSet<string> InternalDocumentKinds => _internalDocumentKinds ??=
+    [
+        AgentDocument.Kind,
+        ForkDocument.Kind,
+        SessionBindingDocument.Kind,
+        AdmissionDocument.Kind,
+        CheckpointDocument.Kind,
+    ];
+
+    private HashSet<string>? _internalDocumentKinds;
 
     /// <summary>
     /// Gives a fork its native session: forks the parent's transcript, resumes the result, and
