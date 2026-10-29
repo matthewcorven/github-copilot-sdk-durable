@@ -4321,6 +4321,7 @@ internal sealed class DurableRuntime : IAsyncDisposable
         var session = Client.CreateSessionAsync(BuildSessionConfig(choices, null)).GetAwaiter().GetResult();
         var conversation = new DurableConversation(this, null!, record);
         conversation.Attach(session);
+        conversation.BindAsync(session.SessionId, choices?.Model ?? DefaultModel).GetAwaiter().GetResult();
         _conversations[conversationId] = conversation;
         return conversation;
     }
@@ -4350,6 +4351,7 @@ internal sealed class DurableRuntime : IAsyncDisposable
         var conversation = new DurableConversation(this, null!, record);
         var session = await Client.CreateSessionAsync(BuildSessionConfig(choices, conversation), cancellationToken);
         conversation.Attach(session);
+        await conversation.BindAsync(session.SessionId, choices?.Model ?? DefaultModel, cancellationToken);
         _conversations[record.Id] = conversation;
         return conversation;
     }
@@ -4417,6 +4419,7 @@ internal sealed class DurableRuntime : IAsyncDisposable
         var session = await Client.CreateSessionAsync(BuildSessionConfig(choices, null), cancellationToken);
         var conversation = new DurableConversation(this, null!, record);
         conversation.Attach(session);
+        await conversation.BindAsync(session.SessionId, choices?.Model ?? DefaultModel, cancellationToken);
         _conversations[record.Id] = conversation;
     }
 
@@ -4537,6 +4540,9 @@ internal sealed class DurableRuntime : IAsyncDisposable
         var conversation = new DurableConversation(this, null!, record);
         var session = await ForkSessionAsync(parent, conversation, choices, cancellationToken);
         conversation.Attach(session);
+        // A fork names its own session: the binding document is ForkPolicy.Initial, so a fork
+        // never inherits its parent's session id, and this write records the new one.
+        await conversation.BindAsync(session.SessionId, parent.Choices()?.Model ?? DefaultModel, cancellationToken);
         _conversations[record.Id] = conversation;
         return conversation;
     }
@@ -4829,6 +4835,88 @@ internal sealed class DurableRuntime : IAsyncDisposable
         var runtime = new TaskRuntime(Store, record, definition, cancellationToken);
         await definition.Abort(runtime);
     }
+
+    /// <summary>
+    /// Re-binds a stored conversation to the native session it recorded, or fails explicitly.
+    /// </summary>
+    /// <remarks>
+    /// The binding is the record of which SDK session served the conversation. Resuming reads it
+    /// and asks the client for that session: a native transcript that is still there is resumed,
+    /// so the conversation continues with its history. A transcript that is gone throws
+    /// <see cref="DurableRecoveryRequiredException"/> instead of quietly creating a new, empty
+    /// session — a replacement would answer with no memory of the conversation while looking
+    /// perfectly healthy. A conversation that never recorded a binding has nothing to recover,
+    /// so it is bound to a fresh session and that binding is written.
+    /// </remarks>
+    internal async Task<DurableConversation> ResumeConversationAsync(
+        string conversationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (_conversations.TryGetValue(conversationId, out var live))
+        {
+            return live;
+        }
+
+        var record = Store.Conversation(conversationId)
+            ?? throw new InvalidOperationException($"No conversation '{conversationId}' is stored.");
+
+        var choices = Store.Document(AgentDocument.Kind, conversationId)?.Latest is { } latest
+            ? latest.Deserialize<AgentChoices>(DurableJson.Options)
+            : null;
+
+        var binding = Store.Document(SessionBindingDocument.Kind, conversationId)?.Latest is { } bound
+            ? bound.Deserialize<SessionBinding>(DurableJson.Options)
+            : null;
+
+        var conversation = new DurableConversation(this, null!, record);
+
+        if (binding?.SessionId is { Length: > 0 } recordedSessionId)
+        {
+            // A null result is the SDK saying it has no such session: the native transcript this
+            // conversation's history lives in is gone, and only the host can decide what to do.
+            var metadata = await Client.GetSessionMetadataAsync(recordedSessionId, cancellationToken);
+            if (metadata is null)
+            {
+                throw new DurableRecoveryRequiredException(conversationId, recordedSessionId);
+            }
+
+            var resumeConfig = BuildResumeSessionConfig(BuildSessionConfig(choices, conversation));
+            var resumed = await Client.ResumeSessionAsync(recordedSessionId, resumeConfig, cancellationToken);
+            conversation.Attach(resumed);
+            _conversations[conversationId] = conversation;
+            return conversation;
+        }
+
+        var session = await Client.CreateSessionAsync(BuildSessionConfig(choices, conversation), cancellationToken);
+        conversation.Attach(session);
+        await conversation.BindAsync(session.SessionId, choices?.Model ?? DefaultModel, cancellationToken);
+        _conversations[conversationId] = conversation;
+        return conversation;
+    }
+
+    /// <summary>
+    /// Copies a session configuration into the shape resuming takes.
+    /// </summary>
+    /// <remarks>
+    /// Resuming accepts a <see cref="ResumeSessionConfig"/>, which carries every setting a new
+    /// session does but is a separate type. Copying rather than rebuilding keeps the two paths
+    /// from drifting: the resumed session runs with exactly the configuration a new session
+    /// would have been given.
+    /// </remarks>
+    private static ResumeSessionConfig BuildResumeSessionConfig(SessionConfig config) => new()
+    {
+        Model = config.Model,
+        ReasoningEffort = config.ReasoningEffort,
+        WorkingDirectory = config.WorkingDirectory,
+        Streaming = config.Streaming,
+        Hooks = config.Hooks,
+        InfiniteSessions = config.InfiniteSessions,
+        Tools = config.Tools,
+        SystemMessage = config.SystemMessage,
+        OnPermissionRequest = config.OnPermissionRequest,
+        SandboxConfig = config.SandboxConfig,
+        EnableFileHooks = config.EnableFileHooks,
+    };
 
     /// <summary>Resumes every task that was running when the process stopped.</summary>
     internal async Task ResumeAsync(CancellationToken cancellationToken = default)
@@ -5451,6 +5539,12 @@ public sealed class DurableHarness : IAsyncDisposable
         AgentChoices? choices = null,
         CancellationToken cancellationToken = default) =>
         _runtime.RootAsync(choices, cancellationToken);
+
+    /// <summary>Rebinds a stored conversation to the native session it recorded.</summary>
+    public Task<DurableConversation> ResumeConversationAsync(
+        string conversationId,
+        CancellationToken cancellationToken = default) =>
+        _runtime.ResumeConversationAsync(conversationId, cancellationToken);
 
     /// <summary>Forks a conversation at an entry.</summary>
     /// <param name="parent">The conversation to fork from.</param>
@@ -6101,12 +6195,15 @@ public sealed class DurableCopilotClient : IAsyncDisposable
     /// not a second durable-session abstraction. Its documents, entries, answers, and forks are
     /// the store's, and its session configuration is built by the shared runtime.
     /// </remarks>
-    public Task<DurableConversation> CreateConversationAsync(
+    public async Task<DurableConversation> CreateConversationAsync(
         AgentChoices? choices = null,
         string? ownerTaskId = null,
         string? ownerConversationId = null,
-        CancellationToken cancellationToken = default) =>
-        throw NotYet("#7.3");
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+        return await _runtime.CreateConversationAsync(choices, ownerTaskId, ownerConversationId, cancellationToken);
+    }
 
     /// <summary>Returns a conversation, creating it on first use.</summary>
     /// <param name="choices">The choices to create it with, when it has to be created.</param>
@@ -6117,10 +6214,13 @@ public sealed class DurableCopilotClient : IAsyncDisposable
     /// a new one is created, so the root is the conversation that was there before a restart
     /// rather than a second one.
     /// </remarks>
-    public Task<DurableConversation> RootAsync(
+    public async Task<DurableConversation> RootAsync(
         AgentChoices? choices = null,
-        CancellationToken cancellationToken = default) =>
-        throw NotYet("#7.3");
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+        return await _runtime.RootAsync(choices, cancellationToken);
+    }
 
     /// <summary>Rebinds a stored conversation to a live session.</summary>
     /// <param name="conversationId">The stored conversation's identifier.</param>
@@ -6132,10 +6232,13 @@ public sealed class DurableCopilotClient : IAsyncDisposable
     /// applies — so a conversation resumed after a restart runs with the authority and the
     /// sandbox policy it had when it was last configured.
     /// </remarks>
-    public Task<DurableConversation> ResumeConversationAsync(
+    public async Task<DurableConversation> ResumeConversationAsync(
         string conversationId,
-        CancellationToken cancellationToken = default) =>
-        throw NotYet("#7.4");
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+        return await _runtime.ResumeConversationAsync(conversationId, cancellationToken);
+    }
 
     /// <summary>Forks a conversation at one of its entries.</summary>
     /// <param name="parent">The conversation to fork from.</param>
@@ -6174,14 +6277,23 @@ public sealed class DurableCopilotClient : IAsyncDisposable
     /// Only conversations this client created or resumed are bound. A conversation in the store
     /// that no session is attached to is not returned; resume it first.
     /// </remarks>
-    public DurableConversation? FindConversation(string conversationId) =>
-        throw NotYet("#7.3");
+    public DurableConversation? FindConversation(string conversationId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(conversationId);
+        // Deliberately not the runtime's store-backed lookup: this answers "is this client
+        // holding that conversation", and restoring one here would create a session as a side
+        // effect of a read.
+        return _runtime.Conversations.FirstOrDefault(c => c.Id == conversationId);
+    }
 
     /// <summary>Finds a live conversation handle by predicate.</summary>
     /// <param name="match">The predicate a handle must satisfy.</param>
     /// <returns>The first matching handle, or <c>null</c> when none matches.</returns>
-    public DurableConversation? FindConversation(Func<DurableConversation, bool> match) =>
-        throw NotYet("#7.3");
+    public DurableConversation? FindConversation(Func<DurableConversation, bool> match)
+    {
+        ArgumentNullException.ThrowIfNull(match);
+        return _runtime.Conversations.FirstOrDefault(match);
+    }
 
     /// <summary>
     /// Builds the Copilot session configuration for a set of stored choices, applying the
@@ -6223,8 +6335,14 @@ public sealed class DurableCopilotClient : IAsyncDisposable
     /// </remarks>
     public SessionConfig GetSessionConfig(
         AgentChoices? choices = null,
-        DurableConversation? conversation = null) =>
-        throw NotYet("#7.3");
+        DurableConversation? conversation = null)
+    {
+        // The stored choices are authoritative, so a conversation's own choices win over
+        // whatever the caller passed; the argument only supplies defaults for a conversation
+        // that has none stored.
+        var effective = conversation?.Choices() ?? choices;
+        return _runtime.BuildSessionConfig(effective, conversation);
+    }
 
     /// <summary>
     /// Builds the session configuration a stored conversation would be resumed with, without
@@ -6239,10 +6357,21 @@ public sealed class DurableCopilotClient : IAsyncDisposable
     /// the stored choices are authoritative and the SDK configuration only fills what they leave
     /// unset. This performs store reads but creates no session and no sandbox.
     /// </remarks>
-    public Task<SessionConfig> GetSessionConfigAsync(
+    public async Task<SessionConfig> GetSessionConfigAsync(
         string conversationId,
-        CancellationToken cancellationToken = default) =>
-        throw NotYet("#7.3");
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+
+        var stored = _runtime.Store.Document(_runtime.AgentDocument.Kind, conversationId)?.Latest;
+        var choices = stored is { } latest
+            ? latest.Deserialize<AgentChoices>(DurableJson.Options)
+            : null;
+
+        // No session is created and no sandbox is started: the configuration is built the way
+        // the runtime would build it, from the store's choices alone.
+        return _runtime.BuildSessionConfig(choices, null);
+    }
 
     /// <summary>Re-enters the tasks the store records as running.</summary>
     /// <param name="cancellationToken">Cancels the operation.</param>
