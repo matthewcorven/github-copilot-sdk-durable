@@ -245,6 +245,70 @@ public class FacadeContractTests
         Assert.Null(client.FindConversation(conversationId));
     }
 
+    [Fact]
+    public async Task Resume_FromASecondProcess_RecoversTheConversationItCreated()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"durable-contract-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "store.jsonl");
+
+        try
+        {
+            string conversationId;
+            string sessionId;
+
+            await using (var first = new DurableClientBuilder()
+                .UseStore(new DurableStoreOptions { Path = path, Format = DurableStoreFormat.Jsonl })
+                .UseClient(ReplayClientOptions())
+                .Build())
+            {
+                var conversation = await first.CreateConversationAsync(new AgentChoices
+                {
+                    Model = "replay-model",
+                    Instructions = "cross-process contract",
+                });
+
+                conversationId = conversation.Id;
+                sessionId = conversation.SessionId!;
+
+                await conversation.SubmitAsync("hello").WaitAsync(EventTimeout);
+            }
+
+            // The second facade runs against a runtime that has never heard of this conversation:
+            // the process that created the session is gone, and the runtime's session table went
+            // with it. Resume has to be able to ask for the session the record names.
+            await using var second = new DurableClientBuilder()
+                .UseStore(new DurableStoreOptions { Path = path, Format = DurableStoreFormat.Jsonl })
+                .UseClient(ReplayClientOptions())
+                .Build();
+
+            var resumed = await second.ResumeConversationAsync(conversationId);
+
+            // The conversation comes back on the session the durable layer recorded, not on a
+            // replacement it had to invent because it could not name the original.
+            Assert.Equal(conversationId, resumed.Id);
+            Assert.Equal(sessionId, resumed.SessionId);
+            Assert.Same(resumed, second.FindConversation(conversationId));
+
+            var binding = Assert.IsType<SessionBinding>(resumed.Binding());
+            Assert.Equal(sessionId, binding.SessionId);
+            Assert.True(binding.Pinned);
+
+            // And it answers: the recovered session runs a turn and commits it durably.
+            var answer = await resumed.SubmitAsync("again").WaitAsync(EventTimeout);
+            Assert.NotNull(answer);
+            Assert.Equal("Hello from the recorded transcript.", answer!.Data.Content);
+
+            var checkpoint = Assert.IsType<ConversationCheckpoint>(resumed.Checkpoint());
+            Assert.Equal("turn:msg-0001", checkpoint.EventId);
+            Assert.Equal("Hello from the recorded transcript.", checkpoint.Content);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     // ----- Checkpoint failure --------------------------------------------------------------
 
     [Fact]
@@ -427,8 +491,9 @@ public class FacadeContractTests
             conversation);
 
         // The configuration carries the application's hook set, with the hooks it did not ask the
-        // durable layer to compose still in place.
-        Assert.Same(hooks, config.Hooks);
+        // durable layer to compose still in place. The set is a copy, so composing onto it leaves
+        // the caller's own instance alone.
+        Assert.NotSame(hooks, config.Hooks);
         Assert.NotNull(config.Hooks!.OnAgentStop);
         var composed = Assert.IsType<Func<UserPromptSubmittedHookInput, HookInvocation, Task<UserPromptSubmittedHookOutput?>>>(
             config.Hooks.OnUserPromptSubmitted);
@@ -442,13 +507,16 @@ public class FacadeContractTests
         Assert.NotNull(output);
         Assert.Equal("original (reviewed)", output!.ModifiedPrompt);
         Assert.Equal("Be concise.", output.AdditionalContext);
+
+        // The caller's own hook is still the one it supplied, and it still runs on its own.
+        var uncomposed = await hooks.OnUserPromptSubmitted!(
+            new UserPromptSubmittedHookInput { Prompt = "original", SessionId = conversation.SessionId },
+            new HookInvocation { SessionId = conversation.SessionId });
+        Assert.Equal("original (reviewed)", uncomposed!.ModifiedPrompt);
+        Assert.Null(uncomposed.AdditionalContext);
     }
 
-    [Fact(
-        Skip = "Known defect: building a session configuration installs the composed prompt hook " +
-               "onto the caller's own SessionHooks instance, so AgentChoices.Hooks is mutated as a " +
-               "side effect of building a configuration and a second build composes on top of the " +
-               "first. Tracked in #87; the library is deliberately unchanged in this change.")]
+    [Fact]
     public async Task HookComposition_LeavesTheCallersOwnHooksUnchanged()
     {
         var registry = new ExtensionRegistry();
@@ -477,15 +545,26 @@ public class FacadeContractTests
         var choices = new AgentChoices { Extensions = ["preamble"], Hooks = hooks };
         var config = client.GetSessionConfig(choices, conversation);
 
-        Assert.Same(hooks, config.Hooks);
+        // The configuration is built from the caller's hooks, not on top of them.
+        Assert.NotSame(hooks, config.Hooks);
 
         // Building a configuration is a read of the caller's choices, so the caller's own hook set
         // is exactly what it was handed over as.
         Assert.Same(supplied, hooks.OnUserPromptSubmitted);
 
-        // And building twice does not stack the composition.
+        // And building twice does not stack the composition: the second configuration composes
+        // onto the caller's hook, not onto the first configuration's composed hook.
         var again = client.GetSessionConfig(choices, conversation);
-        Assert.Same(hooks.OnUserPromptSubmitted, again.Hooks!.OnUserPromptSubmitted);
+        Assert.NotSame(config.Hooks, again.Hooks);
+        Assert.NotSame(config.Hooks!.OnUserPromptSubmitted, again.Hooks!.OnUserPromptSubmitted);
+        Assert.Same(supplied, hooks.OnUserPromptSubmitted);
+
+        var recomposed = await again.Hooks.OnUserPromptSubmitted!(
+            new UserPromptSubmittedHookInput { Prompt = "original", SessionId = conversation.SessionId },
+            new HookInvocation { SessionId = conversation.SessionId });
+
+        Assert.Equal("original", recomposed!.ModifiedPrompt);
+        Assert.Equal("Be concise.", recomposed.AdditionalContext);
     }
 
     // ----- Ownership -----------------------------------------------------------------------

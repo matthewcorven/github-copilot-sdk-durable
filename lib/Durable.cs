@@ -553,6 +553,18 @@ public sealed class SessionBinding
 
     /// <summary>When the binding was recorded, as an ISO 8601 timestamp.</summary>
     public string? BoundAt { get; set; }
+
+    /// <summary>
+    /// Whether the durable layer chose <see cref="SessionId"/> itself and recorded it before the
+    /// session existed.
+    /// </summary>
+    /// <remarks>
+    /// A pinned id is one the durable layer can ask the runtime for again, so a conversation
+    /// created under it is recoverable from a process that never saw the session. An id the
+    /// runtime allocated is not: the durable layer only learned it after the fact, so a runtime
+    /// that does not hold it has lost the transcript and the host has to decide what to do.
+    /// </remarks>
+    public bool Pinned { get; set; }
 }
 
 /// <summary>
@@ -4389,7 +4401,8 @@ internal sealed class DurableRuntime : IAsyncDisposable
             ? latest.Deserialize<AgentChoices>(DurableJson.Options)
             : null;
 
-        var session = Client.CreateSessionAsync(BuildSessionConfig(choices, null)).GetAwaiter().GetResult();
+        var session = CreatePinnedSessionAsync(conversationId, choices, null, CancellationToken.None)
+            .GetAwaiter().GetResult();
         var conversation = new DurableConversation(this, null!, record);
         conversation.Attach(session);
         conversation.BindAsync(session.SessionId, choices?.Model ?? DefaultModel).GetAwaiter().GetResult();
@@ -4428,7 +4441,7 @@ internal sealed class DurableRuntime : IAsyncDisposable
         // The conversation handle exists before the session is created, so prompt
         // sections can read the conversation's durable documents.
         var conversation = new DurableConversation(this, null!, record);
-        var session = await Client.CreateSessionAsync(BuildSessionConfig(choices, conversation), cancellationToken);
+        var session = await CreatePinnedSessionAsync(record.Id, choices, conversation, cancellationToken);
         conversation.Attach(session);
         await conversation.BindAsync(session.SessionId, choices?.Model ?? DefaultModel, cancellationToken);
         _conversations[record.Id] = conversation;
@@ -4495,7 +4508,7 @@ internal sealed class DurableRuntime : IAsyncDisposable
             ? latest.Deserialize<AgentChoices>(DurableJson.Options)
             : null;
 
-        var session = await Client.CreateSessionAsync(BuildSessionConfig(choices, null), cancellationToken);
+        var session = await CreatePinnedSessionAsync(record.Id, choices, null, cancellationToken);
         var conversation = new DurableConversation(this, null!, record);
         conversation.Attach(session);
         await conversation.BindAsync(session.SessionId, choices?.Model ?? DefaultModel, cancellationToken);
@@ -4764,7 +4777,7 @@ internal sealed class DurableRuntime : IAsyncDisposable
         }
 
         var session = forkedSessionId is null
-            ? await Client.CreateSessionAsync(BuildSessionConfig(choices, conversation), cancellationToken)
+            ? await CreatePinnedSessionAsync(conversation.Id, choices, conversation, cancellationToken)
             : await Client.ResumeSessionAsync(
                 forkedSessionId,
                 BuildResumeSessionConfig(choices, conversation),
@@ -5054,12 +5067,25 @@ internal sealed class DurableRuntime : IAsyncDisposable
             // already been asked to continue the session.
             var resumeConfig = BuildResumeSessionConfig(BuildSessionConfig(choices, conversation));
 
-            // A null result is the SDK saying it has no such session: the native transcript this
-            // conversation's history lives in is gone, and only the host can decide what to do.
+            // A null result is the SDK saying it has no such session. What that means depends on
+            // who chose the id: a pinned id is one the durable layer asked for at creation, so it
+            // can ask for it again and the conversation keeps its identity; an id the runtime
+            // allocated is one the durable layer only learned after the fact, so a runtime that
+            // does not hold it has lost the transcript and only the host can decide what to do.
             var metadata = await Client.GetSessionMetadataAsync(recordedSessionId, cancellationToken);
             if (metadata is null)
             {
-                throw new DurableRecoveryRequiredException(conversationId, recordedSessionId);
+                if (!binding.Pinned)
+                {
+                    throw new DurableRecoveryRequiredException(conversationId, recordedSessionId);
+                }
+
+                var recreated = await Client.CreateSessionAsync(
+                    WithSessionId(BuildSessionConfig(choices, conversation), recordedSessionId),
+                    cancellationToken);
+                conversation.Attach(recreated);
+                _conversations[conversationId] = conversation;
+                return conversation;
             }
 
             var resumed = await Client.ResumeSessionAsync(recordedSessionId, resumeConfig, cancellationToken);
@@ -5068,11 +5094,18 @@ internal sealed class DurableRuntime : IAsyncDisposable
             return conversation;
         }
 
-        var session = await Client.CreateSessionAsync(BuildSessionConfig(choices, conversation), cancellationToken);
+        var session = await CreatePinnedSessionAsync(conversationId, choices, conversation, cancellationToken);
         conversation.Attach(session);
         await conversation.BindAsync(session.SessionId, choices?.Model ?? DefaultModel, cancellationToken);
         _conversations[conversationId] = conversation;
         return conversation;
+    }
+
+    /// <summary>Names the session a configuration asks for.</summary>
+    private static SessionConfig WithSessionId(SessionConfig config, string sessionId)
+    {
+        config.SessionId = sessionId;
+        return config;
     }
 
     /// <summary>
@@ -5355,6 +5388,72 @@ internal sealed class DurableRuntime : IAsyncDisposable
             ? []
             : paths.Select(path => DurableSandboxPolicy.ExpandPath(path, workingDirectory)).ToList();
 
+    /// <summary>
+    /// Creates a session under an id the durable layer chose and recorded first.
+    /// </summary>
+    /// <remarks>
+    /// The id is pinned so the binding names a session the durable layer can ask for again. An id
+    /// the runtime allocates is only learned after the fact, so a second process has no way to
+    /// name the session its conversation lives in, and the conversation is unrecoverable even
+    /// though the runtime would have served it. Pinning is a create-time decision: a resumed
+    /// session already has its id, and <see cref="ResumeSessionConfig"/> has no such property.
+    /// </remarks>
+    private async Task<CopilotSession> CreatePinnedSessionAsync(
+        string conversationId,
+        AgentChoices? choices,
+        DurableConversation? conversation,
+        CancellationToken cancellationToken)
+    {
+        var config = BuildSessionConfig(choices, conversation);
+        config.SessionId = await PinSessionIdAsync(conversationId, choices?.Model ?? DefaultModel, cancellationToken);
+        return await Client.CreateSessionAsync(config, cancellationToken);
+    }
+
+    /// <summary>
+    /// Returns the id a conversation's session is created under, recording it before the session
+    /// exists.
+    /// </summary>
+    /// <remarks>
+    /// The id is generated once and written to the binding, rather than derived from the
+    /// conversation id: the store then holds exactly the id the runtime was asked for, and the
+    /// scheme that produced it can change without orphaning every conversation already on disk.
+    /// The write happens before the create RPC, so a crash in between leaves a conversation whose
+    /// binding names the session it was about to open — the same id the next attempt asks for.
+    /// A conversation that already has a pinned id keeps it, so restoring a reopened store does
+    /// not rename the session a conversation is on.
+    /// </remarks>
+    private async Task<string> PinSessionIdAsync(
+        string conversationId,
+        string? model,
+        CancellationToken cancellationToken)
+    {
+        var existing = Store.Document(SessionBindingDocument.Kind, conversationId)?.Latest is { } latest
+            ? latest.Deserialize<SessionBinding>(DurableJson.Options)
+            : null;
+
+        if (existing is { Pinned: true, SessionId: { Length: > 0 } pinned })
+        {
+            return pinned;
+        }
+
+        var sessionId = $"s{Guid.NewGuid():N}";
+        await Store.CommitAsync(tx =>
+        {
+            var draft = tx.Doc(SessionBindingDocument, conversationId);
+            draft.Value = new SessionBinding
+            {
+                SessionId = sessionId,
+                Model = model,
+                Pinned = true,
+                BoundAt = DateTimeOffset.UtcNow.ToString("O"),
+            };
+            draft.Save(tx.AppendEntry(conversationId, "session-binding", sessionId));
+            return Task.CompletedTask;
+        });
+
+        return sessionId;
+    }
+
     /// <summary>Builds the Copilot session configuration for a set of choices.</summary>
     internal SessionConfig BuildSessionConfig(AgentChoices? choices, DurableConversation? conversation) =>
         (SessionConfig)BuildSessionConfig(choices, conversation, new SessionConfig());
@@ -5440,9 +5539,13 @@ internal sealed class DurableRuntime : IAsyncDisposable
             config.Streaming = streaming;
         }
 
+        // The caller's hook set is copied, never adopted: building a configuration is a read of
+        // the caller's choices, so composing the durable sections below must not write through to
+        // the object the caller still holds. Every hook is carried over, so a hook the durable
+        // layer does not compose is still the caller's.
         if (resolved.Hooks is not null)
         {
-            config.Hooks = resolved.Hooks;
+            config.Hooks = CopyHooks(resolved.Hooks);
         }
 
         // Native compaction: the SDK summarizes the model context itself once it grows past
@@ -5497,6 +5600,31 @@ internal sealed class DurableRuntime : IAsyncDisposable
 
         return config;
     }
+
+    /// <summary>
+    /// Copies a hook set, so a configuration built from it can compose its own hooks without
+    /// changing the caller's.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="SessionHooks"/> is a plain settable class with no copy constructor, so every
+    /// hook is carried over by hand. The copy is exhaustive over the type as it stands, so a hook
+    /// the durable layer does not compose is still the caller's.
+    /// </remarks>
+    private static SessionHooks CopyHooks(SessionHooks hooks) => new()
+    {
+        OnPreToolUse = hooks.OnPreToolUse,
+        OnPreMcpToolCall = hooks.OnPreMcpToolCall,
+        OnPostToolUse = hooks.OnPostToolUse,
+        OnPostToolUseFailure = hooks.OnPostToolUseFailure,
+        OnUserPromptSubmitted = hooks.OnUserPromptSubmitted,
+        OnUserPromptTransformed = hooks.OnUserPromptTransformed,
+        OnSessionStart = hooks.OnSessionStart,
+        OnSessionEnd = hooks.OnSessionEnd,
+        OnErrorOccurred = hooks.OnErrorOccurred,
+        OnAgentStop = hooks.OnAgentStop,
+        OnSubagentStart = hooks.OnSubagentStart,
+        OnSubagentStop = hooks.OnSubagentStop,
+    };
 
     /// <summary>
     /// Renders the prompt sections for a conversation, the way they are rendered

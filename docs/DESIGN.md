@@ -280,6 +280,13 @@ sealed class Extension {
 `Registry.Uninstall(name)` removes it. Stored configuration references extensions **by name**, so
 stored choices outlive the code — exactly Pi's `06-configuration` / `30-reload-and-restart` behavior.
 
+Hook composition is a read of the caller's choices, not a write to them. `BuildSessionConfig`
+copies the caller's `SessionHooks` and composes the durable prompt section onto the copy, so
+`AgentChoices.Hooks` is never mutated: building a configuration twice composes once, and a host
+that keeps its own hook set keeps it. `SessionHooks` has no copy constructor, so the copy is
+explicit and covers every hook the type declares — a hook the copy forgot would be silently
+dropped from the session.
+
 ### 3.4 `DurableConversation` — the conversation handle
 
 Wraps a `CopilotSession` plus the durable store, exposing Pi-shaped operations:
@@ -302,7 +309,39 @@ Wraps a `CopilotSession` plus the durable store, exposing Pi-shaped operations:
 - `ResumeAsync()` → re-enter running tasks
 - `CloseAsync()`
 
-### 3.6 Sandbox policy — a durable, per-conversation grant
+### 3.6 Session identity — the id is chosen before the session exists
+
+A durable conversation is the identity; the native session is what serves it. Resuming reads
+`durable.session-binding` and asks the runtime for the session it names. That only works if
+the durable layer can *name* the session, and the SDK allocates an id server-side unless the
+caller asks for one. `SessionConfig.SessionId` is that request, and the durable layer always
+sets it.
+
+The id is **generated once and written to the binding before the create RPC**, not derived
+from the conversation id:
+
+- The store then holds exactly the id the runtime was asked for. A derived id would be a
+  second, parallel source of truth that has to keep agreeing with the first.
+- The derivation scheme can change without orphaning conversations already on disk. A
+  derived id is welded to the conversation id forever, so any later change to the scheme
+  makes every existing record unresumable.
+- A crash between the write and the RPC leaves a binding naming the session the next attempt
+  will ask for, which is the same state a crash after the RPC leaves.
+
+`SessionBinding.Pinned` records which of the two happened. A pinned id is one the durable
+layer chose and can therefore ask for again: if the runtime does not hold it, the session is
+re-created under the same id and the conversation keeps its identity. An id the runtime
+allocated is one the durable layer only learned after the fact, so a runtime that does not
+hold it has lost the transcript, and `ResumeConversationAsync` throws
+`DurableRecoveryRequiredException` rather than quietly starting a fresh session. Records
+written before pinning existed, and bindings a host wrote by hand, are in the second shape.
+
+Pinning is applied only when the configuration is a `SessionConfig`: `ResumeSessionConfig`
+has no `SessionId`, and a resume names its session in the call itself. A fork is a new
+conversation and pins its own id — `durable.session-binding` is declared `ForkPolicy.Initial`
+precisely so a fork never inherits its parent's session.
+
+### 3.7 Sandbox policy — a durable, per-conversation grant
 
 The SDK's sandbox is a session-level thing: `SessionConfigBase.SandboxConfig` takes a
 `GitHub.Copilot.Rpc.SandboxConfig` and the runtime applies it to the session's processes.
