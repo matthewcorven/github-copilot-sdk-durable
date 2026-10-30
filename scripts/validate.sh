@@ -86,7 +86,6 @@ deterministic_exclusion_reason() {
 # people to ignore it, which is worse than not having the check.
 determinism_exclusion_reason() {
   case "$1" in
-    23-child-tasks) echo "races a 20 ms delay against a 100 ms bank confirmation, so the number of refunded children varies between runs (examples/23-child-tasks.cs:38,133)" ;;
     *) echo "" ;;
   esac
 }

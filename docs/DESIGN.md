@@ -636,9 +636,10 @@ an example added later is covered without being listed anywhere.
 legitimately differ between runs — the temporary workspace each run creates, the session id the
 runtime hands out, and any timestamp — so the check normalises them before comparing. The
 normalisation lives in `scripts/validate.sh`, not in the examples: an example keeps printing
-what it actually saw. `23-child-tasks` is skipped, with its reason printed, because it races a
-20 ms delay against a 100 ms bank confirmation and so varies between runs on its own; a check
-that fails at random is worse than no check.
+what it actually saw. An example that has to print a live state waits for that state to be
+observable rather than for a duration — `23-child-tasks` prints its task graph once the
+checkout is waiting on its payments and every payment has committed the checkpoint that says
+it is waiting for the bank, so the print is the same on every run.
 
 **Synthesised sessions.** The durable layer names the session it asks for (§3.6), and the name
 is generated per conversation, so a `session.create` arrives with an id no fixture can record.
