@@ -25,10 +25,10 @@ EXAMPLES="$ROOT/examples"
 # model supports one.
 LIVE_EXAMPLES=(07 08 10 13 15 16 17 18 19 20 21 22 24 25 26 27 28 29 30 31 33 34 35)
 
-# Examples that run with no Copilot sign-in against the recorded runtime. Two of them
-# (32-jsonl-store, 37-ef-core-store) exercise the durable store only and never ask the
-# runtime for a session; the rest create a session, which the runtime serves from the
-# recording and marks as synthesised. See docs/DESIGN.md section 6.1.
+# Examples that run with no Copilot sign-in against the recorded runtime. Three of them
+# (32-jsonl-store, 36-durable-client-builder, 37-ef-core-store) exercise the durable store and
+# the facade only and never ask the runtime for a session; the rest create a session, which the
+# runtime serves from the recording and marks as synthesised. See docs/DESIGN.md section 6.1.
 DETERMINISTIC_EXAMPLES=(
   00-conversation
   01-documents
@@ -45,6 +45,7 @@ DETERMINISTIC_EXAMPLES=(
   23-child-tasks
   32-jsonl-store
   35-sandbox-sdk-observability-bypass
+  36-durable-client-builder
   37-ef-core-store
 )
 
