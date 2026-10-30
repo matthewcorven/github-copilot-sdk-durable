@@ -448,7 +448,7 @@ public class FacadeContractTests
         Skip = "Known defect: building a session configuration installs the composed prompt hook " +
                "onto the caller's own SessionHooks instance, so AgentChoices.Hooks is mutated as a " +
                "side effect of building a configuration and a second build composes on top of the " +
-               "first. Reported separately; the library is deliberately unchanged in this change.")]
+               "first. Tracked in #87; the library is deliberately unchanged in this change.")]
     public async Task HookComposition_LeavesTheCallersOwnHooksUnchanged()
     {
         var registry = new ExtensionRegistry();
