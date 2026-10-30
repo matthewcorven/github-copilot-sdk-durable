@@ -32,6 +32,10 @@ var hello = await root.CommitAsync(async tx =>
 
 Console.WriteLine($"typed entry: {hello}");
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await root.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 // createConversation() and fork() apply the agent choices in the creating commit.
 // A fork starts with the agent the parent had at the fork entry.
 var helper = await harness.CreateConversationAsync(new AgentChoices

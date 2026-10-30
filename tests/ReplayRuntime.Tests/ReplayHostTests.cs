@@ -58,12 +58,59 @@ public sealed class ReplayHostTests
             Request(2, "session.sendMessages", new JsonObject { ["sessionId"] = "s1" }),
             Request(3, "runtime.shutdown", new JsonObject()));
 
-        var notification = Assert.Single(transcript.Notifications);
+        // The session announcement comes first, then the recorded answer.
+        Assert.Equal(2, transcript.Notifications.Count);
+        var start = transcript.Notifications[0];
+        Assert.Equal("session.event", start["method"]!.GetValue<string>());
+        Assert.Equal("s1", start["params"]!["sessionId"]!.GetValue<string>());
+        Assert.Equal("session.start", start["params"]!["event"]!["type"]!.GetValue<string>());
+
+        var notification = transcript.Notifications[1];
         Assert.Equal("session.event", notification["method"]!.GetValue<string>());
         var envelope = notification["params"]!;
         Assert.Equal("s1", envelope["sessionId"]!.GetValue<string>());
         Assert.Equal("assistant.message", envelope["event"]!["type"]!.GetValue<string>());
         Assert.Equal("first", envelope["event"]!["data"]!["content"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task RunAsync_AnnouncesTheRecordedModelInSessionStart()
+    {
+        var transcript = await RunAsync(
+            Request(1, "session.create", new JsonObject()),
+            Request(2, "runtime.shutdown", new JsonObject()));
+
+        Assert.Equal(0, transcript.ExitCode);
+        Assert.Equal(string.Empty, transcript.Stderr);
+
+        var start = Assert.Single(transcript.Notifications);
+        var envelope = start["params"]!;
+        Assert.Equal("s1", envelope["sessionId"]!.GetValue<string>());
+        Assert.Equal("session.start", envelope["event"]!["type"]!.GetValue<string>());
+        Assert.Equal("m1", envelope["event"]!["data"]!["selectedModel"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task RunAsync_SessionStartOmitsSelectedModelWhenTheRecordingNamesNone()
+    {
+        var transcript = await RunWithFixtureAsync(
+            """
+            {
+              "protocolVersion": 3,
+              "runtimeVersion": "0.0.0-replay",
+              "models": [],
+              "sessions": [ { "id": "s1", "turns": [ { "messageId": "msg-1", "content": "first" } ] } ]
+            }
+            """,
+            Request(1, "session.create", new JsonObject()),
+            Request(2, "runtime.shutdown", new JsonObject()));
+
+        Assert.Equal(0, transcript.ExitCode);
+
+        var start = Assert.Single(transcript.Notifications);
+        var data = start["params"]!["event"]!["data"]!;
+        Assert.Equal("session.start", start["params"]!["event"]!["type"]!.GetValue<string>());
+        Assert.False(data.AsObject().ContainsKey("selectedModel"));
     }
 
     [Fact]
@@ -243,18 +290,21 @@ public sealed class ReplayHostTests
         var responses = transcript.Responses;
         Assert.Equal(6, responses.Count);
 
+        // The session announcement is part of the transcript, so it replays with it.
         var first = responses[2]["result"]!["events"]!.AsArray();
-        Assert.Single(first);
-        Assert.Equal("msg-1", first[0]!["data"]!["messageId"]!.GetValue<string>());
+        Assert.Equal(2, first.Count);
+        Assert.Equal("session.start", first[0]!["type"]!.GetValue<string>());
+        Assert.Equal("msg-1", first[1]!["data"]!["messageId"]!.GetValue<string>());
 
         var second = responses[4]["result"]!["events"]!.AsArray();
-        Assert.Equal(2, second.Count);
-        Assert.Equal("msg-1", second[0]!["data"]!["messageId"]!.GetValue<string>());
-        Assert.Equal("msg-2", second[1]!["data"]!["messageId"]!.GetValue<string>());
+        Assert.Equal(3, second.Count);
+        Assert.Equal("session.start", second[0]!["type"]!.GetValue<string>());
+        Assert.Equal("msg-1", second[1]!["data"]!["messageId"]!.GetValue<string>());
+        Assert.Equal("msg-2", second[2]!["data"]!["messageId"]!.GetValue<string>());
     }
 
     [Fact]
-    public async Task RunAsync_GetMessagesBeforeAnySendReturnsEmptyArray()
+    public async Task RunAsync_GetMessagesBeforeAnySendReturnsOnlyTheSessionStart()
     {
         var transcript = await RunAsync(
             Request(1, "session.create", new JsonObject()),
@@ -262,7 +312,9 @@ public sealed class ReplayHostTests
             Request(3, "runtime.shutdown", new JsonObject()));
 
         Assert.Equal(0, transcript.ExitCode);
-        Assert.Empty(transcript.Responses[1]["result"]!["events"]!.AsArray());
+        var events = transcript.Responses[1]["result"]!["events"]!.AsArray();
+        var only = Assert.Single(events);
+        Assert.Equal("session.start", only!["type"]!.GetValue<string>());
     }
 
     [Fact]
@@ -294,10 +346,12 @@ public sealed class ReplayHostTests
         return request.ToJsonString();
     }
 
-    private static async Task<Transcript> RunAsync(params string[] requests)
+    private static Task<Transcript> RunAsync(params string[] requests) => RunWithFixtureAsync(FixtureJson, requests);
+
+    private static async Task<Transcript> RunWithFixtureAsync(string fixtureJson, params string[] requests)
     {
         var fixturePath = Path.Combine(Path.GetTempPath(), $"replay-fixture-{Guid.NewGuid():N}.json");
-        await File.WriteAllTextAsync(fixturePath, FixtureJson);
+        await File.WriteAllTextAsync(fixturePath, fixtureJson);
 
         try
         {

@@ -54,6 +54,10 @@ var root = await harness.RootAsync(new AgentChoices
 var tools = () => root.Agent().Tools.Select(tool => $"{tool.Name}: {tool.Description}").ToList();
 Console.WriteLine($"after load: [{string.Join(", ", tools())}]");
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await root.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 // Reloading is installing a new object with the same name: it replaces the old
 // one in place, in one publication, so no conversation ever sees it missing.
 registry.Install(LoadFiles("Search files, faster"));

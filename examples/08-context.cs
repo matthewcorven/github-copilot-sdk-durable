@@ -23,6 +23,10 @@ await using var harness = await DurableHarness.OpenAsync(store, registry);
 
 var transcript = await harness.CreateConversationAsync();
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await transcript.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 // The stored transcript: every entry this conversation ever wrote.
 await transcript.CommitAsync(async tx =>
 {

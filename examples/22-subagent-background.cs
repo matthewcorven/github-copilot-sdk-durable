@@ -154,6 +154,10 @@ main = await first.RootAsync(new AgentChoices
     Permissions = ["custom-tool:subagent"],
 });
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await main.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 var spawned = await main.SubmitAsync("Use the subagent tool to spawn a subagent named reader.");
 Console.WriteLine($"spawn: {spawned?.Data.Content}");
 

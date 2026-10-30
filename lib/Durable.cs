@@ -3343,6 +3343,7 @@ public sealed class DurableConversation
     private readonly List<SandboxDecisionEvent> _sandboxDecisions = [];
     private readonly List<(Func<SandboxDecisionEvent, bool> Match, TaskCompletionSource<SandboxDecisionEvent> Completion)> _sandboxWaiters = [];
     private readonly DurableModelTracker _modelTracker = new();
+    private readonly List<TaskCompletionSource<DurableModelReport>> _modelWaiters = [];
     private readonly object _checkpointGate = new();
     private readonly ConcurrentDictionary<string, (string? Name, JsonElement? Arguments)> _toolCalls = [];
 
@@ -3405,6 +3406,34 @@ public sealed class DurableConversation
         if (_modelTracker.Record(evt) is { } report)
         {
             _runtime.PublishModel(report);
+            if (report.HasModel)
+            {
+                ReleaseModelWaiters(report);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Completes every pending <see cref="WaitForEffectiveModelAsync"/> with the report that
+    /// just arrived.
+    /// </summary>
+    private void ReleaseModelWaiters(DurableModelReport report)
+    {
+        List<TaskCompletionSource<DurableModelReport>>? waiting = null;
+        lock (_modelWaiters)
+        {
+            if (_modelWaiters.Count == 0)
+            {
+                return;
+            }
+
+            waiting = [.. _modelWaiters];
+            _modelWaiters.Clear();
+        }
+
+        foreach (var waiter in waiting)
+        {
+            waiter.TrySetResult(report);
         }
     }
 
@@ -3514,8 +3543,74 @@ public sealed class DurableConversation
     /// <see cref="DurableModelReport.NotReported"/> — <see cref="DurableModelReport.HasModel"/>
     /// is <c>false</c> and the value is <c>null</c>; it is never silently replaced with
     /// <see cref="DurableHarness.DefaultModel"/>.
+    /// <para>
+    /// The session-level report arrives asynchronously, after the create call has returned, so
+    /// reading this immediately after <see cref="DurableHarness.CreateConversationAsync"/> can
+    /// still see the not-reported value. Use <see cref="WaitForEffectiveModelAsync"/> when the
+    /// answer is needed rather than the current value.
+    /// </para>
     /// </remarks>
     public DurableModelReport EffectiveModel => _modelTracker.Effective;
+
+    /// <summary>
+    /// Waits for the runtime to report a model for this conversation, and returns the report.
+    /// </summary>
+    /// <param name="timeout">How long to wait. Defaults to 10 seconds.</param>
+    /// <param name="cancellationToken">Cancels the wait.</param>
+    /// <returns>
+    /// The report the runtime made, or <see cref="DurableModelReport.NotReported"/> when the
+    /// runtime reported no model within the timeout.
+    /// </returns>
+    /// <remarks>
+    /// A session-level report arrives asynchronously: the runtime announces the model on
+    /// <c>session.start</c>, which is delivered after the create call has already returned, so
+    /// reading <see cref="EffectiveModel"/> immediately after
+    /// <see cref="DurableHarness.CreateConversationAsync"/> can still see
+    /// <see cref="DurableModelReport.NotReported"/>. This waits for the report instead of
+    /// guessing at a delay, and it returns the not-reported value rather than throwing when the
+    /// runtime never names a model — a runtime that reports nothing is a fact to report, not an
+    /// error to raise.
+    /// </remarks>
+    public async Task<DurableModelReport> WaitForEffectiveModelAsync(
+        TimeSpan? timeout = null,
+        CancellationToken cancellationToken = default)
+    {
+        var current = EffectiveModel;
+        if (current.HasModel)
+        {
+            return current;
+        }
+
+        TaskCompletionSource<DurableModelReport> completion;
+        lock (_modelWaiters)
+        {
+            // Re-checked under the lock: a report that arrived between the read above and the
+            // registration below would otherwise be missed and the wait would time out.
+            var latest = _modelTracker.Effective;
+            if (latest.HasModel)
+            {
+                return latest;
+            }
+
+            completion = new TaskCompletionSource<DurableModelReport>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            _modelWaiters.Add(completion);
+        }
+
+        try
+        {
+            return await completion.Task.WaitAsync(timeout ?? TimeSpan.FromSeconds(10), cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            lock (_modelWaiters)
+            {
+                _modelWaiters.Remove(completion);
+            }
+
+            return DurableModelReport.NotReported;
+        }
+    }
 
     /// <summary>
     /// The model the runtime reported for each completed turn, oldest first.

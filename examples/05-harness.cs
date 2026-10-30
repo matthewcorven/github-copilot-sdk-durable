@@ -67,6 +67,10 @@ await root.CommitAsync(async tx =>
 
 Console.WriteLine($"root: {root.Id} {root.Snapshot(Notes)!["text"]}");
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await root.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 // The stored choices are names; Agent() resolves them against the registry.
 Console.WriteLine($"stored agent: {root.Choices()!.ReasoningEffort}");
 var agent = root.Agent();

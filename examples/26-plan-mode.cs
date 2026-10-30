@@ -87,6 +87,10 @@ chat = await harness.RootAsync(new AgentChoices
 var tools = () => chat!.Agent().Tools.Select(tool => tool.Name).ToList();
 Console.WriteLine($"tools: [{string.Join(", ", tools())}]");
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await chat.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 // Plan mode is a change to the conversation's agent: select the plan extension and
 // offer only reading and submitting.
 await chat.ConfigureAsync(new AgentChoices

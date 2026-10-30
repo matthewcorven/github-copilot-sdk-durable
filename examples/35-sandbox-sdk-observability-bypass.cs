@@ -169,6 +169,10 @@ Check.Equal(
 var conversation = await harness.CreateConversationAsync(choices);
 Check.NotNull(conversation.Session, "the session was created with TrustWorkingDirectory set");
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await conversation.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 // ─── The blocked call ───────────────────────────────────────────────────────
 var deniedPath = Path.Combine(secret, "leak.txt");
 await conversation.SubmitAsync(
@@ -380,6 +384,10 @@ var bypassConversation = await bypassHarness.CreateConversationAsync(new AgentCh
     Sandbox = bypassPolicy,
     Permissions = ["shell"],
 });
+
+// The model the runtime reported for this session, not the one the host asked for.
+var bypassEffectiveModel = await bypassConversation.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {bypassEffectiveModel.Model ?? "(not reported)"}");
 
 var bypassPath = Path.Combine(secret, "bypass.txt");
 var bypassCommand = $"printf 'leaked' > '{bypassPath}'";
