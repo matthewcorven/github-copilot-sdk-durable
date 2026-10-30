@@ -615,9 +615,10 @@ recompiled differently, and no example knows which runtime it is talking to.
   `36-durable-client-builder`, and `37-ef-core-store`, never open a Copilot session. The other
   fourteen create one, and the recorded runtime serves it from the recording (see below).
 
-**Synthesised sessions.** The durable layer does not name the session it asks for, so a
-`session.create` arrives with an id the fixture does not record. The recorded runtime no
-longer refuses: it serves the request from the fixture's first recorded session and says so.
+**Synthesised sessions.** The durable layer names the session it asks for (§3.6), and the name
+is generated per conversation, so a `session.create` arrives with an id no fixture can record.
+The recorded runtime no longer refuses: it serves the request from the fixture's first recorded
+session and says so.
 The marker is the phrase `synthesised session`, written to stderr and, when
 `REPLAY_MARKER_PATH` names a file, appended to that file — the SDK captures the runtime's
 stderr and discards it on success, so a caller that needs to know whether a pass was recorded
