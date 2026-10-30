@@ -68,7 +68,9 @@ label, and move to the next actionable item.  Do not halt the loop.
 
 ## Session Handoff — read this before your first dispatch
 
-State as of `dev` @ `43f65a9` (2026-10-30). Everything below is verified, not assumed.
+State as of 2026-10-30. Everything below is verified, not assumed. Do not trust a
+commit hash here — it goes stale the moment this file is committed. Confirm the
+board with `gh issue list` and the worktrees with `git worktree list`.
 
 ### A stale session may still own a worktree
 
