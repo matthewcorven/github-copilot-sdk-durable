@@ -208,6 +208,8 @@ public sealed class ReplayHost
         return 1;
     }
 
+    private readonly List<JsonObject> _deferred = new();
+
     private int ServeLoop(TextReader stdin)
     {
         while (!_shutdownRequested)
@@ -294,6 +296,13 @@ public sealed class ReplayHost
             }
 
             WriteResult(id, result);
+
+            foreach (var deferred in _deferred)
+            {
+                WriteNotification("session.event", deferred);
+            }
+
+            _deferred.Clear();
         }
 
         return 0;
@@ -408,7 +417,40 @@ public sealed class ReplayHost
         _sessions[id] = new SessionState(id);
         _sources[id] = session;
 
+        // A real runtime announces the session before any turn runs, and that announcement is
+        // where it names the model it selected. The recording carries the model, so the runtime
+        // reports it rather than leaving the client to guess from its own request.
+        EmitSessionStart(_sessions[id], session);
+
         return new JsonObject { ["sessionId"] = id };
+    }
+
+    /// <summary>
+    /// Emits <c>session.start</c> for a session the runtime has just created or resumed.
+    /// </summary>
+    /// <remarks>
+    /// <c>selectedModel</c> comes from the fixture session the runtime serves, so a recording
+    /// that names a model is a runtime that reports one. A recording that names none still gets
+    /// the event, with no model in it: "the recording carries no model" and "the runtime said
+    /// nothing at all" are then visibly different, and neither is invented.
+    /// </remarks>
+    private void EmitSessionStart(SessionState state, FixtureSession source)
+    {
+        var data = new JsonObject
+        {
+            ["sessionId"] = state.Id,
+            ["copilotVersion"] = _fixture.RuntimeVersion,
+            ["producer"] = "replay",
+            ["startTime"] = Timestamp(),
+            ["version"] = 1,
+        };
+
+        if (!string.IsNullOrWhiteSpace(source.Model))
+        {
+            data["selectedModel"] = source.Model;
+        }
+
+        EmitEvent(state, "session.start", data, defer: true);
     }
 
     /// <summary>
@@ -676,7 +718,7 @@ public sealed class ReplayHost
         EmitEvent(state, "tool.execution_complete", data);
     }
 
-    private void EmitEvent(SessionState state, string type, JsonObject data)
+    private void EmitEvent(SessionState state, string type, JsonObject data, bool defer = false)
     {
         var sequence = _eventSequence;
         var envelope = new JsonObject
@@ -696,6 +738,12 @@ public sealed class ReplayHost
 
         // Record what we emitted so getMessages replays the same transcript.
         state.EmittedEvents.Add(envelope["event"]!.DeepClone());
+
+        if (defer)
+        {
+            _deferred.Add(envelope);
+            return;
+        }
 
         WriteNotification("session.event", envelope);
     }
@@ -765,6 +813,7 @@ public sealed class ReplayHost
 
         _sources[sessionId] = session;
         _sessions[sessionId] = new SessionState(sessionId);
+        EmitSessionStart(_sessions[sessionId], session);
         return new JsonObject { ["sessionId"] = sessionId };
     }
 

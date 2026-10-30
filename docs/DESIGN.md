@@ -614,6 +614,31 @@ recompiled differently, and no example knows which runtime it is talking to.
 - The deterministic examples: seventeen of the thirty-eight. Three of them, `32-jsonl-store`,
   `36-durable-client-builder`, and `37-ef-core-store`, never open a Copilot session. The other
   fourteen create one, and the recorded runtime serves it from the recording (see below).
+- The effective-model check: every example that opens a session must print
+  `effective model: <id>`, and the id must be the model the fixture records. See below.
+- The determinism check: each of those examples is run a second time and its output compared
+  against the first run after normalisation. See below.
+
+**The effective model.** A session-opening example prints the model the runtime reported for
+its session, read from `DurableConversation.EffectiveModel` — never from the harness's
+requested default, which is what the host asked for rather than what the runtime answered. The
+runtime reports it on `session.start`, which the recorded runtime emits from the fixture
+session's `model` field, so a recording that names a model is a runtime that reports one.
+
+The print alone proves nothing, because it comes from the library. `scripts/validate.sh
+--deterministic` therefore reads the model out of `tools/ReplayRuntime/fixtures/basic.json`
+itself and compares: a printed id that differs from the recording fails the run, an example
+that opens a session but prints no line fails the run, and an example that opens no session but
+prints a line fails the run. Whether an example opens a session is derived from its source, so
+an example added later is covered without being listed anywhere.
+
+**The determinism check.** The same example, run twice, must say the same thing. Three values
+legitimately differ between runs — the temporary workspace each run creates, the session id the
+runtime hands out, and any timestamp — so the check normalises them before comparing. The
+normalisation lives in `scripts/validate.sh`, not in the examples: an example keeps printing
+what it actually saw. `23-child-tasks` is skipped, with its reason printed, because it races a
+20 ms delay against a 100 ms bank confirmation and so varies between runs on its own; a check
+that fails at random is worse than no check.
 
 **Synthesised sessions.** The durable layer names the session it asks for (§3.6), and the name
 is generated per conversation, so a `session.create` arrives with an id no fixture can record.

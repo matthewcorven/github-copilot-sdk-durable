@@ -27,6 +27,10 @@ registry.Install(new Extension(
 await using var harness = await DurableHarness.OpenAsync(store, registry);
 var root = await harness.RootAsync(new AgentChoices { Extensions = ["terse"] });
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await root.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 // Submit() durably admits user input and returns a Submission. The built-in
 // generation task prepares the system prompt from the agent's sections, calls the
 // model, and appends the answer; wait() resolves once the input is answered.

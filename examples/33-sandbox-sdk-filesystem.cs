@@ -88,6 +88,10 @@ var conversation = await harness.CreateConversationAsync(new AgentChoices
     Permissions = ["shell"],
 });
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await conversation.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 // ─── A permitted write ──────────────────────────────────────────────────────
 var permittedPath = Path.Combine(writable, "ok.txt");
 await conversation.SubmitAsync(

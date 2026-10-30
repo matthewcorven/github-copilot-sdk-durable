@@ -64,6 +64,10 @@ registry.Install(new Extension("payments", tasks: [Payment]));
 await using var harness = await DurableHarness.OpenAsync(store, registry);
 var root = await harness.RootAsync();
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await root.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 // Every task names its owner. This one belongs to the conversation; a task can
 // also own child tasks and wait for them (23-child-tasks.cs).
 var paymentId = await harness.CreateTaskAsync(

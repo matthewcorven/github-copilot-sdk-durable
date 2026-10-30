@@ -79,11 +79,16 @@ registry.Install(new Extension("ticker", tasks: [Ticker]));
 var firstStore = new DurableStore(storePath);
 var firstRun = await DurableHarness.OpenAsync(firstStore, registry);
 var firstRunCancellation = new CancellationTokenSource();
+var firstRunRoot = await firstRun.RootAsync();
 var tickerId = await firstRun.CreateTaskAsync(
     Ticker,
     DurableJson.ToElement(new Dictionary<string, int> { ["to"] = 5 }),
-    ownerConversationId: (await firstRun.RootAsync()).Id,
+    ownerConversationId: firstRunRoot.Id,
     cancellationToken: firstRunCancellation.Token);
+
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await firstRunRoot.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
 
 var tickTwo = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 reachedTick = n =>

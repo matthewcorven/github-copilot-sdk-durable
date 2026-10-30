@@ -272,6 +272,10 @@ var permissive = await harness.CreateConversationAsync(new AgentChoices
     Model = "gpt-5.6-luna",
 });
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await permissive.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 var ran = new List<string>();
 
 // ─── Credential masking, in both sessions ───────────────────────────────────

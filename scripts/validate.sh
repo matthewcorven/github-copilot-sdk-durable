@@ -81,6 +81,16 @@ deterministic_exclusion_reason() {
   esac
 }
 
+# Why an example is not compared against itself across two runs. Only a genuine, already
+# present source of run-to-run variation belongs here: a check that fails at random teaches
+# people to ignore it, which is worse than not having the check.
+determinism_exclusion_reason() {
+  case "$1" in
+    23-child-tasks) echo "races a 20 ms delay against a 100 ms bank confirmation, so the number of refunded children varies between runs (examples/23-child-tasks.cs:38,133)" ;;
+    *) echo "" ;;
+  esac
+}
+
 # The replay runtime and its recorded fixture.
 REPLAY_PROJECT="$ROOT/tools/ReplayRuntime/ReplayRuntime.csproj"
 REPLAY_BIN="$ROOT/tools/ReplayRuntime/bin/Debug/net10.0/ReplayRuntime"
@@ -172,6 +182,54 @@ run_test_project() {
   return 1
 }
 
+# The model the fixture records for the session it records. This is the answer the runtime
+# is expected to report, read from the recording rather than from the library, so the check
+# below cannot agree with the code it is checking by construction.
+recorded_model() {
+  python3 - "$REPLAY_FIXTURE" <<'PY'
+import json, sys
+with open(sys.argv[1]) as handle:
+    fixture = json.load(handle)
+for session in fixture.get("sessions", []):
+    if session.get("model"):
+        print(session["model"])
+        break
+PY
+}
+
+# Whether an example asks the runtime for a session. Derived from the source so an example
+# added later is covered without anyone remembering to list it here.
+example_opens_session() {
+  grep -qE 'RootAsync\(|CreateConversationAsync\(' "$EXAMPLES/$1.cs"
+}
+
+# Collapses the values that legitimately differ between two runs of the same example: the
+# temporary workspace each run creates, the session id the runtime hands out, and any
+# timestamp. The examples are not changed to make this easier; the normalisation lives here.
+normalise_output() {
+  sed -E \
+    -e 's#/private/var/folders/[A-Za-z0-9_.+/-]+#<temp>#g' \
+    -e 's#/var/folders/[A-Za-z0-9_.+/-]+#<temp>#g' \
+    -e 's#/tmp/[A-Za-z0-9_.+/-]+#<temp>#g' \
+    -e 's/s[0-9a-f]{32}/<session>/g' \
+    -e 's/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/<guid>/g' \
+    -e 's/[0-9a-f]{32}/<guid>/g' \
+    -e 's/[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+(Z|[+-][0-9]{2}:[0-9]{2})/<timestamp>/g' \
+    -e 's/[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?/<timestamp>/g'
+}
+
+# Runs one example against the recorded runtime and prints its combined output.
+run_example() {
+  local name="$1" runtime="$2" marker_file="$ROOT/.replay-markers-$$.txt"
+  rm -f "$marker_file"
+  if [[ -n "$runtime" ]]; then
+    (cd "$EXAMPLES" && REPLAY_MARKER_PATH="$marker_file" DURABLE_RUNTIME_PATH="$runtime" dotnet run "$name.cs" 2>&1)
+  else
+    (cd "$EXAMPLES" && dotnet run "$name.cs" 2>&1)
+  fi
+  rm -f "$marker_file"
+}
+
 run_deterministic() {
   local failures=0
 
@@ -220,6 +278,12 @@ run_deterministic() {
   # fixture does not record is served from the recording and marked as synthesised, so a
   # pass that proves less than a recorded transcript says so on its own PASS line.
   local name file output status marker_file markers ran=0 synthesised=0
+  local expected_model model_failures=0
+  expected_model="$(recorded_model 2>/dev/null)"
+  if [[ -z "$expected_model" ]]; then
+    echo "FAIL     the fixture records no model, so the effective-model check cannot run"
+    failures=$((failures + 1))
+  fi
   for name in "${DETERMINISTIC_EXAMPLES[@]}"; do
     file="$EXAMPLES/$name.cs"
     if [[ ! -f "$file" ]]; then
@@ -263,7 +327,84 @@ run_deterministic() {
       echo "PASS     $name.cs (recorded transcript)"
     fi
     echo "$output" | sed 's/^/         /' | head -30
+
+    # The example prints the model the runtime reported. That print comes from the library,
+    # so agreeing with it proves nothing on its own: compare it against the model the
+    # recording names, which the library never reads. An example that opens a session must
+    # print the line; an example that opens none must not invent one.
+    if example_opens_session "$name"; then
+      local printed
+      printed="$(echo "$output" | sed -n 's/^effective model: //p')"
+      if [[ -z "$printed" ]]; then
+        echo "FAIL     $name.cs opens a session but printed no 'effective model:' line"
+        model_failures=$((model_failures + 1))
+      else
+        local wrong=0 reported
+        while IFS= read -r reported; do
+          if [[ "$reported" != "$expected_model" ]]; then
+            echo "FAIL     $name.cs reported model '$reported'; the recording names '$expected_model'"
+            wrong=$((wrong + 1))
+          fi
+        done <<< "$printed"
+        if [[ $wrong -eq 0 ]]; then
+          echo "PASS     $name.cs effective model matches the recording ($expected_model)"
+        else
+          model_failures=$((model_failures + wrong))
+        fi
+      fi
+    elif echo "$output" | grep -q '^effective model: '; then
+      echo "FAIL     $name.cs opens no session but printed an 'effective model:' line"
+      model_failures=$((model_failures + 1))
+    fi
   done
+  echo
+
+  if [[ $model_failures -gt 0 ]]; then
+    echo "$model_failures effective-model check(s) failed."
+    failures=$((failures + model_failures))
+  else
+    echo "Effective model: every example that opens a session reported '$expected_model',"
+    echo "the model the recording names."
+  fi
+  echo
+
+  # The same example, run twice, must say the same thing. Volatile values are normalised
+  # here rather than removed from the examples, so the examples keep printing what they
+  # actually saw.
+  echo "=== Determinism: each example run twice, output compared after normalisation ==="
+  local repeat_failures=0 compared=0 skipped=0
+  for name in "${DETERMINISTIC_EXAMPLES[@]}"; do
+    if ! example_opens_session "$name"; then
+      continue
+    fi
+
+    local skip_reason
+    skip_reason="$(determinism_exclusion_reason "$name")"
+    if [[ -n "$skip_reason" ]]; then
+      printf 'SKIP     %-34s %s\n' "$name.cs" "$skip_reason"
+      skipped=$((skipped + 1))
+      continue
+    fi
+
+    local first second
+    first="$(run_example "$name" "$runtime" | normalise_output)"
+    second="$(run_example "$name" "$runtime" | normalise_output)"
+    compared=$((compared + 1))
+    if [[ "$first" == "$second" ]]; then
+      echo "PASS     $name.cs identical across two runs"
+    else
+      echo "FAIL     $name.cs differs between two runs"
+      diff <(printf '%s\n' "$first") <(printf '%s\n' "$second") | head -20 | sed 's/^/         /'
+      repeat_failures=$((repeat_failures + 1))
+    fi
+  done
+  echo
+  if [[ $repeat_failures -gt 0 ]]; then
+    echo "$repeat_failures example(s) were not deterministic across two runs."
+    failures=$((failures + repeat_failures))
+  else
+    echo "Determinism: $compared example(s) produced identical output twice; $skipped skipped."
+  fi
   echo
 
   # Everything else is excluded on the record, with the reason, so a shrinking

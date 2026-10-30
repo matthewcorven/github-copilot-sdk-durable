@@ -445,7 +445,13 @@ assert a tool call, a model answer, or a host event the recording does not conta
 the suite runs reproducibly without credentials; it does not prove that a live model answers.
 `docs/DESIGN.md` §6.1 is the full statement.
 
-CI runs `dotnet test tests/Durable.Tests`, then `SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh`. Every example is compiled on every push, and the 15 that need no Copilot sign-in also execute with their assertions checked. The other 23 need a signed-in Copilot CLI and are not run in CI.
+The deterministic run also checks two things the PASS lines alone would not. Every example that
+opens a session must print `effective model: <id>`, and the id must be the model the fixture
+records — read from the fixture, not from the library, so the check cannot agree with the code
+it is checking by construction. And every such example is run a second time, with the temporary
+paths, session ids, and timestamps normalised, and must produce identical output.
+
+CI runs `dotnet test tests/Durable.Tests`, then `SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh`. Every example is compiled on every push, and the 15 that need no Copilot sign-in also execute with their assertions checked. The other 23 need a signed-in Copilot CLI and are not run in CI. CI does not run `--deterministic`, so the effective-model and determinism checks are not enforced there yet.
 
 ---
 

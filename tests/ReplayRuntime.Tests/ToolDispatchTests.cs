@@ -89,16 +89,18 @@ public sealed class ToolDispatchTests
         Assert.Equal(0, transcript.ExitCode);
         Assert.Equal(string.Empty, transcript.Stderr);
 
-        // The recorded turn is emitted, then the tool request the client must answer.
+        // The session is announced, the recorded turn is emitted, then the tool request the
+        // client must answer.
         var events = transcript.Notifications
             .Select(n => n["params"]!["event"]!)
             .ToList();
-        Assert.Equal(4, events.Count);
-        Assert.Equal("assistant.message", events[0]["type"]!.GetValue<string>());
-        Assert.Equal("call-1", events[0]["data"]!["toolRequests"]![0]!["toolCallId"]!.GetValue<string>());
-        Assert.Equal("external_tool.requested", events[1]["type"]!.GetValue<string>());
-        Assert.Equal("read_file", events[1]["data"]!["toolName"]!.GetValue<string>());
-        Assert.Equal("notes.txt", events[1]["data"]!["arguments"]!["path"]!.GetValue<string>());
+        Assert.Equal(5, events.Count);
+        Assert.Equal("session.start", events[0]["type"]!.GetValue<string>());
+        Assert.Equal("assistant.message", events[1]["type"]!.GetValue<string>());
+        Assert.Equal("call-1", events[1]["data"]!["toolRequests"]![0]!["toolCallId"]!.GetValue<string>());
+        Assert.Equal("external_tool.requested", events[2]["type"]!.GetValue<string>());
+        Assert.Equal("read_file", events[2]["data"]!["toolName"]!.GetValue<string>());
+        Assert.Equal("notes.txt", events[2]["data"]!["arguments"]!["path"]!.GetValue<string>());
 
         // The pending request is visible to the client while the session is parked.
         var pending = transcript.Responses[2]["result"]!["items"]!.AsArray();
@@ -106,14 +108,14 @@ public sealed class ToolDispatchTests
         Assert.Equal("req-s1-0-0", pending[0]!["requestId"]!.GetValue<string>());
 
         // The client's own result is what the runtime records, and the next turn follows it.
-        Assert.Equal("tool.execution_complete", events[2]["type"]!.GetValue<string>());
-        Assert.Equal("call-1", events[2]["data"]!["toolCallId"]!.GetValue<string>());
-        Assert.True(events[2]["data"]!["success"]!.GetValue<bool>());
+        Assert.Equal("tool.execution_complete", events[3]["type"]!.GetValue<string>());
+        Assert.Equal("call-1", events[3]["data"]!["toolCallId"]!.GetValue<string>());
+        Assert.True(events[3]["data"]!["success"]!.GetValue<bool>());
         Assert.Equal(
             "hello from the real handler",
-            events[2]["data"]!["result"]!["content"]!.GetValue<string>());
-        Assert.Equal("assistant.message", events[3]["type"]!.GetValue<string>());
-        Assert.Equal("msg-2", events[3]["data"]!["messageId"]!.GetValue<string>());
+            events[3]["data"]!["result"]!["content"]!.GetValue<string>());
+        Assert.Equal("assistant.message", events[4]["type"]!.GetValue<string>());
+        Assert.Equal("msg-2", events[4]["data"]!["messageId"]!.GetValue<string>());
 
         Assert.True(transcript.Responses[3]["result"]!["success"]!.GetValue<bool>());
     }

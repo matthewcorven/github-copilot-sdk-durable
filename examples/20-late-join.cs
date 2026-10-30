@@ -18,6 +18,10 @@ var registry = new ExtensionRegistry();
 await using var harness = await DurableHarness.OpenAsync(store, registry);
 var root = await harness.RootAsync(new AgentChoices { Streaming = true });
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await root.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 // Start a run that streams its answer.
 var run = root.SubmitAsync("Count slowly from one to five, one number per sentence, then say DONE.");
 

@@ -96,6 +96,10 @@ var root = await harness.RootAsync(new AgentChoices
     Permissions = ["custom-tool:version"],
 });
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await root.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 // The file changes while a call runs: the running call finishes on v1, the next call
 // uses v2.
 var submission = root.SubmitAsync("Call the version tool and report what it returns.");

@@ -111,6 +111,10 @@ registry.Install(new Extension("checkout", tasks: [Payment, Checkout]));
 await using var harness = await DurableHarness.OpenAsync(store, registry);
 var root = await harness.RootAsync();
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await root.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 // One card is declined:
 Console.WriteLine("One card is declined:");
 var declined = await harness.CreateTaskAsync(

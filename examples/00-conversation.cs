@@ -35,6 +35,11 @@ var conversation = await harness.CreateConversationAsync();
 Console.WriteLine($"copilot session: {conversation.SessionId}");
 Console.WriteLine($"conversation count: {harness.Store.Conversations.Count}");
 
+// The model the runtime reported for this session. It is the runtime's answer, not the
+// model the host asked for, so a substitution would be visible here.
+var effectiveModel = await conversation.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 // ─── Assertions ─────────────────────────────────────────────────────────────
 //
 // A conversation created in a transaction is durable: it is in the store, it

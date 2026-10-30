@@ -92,6 +92,10 @@ async Task<(DurableConversation Conversation, string Path)> ConversationFor(stri
 var alice = await ConversationFor("alice");
 var bob = await ConversationFor("bob");
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await alice.Conversation.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 await alice.Conversation.SubmitAsync("Use the write_file tool to write 'from alice' into note.txt.");
 await bob.Conversation.SubmitAsync("Use the write_file tool to write 'from bob' into note.txt.");
 

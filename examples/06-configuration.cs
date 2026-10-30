@@ -48,6 +48,10 @@ var settings = new HarnessSettings
 await using var harness = await DurableHarness.OpenAsync(store, registry);
 var root = await harness.RootAsync();
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await root.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 // A new conversation stores no choices and follows the host: every installed
 // extension, all of their tools.
 var tools = () => root.Agent().Tools.Select(tool => tool.Name).ToList();

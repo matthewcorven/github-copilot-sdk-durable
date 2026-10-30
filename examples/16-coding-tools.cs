@@ -114,6 +114,10 @@ var root = await harness.RootAsync(new AgentChoices
     Permissions = ["custom-tool:read_file", "custom-tool:edit_file", "custom-tool:run_shell"],
 });
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await root.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 // Each tool call runs as a durable task owned by the generation, which waits for
 // them and continues the run with the next generation.
 var answer = await root.SubmitAsync(

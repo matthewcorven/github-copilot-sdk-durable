@@ -84,6 +84,10 @@ var allowed = await secondRun.CreateConversationAsync(new AgentChoices
     Permissions = ["custom-tool:delete_everything"],
 });
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await allowed.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 var permitted = await allowed.SubmitAsync("Delete every file. Use the delete_everything tool.");
 Console.WriteLine($"granted answer: {permitted?.Data.Content}");
 Console.WriteLine($"deletions after the granted call: {deletions}");

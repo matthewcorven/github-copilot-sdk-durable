@@ -31,6 +31,11 @@ var Notes = new DocumentDefinition<Dictionary<string, string>>(
     () => new Dictionary<string, string> { ["text"] = "" });
 
 var chat = await harness.CreateConversationAsync();
+
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await chat.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 await chat.CommitAsync(async tx =>
 {
     var notes = tx.Doc(Notes, chat.Id);
