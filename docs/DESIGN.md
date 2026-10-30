@@ -636,11 +636,16 @@ an example added later is covered without being listed anywhere.
 legitimately differ between runs — the temporary workspace each run creates, the session id the
 runtime hands out, and any timestamp — so the check normalises them before comparing. The
 normalisation lives in `scripts/validate.sh`, not in the examples: an example keeps printing
-what it actually saw. `23-child-tasks` is skipped, with its reason printed, because it races a
-20 ms delay against a 100 ms bank confirmation and so varies between runs on its own; a check
-that fails at random is worse than no check. That list is a record of known-bad examples and is
-expected to shrink: an example is never added to it to silence a new failure, because the
-failure is a bug in the example and the entry would hide it on every later run.
+what it actually saw. An example that has to print a live state waits for that state to be
+observable rather than for a duration — `23-child-tasks` prints its task graph once the
+checkout is waiting on its payments and every payment has committed the checkpoint that says
+it is waiting for the bank, so the print is the same on every run.
+
+**The exclusion list is empty, and stays a record of known-bad examples.** An example that
+varies between runs is a bug in that example, so the fix belongs in the example and never in a
+new entry here: an entry added to silence a failure hides it on every later run. The list
+exists so that a genuinely unavoidable variation can be excluded with its reason printed, not
+so that a check can be quietened.
 
 **In CI.** `.github/workflows/build.yml` runs this mode on every push and pull request to
 `dev` and `main`, as a `Validate examples (deterministic)` step after the plain

@@ -10,13 +10,15 @@
 #:property NoWarn=GHCP001
 #:include ../lib/Durable.cs
 
+using System.Globalization;
+using System.Text.Json;
 using Durable;
 
 var store = new DurableStore();
 var registry = new ExtensionRegistry();
 
-// A local bank: it declines an expired card at once, and confirms other charges
-// after a moment.
+// A local bank: it answers every card at the same moment, declining an expired card and
+// confirming the others.
 var charged = new HashSet<string>();
 
 var Payment = DurableTask.DefinePhases<Dictionary<string, string>, Dictionary<string, string>>(
@@ -27,29 +29,44 @@ var Payment = DurableTask.DefinePhases<Dictionary<string, string>, Dictionary<st
         ["charge"] = (input, _, runtime) =>
         {
             var card = input["card"];
-            if (card.StartsWith("expired", StringComparison.Ordinal))
+            var declined = card.StartsWith("expired", StringComparison.Ordinal);
+
+            // Charging the card and saying that the payment is waiting for the bank is one
+            // commit, so the charge is never observable without the checkpoint that
+            // explains it.
+            return runtime.CommitAsync(() =>
             {
-                return runtime.CommitAsync(() => TaskCommit.Failed($"{card} declined"));
-            }
+                if (!declined)
+                {
+                    charged.Add(card);
+                }
 
-            charged.Add(card);
-
-            // The bank confirms after a moment: wait for it without holding an invocation.
-            return runtime.SleepUntilAsync(
-                runtime.Now.AddMilliseconds(100),
-                () => TaskCommit.Running(DurableJson.ToElement(new Dictionary<string, string> { ["phase"] = "confirm" })));
+                return TaskCommit.Running(
+                    DurableJson.ToElement(new Dictionary<string, string> { ["phase"] = "confirm" }));
+            });
         },
 
+        // The bank answers at the moment the checkout named for this card: the answer is
+        // not a delay measured from whenever the payment happened to start, so the order
+        // of the answers is fixed by the checkout rather than by the scheduler.
         ["confirm"] = (input, _, runtime) =>
-            runtime.CommitAsync(() => TaskCommit.Completed(
-                DurableJson.ToElement(new Dictionary<string, string> { ["card"] = input["card"] }))),
+            runtime.SleepUntilAsync(
+                DateTimeOffset.FromUnixTimeMilliseconds(
+                    long.Parse(input["answerAt"], CultureInfo.InvariantCulture)),
+                () => input["card"].StartsWith("expired", StringComparison.Ordinal)
+                    ? TaskCommit.Failed($"{input["card"]} declined")
+                    : TaskCommit.Completed(
+                        DurableJson.ToElement(new Dictionary<string, string> { ["card"] = input["card"] }))),
     },
     // Each payment undoes its own effect when aborted.
     (input, _, runtime) =>
     {
-        var refunded = charged.Remove(input["card"]);
-        Console.WriteLine($"  payment {input["card"]} aborted{(refunded ? ", refunded" : "")}");
-        return runtime.CommitAsync(() => TaskCommit.Aborted());
+        Console.WriteLine($"  payment {input["card"]} aborted");
+        return runtime.CommitAsync(() =>
+        {
+            charged.Remove(input["card"]);
+            return TaskCommit.Aborted();
+        });
     });
 
 // The checkout creates its payments as child tasks and waits for all of them.
@@ -65,13 +82,25 @@ var Checkout = DurableTask.DefinePhases<Dictionary<string, string>, Dictionary<s
             // The checkout creates its payments as child tasks and waits for all of them.
             // The children are written in the same transaction as the checkpoint that
             // records them.
+            //
+            // The bank answers every card at one moment, chosen here rather than by each
+            // payment, so which payment fails first does not depend on the scheduler.
+            var answerAt = runtime.Now
+                .AddMilliseconds(100)
+                .ToUnixTimeMilliseconds()
+                .ToString(CultureInfo.InvariantCulture);
+
             var payments = new List<string>();
             foreach (var card in input["cards"].Split(','))
             {
                 var child = runtime.CreateChildTask(
                     tx,
                     Payment,
-                    DurableJson.ToElement(new Dictionary<string, string> { ["card"] = card }));
+                    DurableJson.ToElement(new Dictionary<string, string>
+                    {
+                        ["card"] = card,
+                        ["answerAt"] = answerAt,
+                    }));
                 payments.Add(child.Id);
             }
 
@@ -130,15 +159,20 @@ var cancelled = await harness.CreateTaskAsync(
     Checkout,
     DurableJson.ToElement(new Dictionary<string, string> { ["cards"] = "visa-5,visa-6,visa-7,visa-8" }),
     ownerConversationId: root.Id);
-await Task.Delay(20);
 
-// The task graph prints the live tasks as a tree along their owner edges.
+// The task graph prints the live tasks as a tree along their owner edges. The graph is
+// printed once the checkout is waiting on its payments and every payment has reached the
+// bank: the state is observed, not guessed from a duration, so the print is the same on
+// every run.
+Console.WriteLine("Task graph:");
+await WaitForBankAsync(harness, cancelled.Id);
 PrintGraph(harness.TaskGraph());
+
 await harness.AbortTaskAsync(cancelled.Id);
 Console.WriteLine($"  checkout: {(await harness.WaitForTaskAsync(cancelled.Id)).Status}");
 
 // The task graph after the abort.
-Console.WriteLine("Task graph:");
+Console.WriteLine("Task graph after the abort:");
 PrintGraph(harness.TaskGraph());
 
 // ─── Assertions ─────────────────────────────────────────────────────────────
@@ -175,6 +209,39 @@ Check.That(
     cancelledChildren.All(pair => pair.Task.Outcome?.GetProperty("status").GetString() == "aborted"),
     "every child of an aborted checkout is aborted, not completed");
 
+/// <summary>
+/// Waits until the checkout is waiting on its payments and every payment has reached the
+/// bank, so the graph is printed from a state the run can observe rather than from a delay.
+/// </summary>
+static async Task WaitForBankAsync(DurableHarness harness, string checkoutId)
+{
+    var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+    while (true)
+    {
+        var graph = harness.TaskGraph();
+        var checkout = graph.FirstOrDefault(pair => pair.Task.Id == checkoutId).Task;
+        var payments = graph.Where(pair => pair.Owner == checkoutId).ToList();
+
+        if (checkout is not null
+            && checkout.Status == Durable.TaskStatus.Waiting
+            && payments.Count == 4
+            && payments.All(pair => pair.Task.Status == Durable.TaskStatus.Running
+                && pair.Task.Checkpoint.ValueKind == JsonValueKind.Object
+                && pair.Task.Checkpoint.TryGetProperty("phase", out var phase)
+                && phase.GetString() == "confirm"))
+        {
+            return;
+        }
+
+        if (DateTimeOffset.UtcNow > deadline)
+        {
+            throw new InvalidOperationException("the payments never reached the bank");
+        }
+
+        await Task.Delay(5);
+    }
+}
+
 /// <summary>Print the live tasks as a tree along their owner edges.</summary>
 static void PrintGraph(IReadOnlyList<(DurableTaskRecord Task, string? Owner)> graph)
 {
@@ -193,7 +260,11 @@ static void PrintGraph(IReadOnlyList<(DurableTaskRecord Task, string? Owner)> gr
         }
     }
 
-    foreach (var node in nodes.Where(candidate => owners.GetValueOrDefault(candidate.Id) is null))
+    // A task owned by a conversation rather than by another task is a root: the
+    // conversation is not itself a node in the graph.
+    foreach (var node in nodes.Where(candidate =>
+        owners.GetValueOrDefault(candidate.Id) is not { } owner
+        || !owners.ContainsKey(owner)))
     {
         Print(node, 0);
     }
