@@ -25,9 +25,60 @@ EXAMPLES="$ROOT/examples"
 # model supports one.
 LIVE_EXAMPLES=(07 08 10 13 15 16 17 18 19 20 21 22 24 25 26 27 28 29 30 31 33 34 35)
 
-# Examples that run with no Copilot sign-in and no recorded session: they exercise the
-# durable store only, so they never ask the runtime for a session.
-DETERMINISTIC_EXAMPLES=(32-jsonl-store 37-ef-core-store)
+# Examples that run with no Copilot sign-in against the recorded runtime. Two of them
+# (32-jsonl-store, 37-ef-core-store) exercise the durable store only and never ask the
+# runtime for a session; the rest create a session, which the runtime serves from the
+# recording and marks as synthesised. See docs/DESIGN.md section 6.1.
+DETERMINISTIC_EXAMPLES=(
+  00-conversation
+  01-documents
+  03-owned-conversations
+  04-watches
+  05-harness
+  06-configuration
+  09-registry-reload
+  11-tasks
+  12-recovery
+  14-system-prompt
+  17-print
+  18-json
+  23-child-tasks
+  32-jsonl-store
+  35-sandbox-sdk-observability-bypass
+  37-ef-core-store
+)
+
+# Why each remaining example cannot run against the recorded runtime. Every excluded
+# example is named in the output with its reason, so a shrinking deterministic set is
+# visible rather than silent. The reason is the assertion or request that the recording
+# cannot satisfy, not a guess. bash 3.2 on macOS has no associative arrays, so this is a
+# function rather than a map.
+deterministic_exclusion_reason() {
+  case "$1" in
+    02-forks) echo "needs sessions.fork, which the runtime does not answer" ;;
+    07-harness-conversations) echo "sets a reasoning effort, so the harness queries models.list for a model the fixture does not record" ;;
+    08-context) echo "needs sessions.fork, which the runtime does not answer" ;;
+    10-extension-state) echo "asserts a tool wrote into the document; the recording has no tool call" ;;
+    13-chat) echo "asserts the model's answer; the recording has no model answer" ;;
+    15-real-model) echo "asserts the answer streamed as deltas; the recording has no model answer" ;;
+    16-coding-tools) echo "asserts the app's read_file tool ran; the recording has no tool call" ;;
+    19-inbox) echo "asserts both prompts are in the transcript; the recording has no user-message events" ;;
+    20-late-join) echo "asserts the snapshot holds the user message; the recording has no user-message events" ;;
+    21-subagent-foreground) echo "asserts a subagent tool created a child conversation; the recording has no tool call" ;;
+    22-subagent-background) echo "needs a subagent request the runtime does not answer" ;;
+    24-compaction) echo "needs a compaction request the runtime does not answer" ;;
+    25-coding-agent) echo "asserts the tool ran in the conversation's directory; the recording has no tool call" ;;
+    26-plan-mode) echo "asserts the plan was written to the document; the recording has no tool call" ;;
+    27-reviewer) echo "asserts the review loop ran more than one pass; the recording has no tool call" ;;
+    28-sandbox-per-conversation) echo "asserts a file the sandboxed tool wrote; the recording has no tool call" ;;
+    29-tool-override) echo "asserts the venv shell replaced the plain one; the recording has no tool call" ;;
+    30-reload-and-restart) echo "waits for a runtime restart the recording does not perform" ;;
+    31-permissions) echo "asserts a permission request the recording does not contain" ;;
+    33-sandbox-sdk-filesystem) echo "asserts a write landed on disk; the recording has no tool call" ;;
+    34-sandbox-sdk-network-credentials) echo "asserts the sandboxed shell sees a masked credential; the recording has no tool call" ;;
+    *) echo "" ;;
+  esac
+}
 
 # The replay runtime and its recorded fixture.
 REPLAY_PROJECT="$ROOT/tools/ReplayRuntime/ReplayRuntime.csproj"
@@ -164,9 +215,10 @@ run_deterministic() {
     echo
   fi
 
-  # The store-only examples: they never open a Copilot session, so they need neither a
-  # sign-in nor a recording. They still run the real code paths.
-  local name file output status
+  # The deterministic examples. Each one runs against the recorded runtime; a session the
+  # fixture does not record is served from the recording and marked as synthesised, so a
+  # pass that proves less than a recorded transcript says so on its own PASS line.
+  local name file output status marker_file markers ran=0 synthesised=0
   for name in "${DETERMINISTIC_EXAMPLES[@]}"; do
     file="$EXAMPLES/$name.cs"
     if [[ ! -f "$file" ]]; then
@@ -176,12 +228,16 @@ run_deterministic() {
     fi
 
     echo "=== $name.cs ==="
+    marker_file="$ROOT/.replay-markers-$$.txt"
+    rm -f "$marker_file"
     if [[ -n "$runtime" ]]; then
-      output="$(cd "$EXAMPLES" && DURABLE_RUNTIME_PATH="$runtime" dotnet run "$name.cs" 2>&1)"
+      output="$(cd "$EXAMPLES" && REPLAY_MARKER_PATH="$marker_file" DURABLE_RUNTIME_PATH="$runtime" dotnet run "$name.cs" 2>&1)"
     else
       output="$(cd "$EXAMPLES" && dotnet run "$name.cs" 2>&1)"
     fi
     status=$?
+    markers="$(cat "$marker_file" 2>/dev/null)"
+    rm -f "$marker_file"
 
     if [[ $status -ne 0 ]]; then
       echo "FAIL     $name.cs (exit $status)"
@@ -197,21 +253,54 @@ run_deterministic() {
       continue
     fi
 
-    echo "PASS     $name.cs"
+    ran=$((ran + 1))
+    if echo "$markers" | grep -q "synthesised session"; then
+      synthesised=$((synthesised + 1))
+      echo "PASS     $name.cs (synthesised session — not a recorded transcript)"
+      echo "$markers" | sed 's/^/         /'
+    else
+      echo "PASS     $name.cs (recorded transcript)"
+    fi
     echo "$output" | sed 's/^/         /' | head -30
   done
   echo
 
   # Everything else is excluded on the record, with the reason, so a shrinking
-  # deterministic set is visible in the output rather than silent.
-  local total excluded
+  # deterministic set is visible in the output rather than silent. The excluded count is
+  # derived from what actually ran, so it cannot drift from the PASS lines above.
+  local total excluded reason missing=0
   total="$(cd "$EXAMPLES" && ls *.cs | wc -l | tr -d ' ')"
-  excluded=$((total - ${#DETERMINISTIC_EXAMPLES[@]}))
-  echo "Deterministic: ${#DETERMINISTIC_EXAMPLES[@]} of $total examples ran; $excluded excluded."
-  echo "  Excluded examples create a Copilot session, so they need a signed-in runtime;"
-  echo "  the recorded runtime only answers the sessions its fixture names. Run them with"
-  echo "  scripts/validate.sh (or SKIP_LIVE=1 to compile the live ones without running)."
+  excluded=$((total - ran))
+
+  echo "Deterministic: $ran of $total examples ran; $excluded excluded."
+  if [[ $synthesised -gt 0 ]]; then
+    echo "  $synthesised of the $ran ran on a synthesised session: the fixture does not record"
+    echo "  the session the example asked for, so the runtime served it from the recording."
+    echo "  Those passes prove the example's own code paths, not a recorded transcript."
+  fi
   echo
+  echo "  Excluded examples, and why:"
+  for file in "$EXAMPLES"/*.cs; do
+    name="$(basename "$file" .cs)"
+    reason="$(deterministic_exclusion_reason "$name")"
+    if [[ -n "$reason" ]]; then
+      printf '    %-34s %s\n' "$name" "$reason"
+    elif ! printf '%s\n' "${DETERMINISTIC_EXAMPLES[@]}" | grep -qx "$name"; then
+      # An example that neither ran nor has a recorded reason would otherwise vanish from
+      # the output, which is the failure mode this whole report exists to prevent.
+      missing=$((missing + 1))
+      printf '    %-34s %s\n' "$name" "no reason recorded; add it to deterministic_exclusion_reason()"
+    fi
+  done
+  echo
+  echo "  Run the excluded examples with scripts/validate.sh (or SKIP_LIVE=1 to compile"
+  echo "  the live ones without running them)."
+  echo
+
+  if [[ $missing -gt 0 ]]; then
+    echo "$missing excluded example(s) have no recorded reason."
+    failures=$((failures + missing))
+  fi
 
   if [[ $failures -eq 0 ]]; then
     echo "Deterministic run passed."

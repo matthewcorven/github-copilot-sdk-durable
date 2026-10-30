@@ -21,11 +21,40 @@ public sealed class ReplayHost
     /// </summary>
     public static readonly TimeSpan DefaultToolResultTimeout = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// The phrase the runtime writes when it serves a session the fixture does not record. A
+    /// caller that treats a deterministic pass as evidence has to be able to tell a recorded
+    /// transcript from a synthesised one, so the marker is a stable, greppable string rather
+    /// than prose that drifts.
+    /// </summary>
+    public const string SynthesisedSessionMarker = "synthesised session";
+
+    /// <summary>
+    /// The environment variable that names a file the runtime appends its session markers to.
+    /// </summary>
+    /// <remarks>
+    /// The SDK captures the runtime's stderr and only surfaces it when a request fails, so a
+    /// successful run would otherwise lose the marker. A caller that needs to know whether a
+    /// pass was recorded sets this variable to a path it owns and reads the file afterwards.
+    /// The marker is still written to stderr as well, for a runtime driven by hand.
+    /// </remarks>
+    public const string MarkerPathEnvironmentVariable = "REPLAY_MARKER_PATH";
+
     private readonly Fixture _fixture;
     private readonly TextWriter _stdout;
     private readonly TextWriter _stderr;
     private readonly TimeSpan _toolResultTimeout;
     private readonly Dictionary<string, SessionState> _sessions = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The recorded session that supplies each live session's turns. A session the client
+    /// created is served by the recording it was created from, so a later request resolves
+    /// without re-deriving the answer.
+    /// </summary>
+    private readonly Dictionary<string, FixtureSession> _sources = new(StringComparer.Ordinal);
+
+    /// <summary>Session ids already announced as synthesised, so the marker appears once each.</summary>
+    private readonly HashSet<string> _announcedSynthesised = new(StringComparer.Ordinal);
     private readonly TaskCompletionSource _toolTimeout = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private CancellationTokenSource? _toolTimeoutSource;
     private string? _toolTimeoutDiagnostic;
@@ -347,11 +376,18 @@ public sealed class ReplayHost
             // A requested id that the fixture does not record is still served: the client asked
             // for a session by name, and the recorded turns are what the runtime answers with.
             // The first recorded session supplies them, so a client that names its own session
-            // does not have to know the recorded id.
-            session = _fixture.FindSession(requestedId)
+            // does not have to know the recorded id. That is a synthesised session, not a
+            // recorded one, and it is announced as such.
+            var recorded = _fixture.FindSession(requestedId);
+            session = recorded
                 ?? (_fixture.Sessions.Count > 0
                     ? _fixture.Sessions[0]
                     : throw new FixtureException($"fixture records no session '{requestedId}' and no sessions at all"));
+
+            if (recorded is null)
+            {
+                AnnounceSynthesised(requestedId, session);
+            }
         }
         else
         {
@@ -370,8 +406,57 @@ public sealed class ReplayHost
         // The state is keyed by the id the client asked for, so its later requests resolve.
         var id = requestedId ?? session.Id;
         _sessions[id] = new SessionState(id);
+        _sources[id] = session;
 
         return new JsonObject { ["sessionId"] = id };
+    }
+
+    /// <summary>
+    /// Records that a session is being served from a recording that does not name it, and says
+    /// so on stderr. The line is the only difference between a recorded pass and a synthesised
+    /// one, so it is written once per session and never suppressed.
+    /// </summary>
+    private void AnnounceSynthesised(string sessionId, FixtureSession source)
+    {
+        if (!_announcedSynthesised.Add(sessionId))
+        {
+            return;
+        }
+
+        var line =
+            $"replay-runtime: {SynthesisedSessionMarker} '{sessionId}' from recorded session '{source.Id}'; " +
+            "the fixture does not record this session, so this is not a recorded transcript";
+
+        _stderr.WriteLine(line);
+        AppendMarker(line);
+    }
+
+    /// <summary>
+    /// Appends a marker to the file named by <see cref="MarkerPathEnvironmentVariable"/>, when set.
+    /// </summary>
+    /// <remarks>
+    /// The SDK captures the runtime's stderr and discards it on success, so a caller that wants to
+    /// know whether a pass was recorded needs a sink it controls. Failing to write the file is not
+    /// fatal: the marker has already reached stderr, and a run should not fail because a
+    /// diagnostic could not be recorded.
+    /// </remarks>
+    private static void AppendMarker(string line)
+    {
+        var path = Environment.GetEnvironmentVariable(MarkerPathEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        try
+        {
+            File.AppendAllText(path, line + Environment.NewLine);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // The marker is already on stderr; a diagnostic sink that cannot be written is not
+            // a reason to fail the run.
+        }
     }
 
     private JsonNode SessionSend(JsonObject? parameters, bool singleMessageId)
@@ -656,17 +741,29 @@ public sealed class ReplayHost
     }
 
     /// <summary>
-    /// Resumes a recorded session. The fixture has to record the session, because resuming is
-    /// exactly the case where the runtime is asked to continue a transcript it already holds.
+    /// Resumes a session. A session this runtime created, or one the fixture records, resumes
+    /// from its own recording. Anything else is served from the first recording and announced as
+    /// synthesised, because resuming is exactly the case where the caller believes a transcript
+    /// exists and the runtime has to be honest about whether it does.
     /// </summary>
     private JsonNode SessionResume(JsonObject? parameters)
     {
         var sessionId = parameters?["sessionId"]?.GetValue<string>()
             ?? throw new FixtureException("request is missing sessionId");
 
-        var session = _fixture.FindSession(sessionId)
-            ?? throw new FixtureException($"fixture records no session '{sessionId}' to resume");
+        var session = _sources.TryGetValue(sessionId, out var known)
+            ? known
+            : _fixture.FindSession(sessionId);
 
+        if (session is null)
+        {
+            session = _fixture.Sessions.FirstOrDefault()
+                ?? throw new FixtureException($"fixture records no session '{sessionId}' to resume");
+
+            AnnounceSynthesised(sessionId, session);
+        }
+
+        _sources[sessionId] = session;
         _sessions[sessionId] = new SessionState(sessionId);
         return new JsonObject { ["sessionId"] = sessionId };
     }
@@ -677,6 +774,7 @@ public sealed class ReplayHost
         if (sessionId is not null)
         {
             _sessions.Remove(sessionId);
+            _sources.Remove(sessionId);
         }
 
         return new JsonObject { ["success"] = true };
@@ -693,11 +791,27 @@ public sealed class ReplayHost
         var sessionId = parameters?["sessionId"]?.GetValue<string>()
             ?? throw new FixtureException("request is missing sessionId");
 
-        // A session the client created under its own id is served by the recorded session that
-        // supplied its turns, so the id the client chose does not have to be the recorded one.
-        return _fixture.FindSession(sessionId)
-            ?? _fixture.Sessions.FirstOrDefault()
+        // A session the client created under its own id is served by the recording that supplied
+        // its turns, so the id the client chose does not have to be the recorded one.
+        if (_sources.TryGetValue(sessionId, out var source))
+        {
+            return source;
+        }
+
+        if (_fixture.FindSession(sessionId) is { } recorded)
+        {
+            return recorded;
+        }
+
+        // A request for a session this runtime never created and the fixture never recorded is
+        // still answered from the first recording, but it is announced as synthesised so the
+        // caller cannot mistake it for a recorded transcript.
+        var fallback = _fixture.Sessions.FirstOrDefault()
             ?? throw new FixtureException($"fixture records no session '{sessionId}'");
+
+        AnnounceSynthesised(sessionId, fallback);
+        _sources[sessionId] = fallback;
+        return fallback;
     }
 
     private SessionState GetState(string sessionId)

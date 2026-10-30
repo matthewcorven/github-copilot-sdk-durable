@@ -454,21 +454,56 @@ recompiled differently, and no example knows which runtime it is talking to.
 - A recorded conversation end to end: `tools/polyglot-attach/python/attach.py` drives
   `tools/ReplayRuntime` through `connect`, `session.create`, `session.sendMessages`, and
   `session.getMessages` against `tools/ReplayRuntime/fixtures/basic.json`.
-- The store-only examples, `32-jsonl-store` and `37-ef-core-store`, which never open a
-  Copilot session.
+- The deterministic examples: sixteen of the thirty-seven. Two of them, `32-jsonl-store` and
+  `37-ef-core-store`, never open a Copilot session. The other fourteen create one, and the
+  recorded runtime serves it from the recording (see below).
 
-**What it does not run, and why.** The other 35 examples create a conversation, and the
-durable layer does not name the session it asks for, so the recorded runtime is handed back a
-session id its fixture does not record. It refuses rather than inventing an answer, and the
-example fails with `ConnectionLostException`. Lifting that limit means either recording one
-transcript per example or letting the recorded runtime allocate a session for an unnamed
-`session.create`; both are changes to `tools/ReplayRuntime/`, tracked separately. The mode
-prints the count of examples it ran and excluded, so a shrinking deterministic set is visible
-rather than silent.
+**Synthesised sessions.** The durable layer does not name the session it asks for, so a
+`session.create` arrives with an id the fixture does not record. The recorded runtime no
+longer refuses: it serves the request from the fixture's first recorded session and says so.
+The marker is the phrase `synthesised session`, written to stderr and, when
+`REPLAY_MARKER_PATH` names a file, appended to that file — the SDK captures the runtime's
+stderr and discards it on success, so a caller that needs to know whether a pass was recorded
+needs a sink it controls. `scripts/validate.sh --deterministic` sets that variable and prints
+
+```
+PASS     00-conversation.cs (synthesised session — not a recorded transcript)
+```
+
+for a synthesised pass, and `(recorded transcript)` for a pass that used a session the
+fixture names. A synthesised pass can therefore never be mistaken for a recorded one.
+
+**What it does not run, and why.** Twenty-one examples are excluded, and the mode names each
+one with its reason rather than skipping it silently. The reasons fall into four groups:
+
+- **A request the runtime does not answer.** `02-forks` and `08-context` need `sessions.fork`;
+  `22-subagent-background` needs a subagent request; `24-compaction` needs a compaction
+  request; `07-harness-conversations` sets a reasoning effort, which makes the harness query
+  `models.list` for a model the fixture does not record. The runtime refuses an unrecorded
+  method rather than inventing a response, and the example fails with
+  `ConnectionLostException`.
+- **An assertion about a tool call.** `10`, `16`, `21`, `25`, `26`, `27`, `28`, `29`, `33`, and
+  `34` assert that a tool ran, what it wrote, or what it saw. The fixture records the model's
+  side of the conversation only, so no tool call happens and the assertion fails. A
+  synthesised session cannot fix this: the missing thing is the tool round trip, not the
+  session.
+- **An assertion about model output.** `13-chat` and `15-real-model` assert the model's answer
+  and its streaming deltas; `19-inbox` and `20-late-join` assert the shape of the transcript.
+  The recording has one canned answer, so these assertions are about a real model.
+- **An assertion about the host.** `30-reload-and-restart` waits for a runtime restart the
+  recording does not perform; `31-permissions` asserts a permission request the recording does
+  not contain.
+
+Recording one transcript per example would not lift most of these: the fixture would still
+have to contain tool calls, model answers, and host events that only a live run produces. The
+honest split is the one above — the examples whose own code paths the recording can drive run
+deterministically, and the rest are named with the reason they cannot.
 
 **What it proves.** The example sources and the runtime protocol are exercised with no
 network access, no Copilot sign-in, and no ambient state: the recorded runtime answers from a
-fixed epoch with sequential event ids, so a passing run is reproducible on any machine.
+fixed epoch with sequential event ids, so a passing run is reproducible on any machine. A
+synthesised pass proves the example's own code paths — its store, its harness wiring, its
+event handling — and not a recorded transcript.
 
 **What it does not prove.** It is not a substitute for the live runs. It says nothing about
 whether a real model answers, whether a prompt produces the expected text, or whether the

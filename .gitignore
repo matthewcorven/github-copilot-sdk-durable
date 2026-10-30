@@ -2,6 +2,9 @@
 .scratch/
 .scratch-*/
 
+# Marker files the deterministic run writes to tell a synthesised session from a recorded one.
+.replay-markers-*.txt
+
 # .NET build artifacts from file-based apps.
 bin/
 obj/
