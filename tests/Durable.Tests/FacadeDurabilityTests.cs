@@ -19,6 +19,12 @@ public class FacadeDurabilityTests
 {
     private static readonly TimeSpan EventTimeout = TimeSpan.FromSeconds(30);
 
+    private static readonly DocumentDefinition<AgentChoices> AgentDocument =
+        new("durable.agent", DocumentHistory.Rewindable, ForkPolicy.AsOf);
+
+    private static readonly DocumentDefinition<SessionBinding> BindingDocument =
+        new("durable.session-binding", DocumentHistory.Rewindable, ForkPolicy.Initial);
+
     [Fact]
     public async Task Turn_LeavesACheckpointAndASessionBinding()
     {
@@ -122,15 +128,30 @@ public class FacadeDurabilityTests
         try
         {
             string conversationId;
-            string sessionId;
+            const string sessionId = "session-not-recorded";
 
             using (var store = new DurableStore(path))
             {
-                await using var harness = await DurableHarness.OpenAsync(store, new ExtensionRegistry(), ReplayOptions());
-                var conversation = await harness.CreateConversationAsync(new AgentChoices { Model = "replay-model" });
+                // A conversation bound to a session the durable layer did not choose: the id was
+                // learned from the runtime after the session existed, so the durable layer cannot
+                // ask for it again. This is the shape a record written before session ids were
+                // pinned has, and the shape a host that bound a session by hand leaves behind.
+                var conversation = await store.CommitAsync(tx =>
+                {
+                    var created = tx.CreateConversation();
+
+                    var agent = tx.Doc(AgentDocument, created.Id);
+                    agent.Value = new AgentChoices { Model = "replay-model" };
+                    agent.Save(tx.AppendEntry(created.Id, "agent"));
+
+                    var binding = tx.Doc(BindingDocument, created.Id);
+                    binding.Value = new SessionBinding { SessionId = sessionId, Model = "replay-model" };
+                    binding.Save(tx.AppendEntry(created.Id, "session-binding"));
+
+                    return Task.FromResult(created);
+                });
+
                 conversationId = conversation.Id;
-                sessionId = conversation.SessionId!;
-                Assert.NotNull(conversation.Binding());
             }
 
             // The recorded session is not one the runtime knows, which is what a deleted native
@@ -144,6 +165,14 @@ public class FacadeDurabilityTests
 
                 Assert.Equal(conversationId, failure.ConversationId);
                 Assert.Equal(sessionId, failure.SessionId);
+
+                // The failure is explicit and non-destructive: the record is still there, still
+                // bound to the session the host has to decide about, and no replacement session
+                // was opened behind its back.
+                Assert.Single(reopened.Conversations);
+                var binding = DurableJson.FromElement<SessionBinding>(
+                    reopened.Document(BindingDocument.Kind, conversationId)!.Latest!.Value);
+                Assert.Equal(sessionId, binding!.SessionId);
             }
         }
         finally
