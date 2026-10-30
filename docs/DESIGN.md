@@ -638,7 +638,18 @@ runtime hands out, and any timestamp — so the check normalises them before com
 normalisation lives in `scripts/validate.sh`, not in the examples: an example keeps printing
 what it actually saw. `23-child-tasks` is skipped, with its reason printed, because it races a
 20 ms delay against a 100 ms bank confirmation and so varies between runs on its own; a check
-that fails at random is worse than no check.
+that fails at random is worse than no check. That list is a record of known-bad examples and is
+expected to shrink: an example is never added to it to silence a new failure, because the
+failure is a bug in the example and the entry would hide it on every later run.
+
+**In CI.** `.github/workflows/build.yml` runs this mode on every push and pull request to
+`dev` and `main`, as a `Validate examples (deterministic)` step after the plain
+`SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh` step. The plain step stays because it covers
+the live-gated examples this mode excludes; the deterministic step is separate rather than a
+matrix leg so that a non-deterministic example fails one named step beside the plain pass it
+complements. The determinism comparison is the only thing in either step that runs an example
+twice, so a regression that prints a fresh id, a fresh timestamp, or reordered lines fails CI
+rather than passing it.
 
 **Synthesised sessions.** The durable layer names the session it asks for (§3.6), and the name
 is generated per conversation, so a `session.create` arrives with an id no fixture can record.
