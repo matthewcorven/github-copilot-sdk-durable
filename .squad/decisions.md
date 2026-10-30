@@ -434,3 +434,40 @@ Fix: removed the dead duplicate block, ported #44's logic into the real `Durable
 **References:** #36, #44, PR #60, PR #62, `lib/Durable.cs`, `tests/Durable.Tests/RuntimeConnectionTests.cs`
 **Why:** This cost a full diagnostic cycle and nearly shipped a silent feature regression on the exact feature #44 had just added.
 **How it applies:** Every future rebase or conflict resolution in the #36–#41 chain (all of which touch `lib/Durable.cs`) must verify that no merged feature vanished. Treat a deleted-method grep as a mandatory rebase step, not an optional one.
+
+### 2026-10-30T03:55:00-04:00: The internal-document set must be derived, never hardcoded — #82's allowlist broke #80
+**By:** coordinator (fixing PR #80's conflict with #82)
+**What:** #82 fixed the fork-transcript leak by filtering bookkeeping entries, but implemented `IsInternalDocument(kind)` as a **hardcoded two-item allowlist** (`ForkDocument.Kind`, `AgentDocument.Kind`). PR #80 then added three more internal documents — `SessionBindingDocument` (`durable.session-binding`), `AdmissionDocument` (`durable.admission`), `CheckpointDocument` (`durable.checkpoint`) — registered in the `DurableRuntime` constructor. Their anchor entries were not recognised as bookkeeping and leaked into the transcript, so `Fork_TranscriptHoldsTheInheritedPrefixAndItsOwnEntriesOnly` failed with `Expected ["e24","e8"] / Actual ["e24","e21","e8","e5"]` and `Fork_TranscriptIsUnchangedAfterReopen` failed with `Expected 2 / Actual 5`. Fixed by replacing the literal with a lazily-built `HashSet<string>` property `InternalDocumentKinds` derived from the runtime's five document definitions, plus a `_internalDocumentKinds` backing field.
+**References:** #37, #81, PR #80, PR #82, `lib/Durable.cs` (`DurableRuntime` constructor, `BookkeepingEntries`, `IsInternalDocument`, `InternalDocumentKinds`)
+**Why:** A hardcoded allowlist silently rots the moment a new internal document is registered, and the failure surfaces as a confusing transcript-count assertion in an unrelated PR.
+**How it applies:** **Any new internal document must be added to `InternalDocumentKinds`.** Better: derive the set from the registration point so it cannot be forgotten. When a fork/transcript count assertion fails after adding a document, suspect a missing internal-document kind before suspecting the fork logic.
+
+### 2026-10-30T03:55:00-04:00: Epic #3 is not satisfiable as written — 2 of 8 criteria pass; do not close it
+**By:** coordinator (empirical re-evaluation after #78 and #39 merged)
+**What:** Epic #3's eight acceptance criteria were checked individually against `dev` at `7e19f03`:
+- **C1 FAIL** — "a documented command runs all 31 examples" — `./scripts/validate.sh --deterministic` runs **16 of 37**; the repo has 37 examples, not 31. The bar is stale.
+- **C2 PASS** — `grep -rniE 'mock|fake|stub|simulat' examples/` returns nothing.
+- **C3 FAIL** — "every example prints `effective model: <id>`" — no such prefix exists anywhere in `examples/`.
+- **C4 FAIL** — depends on C3.
+- **C5 FAIL** — no run-twice-and-diff-stdout determinism check in `scripts/validate.sh`.
+- **C6 PASS** — `docs/EXAMPLES_AUDIT.md:52` now says "The Recorded Runtime Is a Separate Process, Not an In-Example Stand-In" and states 16 of 37 with the synthesised marker.
+- **C7 FAIL** — `grep -rn "policy_resolved" --include=*.cs lib/ tools/ tests/` returns **nothing**.
+- **C8 FAIL** — depends on C7.
+**References:** #3, #78, #39, PR #83, PR #84, `scripts/validate.sh`, `docs/EXAMPLES_AUDIT.md`, `docs/DESIGN.md` §6.1
+**Why:** Closing it would claim a determinism guarantee the repo does not provide; leaving it untouched means the next agent re-derives the same eight-way audit.
+**How it applies:** Epic #3 needs a decision before any agent works it: either re-scope C1 to the real 16-of-37 bar, or split the genuinely unimplemented parts (effective-model reporting, `policy_resolved` decision event, byte-identical determinism check) into follow-up issues. **Do not close it as-is.**
+
+### 2026-10-30T03:55:00-04:00: Six agent-surfaced follow-ups are known and unfiled
+**By:** coordinator (accumulated from PR #83 and PR #84 verification)
+**What:** Two PRs surfaced six real gaps that were deliberately left out of scope. None has an issue yet.
+From **PR #83** (#78):
+1. `sessions.fork` is missing from `ReplayHost.SupportedMethods` — adding it would unlock `02-forks` and `08-context` for the deterministic suite.
+2. `07-harness-conversations` needs a fixture recording a model with a supported reasoning effort.
+3. `30-reload-and-restart` takes 124s and times out.
+4. The SDK captures the runtime's stderr and discards it on success, so a synthesised-session warning can be lost; `REPLAY_MARKER_PATH` exists as the workaround sink.
+From **PR #84** (#39):
+5. `BuildSandboxConfig` silently drops a `Network.Proxy` with no `Url`. `examples/34` asserts that drop, so changing it belongs with #40.
+6. `DurableClientBuilder` itself is not container-registered (only `DurableCopilotClient` is).
+**References:** #78, #39, #40, PR #83, PR #84, `tools/ReplayRuntime/ReplayHost.cs`, `lib/Durable.cs` (`BuildSandboxConfig`, `DurableClientBuilder`), `examples/34`
+**Why:** These were found by agents doing adjacent work and will be lost when those sessions end; re-discovering them costs a full investigation each.
+**How it applies:** File them as issues when the board is otherwise clear, or fold #5 into #40. Do not silently "fix" #5 without updating `examples/34`.
