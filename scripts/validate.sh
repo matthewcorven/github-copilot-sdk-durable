@@ -84,6 +84,11 @@ deterministic_exclusion_reason() {
 # Why an example is not compared against itself across two runs. Only a genuine, already
 # present source of run-to-run variation belongs here: a check that fails at random teaches
 # people to ignore it, which is worse than not having the check.
+#
+# Every entry records a known-bad example, and the list is expected to shrink. Never add an
+# entry to make a new failure go away: a non-deterministic example is a bug in that example,
+# so fix the example. An entry added to silence a regression hides the failure this pass
+# exists to catch, and it stays hidden for every run after it.
 determinism_exclusion_reason() {
   case "$1" in
     *) echo "" ;;

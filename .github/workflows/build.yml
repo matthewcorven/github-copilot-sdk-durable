@@ -29,11 +29,26 @@ jobs:
       - name: Test
         run: dotnet test tests/Durable.Tests --nologo -v q
 
-      # Compiles all 38 examples and runs the 17 that need no Copilot sign-in.
+      # Compiles all 38 examples and runs the 17 that need no Copilot sign-in. This is the
+      # plain path: it does not compare an example against itself, so it cannot catch an
+      # example whose output changes from run to run.
       # SKIP_TESTS=1 because the Test step above already ran the xUnit suite;
       # without it validate.sh would run the same tests a second time.
       - name: Validate examples
         run: SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh
+
+      # The deterministic pass (docs/DESIGN.md section 6.1): every example that needs no
+      # Copilot sign-in runs against the recorded runtime, asserts the effective model the
+      # recording names, and is then run a second time with its normalised output compared
+      # against the first. It is a separate step rather than a matrix leg so that a
+      # non-deterministic example fails one named step next to the plain pass it complements,
+      # and so the dotnet restore/build/test cache the step above populated is reused.
+      # The step above stays because it covers the live-gated examples this pass excludes.
+      # SKIP_TESTS=1 for the same reason as above; the deterministic suites the plain path
+      # never runs (ReplayRuntime.Tests, ReplayToolDispatchTests) are part of this step's
+      # value, so they are deliberately not skipped here.
+      - name: Validate examples (deterministic)
+        run: ./scripts/validate.sh --deterministic
 
       - name: Pack
         run: dotnet pack lib/Copilot.Durable.csproj --no-build -c Release -o artifacts

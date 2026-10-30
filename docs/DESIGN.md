@@ -641,6 +641,21 @@ observable rather than for a duration — `23-child-tasks` prints its task graph
 checkout is waiting on its payments and every payment has committed the checkpoint that says
 it is waiting for the bank, so the print is the same on every run.
 
+**The exclusion list is empty, and stays a record of known-bad examples.** An example that
+varies between runs is a bug in that example, so the fix belongs in the example and never in a
+new entry here: an entry added to silence a failure hides it on every later run. The list
+exists so that a genuinely unavoidable variation can be excluded with its reason printed, not
+so that a check can be quietened.
+
+**In CI.** `.github/workflows/build.yml` runs this mode on every push and pull request to
+`dev` and `main`, as a `Validate examples (deterministic)` step after the plain
+`SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh` step. The plain step stays because it covers
+the live-gated examples this mode excludes; the deterministic step is separate rather than a
+matrix leg so that a non-deterministic example fails one named step beside the plain pass it
+complements. The determinism comparison is the only thing in either step that runs an example
+twice, so a regression that prints a fresh id, a fresh timestamp, or reordered lines fails CI
+rather than passing it.
+
 **Synthesised sessions.** The durable layer names the session it asks for (§3.6), and the name
 is generated per conversation, so a `session.create` arrives with an id no fixture can record.
 The recorded runtime no longer refuses: it serves the request from the fixture's first recorded
