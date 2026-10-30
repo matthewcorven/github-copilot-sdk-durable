@@ -72,30 +72,27 @@ State as of 2026-10-30. Everything below is verified, not assumed. Do not trust 
 commit hash here — it goes stale the moment this file is committed. Confirm the
 board with `gh issue list` and the worktrees with `git worktree list`.
 
-### A stale session may still own a worktree
+### Worktree 40 is live — do not delete it
 
-A prior Ralph session (`ceff3860`) is still running and holds
 `/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/40` on branch
-`squad/40-facade-contract-tests`. It has produced **0 commits and 0 edits** across
-1801 turns and 90 context compactions, and is looping on repeated reads. It will
-not deliver #40.
-
-**Before dispatching #40:** check `git worktree list`. If that worktree still
-exists, remove it (`git worktree remove --force <path>`) and delete the branch
-(`git branch -D squad/40-facade-contract-tests`) — it holds no work. Do not
-dispatch a second agent onto that branch while the old session is alive.
+`squad/40-facade-contract-tests` holds **PR #86**, which is open, mergeable, and
+green. An earlier note here said this worktree held no work and should be removed;
+that was true when written and is now wrong. **Check `gh pr list` before removing
+any worktree.**
 
 ### The board
 
-Open: #40, #41, #19, #8, #7, #6, #5, #4, #3.
+Open: #87, #41, #40, #19, #8, #7, #6, #5, #4, #3.
 
-- **#40** — unblocked, the right next target. Read
-  `docs/implementation/ISSUE_40_NOTES.md` first: six of its eight contract areas
-  are already covered by existing facts. The two real gaps are **checkpoint
-  failure** (inject a provider whose `Commit()` throws via
-  `DurableStoreOptions.Provider`) and **hook composition** (the wrapper at
-  `lib/Durable.cs:5459-5483`). `docs/implementation/ISSUE_40_HOOK_API.md` has the
-  hook type shapes.
+- **#40** — **delivered by PR #86** (open, mergeable, `build=SUCCESS`). It adds
+  `tests/Durable.Tests/FacadeContractTests.cs` (14 tests, +862 lines) covering
+  reopen, resume, checkpoint failure, duplicate delivery, interrupted fork, hook
+  composition, ownership, and policy application. Merge it, then close #40.
+- **#87** — the hook-mutation defect PR #86 documents but does not fix:
+  `BuildSessionConfig` assigns the caller's `SessionHooks` by reference and then
+  mutates it, so `AgentChoices.Hooks` is rewritten and a second build stacks the
+  composition. `HookComposition_LeavesTheCallersOwnHooksUnchanged` is skipped
+  against it. Unskip that test to reproduce.
 - **#41** — blocked by #40.
 - **#19** — blocked by #6 and #3.
 - **#3** — **do not close it.** Only 2 of its 8 acceptance criteria pass; the
@@ -114,7 +111,8 @@ follow-ups are known and unfiled". File them when the board is otherwise clear.
 - `dev` is the integration branch; every PR targets `dev`. `main` is release-only.
 - There is **no solution file** at the repo root — `dotnet build -c Release` fails
   with `MSB1003`. Build `lib/Copilot.Durable.csproj` by path.
-- Baseline: `dotnet test tests/Durable.Tests` → **127 passed**.
+- Baseline: `dotnet test tests/Durable.Tests` → **127 passed** on `dev`;
+  **140 passed, 1 skipped** on `squad/40-facade-contract-tests` (the skip is #87).
 - `scripts/validate.sh` bans `mock|fake|stub|simulat` in `examples/*.cs`. Use
   "double", "stand-in", or "synthesised".
 - Any new internal document must be added to `InternalDocumentKinds` in
