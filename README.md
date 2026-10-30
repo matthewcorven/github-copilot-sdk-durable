@@ -1,6 +1,6 @@
 # Durable GitHub Copilot SDK agents in C#
 
-A suite of 37 self-contained C# examples that build **durable** agents on the
+A suite of 38 self-contained C# examples that build **durable** agents on the
 [GitHub Copilot SDK](https://github.com/github/copilot-sdk). Every example is a single
 file-based .NET app — no `.csproj`, no solution, no build step beyond `dotnet run`.
 
@@ -74,7 +74,7 @@ In-depth technical reports, design notes, and audits are available in [`docs/`](
 |---|---|---|
 | .NET SDK | 10.0 or later | File-based apps (`dotnet run file.cs`) need .NET 10 |
 | GitHub Copilot CLI | 1.0.103 or later | The SDK drives the CLI over RPC |
-| GitHub Copilot access | an active subscription | 23 of the 37 examples need a signed-in CLI: 22 make live model calls, and `07` only queries `models.list` to confirm the model supports a reasoning effort |
+| GitHub Copilot access | an active subscription | 23 of the 38 examples need a signed-in CLI: 22 make live model calls, and `07` only queries `models.list` to confirm the model supports a reasoning effort |
 
 Check both:
 
@@ -172,6 +172,7 @@ against the recorded runtime in `tools/ReplayRuntime/`. See
 | [33](examples/33-sandbox-sdk-filesystem.cs) | The sandbox filesystem policy | A conversation carries a sandbox policy with a writable, a read-only, and a denied directory. The durable layer approves the shell call; the sandbox refuses the write. |
 | [34](examples/34-sandbox-sdk-network-credentials.cs) | The sandbox network and credential policy | The other half of the sandbox policy: network egress, credential masking and injection, dev-toolchain access, and MCP/LSP confinement. |
 | [35](examples/35-sandbox-sdk-observability-bypass.cs) | Sandbox observability and bypass | Enforcement rather than configuration: a blocked call, the denial it produced, and the bypass, working-directory-trust and keychain settings around it. |
+| [36](examples/36-durable-client-builder.cs) | The durable client builder | One call assembles a host and connects to nothing: `Build()` validates the description, the first operation initializes once, ownership decides what disposal releases, and one store takes one runtime. |
 | [37](examples/37-ef-core-store.cs) | The EF Core store | The store's state written through a relational schema instead of a JSONL file. The SQLite connection-string convention, the provider selected by name and by factory, the migration's tables, a reopen that reads the state back, and the four-provider matrix. No server needed. |
 
 ---
@@ -208,12 +209,46 @@ Both paths compile the same source. `lib/Copilot.Durable.csproj` builds the pack
 `lib/Durable.cs`; `tests/Durable.Tests` references that project, so the test suite
 exercises the artifact consumers actually get.
 
+### One call: the builder and the facade
+
+`DurableClientBuilder` describes a host and `DurableCopilotClient` is that host. `Build()`
+validates the description and constructs the facade; it opens no store, starts no SDK client
+process, and resumes no task, so it is safe to call while the application is still being wired
+up. The first operation that needs either resource initializes both, once, and concurrent first
+operations share that attempt.
+
+```csharp
+await using var client = new DurableClientBuilder()
+    .UseStore(new DurableStoreOptions { Path = storePath })
+    .UseHarnessOptions(new DurableHarnessOptions())
+    .Build();
+
+var conversation = await client.RootAsync();
+await conversation.SubmitAsync("Summarize the repo").WaitAsync();
+```
+
+Disposal follows who created the resource. A store or client passed to `UseStore`/`UseClient` is
+*borrowed* — the facade uses it and leaves it alone; one the builder creates is *owned* and
+disposed with the facade. That order matters, because a persistent store holds an exclusive
+writer lock until it is disposed. A store also has exactly one runtime: a second facade over the
+same store is refused rather than racing the first for its tasks.
+
+`GetSessionConfig`/`GetSessionConfigAsync` build the configuration the runtime would use, applying
+the precedence rule — the conversation's stored choices are authoritative and the caller's
+arguments only fill what the conversation leaves unset. Neither creates a session, so a host can
+inspect what a restart would do without doing it. `NativeClient` is the raw-SDK escape hatch:
+calls made through it sit outside the durable guarantees, because a session created that way is
+not a `DurableConversation`. [`docs/DESIGN.md`](docs/DESIGN.md) §3.8 covers checkpoints, recovery,
+forks, and the full boundary.
+
 ### Core types
 
 | Type | Purpose |
 |---|---|
 | `DurableStore` | The durable state. Persists to an append-only JSONL file (explicit path, or the per-user default), or stays in memory. |
 | `DurableHarness` | Owns the client, the store, the registry, and the conversations. `OpenAsync`, `RootAsync`, `CreateConversationAsync`, `ForkAsync`, `CreateTaskAsync`. |
+| `DurableClientBuilder` | The one-call description of a host: `UseStore`, `UseClient`, `UseRegistry`, `UseHarnessOptions`, `Configure`, `Build()`. |
+| `DurableCopilotClient` | What `Build()` returns: the facade over one runtime. `InitializeAsync`, `CreateConversationAsync`, `ResumeConversationAsync`, `ForkAsync`, `GetSessionConfig(Async)`, `NativeClient`, `DisposeAsync`. |
 | `DurableConversation` | A Copilot session bound to durable app state. `SubmitAsync`, `Snapshot`, `CommitAsync`, `ConfigureAsync`, `Agent`, `ForkAsync`. |
 | `Transaction` | The unit of atomicity. `CreateConversation`, `AppendEntry`, `Doc`, `CreateTask`. Everything written inside commits together, or not at all. |
 | `DocumentDefinition<T>` | A document's kind, history policy, fork policy, and initial value. |
@@ -376,7 +411,7 @@ Validation runs in two complementary layers:
 2. **xUnit test suite (`tests/Durable.Tests`):** Focused unit and integration tests verifying `DurableStore` rollback semantics, fork entry filtering and state independence, store crash recovery with memo idempotency, and abort propagation.
 
 ```bash
-# Every example: compile, run xUnit suite, and run all 37 examples.
+# Every example: compile, run xUnit suite, and run all 38 examples.
 ./scripts/validate.sh
 
 # Fast offline validation: run xUnit suite + examples that do not call a model.
@@ -400,16 +435,17 @@ invocation also runs the vocabulary check: it fails when a source file under `ex
 describes itself with a placeholder term instead of naming what it really does.
 
 The deterministic run executes the recorded runtime's own test suite, the durable tool round
-trip against it, a recorded conversation end to end, and 16 of the 37 examples. Two of those
-(`32-jsonl-store`, `37-ef-core-store`) never open a Copilot session; the other fourteen create
-one, and the recorded runtime serves it from the recording and marks the pass as
+trip against it, a recorded conversation end to end, and 17 of the 38 examples. Three of those
+(`32-jsonl-store`, `36-durable-client-builder`, `37-ef-core-store`) never open a Copilot session;
+the other fourteen create one, and the recorded runtime serves it from the recording and marks
+the pass as
 `synthesised session — not a recorded transcript`. The remaining 21 examples are printed by
 name with the reason they cannot run: they need a request the runtime does not answer, or they
 assert a tool call, a model answer, or a host event the recording does not contain. It proves
 the suite runs reproducibly without credentials; it does not prove that a live model answers.
 `docs/DESIGN.md` §6.1 is the full statement.
 
-CI runs `dotnet test tests/Durable.Tests`, then `SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh`. Every example is compiled on every push, and the 14 that need no Copilot sign-in also execute with their assertions checked. The other 23 need a signed-in Copilot CLI and are not run in CI.
+CI runs `dotnet test tests/Durable.Tests`, then `SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh`. Every example is compiled on every push, and the 15 that need no Copilot sign-in also execute with their assertions checked. The other 23 need a signed-in Copilot CLI and are not run in CI.
 
 ---
 
@@ -424,7 +460,7 @@ For token pricing tables, reasoning effort constraints, and SDK-specific tool-au
 ## Repository layout
 
 ```
-examples/                 37 self-contained file-based C# apps
+examples/                 38 self-contained file-based C# apps
 lib/Durable.cs            the shared durable layer every example includes
 lib/Copilot.Durable.csproj  builds the Copilot.Durable NuGet package from that file
 tests/Durable.Tests       xUnit test suite for the durable library

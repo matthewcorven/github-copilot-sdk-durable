@@ -7,7 +7,7 @@
 
 A suite of **self-contained C# file-based apps** (`dotnet run app.cs`, .NET 10) that demonstrate
 durable GitHub Copilot SDK agents, with **breadth equal to the Pi Durable example set**
-(37 examples, `00`–`35` and `37`).
+(38 examples, `00`–`37`).
 
 Each example is a single `.cs` file plus, where it needs shared helpers, a `#:include`d
 support file. No `.csproj`.
@@ -401,7 +401,115 @@ Two operational notes, both covered in [`SANDBOX_MATRIX.md`](SANDBOX_MATRIX.md):
 - Sandbox types are annotated `GHCP001` (evaluation only). Examples that touch them carry
   `#:property NoWarn=GHCP001`.
 
-## 4. Example suite (37 examples: Pi `00`–`30` mirrored one-to-one, plus six C#-only additions)
+### 3.8 The builder, the facade, and the boundary between them
+
+`DurableClientBuilder` is a description and `DurableCopilotClient` is a host. The builder records
+what a host already has; `Build()` validates that description and constructs the host. That is
+all it does: no store is opened, no SDK client process is started, no task is resumed, and no
+prompt section is rendered. Construction is cheap and fallible in exactly one way — an option
+that cannot describe a host — which is why it is safe to call during container construction.
+Everything that touches the outside world is deferred to the first operation that needs it.
+
+- **`DurableClientBuilder`** — `UseStore(DurableStore)`, `UseStore(DurableStoreOptions)`,
+  `UseClient(CopilotClient)`, `UseClient(CopilotClientOptions?)`, `UseRegistry(ExtensionRegistry)`,
+  `UseHarnessOptions(DurableHarnessOptions)`, `Configure(Action<DurableClientOptions>)`, `Options`,
+  `Build()`. Each call replaces the previous choice, so the last write wins and ordering never
+  matters; `UseStore` and `UseClient` clear the competing source, because a store is supplied
+  either as an object or as options that create one, never both.
+- **`DurableClientOptions`** — the description `Build()` reads: `Store`, `StoreOptions`, `Client`,
+  `ClientOptions`, `Registry`, `Harness`, `OwnsStore`, `OwnsClient`.
+- **`Build()`** refuses a description that cannot be a host, with an `InvalidOperationException`
+  naming the call that fixes it: no store source, two store sources, two SDK client sources, an
+  ownership flag with nothing to own, or a null harness. It resolves the registry once
+  (`Options.Registry ??= new ExtensionRegistry()`), so the options and the client report the same
+  instance and an extension installed after the build is visible to the next configuration.
+- **`DurableCopilotClient`** — `InitializeAsync`, `CreateConversationAsync`, `RootAsync`,
+  `ResumeConversationAsync`, `ForkAsync`, `FindConversation(string)`,
+  `FindConversation(Func<DurableConversation, bool>)`, `GetSessionConfig`, `GetSessionConfigAsync`,
+  `ResumeTasksAsync`, `WaitForTaskAsync`, `DisposeAsync`, plus `Options`, `Store`, `Registry`,
+  `NativeClient`, and `IsInitialized`.
+
+**Initialization.** A built client is inert. The first operation that needs the store or the SDK
+client initializes it, and concurrent first operations share one attempt: the work happens once
+and every caller awaits the same task. Reading `Store` or `NativeClient` before that is an
+`InvalidOperationException` naming `InitializeAsync`, rather than a null a caller has to notice.
+A failed initialization disposes whatever it created — the client it started, then the store it
+opened — so a retry starts from a clean slate rather than from a half-attached runtime.
+
+**Ownership.** Disposal follows who created the resource. A store or client the caller supplied
+is *borrowed*: the facade drives it and leaves it alone on disposal. One the builder created is
+*owned*: the facade disposes it. `OwnsStore` and `OwnsClient` override the flag for a resource
+the caller supplied; asking to own a resource the builder would create anyway is refused, because
+it is already owned. The order matters beyond tidiness. A persistent store holds an exclusive
+writer lock for its lifetime (section 3.1), and the runtime releases the client before the store,
+so the only safe order — store after client — is the one the runtime performs. Disposal is
+idempotent and unbinds first, so a second `DisposeAsync` is a no-op and a disposed facade reports
+itself as uninitialized.
+
+**One store, one runtime.** A store has one task runner. A second runtime attaching to the same
+store is refused with an `InvalidOperationException` that says so, because the two would compete
+for the same tasks and interleave the same documents. The supported shape for many callers is one
+runtime shared by all of them, not one runtime each.
+
+**Precedence.** The stored agent choices are authoritative, and `GetSessionConfig(choices,
+conversation)` applies that rule: the conversation's own choices win, and the argument only
+supplies defaults for a conversation that has none stored. Where a stored choice is unset, the
+SDK configuration — or the runtime's default model, `gpt-6-luna` — applies. The rule exists
+because the store is what makes a conversation reproducible: a setting that lives only in host
+configuration is not part of the durable record, so it would change across a restart and travel
+badly across a fork. Host-level options are deliberately outside the merge, because they describe
+the process rather than the conversation: `DurableHarnessOptions.PermissionHandler`,
+`EnableFileHooks`, and `TolerateHostHookFailures`. Supplying a permission handler replaces the
+fail-closed durable policy for every conversation, which moves the agent's authority out of the
+store and out of these guarantees. `GetSessionConfigAsync(conversationId)` is the same rule for a
+conversation with no live handle: it reads `durable.agent`, builds the configuration the runtime
+would use, and creates no session and no sandbox.
+
+**Checkpoints.** `ConversationCheckpoint` is the durable record of one thing that finished — a
+turn or a tool call — with `Kind`, `EventId`, `Content`, `ToolName`, `Success`, `Error`, and
+`RecordedAt` among its fields. Each checkpoint is a new version of the conversation's checkpoint
+document, so the document's history is the checkpoint log, and `conversation.Checkpoint()` is the
+latest one. `EventId` is the deduplication key: a checkpoint whose key is already the document's
+latest value is not written again, so an event the runtime delivers twice does not produce two
+checkpoints. Checkpoints are recorded by the permanent subscription the conversation installs, so
+they are written whether or not the caller is watching.
+
+**Recovery.** `ResumeConversationAsync` returns the live handle when one exists. Otherwise it
+reads the conversation record, `durable.agent`, and `durable.session-binding`, and asks the
+runtime for the session the binding names. What happens next is section 3.6: a pinned id the
+runtime does not hold is re-created under the same id, and an id the runtime allocated that the
+runtime no longer holds throws `DurableRecoveryRequiredException` rather than continuing with an
+empty session. The exception is deliberate: the durable conversation is intact — entries,
+documents, and choices are all in the store — and what is missing is the runtime's own
+transcript, so the host decides whether to re-create the session or surface the loss.
+
+**Forks.** `ForkAsync(parent, durableEntryId)` commits the durable half before it asks the
+runtime to fork, and an interrupted fork is recovered from `durable.fork` the next time the store
+is opened. Each document is copied according to its `ForkPolicy` — `AsOf` (the value at the fork
+entry), `Current` (the latest), or `Initial` (the first) — and the choices are inherited as a
+snapshot, so a later change to the parent does not reach the child. `durable.session-binding` is
+declared `Initial` precisely so a fork never inherits its parent's session and pins its own. The
+transcript a fork exposes excludes the durable layer's own bookkeeping: `Entries()` hides the
+document kinds listed in `InternalDocumentKinds`, so the durable machinery is not part of what a
+caller reads or a fork copies as transcript.
+
+**The raw-SDK escape hatch.** `NativeClient` returns the underlying `CopilotClient`. Calls made
+through it — creating a session, resuming one, forking one, or any other SDK operation the facade
+does not expose — are the caller's own and sit outside these guarantees. A session created that
+way is not a `DurableConversation`: its choices are not stored, its documents are not bound, its
+grants are not enforced by the durable permission policy, and it does not appear in
+`FindConversation(Func<DurableConversation, bool>)`. Reach for it to configure the SDK, not to
+route around the facade.
+
+The facade is not a second implementation. It drives the same runtime `DurableHarness` drives —
+the same binding, the same configuration building, the same task coordination, the same lifecycle
+— so a conversation created through the facade is indistinguishable from one created through the
+harness, and the two can be used together over one store. Sharing the configuration helpers alone
+would not be enough: the runtime, not the helpers, is what holds the bindings.
+`examples/36-durable-client-builder.cs` is the runnable demonstration; everything it asserts is
+observable without a session.
+
+## 4. Example suite (38 examples: Pi `00`–`30` mirrored one-to-one, plus seven C#-only additions)
 
 | # | Pi example | C# example | Demonstrates |
 |---|---|---|---|
@@ -441,6 +549,7 @@ Two operational notes, both covered in [`SANDBOX_MATRIX.md`](SANDBOX_MATRIX.md):
 | 33 | — (C#-only) | `33-sandbox-sdk-filesystem.cs` | The sandbox filesystem policy: writable, read-only and denied directories, enforced below the permission layer. |
 | 34 | — (C#-only) | `34-sandbox-sdk-network-credentials.cs` | The rest of the sandbox policy: network egress, credential masking and injection, dev-tool access, MCP/LSP confinement. |
 | 35 | — (C#-only) | `35-sandbox-sdk-observability-bypass.cs` | Sandbox observability, bypass, working-directory trust and keychain — asserted from enforcement, not configuration. |
+| 36 | — (C#-only) | `36-durable-client-builder.cs` | The builder/facade boundary: `Build()` validates and connects to nothing, ownership decides what disposal releases, one store takes one runtime, stored choices are authoritative. |
 | 37 | — (C#-only) | `37-ef-core-store.cs` | The EF Core provider: the SQLite connection-string convention, selection by name and by factory, the migration's tables, reopen-and-read-back, and the four-provider matrix. |
 
 ## 5. File-based app conventions
@@ -474,7 +583,7 @@ Every example must:
 `scripts/validate.sh` runs the whole suite. `SKIP_LIVE=1` skips the examples that call a
 model; `COMPILE_ONLY=1` builds without running.
 
-CI enforces requirements 1 and 2 for the 14 examples that need no Copilot sign-in by running
+CI enforces requirements 1 and 2 for the 15 examples that need no Copilot sign-in by running
 `SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh` after the xUnit suite. The other 23 are
 compiled but not run in CI.
 
@@ -502,9 +611,9 @@ recompiled differently, and no example knows which runtime it is talking to.
 - A recorded conversation end to end: `tools/polyglot-attach/python/attach.py` drives
   `tools/ReplayRuntime` through `connect`, `session.create`, `session.sendMessages`, and
   `session.getMessages` against `tools/ReplayRuntime/fixtures/basic.json`.
-- The deterministic examples: sixteen of the thirty-seven. Two of them, `32-jsonl-store` and
-  `37-ef-core-store`, never open a Copilot session. The other fourteen create one, and the
-  recorded runtime serves it from the recording (see below).
+- The deterministic examples: seventeen of the thirty-eight. Three of them, `32-jsonl-store`,
+  `36-durable-client-builder`, and `37-ef-core-store`, never open a Copilot session. The other
+  fourteen create one, and the recorded runtime serves it from the recording (see below).
 
 **Synthesised sessions.** The durable layer does not name the session it asks for, so a
 `session.create` arrives with an id the fixture does not record. The recorded runtime no
