@@ -5,6 +5,7 @@
 
 using GitHub.Copilot;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Durable.DependencyInjection;
 
@@ -39,7 +40,7 @@ public static class DurableServiceCollectionExtensions
     /// and owned by the durable layer.
     /// </remarks>
     public static IServiceCollection AddDurableCopilotClient(this IServiceCollection services) =>
-        throw NotYet("#7.5");
+        services.AddDurableCopilotClient(static _ => { });
 
     /// <summary>Registers a durable Copilot client with the options the delegate sets.</summary>
     /// <param name="services">The service collection.</param>
@@ -54,9 +55,58 @@ public static class DurableServiceCollectionExtensions
     /// </remarks>
     public static IServiceCollection AddDurableCopilotClient(
         this IServiceCollection services,
-        Action<DurableClientOptions> configure) =>
-        throw NotYet("#7.5");
+        Action<DurableClientOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configure);
 
-    private static NotImplementedException NotYet(string issue) =>
-        new($"The durable client registration is declared in #7.1 and implemented in {issue}.");
+        // Idempotent: a second call must not register a second client. The factory below is
+        // the only registration that produces a client, so replacing it is enough — and it
+        // keeps the last delegate the host passed, which is what "last write wins" means for
+        // the builder's own Use… methods too.
+        services.RemoveAll<DurableCopilotClient>();
+        services.AddSingleton(provider => Build(provider, configure));
+        return services;
+    }
+
+    /// <summary>
+    /// Builds the client from the container: what the host registered is borrowed, what is
+    /// absent is left to the durable layer.
+    /// </summary>
+    /// <remarks>
+    /// The delegate runs here, when the client is resolved, so a host can read configuration
+    /// that is only available once the container is built. The builder is the same one a manual
+    /// build uses, and <see cref="DurableClientBuilder.Build"/> only validates and constructs,
+    /// so resolving the client performs no I/O.
+    /// </remarks>
+    private static DurableCopilotClient Build(
+        IServiceProvider provider,
+        Action<DurableClientOptions> configure)
+    {
+        var builder = new DurableClientBuilder();
+
+        // Borrow what the container already holds. A store or client the host registered is
+        // theirs: the durable layer must not dispose it, so the ownership flags stay unset and
+        // the default "borrow what was supplied" policy applies.
+        if (provider.GetService<DurableStore>() is { } store)
+        {
+            builder.UseStore(store);
+        }
+
+        if (provider.GetService<ExtensionRegistry>() is { } registry)
+        {
+            builder.UseRegistry(registry);
+        }
+
+        if (provider.GetService<CopilotClient>() is { } client)
+        {
+            builder.UseClient(client);
+        }
+
+        // The delegate runs last so it can override anything the container supplied, including
+        // by asking the durable layer to create and own a store or client instead.
+        builder.Configure(configure);
+
+        return builder.Build();
+    }
 }

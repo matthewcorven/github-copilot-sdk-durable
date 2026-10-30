@@ -332,7 +332,16 @@ time:
   resolved policy from the same stored grant — the stored policy describes the *shape* of
   the grant, not one machine's layout. The token never reaches the wire type.
 - **`BuildSessionConfig`** wires the mapped config in alongside `TrustWorkingDirectory` and
-  `EnableFileHooks`.
+  `EnableFileHooks`. It is the one place a session configuration is built, so the harness and
+  the facade cannot disagree about whether the stored policy was applied: both reach it, and
+  the resume path copies its result into the shape resuming takes.
+- **`DurableSandboxPolicyException`** — a stored policy that cannot be applied faithfully
+  stops the session instead of being narrowed. The rules are the ones the mapping would
+  otherwise have to drop: a policy that disables the sandbox while still naming credential,
+  filesystem, network, or keychain restrictions; a credential under an empty environment
+  variable name; a credential with no inject hosts, an empty inject host, or a bare `*` host.
+  The exception carries the `Reason` and the `Policy`, and the session is neither created nor
+  resumed — a conversation whose policy is rejected is not written to the store at all.
 - **`SandboxDecisions` / `WaitForSandboxDecisionAsync`** — the conversation exposes the
   `sandbox.decision` events the existing `Attach` subscription already receives, so a caller
   can assert on what the runtime reported without a second subscription.
