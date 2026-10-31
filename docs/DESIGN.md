@@ -560,6 +560,28 @@ durable guarantee above is the library's; the host only decides *which* store, *
   the durable entry, not the checkpoint's own identifier — so it names a position in the store's
   history that a caller can read back.
 
+### 3.10 The TypeScript port
+
+The durable core is also ported to TypeScript in `lib/ts/durable.ts`, so the same semantics can
+be exercised on the JavaScript runtime. The port is a translation, not a second design: the six
+model areas below keep their C# names, and §3.1–§3.8 remain the language-neutral contract for
+both.
+
+| Model area | Types |
+|---|---|
+| Conversations | `ConversationRecord`, `ForkIntent`, `SessionBinding`, `InputAdmission`, `ConversationCheckpoint`, `conversationLineage` |
+| Documents | `DocumentDefinition<T>`, `DocumentHistory`, `DocumentVersion`, `EntryRecord`, `DocumentState`, `ForkPolicy` |
+| Durable tasks | `DurableTaskDefinition`, `DurableTask`, `DurableTaskRecord`, `TaskStatus`, `TaskCommit`, `TaskOutcome`, `TaskRuntime`, `DurableTaskRunner` |
+| Extension registry | `Extension`, `ExtensionRegistry`, `ToolWrapper`, `PromptSection`, `SectionInput` |
+| Transactions | `Transaction`, `DocumentDraft<T>`, `UndoLog` |
+| Watch stream | `WatchHandle<T>`, `WatchFrame<T>`, `WatchOptions`, `watchDocument` |
+
+The port is type-checked under `lib/ts/tsconfig.json` (strict) with `npm run typecheck` from
+`lib/ts`. Where TypeScript has no direct equivalent — the commit gate, cancellation, the durable
+timer, the JSON boundary — the approximation is recorded in `docs/COMPARATIVE_ANALYSIS.md` §8
+rather than left to differ silently. The file backends and the session-bound layer are not part
+of the port; §8.2 says so explicitly.
+
 ## 4. Example suite (38 examples: Pi `00`–`30` mirrored one-to-one, plus seven C#-only additions)
 
 | # | Pi example | C# example | Demonstrates |
