@@ -1,0 +1,11 @@
+[project]
+name = "copilot-durable"
+version = "0.1.0"
+description = "The durable layer of the Copilot SDK, ported to Python."
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.pyright]
+include = ["durable.py"]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"

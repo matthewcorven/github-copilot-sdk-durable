@@ -263,6 +263,13 @@ Mirrors Pi's `defineTask`:
 The runner is a plain `async` loop over the store. On restart, a task in `running` state is
 re-entered at its last saved checkpoint — exactly Pi's resume semantics.
 
+The loop reads the task's **committed** record at the top of every step, not a record it captured
+when the run started. A commit replaces the stored checkpoint, and the next step must see the
+checkpoint the previous step committed; a runner that holds one record for the whole run would
+re-enter the same phase forever. In a language where the record is a reference the store mutates
+in place the two are the same object, so the rule is invisible there — it is stated here because
+it is part of the contract, not an implementation detail of one port.
+
 ### 3.3 `DurableRegistry` — extensions, tools, sections, hooks
 
 Pi's `defineExtension` / `createRegistry` / `install` / `uninstall` map to a plain C# registry:
@@ -581,6 +588,28 @@ The port is type-checked under `lib/ts/tsconfig.json` (strict) with `npm run typ
 timer, the JSON boundary — the approximation is recorded in `docs/COMPARATIVE_ANALYSIS.md` §8
 rather than left to differ silently. The file backends and the session-bound layer are not part
 of the port; §8.2 says so explicitly.
+### 3.11 Watches — the durable change feed
+
+A watch is a **single-consumer** stream of what the store has committed, over documents and
+entries rather than over SDK session events. It is the durable layer's own type: the SDK's
+`session.On<T>` stream reports what the runtime did, and a watch reports what the store wrote.
+
+- **Baseline first.** A subscriber's first frame is a snapshot of the committed state at the
+  moment the watch was acquired, so a subscriber never has to replay the store to catch up.
+- **Deltas after.** Each later frame carries only what was committed since the previous frame:
+  the new entry ids and the new document versions, as `(kind, ownerId, entryId)` triples.
+- **Bounded.** A subscriber that falls more than 100 frames behind has its accumulated deltas
+  replaced by one full-value `reset` frame instead of an unbounded queue. The bound is the same
+  100 frames Pi's `WatchHandle<T>` uses.
+- **One consumer.** Two readers of one queue would each see half the frames, so a second
+  subscription fails rather than silently splitting the stream. A second reader opens a second
+  watch.
+- **Committed only.** A frame is produced from committed state, so a value that a transaction
+  has staged but not committed is never delivered.
+
+A watch is a convenience over the store, not a second source of truth: everything a frame
+reports is already readable through `Entries` and `Snapshot`, and a host that never opens a
+watch loses no state.
 
 ## 4. Example suite (38 examples: Pi `00`–`30` mirrored one-to-one, plus seven C#-only additions)
 

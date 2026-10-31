@@ -64,6 +64,28 @@ A comparative analysis of the per-durable-agent architecture in this repository 
 
 ---
 
+## 7. The Python port (`lib/py/durable.py`)
+
+The Python port follows `docs/DESIGN.md` §3 rather than the C# source's shape, and keeps the C#
+type names so a reader can move between the two. Where Python has no equivalent for a C#
+construct, the approximation is recorded here rather than left to differ silently.
+
+| C# construct | Python approximation | Why, and what is preserved |
+|---|---|---|
+| `IDurableStoreProvider` (interface) | `DurableStoreProvider` (concrete base class raising `NotImplementedError`) | Python has no interfaces. The base class documents the same contract and fails loudly on a method a provider forgets, which is what the compiler would have caught. |
+| `IDisposable.Dispose()` | `close()` | Python's disposal idiom. `close()` is idempotent, as `Dispose()` is. |
+| `CommitTaskAsync` overloads (with and without a `Transaction`) | one `commit_task_async` that dispatches on the callback's arity via `inspect.signature` | Python has no overload resolution. A zero-argument callback runs without a transaction and without the undo log, exactly as the C# overload does. |
+| `DocumentDefinition<T>` (generic) | `DocumentDefinition` with a `type` field and `deserialize()` | Python generics are erased at runtime, so the stored value's type has to be carried as data. `deserialize()` is what the C# generic argument gives for free. |
+| `JsonElement` | `Any` (plain JSON values) | `System.Text.Json` has no Python counterpart. Values round-trip through `json`, and `DurableJson.to_wire` reproduces the C# serializer's camelCase, null-dropping shape. |
+| Enums serialized as numbers | `IntEnum` with the C# numeric values, coerced back on read | The wire format is unchanged, so a store written by the C# layer reads in Python and the reverse. `_from_wire` resolves annotations with `typing.get_type_hints` because `from __future__ import annotations` makes `dataclasses.Field.type` a string. |
+| `CancellationToken` | `asyncio.Event` | Python's cooperative cancellation. `_sleep` wakes early when the event is set, and `asyncio.CancelledError` breaks the task loop where `OperationCanceledException` would. |
+| `DurableTaskRecord` is a reference type shared by store and runner | the runner re-reads `store.task(task_id)` at the top of every step | Python dataclasses are not shared by reference across the store boundary, so a captured record would never see the checkpoint a commit wrote. DESIGN §3.2 now states the rule as part of the contract. |
+| `SemaphoreSlim(1, 1)` commit gate | `asyncio.Lock` | Same mutual exclusion, scoped to the event loop the store is used from. |
+| `ConcurrentDictionary` provider registry | `dict` + `threading.Lock`, case-insensitive keys | The registry is process-wide and may be touched from any thread, so it keeps a real lock. |
+| `FileStream` + `FileShare` lock | `fcntl.flock` on POSIX, `msvcrt.locking` on Windows, over a `{path}.lock` sidecar | Same guarantee: one writer per store file, and a second opener is refused with the holder named. |
+| `Channel<T>` watch (example-level in C#) | `DurableWatch` / `DurableFrame` in the core | The C# core has no watch type; `examples/04-watches.cs` builds one over a `Channel<string>`. The Python port promotes it to a real type with a baseline frame, deltas, a 100-frame reset, and a single-consumer rule, and DESIGN §3.11 now specifies it. |
+| `CopilotClient` / `CopilotSession` | a `client_factory` seam on `DurableHarness.open_async`, and duck-typed `fork`/`resume`/`create` session calls | The Python SDK binding is out of scope for this port. The seam is explicit: a harness opened without a factory raises rather than degrading, and a client missing a session capability raises naming the capability. |
+
 ## 8. TypeScript port (`lib/ts/durable.ts`)
 
 The durable core is ported to TypeScript so the same semantics can be exercised on the
