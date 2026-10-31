@@ -509,6 +509,57 @@ would not be enough: the runtime, not the helpers, is what holds the bindings.
 `examples/36-durable-client-builder.cs` is the runnable demonstration; everything it asserts is
 observable without a session.
 
+### 3.9 The runtime host — `src/Durable.Runtime`
+
+`Durable.Runtime` is the process that turns a store into a running agent. It is a thin host, not a
+second implementation: it opens a store, claims it, imports an agent definition, opens the
+conversation that definition owns, submits one prompt, and prints what the runtime reported. Every
+durable guarantee above is the library's; the host only decides *which* store, *which* agent, and
+*what to print*.
+
+- **Commands.** `run` executes one turn and exits. `serve` and `schedule` parse the same options and
+  delegate; they are delivered by later work (HTTP transport, scheduler) and exit `4`
+  (`NotAvailable`) naming the issue that delivers them. `--help` documents all three and every flag.
+- **Exit codes.** `0` succeeded, `1` the agent or the host failed, `2` a usage error, `3` the turn
+  completed but did not succeed, `4` the command is not implemented in this build.
+- **Store ownership before the client.** `DurableHarness.OpenAsync` starts the SDK client *before*
+  it constructs the harness, and the harness is what claims the store's task scheduler. A host that
+  opened the client first and discovered the store was taken would leave an orphaned runtime
+  process behind. The host therefore claims and releases the scheduler as a pre-flight probe before
+  `OpenAsync`; the cross-process half is already covered, because `DurableStore.Create` takes the
+  store file's exclusive writer lock. A refused host exits non-zero naming the store and its owner
+  and starts nothing.
+- **Agent definitions.** An agent is a document of kind `durable.agent-definition`, owner id
+  `agent:{name}`, `ForkPolicy.Initial`, listed in `InternalDocumentKinds` so it is bookkeeping
+  rather than transcript. A file passed with `--definition` is an *import surface*: it is validated,
+  committed, and thereafter the store is the source of truth. Validation runs at import, at host
+  startup, and on every invocation, and refuses with a message naming the agent: a name that does
+  not match `^[a-z0-9][a-z0-9._-]*$`, an extension the host does not have installed, a tool the
+  selected extensions do not provide, a sandbox policy that cannot be applied, or a permission
+  grant that does not parse. Extension names are resolved with `ExtensionRegistry.Find`, not
+  `ResolveExtensions`, because the latter silently drops names it cannot resolve.
+- **One conversation per agent.** The conversation is found by its `OwnerConversationId`
+  (`agent:{name}`), so every occurrence of an agent is an admission and a checkpoint inside the same
+  conversation, and the conversation id is stable across runs. `--new-conversation` is the opt-out.
+- **Containment.** Every run reports how the agent's authority is bounded: `Sandboxed` when the
+  definition enables a sandbox, `PermissionGated` when no sandbox is set and the durable fail-closed
+  policy decides each request against the agent's grants, and `None` when the host supplied its own
+  permission handler — including a careful one, because an unverifiable handler reads as the worst
+  case. `run` proceeds with a warning; `serve` and `schedule` refuse to start with `None` unless
+  `--allow-uncontained` is passed.
+- **The effective model.** The model an agent *requests* is not the model the runtime *reported*.
+  The host reads `WaitForEffectiveModelAsync` and prints what it returns. When the runtime reports
+  nothing, the result carries `effectiveModel: null` and `modelReported: false` and the host prints
+  `(no model reported)`; it never substitutes the requested model or the harness default.
+  `--require-effective-model` turns that absence into a failure.
+- **The run result.** One JSON object on stdout, and nothing else; diagnostics go to stderr. It is
+  the single shape every transport serializes: `agent`, `conversationId`, `admissionId`,
+  `checkpointId`, `effectiveModel` (`model` + `source`, or null), `modelReported`, `containment`,
+  `containmentReason`, `outcome` (`succeeded`, `turnUnsuccessful`, or `agentFailed`), and `error`.
+  `checkpointId` is the entry id of the latest version of the conversation's checkpoint document —
+  the durable entry, not the checkpoint's own identifier — so it names a position in the store's
+  history that a caller can read back.
+
 ## 4. Example suite (38 examples: Pi `00`–`30` mirrored one-to-one, plus seven C#-only additions)
 
 | # | Pi example | C# example | Demonstrates |
