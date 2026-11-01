@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "language": "typescript",
+  "range": [0, 10],
+  "workingDirectory": "repository root",
+  "setupCommand": ["npm", "--prefix", "examples/ts", "ci"],
+  "runtime": "Native Copilot SDK, or DURABLE_RUNTIME_PATH pointing to the real ReplayRuntime executable. Never imports harness.ts/runtime.ts.",
+  "store": "in-memory; no per-user or on-disk default path",
+  "validation": { "status": "pending-api-handoff", "sdk": "1.0.28" },
+  "preservedScaffolding": {
+    "files": ["harness.ts", "runtime.ts"],
+    "status": "unused interrupted intent; not a native SDK adapter or parity evidence"
+  },
+  "examples": [
+    { "id": "00", "file": "00-conversation.ts", "original": "../00-conversation.cs", "live": false, "liveReason": null, "deterministic": true, "deterministicExclusionReason": null, "command": ["node", "--experimental-transform-types", "examples/ts/00-conversation.ts"], "assertionParity": "all original facts ported; native execution pending" },
+    { "id": "01", "file": "01-documents.ts", "original": "../01-documents.cs", "live": false, "liveReason": null, "deterministic": true, "deterministicExclusionReason": null, "command": ["node", "--experimental-transform-types", "examples/ts/01-documents.ts"], "assertionParity": "all original facts ported; native execution pending" },
+    { "id": "02", "file": "02-forks.ts", "original": "../02-forks.cs", "live": false, "liveReason": null, "deterministic": false, "deterministicExclusionReason": "needs sessions.fork, which the runtime does not answer", "command": ["node", "--experimental-transform-types", "examples/ts/02-forks.ts"], "assertionParity": "all original facts ported; native execution pending" },
+    { "id": "03", "file": "03-owned-conversations.ts", "original": "../03-owned-conversations.cs", "live": false, "liveReason": null, "deterministic": true, "deterministicExclusionReason": null, "command": ["node", "--experimental-transform-types", "examples/ts/03-owned-conversations.ts"], "assertionParity": "all original facts ported; native execution pending" },
+    { "id": "04", "file": "04-watches.ts", "original": "../04-watches.cs", "live": false, "liveReason": null, "deterministic": true, "deterministicExclusionReason": null, "command": ["node", "--experimental-transform-types", "examples/ts/04-watches.ts"], "assertionParity": "all original facts ported; native execution pending" },
+    { "id": "05", "file": "05-harness.ts", "original": "../05-harness.cs", "live": false, "liveReason": null, "deterministic": true, "deterministicExclusionReason": null, "command": ["node", "--experimental-transform-types", "examples/ts/05-harness.ts"], "assertionParity": "all original facts ported; native execution pending" },
+    { "id": "06", "file": "06-configuration.ts", "original": "../06-configuration.cs", "live": false, "liveReason": null, "deterministic": true, "deterministicExclusionReason": null, "command": ["node", "--experimental-transform-types", "examples/ts/06-configuration.ts"], "assertionParity": "all original facts ported; native execution pending" },
+    { "id": "07", "file": "07-harness-conversations.ts", "original": "../07-harness-conversations.cs", "live": true, "liveReason": "sets a reasoning effort, so the harness queries models.list for a model the fixture does not record", "deterministic": false, "deterministicExclusionReason": "sets a reasoning effort, so the harness queries models.list for a model the fixture does not record", "command": ["node", "--experimental-transform-types", "examples/ts/07-harness-conversations.ts"], "assertionParity": "all original facts ported; LIVE execution pending" },
+    { "id": "08", "file": "08-context.ts", "original": "../08-context.cs", "live": true, "liveReason": "needs sessions.fork, which the runtime does not answer", "deterministic": false, "deterministicExclusionReason": "needs sessions.fork, which the runtime does not answer", "command": ["node", "--experimental-transform-types", "examples/ts/08-context.ts"], "assertionParity": "all original facts ported; LIVE execution pending" },
+    { "id": "09", "file": "09-registry-reload.ts", "original": "../09-registry-reload.cs", "live": false, "liveReason": null, "deterministic": true, "deterministicExclusionReason": null, "command": ["node", "--experimental-transform-types", "examples/ts/09-registry-reload.ts"], "assertionParity": "all original facts ported; native execution pending" },
+    { "id": "10", "file": "10-extension-state.ts", "original": "../10-extension-state.cs", "live": true, "liveReason": "asserts a tool wrote into the document; the recording has no tool call", "deterministic": false, "deterministicExclusionReason": "asserts a tool wrote into the document; the recording has no tool call", "command": ["node", "--experimental-transform-types", "examples/ts/10-extension-state.ts"], "assertionParity": "all original facts ported; LIVE execution pending" }
+  ]
+}
