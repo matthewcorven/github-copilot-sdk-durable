@@ -17,9 +17,21 @@ using Durable;
 var store = new DurableStore();
 var registry = new ExtensionRegistry();
 
-// A local bank: it answers every card at the same moment, declining an expired card and
-// confirming the others.
+// A local bank: it answers each card at the moment the checkout names for it, declining an
+// expired card and confirming the others.
 var charged = new HashSet<string>();
+
+// The cards the abort fan-out reached. The fan-out walks the siblings in whatever order
+// they finish, so the abort handler records the card instead of printing it: the example
+// prints the set once, sorted, after the fan-out settles.
+var aborted = new HashSet<string>();
+
+// The checkout names the moment the bank answers each card and spaces the moments out, so
+// the order the payments reach a terminal state is fixed by the checkout rather than by the
+// scheduler. The spacing is wide enough that a sibling is still waiting when the fail-fast
+// abort reaches it.
+const int FirstAnswerMilliseconds = 1000;
+const int AnswerSpacingMilliseconds = 1000;
 
 var Payment = DurableTask.DefinePhases<Dictionary<string, string>, Dictionary<string, string>>(
     "example.payment",
@@ -58,16 +70,16 @@ var Payment = DurableTask.DefinePhases<Dictionary<string, string>, Dictionary<st
                     : TaskCommit.Completed(
                         DurableJson.ToElement(new Dictionary<string, string> { ["card"] = input["card"] }))),
     },
-    // Each payment undoes its own effect when aborted.
+    // Each payment undoes its own effect when aborted. The card is recorded inside the
+    // commit, so a commit that arrives after the payment already finished records nothing:
+    // the set holds the payments this abort actually reached.
     (input, _, runtime) =>
-    {
-        Console.WriteLine($"  payment {input["card"]} aborted");
-        return runtime.CommitAsync(() =>
+        runtime.CommitAsync(() =>
         {
+            aborted.Add(input["card"]);
             charged.Remove(input["card"]);
             return TaskCommit.Aborted();
-        });
-    });
+        }));
 
 // The checkout creates its payments as child tasks and waits for all of them.
 // With `failFast`, the first payment that fails aborts the others; the checkout
@@ -83,12 +95,11 @@ var Checkout = DurableTask.DefinePhases<Dictionary<string, string>, Dictionary<s
             // The children are written in the same transaction as the checkpoint that
             // records them.
             //
-            // The bank answers every card at one moment, chosen here rather than by each
-            // payment, so which payment fails first does not depend on the scheduler.
-            var answerAt = runtime.Now
-                .AddMilliseconds(100)
-                .ToUnixTimeMilliseconds()
-                .ToString(CultureInfo.InvariantCulture);
+            // The checkout names the moment the bank answers each card, and spaces the
+            // moments out. The declined card answers before its siblings, while they are
+            // still waiting, so the fail-fast abort reaches them instead of racing a
+            // sibling that has already finished.
+            var answerAt = runtime.Now.AddMilliseconds(FirstAnswerMilliseconds);
 
             var payments = new List<string>();
             foreach (var card in input["cards"].Split(','))
@@ -99,9 +110,12 @@ var Checkout = DurableTask.DefinePhases<Dictionary<string, string>, Dictionary<s
                     DurableJson.ToElement(new Dictionary<string, string>
                     {
                         ["card"] = card,
-                        ["answerAt"] = answerAt,
+                        ["answerAt"] = answerAt
+                            .ToUnixTimeMilliseconds()
+                            .ToString(CultureInfo.InvariantCulture),
                     }));
                 payments.Add(child.Id);
+                answerAt = answerAt.AddMilliseconds(AnswerSpacingMilliseconds);
             }
 
             foreach (var payment in payments)
@@ -153,6 +167,12 @@ var declined = await harness.CreateTaskAsync(
 var declinedOutcome = await harness.WaitForTaskAsync(declined.Id);
 Console.WriteLine($"  checkout: {declinedOutcome.Status}");
 
+// The fail-fast abort reached the siblings of the declined card that were still waiting at
+// the bank. The set is printed once, sorted, rather than from the abort handler: the
+// handler runs in whatever order the fan-out reaches the siblings.
+var declinedAborted = aborted.Order(StringComparer.Ordinal).ToList();
+Console.WriteLine($"  aborted payments: {string.Join(", ", declinedAborted)}");
+
 // The customer cancels:
 Console.WriteLine("The customer cancels:");
 var cancelled = await harness.CreateTaskAsync(
@@ -170,6 +190,8 @@ PrintGraph(harness.TaskGraph());
 
 await harness.AbortTaskAsync(cancelled.Id);
 Console.WriteLine($"  checkout: {(await harness.WaitForTaskAsync(cancelled.Id)).Status}");
+var cancelledAborted = aborted.Order(StringComparer.Ordinal).ToList();
+Console.WriteLine($"  aborted payments: {string.Join(", ", cancelledAborted)}");
 
 // The task graph after the abort.
 Console.WriteLine("Task graph after the abort:");
@@ -193,6 +215,15 @@ Check.That(declinedOutcome.Error is not null, "the failed checkout carries an er
 Check.That(!charged.Contains("expired-2"), "the declined card was never charged");
 Check.That(charged.Contains("visa-1"), "the other cards were charged");
 
+// The declined card is the second payment, so the checkout has already waited for
+// visa-1 to complete when it observes the failure. The fail-fast abort then reaches the
+// two siblings that are still waiting at the bank. The set is asserted, not the order the
+// fan-out walked it in.
+Check.Sequence(
+    ["visa-3", "visa-4"],
+    declinedAborted,
+    "the declined card aborts the siblings still waiting at the bank");
+
 // The customer cancels: the checkout is aborted, and its children are aborted
 // with it, so their effects are undone.
 var cancelledOutcome = await harness.WaitForTaskAsync(cancelled.Id);
@@ -208,6 +239,13 @@ Check.That(
 Check.That(
     cancelledChildren.All(pair => pair.Task.Outcome?.GetProperty("status").GetString() == "aborted"),
     "every child of an aborted checkout is aborted, not completed");
+
+// The cancelled checkout's four payments were aborted too, so the set now holds every
+// payment the two fan-outs reached.
+Check.Sequence(
+    ["visa-3", "visa-4", "visa-5", "visa-6", "visa-7", "visa-8"],
+    cancelledAborted,
+    "both fan-outs aborted every payment they reached");
 
 /// <summary>
 /// Waits until the checkout is waiting on its payments and every payment has reached the
