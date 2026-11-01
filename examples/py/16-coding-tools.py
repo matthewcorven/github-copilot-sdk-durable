@@ -14,7 +14,7 @@ from durable import AgentChoices, Check, DurableHarness, DurableStore, Extension
 
 async def main():
     with TemporaryDirectory(prefix="durable-coding-") as directory:
-        workspace = Path(directory)
+        workspace = Path(directory).resolve()
         (workspace / "notes.txt").write_text("hello world\n")
         store = DurableStore.create_ephemeral()
         registry = ExtensionRegistry()
