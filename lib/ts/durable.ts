@@ -2516,6 +2516,7 @@ export class DurableHarnessOptions {
   runtimeArguments: string[] = [];
   permissionHandler?: SessionConfig["onPermissionRequest"];
   enableFileHooks?: boolean;
+  tolerateHostHookFailures = false;
   constructor(options: Partial<DurableHarnessOptions> = {}) { Object.assign(this, options); }
   /**
    * The environment variable that names the runtime the harness targets. The port
@@ -2628,6 +2629,10 @@ function wireChoices(choices: AgentChoices): JsonObject {
 }
 
 export class DurableConversation {
+  static isHostHookFailure(message: string | null | undefined): boolean {
+    return typeof message === "string" && /hook/i.test(message)
+      && /sandbox|operation not permitted|code 126/i.test(message);
+  }
   private attached: CopilotSession | null = null;
   private unsubscribe?: () => void;
   private pending = 0;
@@ -2766,7 +2771,12 @@ export class DurableConversation {
             if (event.agentId) return;
             if (event.type === "assistant.message") last = event;
             if (event.type === "session.idle") { clearTimeout(timer); stop(); resolve(last); }
-            if (event.type === "session.error") { clearTimeout(timer); stop(); reject(new Error(event.data.message)); }
+            if (event.type === "session.error") {
+              clearTimeout(timer); stop();
+              if (this.harness.options.tolerateHostHookFailures && DurableConversation.isHostHookFailure(event.data.message))
+                resolve(last);
+              else reject(new Error(event.data.message));
+            }
           });
           const timer = setTimeout(() => { stop(); reject(new Error(`Submission timed out after ${timeoutMs}ms.`)); }, timeoutMs);
           void this.session.send({ prompt }).catch(error => { clearTimeout(timer); stop(); reject(error); });

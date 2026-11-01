@@ -2968,6 +2968,11 @@ INTERNAL_DOCUMENT_KINDS: Final[frozenset[str]] = frozenset(
 
 
 class DurableConversation:
+    @staticmethod
+    def is_host_hook_failure(message: str | None) -> bool:
+        return isinstance(message, str) and "hook" in message.lower() and any(
+            marker in message.lower() for marker in ("sandbox", "operation not permitted", "code 126"))
+
     """A conversation handle: durable identity plus the live session serving it.
 
     The handle exists before the session does, so prompt sections can read the
@@ -3329,7 +3334,12 @@ class DurableConversation:
                         elif kind == "session.idle" and not completion.done():
                             completion.set_result(last)
                         elif kind == "session.error" and not completion.done():
-                            completion.set_exception(RuntimeError(_event_field(_event_data(event), "message")))
+                            message = _event_field(_event_data(event), "message")
+                            if (self._harness is not None and self._harness.options.tolerate_host_hook_failures
+                                    and self.is_host_hook_failure(message)):
+                                completion.set_result(last)
+                            else:
+                                completion.set_exception(RuntimeError(message))
                     stop = self._session.on(observe)
                     try:
                         await self._session.send(prompt)
