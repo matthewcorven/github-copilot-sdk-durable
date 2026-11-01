@@ -41,7 +41,7 @@
       "file": "examples/py/24-compaction.py",
       "status": "ported",
       "mode": "LIVE",
-      "assertions": ["five nonempty answers", "stored transcript retains entries"],
+      "assertions": ["five nonempty answers", "stored transcript retains entries", "model context is not empty"],
       "liveReason": "needs a compaction request the runtime does not answer"
     },
     {
