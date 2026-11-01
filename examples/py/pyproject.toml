@@ -1,0 +1,9 @@
+[project]
+name = "copilot-durable-examples-py"
+version = "0.0.0"
+description = "Standalone Python ports of durable examples 00-10."
+requires-python = ">=3.11"
+dependencies = ["github-copilot-sdk==1.0.28", "pydantic>=2,<3"]
+
+[tool.setuptools]
+py-modules = ["example", "check"]
