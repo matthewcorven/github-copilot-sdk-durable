@@ -5,6 +5,7 @@ import unittest
 import json
 from unittest.mock import patch, AsyncMock
 from types import SimpleNamespace
+from pathlib import Path
 
 from durable import (
     AgentChoices, DurableHarness, DurableStore, DurableStoreOptions, ExtensionRegistry,
@@ -14,6 +15,8 @@ from durable import (
     DurableClientBuilder,
 )
 from copilot.tools import Tool, ToolResult
+
+REPLAY_FIXTURES = Path(__file__).resolve().parents[2] / "tools" / "ReplayRuntime" / "fixtures"
 
 
 class SdkTests(unittest.IsolatedAsyncioTestCase):
@@ -208,7 +211,7 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
             overrides_built_in_tool=True,
         )], wraps=[ToolWrapper("read_file", wrap)]))
         options = DurableHarnessOptions(runtime_arguments=[
-            "--fixture", os.path.abspath("../../tools/ReplayRuntime/fixtures/tool-round-trip.json")])
+            "--fixture", str(REPLAY_FIXTURES / "tool-round-trip.json")])
         store = DurableStore.create_ephemeral()
         harness = await DurableHarness.open_async(store, registry, options)
         try:
@@ -229,7 +232,7 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
     async def test_facade_shares_one_harness_and_no_model_stays_unreported(self):
         store = DurableStore.create_ephemeral()
         options = DurableHarnessOptions(runtime_arguments=[
-            "--fixture", os.path.abspath("../../tools/ReplayRuntime/fixtures/no-model.json")])
+            "--fixture", str(REPLAY_FIXTURES / "no-model.json")])
         client = DurableClientBuilder().use_store(store).use_harness_options(options).build()
         try:
             chat = await client.root_async(AgentChoices(extensions=[]))
