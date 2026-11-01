@@ -2824,6 +2824,7 @@ export class DurableHarness {
   readonly agentDocument = agentDocument;
   readonly runner: DurableTaskRunner;
   private readonly handles = new Map<string, DurableConversation>();
+  private disposal: Promise<void> | undefined;
   effectiveModel = DurableModelReport.NotReported;
   constructor(readonly client: CopilotClient, readonly store: DurableStore,
     readonly registry: ExtensionRegistry, readonly options = new DurableHarnessOptions()) {
@@ -3025,11 +3026,19 @@ export class DurableHarness {
   taskGraph(): Array<{ task: DurableTaskRecord; owner: string | null }> {
     return this.store.tasks.map(task => ({ task, owner: task.ownerTaskId ?? task.ownerConversationId }));
   }
-  async disposeAsync(): Promise<void> {
-    for (const conversation of this.handles.values()) conversation.detach();
-    await Promise.all(this.conversations.map(conversation => conversation.checkpointBarrierAsync()));
-    await this.runner.disposeAsync();
-    await this.client.stop();
+  disposeAsync(): Promise<void> {
+    return this.disposal ??= (async () => {
+      for (const conversation of this.handles.values()) conversation.detach();
+      try {
+        await Promise.all(this.conversations.map(conversation => conversation.checkpointBarrierAsync()));
+      } finally {
+        try { await this.runner.disposeAsync(); }
+        finally {
+          const errors = await this.client.stop();
+          if (errors.length) throw new AggregateError(errors, "The SDK client failed to stop cleanly.");
+        }
+      }
+    })();
   }
 }
 

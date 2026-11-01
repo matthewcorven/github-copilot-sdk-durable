@@ -13,6 +13,21 @@ import {
 } from "./durable.js";
 import { CopilotClient } from "@github/copilot-sdk";
 
+test("harness disposal is idempotent and stops SDK after checkpoint failure", async () => {
+  const store = DurableStore.createEphemeral();
+  const client = new CopilotClient();
+  let stops = 0;
+  client.stop = async () => { stops++; return []; };
+  const harness = new DurableHarness(client, store, new ExtensionRegistry());
+  try {
+    const record = await store.commitAsync(tx => tx.createConversation());
+    harness.findConversation(record.id)!.checkpointBarrierAsync = async () => { throw new Error("checkpoint failed"); };
+    await assert.rejects(harness.disposeAsync(), /checkpoint failed/);
+    await assert.rejects(harness.disposeAsync(), /checkpoint failed/);
+    assert.equal(stops, 1);
+  } finally { store.dispose(); }
+});
+
 test("JSONL native lock refuses another process and releases after a crash", { timeout: 5000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "durable-ts-lock-"));
   const file = join(dir, "store.jsonl");
@@ -45,7 +60,7 @@ test("JSONL retains exact CRLF/mixed UTF8 boundaries and discards all unterminat
       const dir = mkdtempSync(join(tmpdir(), "durable-ts-boundary-"));
       const file = join(dir, "store.jsonl");
       const options = Object.assign(new DurableStoreOptions(), { path: file, format: DurableStoreFormat.Jsonl });
-      const ids = ["\u96ea\u00e9", "\u03bb"];
+      const ids = ["\u96ea\u00e9", "\ud83d\ude80"];
       const prefix = ids.map((id, i) => JSON.stringify({
         v: 1, seq: i + 1, type: "conversation", payload: { id, createdAt: "2026-11-01T00:00:00Z" },
       }) + endings[i]).join("");
@@ -64,6 +79,21 @@ test("JSONL retains exact CRLF/mixed UTF8 boundaries and discards all unterminat
       } finally { store.dispose(); rmSync(dir, { recursive: true }); }
     }
   }
+});
+
+test("JSONL truncates a file containing only an unterminated record to zero", () => {
+  const dir = mkdtempSync(join(tmpdir(), "durable-ts-empty-tail-"));
+  const file = join(dir, "store.jsonl");
+  try {
+    for (const tail of ['{"v":1', '{"v":1,"seq":1,"type":"conversation","payload":{"id":"tail"}}']) {
+      writeFileSync(file, tail);
+      const store = DurableStore.create(Object.assign(new DurableStoreOptions(), { path: file, format: DurableStoreFormat.Jsonl }));
+      try {
+        assert.equal(store.conversations.length, 0);
+        assert.equal(readFileSync(file).byteLength, 0);
+      } finally { store.dispose(); }
+    }
+  } finally { rmSync(dir, { recursive: true }); }
 });
 
 test("JSONL commits, rollback, task memos and torn-tail reopen", async () => {
