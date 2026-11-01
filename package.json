@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "scripts": {
+    "examples:ts": "node examples/run_all.mjs",
+    "test:parity:ts": "node --import ./lib/ts/node_modules/tsx/dist/loader.mjs --test lib/ts/parity.test.ts tests/parity/runner.test.mjs"
+  }
+}

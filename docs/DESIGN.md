@@ -833,6 +833,100 @@ channel the parent already has.
   parent process is a trusted caller, which is what owning the pipes means. The HTTP transport
   (§3.12) and the scheduler (§3.13) are separate work.
 
+### 3.15.1 Language ports and the parity contract
+
+The TypeScript and Python adapters bind to the official `@github/copilot-sdk` and
+`github-copilot-sdk` packages (declared version `1.0.28`). The numbered parity scope is
+exactly C# `00`–`35`, including the five additions after the original `00`–`30` suite;
+newer C# `36` and `37` are not silently counted as ports. The language-neutral invariants
+in §3.1–§3.8 still govern both adapters; the JSON-lines transport above is separate from
+their in-process store and task APIs.
+
+| Concept | C# | TypeScript | Python |
+|---|---|---|---|
+| Store and atomic transaction | `DurableStore.CommitAsync`, `Transaction` | `DurableStore.commitAsync`, `Transaction` | `DurableStore.commit_async`, `Transaction` |
+| Explicit ephemeral / persistent tier | `CreateEphemeral` / `Create(DurableStoreOptions)` | `createEphemeral` / `create(DurableStoreOptions)` | `create_ephemeral` / `create(DurableStoreOptions)` |
+| Versioned document / fork policy | `DocumentDefinition<T>`, `DocumentHistory`, `ForkPolicy` | `DocumentDefinition<T>`, `DocumentHistory`, `ForkPolicy` | `DocumentDefinition[T]`, `DocumentHistory`, `ForkPolicy` |
+| Draft and immutable snapshot | `tx.Doc`, `draft.Save`, `conversation.Snapshot` | `tx.doc`, `draft.save`, `conversation.snapshot` | `tx.doc`, `draft.save`, `conversation.snapshot` |
+| Conversation / SDK transcript | `DurableConversation`, `ContextAsync`, `Entries` | `DurableConversation`, `contextAsync`, `entries` | `DurableConversation`, `context_async`, `entries` |
+| Checkpointed task and memo | `DurableTask`, `TaskRuntime.MemoAsync`, `TaskCommit` | `DurableTask`, `TaskRuntime.memoAsync`, `TaskCommit` | `DurableTask`, `TaskRuntime.memo_async`, `TaskCommit` |
+| Scheduler / recover / abort tree | `DurableHarness.ResumeAsync`, `AbortTaskAsync` | `DurableTaskRunner.resumeAsync`, `abortTaskAsync` (also harness delegates) | `DurableHarness.resume_async`, `abort_task_async` |
+| Named extension registry / tools | `ExtensionRegistry`, `Extension`, `ToolWrapper` | `ExtensionRegistry`, `Extension`, `ToolWrapper` | `ExtensionRegistry`, `Extension`, `ToolWrapper` |
+| Watch stream | `conversation.Watch` | `watchDocument`, `WatchHandle` | `DurableWatch.frames` |
+| Native sandbox wire policy | `DurableSandboxPolicy`, SDK `SandboxConfig` | `DurableSandboxPolicy`, `buildSandboxConfig` | `DurableSandboxPolicy`, `build_sandbox_config` |
+
+`entries` is the app-written transcript, not native SDK history. In particular, corrected
+example `13` has **exactly zero** durable plain entries after an SDK-only chat turn; its
+user/assistant/system transcript assertions remain LIVE. Fork parity checks inherited
+state at the boundary, an independent fork edit, and **exactly two** filtered entries
+(inherited + own), excluding inherited and own durable bookkeeping. The unit fact uses
+the real store fork primitives without claiming native `sessions.fork` execution.
+
+The recovery fact starts separate processes against an actual JSONL file: the initial
+run records a memo and exits abruptly, the first recovery exits again, and the second
+recovery completes. A physical side-effect file must contain exactly one line, the memo
+must survive reopening, and the terminal record must report two restarts. This proves
+the memo guard for this checkpoint scenario, not general exactly-once delivery of an
+arbitrary external service. Rollback must restore entries, documents, and conversation
+inventory; abort must visit the parent and two owned children once and persist all
+three exact terminal/aborted outcomes. Mutations change those **real library sources in
+isolated copies**, not an alternate implementation or another agent's worktree.
+
+**Manifest schema.** `examples/parity.json` is the checked-in, generated version-1
+contract. `python examples/parity_manifest.py` validates it; `--write` regenerates it
+only after a range owner's explicit handoff. It combines all three range declarations
+in each language (`parity-00-10.json`, `parity-11-21.json`, `parity-22-35.json`). A change
+to source inventory, range evidence, status, or expected output makes the runners fail
+until the contract is deliberately updated.
+
+| Field | Meaning / required invariant |
+|---|---|
+| `schemaVersion`, `scope`, `reference` | `1`, `[0,35]`, `scripts/validate.sh`; 36 unique entries in numeric order. |
+| `examples[].id`, `source` | Two-digit ID and exact C# basename, each present once. |
+| `live` | Exact membership in C# `LIVE_EXAMPLES`; not an implementation status. |
+| `deterministic`, `liveReason` | Exact C# deterministic selection and verbatim exclusion reason, or `null` for an included scenario. These are independent of `live` (`17`, `18`, `35` have both flags). |
+| `expectedOutput` | Checked-in actual C# stdout path for `00`, `01`, `03`, `04`; `null` elsewhere. |
+| `languages.ts` / `languages.py` | Exact source `path`, `status`, `sandboxMode`, `rangeManifest`, and the unchanged range row as `evidence`. |
+| `status` | `ported` means implemented; **does not mean LIVE-validated**. `pending-native-api` requires an actionable `evidence.pendingReason` and fails when selected, rather than becoming an exclusion or a pass. |
+| `sandboxMode` | `supported`, `unsupported`, or `not-applicable`; unsupported requires specific proven `evidence.sandboxReason`, never a blanket claim that the SDK lacks sandbox configuration. |
+| `evidence` | Preserves validation status, original assertions, conditional `liveAssertions`, known limits, fixture configuration, and optional `timeoutSeconds`. |
+
+**Runner modes and evidence.** `npm run examples:ts` and `python examples/run_all.py`
+default to `--all-available`: run the full inventory with the signed-in native CLI,
+request `--live` for supported sandbox examples, and fail on every assertion, pending
+API, missing file, or subprocess failure. Replay overrides are refused in this mode.
+`--deterministic` runs exactly
+`00,01,03,04,05,06,09,11,12,14,17,18,23,32,35` with the built ReplayRuntime, printing
+each other ID and its exact C# exclusion reason. `--list` validates and prints selection
+only; it is not execution evidence. Optional IDs narrow, never widen, the selected mode.
+Example `30` retains its real startup delay and a 300-second runner limit.
+
+Sandbox `28`, `33`, and `34` have default policy-only checks and separate required LIVE
+effects; passing the former does not prove the latter. `35` has a deterministic SDK
+observation path and conditional backend/enforcement/bypass assertions. The SDK exposes
+native sandbox configuration in both languages: availability of that wire API is not
+proof of native enforcement, credential injection, or a granted bypass on a given host.
+Likewise, replay-generated session IDs carry explicit **synthesised, NOT recorded
+transcript** markers. Fixture interoperability proves the tested durable/SDK protocol
+scenario, not a LIVE model/tool selection.
+
+**Output comparison.** Deterministic runs compare the entire normalized stdout of four
+actual ported examples per language against `examples/expected/*.txt`. The files were
+captured by executing the same C# sources with ReplayRuntime `basic.json`, not invented
+from the port. `tests/parity/capture_reference.py` repeats the C# capture and compares it
+without rewriting; `--write` is the explicit recapture operation. Provenance includes
+exact commands and SHA-256 hashes of the C# source, fixture, and expected stdout.
+
+Both normalizers mirror `scripts/validate.sh`: volatile temporary paths, session IDs,
+GUIDs and timestamps become placeholders; they additionally handle Windows temporary
+paths, hyphenated SDK session IDs, CRLF, and generated `c`/`e`/`t` numeric identities
+whose allocation differs between languages. Numeric counts, enum/boolean casing,
+labels, ordering, model reports and all other text remain unchanged. Diagnostics on
+stderr remain visible. Incorrect actual stdout, a wrong expected file (even with a
+refreshed hash), a removed inventory entry, and a failing original assertion are each
+covered by real-runner mutation gates. Source-only/typecheck/LIVE-exclusion success is
+not a substitute for these comparisons.
+
 ## 4. Example suite (38 examples: Pi `00`–`30` mirrored one-to-one, plus seven C#-only additions)
 
 | # | Pi example | C# example | Demonstrates |
@@ -1068,4 +1162,3 @@ These cost the most time to discover and are all exercised by the examples:
   `AssistantMessageDeltaEvent.Data.DeltaContent`.
 - **`ToolExecutionCompleteData`** has no `ToolName`; match on `ToolCallId`.
 - **`Console.WriteLine("a:", x)`** drops `x` — that is the format-string overload.
-
