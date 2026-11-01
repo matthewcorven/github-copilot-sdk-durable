@@ -1,0 +1,139 @@
+{
+  "schemaVersion": 1,
+  "language": "typescript",
+  "range": [22, 35],
+  "status": "ported-with-live-acceptance-gaps",
+  "notes": [
+    "All fourteen files are runnable ports. Ported does not mean LIVE tool-effect assertions were validated.",
+    "LIVE denotes a reference assertion the recording cannot satisfy, not permission to skip a missing native SDK API.",
+    "Uses the official SDK through the frozen shared native library, not a shadow implementation.",
+    "Replay validated 23, 32, 35 and policy-mode 28, 33, 34. Other LIVE assertions remain unproven.",
+    "JSONL requires the optional fs-ext native advisory-lock addon. macOS install/run and crash release were verified; Linux/Windows install/run remains unverified, not blanket unsupported. Missing addon raises an explicit unsupported-platform error."
+  ],
+  "examples": [
+    {
+      "number": 22, "name": "subagent-background",
+      "source": "examples/22-subagent-background.cs", "file": "examples/ts/22-subagent-background.ts",
+      "status": "ported", "mode": "LIVE",
+      "assertions": ["reader survives reopen", "the subagent conversation ID is unchanged", "reopened runtime status names reader"],
+      "liveReason": "needs a subagent request the runtime does not answer"
+    },
+    {
+      "number": 23, "name": "child-tasks",
+      "source": "examples/23-child-tasks.cs", "file": "examples/ts/23-child-tasks.ts",
+      "status": "ported", "mode": "deterministic",
+      "verification": "Actual SDK ReplayRuntime passed every child/ownership/fail-fast/abort assertion. C# stdout labels and enum casing match; task IDs differ.",
+      "assertions": ["four payment children and conversation ownership", "declined checkout fails with an error", "expired card is never charged", "visa-1 remains charged", "fail-fast aborts exactly visa-3 and visa-4", "cancelled checkout and all four children are aborted and terminal", "aborted charges are undone", "both abort fan-outs reach the exact expected card set"]
+    },
+    {
+      "number": 24, "name": "compaction",
+      "source": "examples/24-compaction.cs", "file": "examples/ts/24-compaction.ts",
+      "status": "ported", "mode": "LIVE",
+      "assertions": ["five nonempty answers", "stored transcript retains entries"],
+      "liveReason": "needs a compaction request the runtime does not answer"
+    },
+    {
+      "number": 25, "name": "coding-agent",
+      "source": "examples/25-coding-agent.cs", "file": "examples/ts/25-coding-agent.ts",
+      "status": "ported", "mode": "LIVE",
+      "assertions": ["initial working directory equals workspace", "actual tool answer names workspace", "configured directory changes to app", "actual second tool answer names app"],
+      "liveReason": "asserts the tool ran in the conversation's directory; the recording has no tool call"
+    },
+    {
+      "number": 26, "name": "plan-mode",
+      "source": "examples/26-plan-mode.cs", "file": "examples/ts/26-plan-mode.ts",
+      "status": "ported", "mode": "LIVE",
+      "assertions": ["coding tools are read_file", "plan tools are submit_plan", "leaving plan mode restores read_file", "tool writes a nonempty plan document", "every plan step has content"],
+      "liveReason": "asserts the plan was written to the document; the recording has no tool call"
+    },
+    {
+      "number": 27, "name": "reviewer",
+      "source": "examples/27-reviewer.cs", "file": "examples/ts/27-reviewer.ts",
+      "status": "ported", "mode": "LIVE",
+      "assertions": ["reviewer choices retain requested model, extension, read-only tool, and directory", "at least two review passes and answers", "last answer contains No further findings."],
+      "liveReason": "asserts the review loop ran more than one pass; the recording has no tool call"
+    },
+    {
+      "number": 28, "name": "sandbox-per-conversation",
+      "source": "examples/28-sandbox-per-conversation.cs", "file": "examples/ts/28-sandbox-per-conversation.ts",
+      "status": "ported", "mode": "policy", "sandboxMode": "supported",
+      "liveReason": "asserts a file the sandboxed tool wrote; the recording has no tool call",
+      "verification": "Actual SDK session creation, policy wire and distinct document directories passed in policy mode; --live enables original file-content assertions.",
+      "notes": ["The C# reference confines a custom tool using a sandbox document. This port preserves that document and also verifies the required native SDK filesystem policy."],
+      "assertions": ["distinct per-conversation directories", "each document points at its own directory", "requested policy survives the SDK wire"],
+      "liveAssertions": [
+        {"assertion": "alice's note contains from alice in alice's sandbox", "status": "LIVE", "reason": "Asserts a file the sandboxed tool wrote; the recording has no tool call."},
+        {"assertion": "bob's note contains from bob in bob's sandbox", "status": "LIVE", "reason": "Asserts a file the sandboxed tool wrote; the recording has no tool call."}
+      ]
+    },
+    {
+      "number": 29, "name": "tool-override",
+      "source": "examples/29-tool-override.cs", "file": "examples/ts/29-tool-override.ts",
+      "status": "ported", "mode": "LIVE",
+      "assertions": ["venv answer contains .venv", "plain answer does not contain .venv", "wrapper times exactly two shell calls"],
+      "liveReason": "asserts the venv shell replaced the plain one; the recording has no tool call"
+    },
+    {
+      "number": 30, "name": "reload-and-restart",
+      "source": "examples/30-reload-and-restart.cs", "file": "examples/ts/30-reload-and-restart.ts",
+      "status": "ported", "mode": "LIVE", "timeoutSeconds": 300,
+      "notes": ["The C# original takes approximately 124 seconds in this environment. Allow 300 seconds outside the standalone invocation; the deliberate 120-second tool-start gate is not a default-runner false failure."],
+      "assertions": ["in-flight call finishes on v1", "next call uses v2", "restarted process initially has no installed tool", "installing code binds stored extension name to version"],
+      "liveReason": "waits for a runtime restart the recording does not perform"
+    },
+    {
+      "number": 31, "name": "permissions",
+      "source": "examples/31-permissions.cs", "file": "examples/ts/31-permissions.ts",
+      "status": "ported", "mode": "LIVE",
+      "assertions": ["denied and reopened tool effects remain zero with runtime answers", "reopened choices have no grants", "granted tool runs exactly once with an answer", "fork inherits exact grant snapshot", "path scope matches at a boundary, not a sibling prefix", "absent grants confer no capability"],
+      "liveReason": "asserts a permission request the recording does not contain"
+    },
+    {
+      "number": 32, "name": "jsonl-store",
+      "source": "examples/32-jsonl-store.cs", "file": "examples/ts/32-jsonl-store.ts",
+      "status": "ported", "mode": "store-only", "timeoutSeconds": 30,
+      "invocation": ["lib/ts/node_modules/.bin/tsx", "examples/ts/32-jsonl-store.ts"],
+      "verification": "Actual store-only standalone passed JSONL persistence/reopen/physical torn-tail truncation; exact C# labels and five-record count retained.",
+      "assertions": ["explicit path selects persistent tier", "commit creates the store file", "multiple JSONL record envelopes", "reopen restores the committed document", "committed version survives torn tail", "torn tail is physically truncated at open", "default path is absolute under durable/durable-store.jsonl", "ephemeral tier persists nothing"],
+      "liveAssertions": []
+    },
+    {
+      "number": 33, "name": "sandbox-sdk-filesystem",
+      "source": "examples/33-sandbox-sdk-filesystem.cs", "file": "examples/ts/33-sandbox-sdk-filesystem.ts",
+      "status": "ported", "mode": "policy", "sandboxMode": "supported",
+      "liveReason": "asserts a write landed on disk; the recording has no tool call",
+      "verification": "Actual SDK session and exact filesystem wire passed in policy mode; --live enables original tool-effect assertions.",
+      "assertions": ["filesystem fields survive the SDK wire", "workspace token expands against the conversation directory", "no unexpanded policy paths remain"],
+      "liveAssertions": [
+        {"assertion": "permitted write lands on disk with content permitted", "status": "LIVE", "reason": "The recording has no tool call, so no sandboxed write lands on disk."},
+        {"assertion": "engaged backend reports a filesystem denial and the denied file retains its original content", "status": "LIVE", "reason": "Requires an engaged sandbox backend and a real denied tool call; preserve the C# backend-engaged guard."}
+      ]
+    },
+    {
+      "number": 34, "name": "sandbox-sdk-network-credentials",
+      "source": "examples/34-sandbox-sdk-network-credentials.cs", "file": "examples/ts/34-sandbox-sdk-network-credentials.ts",
+      "status": "ported", "mode": "policy", "sandboxMode": "supported",
+      "liveReason": "asserts the sandboxed shell sees a masked credential; the recording has no tool call",
+      "verification": "Both native SDK session policies passed exact wire assertions. --live requires actual nonempty credential reports and backend-gated network observations.",
+      "assertions": ["locked and permissive network flags and host lists survive the wire", "auth, dev-tool, MCP, and LSP fields survive the wire", "credential policy carries only variable names and inject hosts", "proxy fields map only when configured", "resolved-policy fields agree when reported"],
+      "liveAssertions": [
+        {"assertion": "both sandboxed shells see a nonempty masked credential whose digest differs from the generated value", "status": "LIVE", "reason": "The recording has no tool call to produce the digest/length report; missing or empty output is not evidence of masking."},
+        {"assertion": "allowed-host and blocked-host observations reflect the sandbox's network policy", "status": "LIVE", "reason": "Requires real network tool calls and backend observations; retain the C# engaged/report guards and do not invent HTTP success."}
+      ]
+    },
+    {
+      "number": 35, "name": "sandbox-sdk-observability-bypass",
+      "source": "examples/35-sandbox-sdk-observability-bypass.cs", "file": "examples/ts/35-sandbox-sdk-observability-bypass.ts",
+      "status": "ported", "mode": "policy", "deterministic": true, "sandboxMode": "supported",
+      "liveReason": null,
+      "verification": "Deterministic actual SDK ReplayRuntime run passed policy/trust/legacy precedence and zero-escalation assertions; stdout matches C# apart from temporary paths.",
+      "notes": ["The C# original runs deterministically without a successful tool call. Do not classify this entire example as LIVE.", "No backend engagement skips the three-part enforcement proof; no offered escalation asserts zero declines and zero bypass_decided events, explicitly leaving the host decline branch unproven."],
+      "assertions": ["policy survives the SDK wire", "top-level seatbelt keychain field takes precedence over deprecated experimental.seatbelt", "durable mapping never emits deprecated seatbelt fields", "trust true maps to User and false maps to Session", "AllowBypass false records no bypass decision", "no offered escalation means zero declines and zero bypass decisions"],
+      "liveAssertions": [
+        {"assertion": "engaged backend provides permission approval, sandbox denial, tool refusal, unchanged denied file, and successful control write", "status": "LIVE", "reason": "Conditional enforcement proof requires a real engaged backend and tool effects absent from the recording."},
+        {"assertion": "macOS reports the requested keychain capability when the backend engages", "status": "LIVE", "reason": "Conditional platform/backend observation cannot be invented from a configured policy."},
+        {"assertion": "offered escalation produces exactly one inspected host decline and one declined model-requested bypass decision", "status": "LIVE", "reason": "Conditional on an actual offered escalation; the SDK cannot force the prompt and the recording does not exercise the host decline branch."}
+      ]
+    }
+  ]
+}
