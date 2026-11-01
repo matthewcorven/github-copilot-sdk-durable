@@ -2991,6 +2991,9 @@ class DurableConversation:
         self._hooks: Any = None
         self._effective_model = NOT_REPORTED
         self._pass_open = False
+        self._checkpoint_chain: asyncio.Task[None] | None = None
+        self._checkpoint_failure: BaseException | None = None
+        self._tool_calls: dict[str, Any] = {}
         self.record = record
 
     # -- identity ------------------------------------------------------------
@@ -3068,6 +3071,35 @@ class DurableConversation:
         """
         kind = _event_kind(event)
         data = _event_data(event)
+        if kind == "tool.execution_start":
+            self._tool_calls[_event_field(data, "tool_call_id")] = data
+        elif kind == "tool.execution_complete":
+            tool_call_id = _event_field(data, "tool_call_id")
+            started = self._tool_calls.pop(tool_call_id, None)
+            result = _event_field(data, "result")
+            error = _event_field(data, "error")
+            checkpoint = ConversationCheckpoint(
+                checkpoint_id=f"c{uuid4().hex}", kind="tool", event_id=f"tool:{tool_call_id}",
+                tool_name=_event_field(started, "tool_name"),
+                tool_args=json.dumps(_event_field(started, "arguments")),
+                success=_event_field(data, "success"), content=_event_field(result, "content"),
+                error=_event_field(error, "message"), recorded_at=datetime.now(timezone.utc).isoformat(),
+            )
+            previous = self._checkpoint_chain
+            async def write() -> None:
+                if previous is not None:
+                    await previous
+                try:
+                    async def body(tx: Transaction) -> None:
+                        draft = tx.doc(CHECKPOINT_DOCUMENT, self.id)
+                        if draft.value is not None and draft.value.event_id == checkpoint.event_id:
+                            return
+                        draft.value = checkpoint
+                        draft.save(tx.append_entry(self.id, "checkpoint"))
+                    await self.commit_async(body)
+                except BaseException as error:
+                    self._checkpoint_failure = self._checkpoint_failure or error
+            self._checkpoint_chain = asyncio.create_task(write())
 
         if kind == "assistant.message":
             content = _event_field(data, "content")
@@ -3249,6 +3281,12 @@ class DurableConversation:
             raise RuntimeError(f"Conversation '{self.id}' has no attached SDK session.")
         return await self._session.get_events()
 
+    async def checkpoint_barrier_async(self) -> None:
+        if self._checkpoint_chain is not None:
+            await self._checkpoint_chain
+        if self._checkpoint_failure is not None:
+            raise RuntimeError(f"Conversation '{self.id}' failed to persist a tool checkpoint.") from self._checkpoint_failure
+
     async def abort_async(self) -> None:
         if self._session is None:
             raise RuntimeError(f"Conversation '{self.id}' has no attached SDK session.")
@@ -3292,6 +3330,7 @@ class DurableConversation:
                         answer = await asyncio.wait_for(completion, timeout)
                     finally:
                         stop()
+                    await self.checkpoint_barrier_async()
                     async def complete(tx: Transaction) -> None:
                         if answer is not None:
                             data = _event_data(answer)
@@ -3686,10 +3725,12 @@ class DurableHarness:
                 config[name] = value
         if self._options.enable_file_hooks is not None:
             config["enable_file_hooks"] = self._options.enable_file_hooks
-        if choices.reasoning_effort is not None:
+        if choices.reasoning_effort is not None and choices.model not in (None, "auto"):
             models = await self._client.list_models()
             model = next((m for m in models if m.id == config["model"]), None)
-            if model is not None and model.capabilities.supports.reasoning_effort:
+            if model is not None and model.supported_reasoning_efforts:
+                if choices.reasoning_effort not in ("low", "medium", "high", "xhigh", "max"):
+                    raise ValueError(f"SDK 1.0.28 cannot configure reasoning effort '{choices.reasoning_effort}'.")
                 config["reasoning_effort"] = choices.reasoning_effort
         sections = [section for extension in extensions for section in extension.sections]
         system_message = await self.build_system_message(agent, sections, conversation)
@@ -4078,7 +4119,9 @@ class DurableHarness:
             await self.abort_task_async(child.id, cancellation)
 
         runtime = TaskRuntime(self._store, record, definition, cancellation)
-        await definition.run_abort(runtime)
+        commit = await definition.run_abort(runtime)
+        if record.status is not TaskStatus.TERMINAL:
+            await self._store.commit_task_async(task_id, lambda: commit)
 
     def close(self) -> None:
         """Detaches every conversation handle. The store stays the caller's."""
@@ -4091,7 +4134,9 @@ class DurableHarness:
         if self._closed:
             return
         self._closed = True
+        conversations = list(self._conversations.values())
         self.close()
+        await asyncio.gather(*(conversation.checkpoint_barrier_async() for conversation in conversations))
         if self._in_flight:
             await asyncio.gather(*self._in_flight.values())
         await self._client.stop()
@@ -4279,6 +4324,7 @@ class DurableCopilotClient:
         self._owns_store = False
         self._owns_client = False
         self._initialization: asyncio.Task[None] | None = None
+        self._harness: DurableHarness | None = None
         self._closed = False
 
     @property
@@ -4335,6 +4381,7 @@ class DurableCopilotClient:
                 self._owns_client = True
             else:
                 self._owns_client = bool(self._options.owns_client)
+            self._harness = DurableHarness(self._client, self._store, self.registry, self._options.harness)
         except BaseException:
             # A half-initialized client would hold a store lock with nothing driving it, so
             # whatever was created is released before the failure propagates.
@@ -4349,21 +4396,26 @@ class DurableCopilotClient:
     async def _create_client_async(self) -> Any:
         factory = getattr(self._options.client_options, "factory", None)
         if factory is None:
-            raise RuntimeError(
-                "No client was supplied and no client factory was configured. The Python "
-                "SDK binding is not part of the durable core port, so the host supplies "
-                "the client through use_client or a client_options factory."
-            )
-        client = factory()
-        if inspect.isawaitable(client):
-            client = await client
+            options = self._options.harness
+            kwargs = self._options.client_options or {}
+            if not isinstance(kwargs, Mapping):
+                raise TypeError("SDK client_options must be keyword options or expose a factory.")
+            kwargs = dict(kwargs)
+            kwargs.setdefault("connection", RuntimeConnection.for_stdio(
+                path=resolve_runtime_path(options), args=options.runtime_arguments))
+            client = CopilotClient(**kwargs)
+            await client.start()
+        else:
+            client = factory()
+            if inspect.isawaitable(client):
+                client = await client
         return client
 
     @staticmethod
     async def _close_client_async(client: Any) -> None:
-        close = getattr(client, "close", None) or getattr(client, "stop_async", None)
+        close = getattr(client, "stop", None) or getattr(client, "close", None) or getattr(client, "stop_async", None)
         if close is None:
-            return
+            raise TypeError("The owned SDK client has no stop method.")
         result = close()
         if inspect.isawaitable(result):
             await result
@@ -4376,22 +4428,48 @@ class DurableCopilotClient:
     ) -> DurableConversation:
         """Creates a conversation and its session."""
         await self.initialize_async()
-        assert self._store is not None
-        harness = DurableHarness(
-            self._client, self._store, self.registry, self._options.harness
-        )
-        return await harness.create_conversation_async(
+        assert self._harness is not None
+        return await self._harness.create_conversation_async(
             choices, owner_task_id, owner_conversation_id
         )
 
     def find_conversation(self, conversation_id: str) -> DurableConversation | None:
         """Finds a conversation by id, restoring it from the store if not yet opened."""
-        if self._store is None:
+        if self._harness is None:
             return None
-        record = self._store.conversation(conversation_id)
-        if record is None:
-            return None
-        return DurableConversation(self._store, record, self.registry)
+        return self._harness.find_conversation(conversation_id)
+
+    async def root_async(self, choices: AgentChoices | None = None) -> DurableConversation:
+        await self.initialize_async()
+        assert self._harness is not None
+        return await self._harness.root_async(choices)
+
+    async def resume_conversation_async(self, conversation_id: str) -> DurableConversation:
+        await self.initialize_async()
+        assert self._harness is not None
+        return await self._harness.resume_conversation_async(conversation_id)
+
+    async def fork_async(self, parent: DurableConversation, entry_id: str) -> DurableConversation:
+        await self.initialize_async()
+        assert self._harness is not None
+        return await self._harness.fork_async(parent, entry_id)
+
+    async def resume_tasks_async(self, cancellation: asyncio.Event | None = None) -> list[TaskOutcome]:
+        await self.initialize_async()
+        assert self._harness is not None
+        return await self._harness.resume_async(cancellation)
+
+    async def wait_for_task_async(self, task_id: str, cancellation: asyncio.Event | None = None) -> TaskOutcome:
+        await self.initialize_async()
+        assert self._harness is not None
+        return await self._harness.wait_for_task_async(task_id, cancellation)
+
+    async def get_session_config_async(
+        self, choices: AgentChoices | None = None, conversation: DurableConversation | None = None,
+    ) -> dict[str, Any]:
+        await self.initialize_async()
+        assert self._harness is not None
+        return await self._harness.build_session_config(choices, conversation)
 
     async def close_async(self) -> None:
         """Releases whatever the durable layer owns. Idempotent."""
@@ -4399,6 +4477,10 @@ class DurableCopilotClient:
             return
         self._closed = True
 
+        if self._harness is not None:
+            self._harness.close()
+            if self._harness._in_flight:
+                await asyncio.gather(*self._harness._in_flight.values())
         if self._owns_client and self._client is not None:
             await self._close_client_async(self._client)
         if self._owns_store and self._store is not None:
