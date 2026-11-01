@@ -1,7 +1,6 @@
 // 24 — Compaction.
 //
-// A long trip-planning chat whose older messages are summarized so the model context
-// stays small.
+// A trip-planning chat with native context compaction enabled.
 //
 // The Copilot SDK compacts natively: a session with infinite sessions enabled manages the
 // context window in the background and emits compaction events.
@@ -53,7 +52,7 @@ using var subscription = root.Session.On<SessionEvent>(evt =>
     }
 });
 
-// A long chat: the context grows, and the runtime compacts it in the background.
+// The context grows as we chat. Five questions may not reach the compaction thresholds.
 var answers = new List<AssistantMessageEvent?>();
 foreach (var question in new[]
 {
@@ -70,7 +69,9 @@ foreach (var question in new[]
     Console.WriteLine($"  answered: {(answer?.Data.Content.Length ?? 0)} chars");
 }
 
-// The stored transcript keeps every entry; the model context is what the model sees.
+// Entries exposes app-written durable entries, not the SDK chat transcript or internal
+// admission/turn checkpoints. This example writes no app documents or tasks.
+// ContextAsync reads the SDK context, which can contain the real chat events.
 var stored = root.Entries(100);
 var context = await root.ContextAsync();
 Console.WriteLine($"stored entries: {stored.Count}");
@@ -85,9 +86,9 @@ foreach (var evt in context.OfType<SessionUsageCheckpointEvent>())
 
 // ─── Assertions ─────────────────────────────────────────────────────────────
 //
-// Every question was answered, and the stored transcript kept every entry
-// even though the model context was compacted.
+// Every question was answered and the SDK context is nonempty. No app entries were written.
+// Compaction events are observations, not a guarantee that this short chat was compacted.
 Check.Equal(5, answers.Count, "every question was answered");
 Check.That(answers.All(answer => answer is not null && answer.Data.Content.Trim().Length > 0), "no answer was empty");
-Check.That(stored.Count >= 1, "the stored transcript kept its entries");
+Check.Equal(0, stored.Count, "SDK chat alone writes no public app entries");
 Check.That(context.Count > 0, "the model context is not empty");
