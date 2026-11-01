@@ -33,7 +33,10 @@ async def main():
     registry.install(Extension("payments", tasks=[payment]))
     harness = DurableHarness(None, store, registry)
     try:
-        root = await harness.root_async()
+        async def create_root(tx):
+            return tx.create_conversation()
+
+        root = await store.commit_async(create_root)
         task = await harness.create_task_async(payment, {"amount": 5}, owner_conversation_id=root.id)
         paid = await harness.wait_for_task_async(task.id)
         Check.equal("completed", paid.status, "the task completed")
