@@ -11,6 +11,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\lib\Copilot.Durable.csproj" />
     <ProjectReference Include="..\..\tools\ReplayRuntime\ReplayRuntime.csproj" />
+    <ProjectReference Include="..\..\src\Durable.Runtime\Durable.Runtime.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -25,6 +26,8 @@
   <ItemGroup>
     <None Include="..\..\tools\ReplayRuntime\fixtures\tool-round-trip.json" Link="fixtures\tool-round-trip.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\tools\ReplayRuntime\fixtures\missing-tool-call.json" Link="fixtures\missing-tool-call.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\tools\ReplayRuntime\fixtures\basic.json" Link="fixtures\basic.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\tools\ReplayRuntime\fixtures\no-model.json" Link="fixtures\no-model.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

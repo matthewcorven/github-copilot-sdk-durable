@@ -36,6 +36,10 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Durable.Tests" />
+    <!-- The host reads agent definitions and checkpoint documents directly, and
+         validates a stored sandbox policy with the runtime's own validator so the
+         definition path refuses exactly what a session would refuse. -->
+    <InternalsVisibleTo Include="Durable.Runtime" />
     <!-- A provider shares the store's exclusive file lock so two writers on one path
          are refused the same way whatever the provider. -->
     <InternalsVisibleTo Include="Durable.EfCore" />

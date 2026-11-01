@@ -1,0 +1,27 @@
+{
+  "protocolVersion": 3,
+  "runtimeVersion": "0.0.0-replay",
+  "models": [
+    {
+      "id": "replay-model",
+      "name": "Replay Model",
+      "vendor": "replay",
+      "capabilities": {
+        "supports": {
+          "toolCalls": true
+        }
+      }
+    }
+  ],
+  "sessions": [
+    {
+      "id": "session-no-model",
+      "turns": [
+        {
+          "messageId": "msg-0001",
+          "content": "A turn from a recording that names no model."
+        }
+      ]
+    }
+  ]
+}

@@ -3143,6 +3143,97 @@ public sealed record ResolvedAgent(
     DurableSandboxPolicy? Sandbox);
 
 /// <summary>
+/// A named agent the runtime host can run: the durable, persisted form of
+/// <see cref="AgentChoices"/>.
+/// </summary>
+/// <remarks>
+/// An agent definition is a document, not a configuration file. A file is an import surface
+/// only; once imported, the store is the single source of truth, so a definition that was
+/// valid when the host started is still the definition the host runs, and a definition that
+/// changed on disk cannot silently change what a scheduled run does.
+/// <para>
+/// The definition is owned by <c>agent:{name}</c> rather than by a conversation, because it
+/// outlives every conversation it is used to create. The <c>agent:</c> prefix keeps that owner
+/// id namespace disjoint from conversation ids (<c>c{n}</c>), task ids (<c>t{n}</c>), entry ids
+/// (<c>e{n}</c>), and admission ids (<c>a{Guid}</c>).
+/// </para>
+/// <para>
+/// There is deliberately no permission handler field. A handler is a delegate, so it cannot be
+/// persisted, and a definition that named one would be a definition whose authority lived
+/// outside the store. The definition carries <see cref="Permissions"/> — grants, which are
+/// data — and the host supplies the handler.
+/// </para>
+/// </remarks>
+public sealed class AgentDefinition
+{
+    /// <summary>The document kind an agent definition is stored under.</summary>
+    public const string DocumentKind = "durable.agent-definition";
+
+    /// <summary>The prefix of the owner id an agent definition is stored under.</summary>
+    public const string OwnerPrefix = "agent:";
+
+    /// <summary>The owner id a definition with this name is stored under.</summary>
+    public static string OwnerId(string name) => $"{OwnerPrefix}{name}";
+
+    /// <summary>The stable identifier, and the document owner id suffix.</summary>
+    public required string Name { get; init; }
+
+    /// <summary>A human-readable description, for listings.</summary>
+    public string? Description { get; init; }
+
+    /// <summary>Extra instructions appended to the system prompt.</summary>
+    public string? Instructions { get; init; }
+
+    /// <summary>
+    /// The model to <i>request</i>. This is never the effective model: only the runtime's own
+    /// report says which model actually ran.
+    /// </summary>
+    public string? Model { get; init; }
+
+    /// <summary>The reasoning effort level to request.</summary>
+    public string? ReasoningEffort { get; init; }
+
+    /// <summary>The working directory to run in.</summary>
+    public string? WorkingDirectory { get; init; }
+
+    /// <summary>The extension names this agent needs. Every one must resolve.</summary>
+    public List<string>? Extensions { get; init; }
+
+    /// <summary>The tool names this agent needs. Every one must resolve.</summary>
+    public List<string>? Tools { get; init; }
+
+    /// <summary>The permission grants this agent may use, as <c>kind</c> or <c>kind:scope</c>.</summary>
+    public List<string>? Permissions { get; init; }
+
+    /// <summary>The sandbox policy, or <c>null</c> for no sandbox.</summary>
+    public DurableSandboxPolicy? Sandbox { get; init; }
+
+    /// <summary>Whether the session streams assistant message deltas.</summary>
+    public bool? Streaming { get; init; }
+
+    /// <summary>Native session compaction settings.</summary>
+    public InfiniteSessionConfig? InfiniteSessions { get; init; }
+
+    /// <summary>
+    /// The choices this definition stands for. The only conversion, and it is total: every
+    /// field of the definition has a home in the choices, so nothing is dropped on the way in.
+    /// </summary>
+    public AgentChoices ToChoices() => new()
+    {
+        Extensions = Extensions is null ? null : [.. Extensions],
+        Tools = Tools is null ? null : [.. Tools],
+        Model = Model,
+        ReasoningEffort = ReasoningEffort,
+        WorkingDirectory = WorkingDirectory,
+        Instructions = Instructions,
+        Streaming = Streaming,
+        InfiniteSessions = InfiniteSessions,
+        Permissions = Permissions is null ? null : [.. Permissions],
+        Sandbox = Sandbox,
+    };
+}
+
+/// <summary>
 /// The model a runtime reported for a session or for one turn of it.
 /// </summary>
 /// <remarks>
@@ -4349,6 +4440,10 @@ internal sealed class DurableRuntime : IAsyncDisposable
         SessionBindingDocument = new DocumentDefinition<SessionBinding>("durable.session-binding", DocumentHistory.Rewindable, ForkPolicy.Initial);
         AdmissionDocument = new DocumentDefinition<InputAdmission>("durable.admission", DocumentHistory.Rewindable, ForkPolicy.AsOf);
         CheckpointDocument = new DocumentDefinition<ConversationCheckpoint>("durable.checkpoint", DocumentHistory.Rewindable, ForkPolicy.AsOf);
+        // Initial, so a fork of a conversation does not inherit a definition it never used. The
+        // definition is owned by "agent:{name}" rather than by a conversation, so a conversation
+        // fork never copies it in the first place; the policy is here so the kind is complete.
+        AgentDefinitionDocument = new DocumentDefinition<AgentDefinition>(AgentDefinition.DocumentKind, DocumentHistory.Rewindable, ForkPolicy.Initial);
     }
 
     /// <summary>The document that records which SDK session a durable conversation is bound to.</summary>
@@ -4359,6 +4454,9 @@ internal sealed class DurableRuntime : IAsyncDisposable
 
     /// <summary>The document that records a checkpoint per completed turn or tool call.</summary>
     internal DocumentDefinition<ConversationCheckpoint> CheckpointDocument { get; }
+
+    /// <summary>The document that records a persisted agent definition, owned by <c>agent:{name}</c>.</summary>
+    internal DocumentDefinition<AgentDefinition> AgentDefinitionDocument { get; }
 
     /// <summary>The Copilot client, once the runtime is bound.</summary>
     internal CopilotClient Client => _client
@@ -4840,6 +4938,7 @@ internal sealed class DurableRuntime : IAsyncDisposable
         SessionBindingDocument.Kind,
         AdmissionDocument.Kind,
         CheckpointDocument.Kind,
+        AgentDefinitionDocument.Kind,
     ];
 
     private HashSet<string>? _internalDocumentKinds;
@@ -5416,7 +5515,11 @@ internal sealed class DurableRuntime : IAsyncDisposable
     /// session that gets another is a silent downgrade, and the store would go on claiming the
     /// protection the session does not have.
     /// </remarks>
-    private static void ValidateSandboxPolicy(DurableSandboxPolicy policy)
+    /// <remarks>
+    /// Internal rather than private so the runtime host validates an agent definition's policy
+    /// with the same rules a session applies, instead of a second copy that can drift.
+    /// </remarks>
+    internal static void ValidateSandboxPolicy(DurableSandboxPolicy policy)
     {
         // A disabled sandbox enforces nothing, so a policy that disables it while still naming
         // restrictions describes a session that would run unsandboxed while the store claims
