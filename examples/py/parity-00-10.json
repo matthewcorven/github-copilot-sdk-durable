@@ -13,7 +13,7 @@
   "validation": {
     "status": "all-original-assertions-verified; scripted-replay-framing-gap",
     "sdk": "1.0.28",
-    "sharedApiCommits": ["5b083e6", "4682509"],
+    "sharedApiCommits": ["5b083e6", "4682509", "8b939ca", "92e8d76"],
     "targetedTests": "7 source/schema/handler gates pass. Two real tool-state replay gates passed but intermittently encounter interleaved ReplayRuntime Content-Length headers; not claimed as stable green.",
     "replay": "00,01,03,04,05,06,09 passed through the actual SDK and ReplayRuntime; synthesised sessions, not recorded native transcripts; reported model replay-model",
     "native": "02,07,08,10 passed all original assertions against the native runtime; reported model gpt-6-luna; actual 08 model answer CONTEXT",
