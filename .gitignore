@@ -28,3 +28,6 @@ obj/
 artifacts/
 *.nupkg
 *.snupkg
+
+# Node toolchain for the TypeScript port (lib/ts).
+node_modules/
