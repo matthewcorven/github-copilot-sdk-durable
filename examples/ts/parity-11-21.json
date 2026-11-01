@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "issue": 103,
+  "language": "typescript",
+  "range": [11, 21],
+  "complete": false,
+  "examples": [
+    {
+      "file": "11-tasks.ts",
+      "source": "examples/11-tasks.cs",
+      "live": false,
+      "status": "implemented-core",
+      "command": ["node", "--experimental-transform-types", "examples/ts/11-tasks.ts"],
+      "assertionCount": 9,
+      "limitations": ["Uses the native DurableTaskRunner rather than the unavailable SDK harness; creates a real store conversation owner. No SDK session or effective-model report is claimed."]
+    },
+    {
+      "file": "12-recovery.ts",
+      "source": "examples/12-recovery.cs",
+      "live": false,
+      "status": "pending-native-api",
+      "blockedBy": ["DurableStore's Auto/Jsonl/LegacyJson file providers throw; real close/reopen preserving task checkpoints and memos is required. An in-memory restart is not recovery parity."],
+      "requiredAssertions": ["completed", "counted to 5", "printed == [1,2,3,4,5]", "saved phase == tick", "saved n == 2", "saved memos count == 2"]
+    },
+    {
+      "file": "13-chat.ts",
+      "source": "examples/13-chat.cs",
+      "live": true,
+      "liveReason": "Original submits a model turn and asserts the answer is Paris plus user/assistant/system transcript events.",
+      "status": "pending-native-api",
+      "blockedBy": ["DurableHarness, DurableConversation, AgentChoices, submit/context, SDK session attachment and prompt injection are absent."],
+      "requiredAssertions": ["trimmed answer == Paris", "entries count >= 1", "user event exists", "assistant event exists", "system event exists"]
+    },
+    {
+      "file": "14-system-prompt.ts",
+      "source": "examples/14-system-prompt.cs",
+      "live": false,
+      "status": "pending-native-api",
+      "blockedBy": ["Per-conversation AgentChoices, agent resolution, configure and BuildSystemMessage are absent. PromptSection alone cannot prove stored configuration isolation."],
+      "requiredAssertions": ["root cwd == packages", "subagent cwd != packages", "subagent instructions unchanged", "root instructions unchanged", "root extensions count >= 2"]
+    },
+    {
+      "file": "15-real-model.ts",
+      "source": "examples/15-real-model.cs",
+      "live": true,
+      "liveReason": "Original streams real model output and compares all delta characters to final answer length.",
+      "status": "pending-native-api",
+      "blockedBy": ["SDK harness/session binding, streaming configuration and event subscriptions are absent."],
+      "requiredAssertions": ["answer exists", "printed > 0", "printed == final content length", "final content length > 0"]
+    },
+    {
+      "file": "16-coding-tools.ts",
+      "source": "examples/16-coding-tools.cs",
+      "live": true,
+      "liveReason": "Original asks a model to select read/edit/shell tools and verifies actual file effects and hook timings.",
+      "status": "pending-native-api",
+      "blockedBy": ["DurableTool has only name/description; SDK handlers, argument schemas, built-in override, pre/post hooks and custom-tool permissions are absent."],
+      "requiredAssertions": ["read_file ran", "edit_file ran", "run_shell ran", "tool failure count == 0", "file == hello durable", "timings count == 1"]
+    },
+    {
+      "file": "17-print.ts",
+      "source": "examples/17-print.cs",
+      "live": true,
+      "liveReason": "Original awaits one model submission with built-in read permission and prints its final answer.",
+      "status": "pending-native-api",
+      "blockedBy": ["submit, answers, session binding and built-in read permission configuration are absent."],
+      "requiredAssertions": ["answer exists", "trimmed answer length > 0", "answers count == 1"]
+    },
+    {
+      "file": "18-json.ts",
+      "source": "examples/18-json.cs",
+      "live": true,
+      "liveReason": "Original emits a snapshot followed by session events from a model/tool run, serialized as JSON objects.",
+      "status": "pending-native-api",
+      "blockedBy": ["context, submit, session event subscriptions and read permissions are absent."],
+      "requiredAssertions": ["lines count >= 1", "every line is a JSON object", "snapshot line exists", "event line exists"]
+    },
+    {
+      "file": "19-inbox.ts",
+      "source": "examples/19-inbox.cs",
+      "live": true,
+      "liveReason": "Original submits overlapping model turns and checks both inputs and per-submission answers were retained.",
+      "status": "pending-native-api",
+      "blockedBy": ["Durable admission queue, concurrent submit completions, transcript and answers are absent."],
+      "requiredAssertions": ["user messages count == 2", "2+2 input exists", "3+3 input exists", "first answer exists", "follow-up answer exists", "first answer nonempty", "follow-up answer nonempty", "answers count == 2"]
+    },
+    {
+      "file": "20-late-join.ts",
+      "source": "examples/20-late-join.cs",
+      "live": true,
+      "liveReason": "Original joins a streaming model run after 1.5 seconds and requires live deltas after the snapshot; timing is not guaranteed by a completed recording.",
+      "status": "pending-native-api",
+      "blockedBy": ["Streaming SDK session, context snapshot, delta subscriptions and submit are absent."],
+      "requiredAssertions": ["snapshot count >= 1", "snapshot user event exists", "post-join deltas count >= 1", "answer exists", "trimmed answer nonempty"]
+    },
+    {
+      "file": "21-subagent-foreground.ts",
+      "source": "examples/21-subagent-foreground.cs",
+      "live": true,
+      "liveReason": "Original requires a parent model tool call to create an owned child session, await its answer, and return it to the parent.",
+      "status": "pending-native-api",
+      "blockedBy": ["SDK tools, nested submit, ownerConversationId session creation and custom-tool permissions are absent."],
+      "requiredAssertions": ["children count == 1", "child exists in store", "child id != parent id", "parent answer exists", "parent answer contains 2"]
+    }
+  ]
+}
