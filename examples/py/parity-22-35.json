@@ -14,7 +14,8 @@
     {
       "number": 22,
       "name": "subagent-background",
-      "source": "examples/22-subagent-background.cs",
+      "id": "22", "source": "22-subagent-background.cs",
+      "path": "examples/py/22-subagent-background.py", "sandboxMode": "not-applicable",
       "file": "examples/py/22-subagent-background.py",
       "status": "ported",
       "mode": "LIVE",
@@ -24,7 +25,8 @@
     {
       "number": 23,
       "name": "child-tasks",
-      "source": "examples/23-child-tasks.cs",
+      "id": "23", "source": "23-child-tasks.cs",
+      "path": "examples/py/23-child-tasks.py", "sandboxMode": "not-applicable", "liveReason": null,
       "file": "examples/py/23-child-tasks.py",
       "status": "ported",
       "mode": "deterministic",
@@ -34,7 +36,8 @@
     {
       "number": 24,
       "name": "compaction",
-      "source": "examples/24-compaction.cs",
+      "id": "24", "source": "24-compaction.cs",
+      "path": "examples/py/24-compaction.py", "sandboxMode": "not-applicable",
       "file": "examples/py/24-compaction.py",
       "status": "ported",
       "mode": "LIVE",
@@ -44,7 +47,8 @@
     {
       "number": 25,
       "name": "coding-agent",
-      "source": "examples/25-coding-agent.cs",
+      "id": "25", "source": "25-coding-agent.cs",
+      "path": "examples/py/25-coding-agent.py", "sandboxMode": "not-applicable",
       "file": "examples/py/25-coding-agent.py",
       "status": "ported",
       "mode": "LIVE",
@@ -54,7 +58,8 @@
     {
       "number": 26,
       "name": "plan-mode",
-      "source": "examples/26-plan-mode.cs",
+      "id": "26", "source": "26-plan-mode.cs",
+      "path": "examples/py/26-plan-mode.py", "sandboxMode": "not-applicable",
       "file": "examples/py/26-plan-mode.py",
       "status": "ported",
       "mode": "LIVE",
@@ -64,7 +69,8 @@
     {
       "number": 27,
       "name": "reviewer",
-      "source": "examples/27-reviewer.cs",
+      "id": "27", "source": "27-reviewer.cs",
+      "path": "examples/py/27-reviewer.py", "sandboxMode": "not-applicable",
       "file": "examples/py/27-reviewer.py",
       "status": "ported",
       "mode": "LIVE",
@@ -74,7 +80,8 @@
     {
       "number": 28,
       "name": "sandbox-per-conversation",
-      "source": "examples/28-sandbox-per-conversation.cs",
+      "id": "28", "source": "28-sandbox-per-conversation.cs",
+      "path": "examples/py/28-sandbox-per-conversation.py",
       "file": "examples/py/28-sandbox-per-conversation.py",
       "status": "ported",
       "mode": "policy",
@@ -91,7 +98,8 @@
     {
       "number": 29,
       "name": "tool-override",
-      "source": "examples/29-tool-override.cs",
+      "id": "29", "source": "29-tool-override.cs",
+      "path": "examples/py/29-tool-override.py", "sandboxMode": "not-applicable",
       "file": "examples/py/29-tool-override.py",
       "status": "ported",
       "mode": "LIVE",
@@ -101,7 +109,8 @@
     {
       "number": 30,
       "name": "reload-and-restart",
-      "source": "examples/30-reload-and-restart.cs",
+      "id": "30", "source": "30-reload-and-restart.cs",
+      "path": "examples/py/30-reload-and-restart.py", "sandboxMode": "not-applicable",
       "file": "examples/py/30-reload-and-restart.py",
       "status": "ported",
       "mode": "LIVE",
@@ -113,7 +122,8 @@
     {
       "number": 31,
       "name": "permissions",
-      "source": "examples/31-permissions.cs",
+      "id": "31", "source": "31-permissions.cs",
+      "path": "examples/py/31-permissions.py", "sandboxMode": "not-applicable",
       "file": "examples/py/31-permissions.py",
       "status": "ported",
       "mode": "LIVE",
@@ -123,7 +133,8 @@
     {
       "number": 32,
       "name": "jsonl-store",
-      "source": "examples/32-jsonl-store.cs",
+      "id": "32", "source": "32-jsonl-store.cs",
+      "path": "examples/py/32-jsonl-store.py", "sandboxMode": "not-applicable", "liveReason": null,
       "file": "examples/py/32-jsonl-store.py",
       "status": "ported",
       "mode": "store-only",
@@ -136,7 +147,8 @@
     {
       "number": 33,
       "name": "sandbox-sdk-filesystem",
-      "source": "examples/33-sandbox-sdk-filesystem.cs",
+      "id": "33", "source": "33-sandbox-sdk-filesystem.cs",
+      "path": "examples/py/33-sandbox-sdk-filesystem.py",
       "file": "examples/py/33-sandbox-sdk-filesystem.py",
       "status": "ported",
       "mode": "policy",
@@ -152,7 +164,8 @@
     {
       "number": 34,
       "name": "sandbox-sdk-network-credentials",
-      "source": "examples/34-sandbox-sdk-network-credentials.cs",
+      "id": "34", "source": "34-sandbox-sdk-network-credentials.cs",
+      "path": "examples/py/34-sandbox-sdk-network-credentials.py",
       "file": "examples/py/34-sandbox-sdk-network-credentials.py",
       "status": "ported",
       "mode": "policy",
@@ -168,7 +181,8 @@
     {
       "number": 35,
       "name": "sandbox-sdk-observability-bypass",
-      "source": "examples/35-sandbox-sdk-observability-bypass.cs",
+      "id": "35", "source": "35-sandbox-sdk-observability-bypass.cs",
+      "path": "examples/py/35-sandbox-sdk-observability-bypass.py",
       "file": "examples/py/35-sandbox-sdk-observability-bypass.py",
       "status": "ported",
       "mode": "policy",
