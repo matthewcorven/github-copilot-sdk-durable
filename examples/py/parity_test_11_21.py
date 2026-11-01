@@ -148,6 +148,9 @@ class DeterministicParityTests(unittest.TestCase):
         for language, suffix in [("ts", "ts"), ("py", "py")]:
             with self.subTest(language=language):
                 metadata = json.loads((ROOT / "examples" / language / "parity-11-21.json").read_text())
+                self.assertTrue(metadata["implementationComplete"])
+                self.assertFalse(metadata["liveValidationComplete"])
+                self.assertFalse(metadata["complete"])
                 self.assertEqual([f"{stem}.{suffix}" for stem in stems],
                                  [item["file"] for item in metadata["examples"]])
                 for item in metadata["examples"]:
