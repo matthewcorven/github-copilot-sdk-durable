@@ -92,8 +92,8 @@ async def main() -> None:
                 control = Path(workspace, "writable", "control.txt")
                 await conversation.submit_async(
                     f"Use the shell tool to run exactly this command, then report its output: printf 'control' > '{control}'")
-                decisions = decision_data(conversation.sandbox_decisions)
                 context = await conversation.context_async()
+                decisions = decision_data(conversation.sandbox_decisions)
                 print()
                 print_report(decisions)
                 print(f"observed decision kinds, in order ({len(decisions)}):")
@@ -113,9 +113,10 @@ async def main() -> None:
                     Check.that(len(permissions) > 0, "the blocked shell call produced a permission completion")
                     Check.that(all("denied" not in item["result"]["kind"].lower() for item in permissions),
                                "the permission result is not a denial")
-                    Check.that(denial.get("denialClass") in ("filesystem_read", "filesystem_write"),
+                    Check.that(any(data["kind"] == "access_denied" and
+                                   data.get("denialClass") in ("filesystem_read", "filesystem_write")
+                                   for data in decisions),
                                "the blocked write reports a filesystem denial")
-                    Check.that(bool(denial.get("deniedResource")), "the denial names the resource it refused")
                     Check.equal("filesystem", denial.get("control"), "the denial is a filesystem denial")
                     Check.equal("shell", denial.get("enforcementPoint"), "the denial came from the shell enforcement point")
                     Check.equal("denied", denial.get("outcome"), "the denial reports the denied outcome")

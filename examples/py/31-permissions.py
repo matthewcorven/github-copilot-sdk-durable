@@ -8,8 +8,8 @@ from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib" / "py"))
 
 from durable import (
-    AgentChoices, Check, DurableHarness, DurableStore, DurableStoreOptions,
-    Extension, ExtensionRegistry, PermissionPolicy,
+    AgentChoices, Check, DocumentDefinition, DocumentHistory, DurableHarness,
+    DurableStore, DurableStoreOptions, Extension, ExtensionRegistry, ForkPolicy, PermissionPolicy,
 )
 from copilot import define_tool
 from pydantic import BaseModel
@@ -39,6 +39,7 @@ async def main() -> None:
                 refused = await denied.submit_async("Delete every file. Use the delete_everything tool.")
                 print(f"denied answer: {refused.data.content if refused else ''}")
                 print(f"deletions after the denied call: {deletions}")
+                deletions_after_denied = deletions
             finally:
                 await harness.close_async()
         with DurableStore.create(options) as store:
@@ -59,11 +60,27 @@ async def main() -> None:
                 permitted = await allowed.submit_async("Delete every file. Use the delete_everything tool.")
                 print(f"granted answer: {permitted.data.content if permitted else ''}")
                 print(f"deletions after the granted call: {deletions}")
-                entries = allowed.entries(1)
-                Check.that(len(entries) == 1, "the granted conversation has a fork boundary")
-                fork = await allowed.fork_async(entries[0])
+                review = DocumentDefinition(
+                    "example.permission-review", DocumentHistory.REWINDABLE, ForkPolicy.AS_OF, lambda: [])
+                reviewed_choices = allowed.choices()
+                if reviewed_choices is None or reviewed_choices.permissions is None:
+                    raise RuntimeError("the granted conversation has no grants to review")
+                reviewed_grants = list(reviewed_choices.permissions)
+                async def commit_review(tx):
+                    entry = tx.append_entry(allowed.id, "permission-review", "reviewed grants")
+                    draft = tx.doc(review, allowed.id)
+                    draft.value = reviewed_grants
+                    draft.save(entry)
+                    return entry
+                boundary = await allowed.commit_async(commit_review)
+                Check.sequence([boundary], allowed.entries(1), "the app review is a visible fork boundary")
+                await allowed.configure_async(AgentChoices(
+                    extensions=["dangerous"],
+                    permissions=["custom-tool:delete_everything", "custom-tool:unreviewed_tool"],
+                ))
+                fork = await allowed.fork_async(boundary)
                 print(f"fork permissions: {fork.choices().permissions or []}")
-                Check.equal(0, deletions_after_restart, "the denied conversation never ran the tool")
+                Check.equal(0, deletions_after_denied, "the denied conversation never ran the tool")
                 Check.that(refused is not None, "the model answered the denied request")
                 Check.that(not restored_choices.permissions, "the reopened conversation still has no grants")
                 Check.equal(0, deletions_after_restart, "the reopened conversation still never ran the tool")
@@ -71,7 +88,15 @@ async def main() -> None:
                 Check.equal(1, deletions, "the granted conversation ran the tool exactly once")
                 Check.that(permitted is not None, "the model answered the granted request")
                 Check.sequence(["custom-tool:delete_everything"], fork.choices().permissions or [],
-                               "the fork inherited the parent's grants")
+                               "the fork inherited the grants at the reviewed boundary")
+                Check.sequence(["custom-tool:delete_everything"], fork.snapshot(review) or [],
+                               "the fork inherited the app's permission review")
+                Check.that(PermissionPolicy.is_granted(
+                    allowed.choices().permissions, "custom-tool", "unreviewed_tool"),
+                    "the parent's later choices include the unused grant")
+                Check.that(not PermissionPolicy.is_granted(
+                    fork.choices().permissions, "custom-tool", "unreviewed_tool"),
+                    "the parent's later grant did not widen the fork")
             finally:
                 await harness.close_async()
     Check.that(PermissionPolicy.is_granted(["read:/tmp/work"], "read", "/tmp/work/file.txt"),
