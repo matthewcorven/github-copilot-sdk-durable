@@ -5,6 +5,7 @@ import unittest
 import json
 import os
 import ast
+import textwrap
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -12,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class DeterministicParityTests(unittest.TestCase):
-    def run_example(self, path, mutation=None, env=None):
+    def run_example(self, path, mutation=None, env=None, cwd=ROOT):
         if mutation is None:
             command = (["node", "--experimental-transform-types"] if path.suffix == ".ts"
                        else [sys.executable]) + [str(path)]
@@ -37,13 +38,12 @@ class DeterministicParityTests(unittest.TestCase):
             source = path.read_text()
             self.assertIn(old, source, f"mutation must target the actual artifact: {path}")
             command = [sys.executable, "-c",
-                       "from pathlib import Path; "
-                       f"p = Path({str(path)!r}); "
-                       "s = p.read_text(); "
-                       f"s = s.replace({old!r}, {new!r}, 1); "
+                       "import sys; from pathlib import Path; "
+                       "p = Path(sys.argv[1]); "
+                       "s = p.read_text().replace(sys.argv[2], sys.argv[3], 1); "
                        "exec(compile(s, str(p), 'exec'), "
-                       "{'__name__': '__main__', '__file__': str(p)})"]
-        return subprocess.run(command, cwd=ROOT, text=True, capture_output=True, timeout=15, env=env)
+                       "{'__name__': '__main__', '__file__': str(p)})", str(path), old, new]
+        return subprocess.run(command, cwd=cwd, text=True, capture_output=True, timeout=15, env=env)
 
     def test_tasks_standalone(self):
         for language, suffix in [("ts", "ts"), ("py", "py")]:
@@ -209,6 +209,177 @@ class DeterministicParityTests(unittest.TestCase):
                     if item["live"]:
                         self.assertTrue(item["liveReason"], item["file"])
                     self.assertTrue((ROOT / "examples" / language / item["file"]).is_file())
+                    if number == 20:
+                        self.assertEqual("live-passed", item["validationStatus"])
+                        self.assertEqual("fdf325bae125768aff8d8e1b8f0eec7fc4ee2955",
+                                         item["referenceCorrection"]["commit"])
+                        self.assertEqual(
+                            "Original joins a streaming model run after 1.5 seconds and requires live deltas after the snapshot; timing is not guaranteed by a completed recording.",
+                            item["liveReason"])
+                        self.assertEqual(5, len(item["requiredAssertions"]))
+                        self.assertEqual(90, item["synchronization"]["deadlineClockSeconds"])
+                        self.assertEqual(15, item["synchronization"]["historyDeadlineSeconds"])
+                        self.assertEqual(50, item["synchronization"]["conditionalHistoryPollMilliseconds"])
+                        self.assertTrue(item["synchronization"]["subscriptionBeforeRelease"])
+                        self.assertFalse(item["synchronization"]["bootstrapCancellationGuaranteed"])
+                        self.assertEqual("the snapshot holds the user message",
+                                         item["historicalNativeEvidence"]["failedAssertion"])
+                        for run in item["nativeEvidence"]["runs"]:
+                            self.assertEqual(0, run["exitCode"])
+                            self.assertTrue(run["snapshotUserEvent"])
+                            self.assertGreater(run["deltasAfterJoin"], 0)
+
+
+class LateJoinParityTests(unittest.TestCase):
+    """Actual port sources + real SDK/facade + reference protocol peer, not LIVE evidence."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.directory = TemporaryDirectory(prefix="durable-port-late-join-")
+        cls.addClassCleanup(cls.directory.cleanup)
+        runtime = Path(cls.directory.name) / "runtime"
+        runtime.mkdir()
+        reference = (ROOT / "tests/Durable.Tests/LateJoinExampleTests.cs").read_text()
+        peer = reference.split('private const string MockRuntimeSource = """"', 1)[1].split('"""";', 1)[0]
+        peer = textwrap.dedent(peer).lstrip()
+        # These facades also read history during root restoration, before session.send.
+        # Apply turn scenarios only to reads after submission, as in the C# demonstration.
+        peer = peer.replace("var reads = 0;", "var reads = 0;\nvar submitted = false;")
+        peer = peer.replace('case "session.send":', 'case "session.send":\n            submitted = true;\n            reads = 0;')
+        peer = peer.replace('if (scenario == "stalled-read")', 'if (submitted && scenario == "stalled-read")')
+        peer = peer.replace('if (scenario == "delayed-user" && reads >= 3)',
+                            'if (submitted && scenario == "delayed-user" && reads >= 3)')
+        peer = peer.replace('if (scenario == "mid-join-error")', 'if (submitted && scenario == "mid-join-error")')
+        peer = peer.replace('if (scenario == "gap" && !resultReceived)',
+                            'if (submitted && scenario == "gap" && !resultReceived)')
+        peer = peer.replace('await EventAsync("assistant.message", new JsonObject',
+                            'if (scenario != "no-answer") await EventAsync("assistant.message", new JsonObject')
+        (runtime / "Program.cs").write_text(peer)
+        (runtime / "Program.csproj").write_text(
+            '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>'
+            '<OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework>'
+            '<ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>'
+            '</PropertyGroup></Project>')
+        build = subprocess.run(["dotnet", "build", "--nologo", "-v:q"], cwd=runtime,
+                               text=True, capture_output=True, timeout=120)
+        if build.returncode:
+            raise RuntimeError(build.stdout + build.stderr)
+        cls.runtime = runtime / "bin/Debug/net10.0" / ("Program.exe" if os.name == "nt" else "Program")
+
+    def run_port(self, language, scenario, mutation=None):
+        path = ROOT / "examples" / language / f"20-late-join.{language}"
+        original = path.read_text()
+        if language == "ts":
+            source = original.replace("90000", "5000").replace("15000", "500")
+        else:
+            source = original.replace("loop.time() + 90", "loop.time() + 5").replace("loop.time() + 15", "loop.time() + 0.5")
+        self.assertNotEqual(original, source, "shorten only the actual source's test budgets")
+        if mutation:
+            old, new = mutation
+            self.assertIn(old, source, f"mutation must target real {language}20 source")
+            source = source.replace(old, new, 1)
+        with TemporaryDirectory(prefix="durable-port-case-", dir=self.directory.name) as directory:
+            env = dict(os.environ, DURABLE_RUNTIME_PATH=str(self.runtime),
+                       LATE_JOIN_MOCK_SCENARIO=scenario)
+            env.pop("DURABLE_EXAMPLE_FIXTURE", None)
+            result = DeterministicParityTests.run_example(
+                self, path, (original, source), env, Path(directory))
+            artifacts = {p.name: p.read_text() for p in Path(directory).iterdir() if p.is_file()}
+        return result, artifacts
+
+    def test_actual_sdk_barrier_delayed_history_and_configuration(self):
+        for language in ("ts", "py"):
+            with self.subTest(language=language):
+                result, artifacts = self.run_port(language, "delayed-user")
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertIn("effective model: mock-reported-model", result.stdout)
+                self.assertIn("  user.message", result.stdout)
+                self.assertIn("answer: One. Two. Three. Four. Five. DONE", result.stdout)
+                self.assertIn("deltas received after joining: 1", result.stdout)
+                self.assertLess(result.stdout.index("snapshot events:"),
+                                result.stdout.index("live subscription installed"))
+                self.assertLess(result.stdout.index("live subscription installed"),
+                                result.stdout.index("event text delta:"))
+                trace = artifacts["trace-delayed-user"]
+                self.assertIn("getMessages:3", trace)
+                self.assertIn("tool-result-after-snapshot:True", trace)
+                self.assertIn("The client has joined.", trace)
+                config = json.loads(artifacts["config-delayed-user"])
+                self.assertTrue(config["streaming"])
+                self.assertEqual(["wait_for_join"], [tool["name"] for tool in config["tools"]])
+                source = (ROOT / "examples" / language / f"20-late-join.{language}").read_text()
+                for exact in ('extensions: ["late-join"]', 'tools: ["wait_for_join"]',
+                              'permissions: ["custom-tool:wait_for_join"]'):
+                    self.assertIn(exact if language == "ts" else exact.replace(": ", "="), source)
+                self.assertNotIn("enable_file_hooks", source)
+                self.assertNotIn("enableFileHooks", source)
+                self.assertNotIn("model=", source)
+                self.assertNotIn('model: "', source)
+                self.assertNotIn("model: '", source)
+
+    def test_actual_sdk_failure_races_and_original_assertions(self):
+        failures = {
+            "no-tool": "Late join timed out while waiting for wait_for_join",
+            "early": "The run ended before joining while waiting for wait_for_join",
+            "error": "mock original model failure",
+            "missing-user": "actual UserMessageEvent",
+            "stalled-read": "Late join timed out while reading the SDK snapshot",
+            "mid-join-error": "mock original model failure",
+            "no-delta": "the late joiner received live deltas",
+            "empty-answer": "the answer is not empty",
+            "no-answer": "the run finished",
+            "no-idle": "Late join timed out while awaiting the completed counting answer",
+        }
+        for language in ("ts", "py"):
+            for scenario, diagnostic in failures.items():
+                with self.subTest(language=language, scenario=scenario):
+                    result, _ = self.run_port(language, scenario)
+                    self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+                    self.assertIn(diagnostic, result.stdout + result.stderr)
+                    if scenario in ("error", "mid-join-error"):
+                        self.assertNotIn("Error: The run ended before joining", result.stderr)
+                    if scenario in ("missing-user", "mid-join-error"):
+                        self.assertNotIn("live subscription installed", result.stdout)
+                        self.assertNotIn("event text delta:", result.stdout)
+
+    def test_actual_sdk_handler_cleanup_without_success_after_cancellation(self):
+        mutations = {
+            "ts": ("await until(release, signal);",
+                   'try { await until(release, signal); }\n'
+                   '    finally { console.error("actual SDK handler exited"); }'),
+            "py": ("await asyncio.wait_for(release.wait(), timeout=max(0, expires - loop.time()))",
+                   'try:\n'
+                   '            await asyncio.wait_for(release.wait(), timeout=max(0, expires - loop.time()))\n'
+                   '        finally:\n'
+                   '            print("actual SDK handler exited", file=sys.stderr)'),
+        }
+        for language in ("ts", "py"):
+            for scenario in ("missing-user", "mid-join-error"):
+                with self.subTest(language=language, scenario=scenario):
+                    result, artifacts = self.run_port(language, scenario, mutations[language])
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn("actual SDK handler exited", result.stderr)
+                    self.assertNotIn("The client has joined.", artifacts.get("trace-" + scenario, ""))
+
+    def test_old_delay_and_early_release_source_mutations_are_red(self):
+        for language in ("ts", "py"):
+            if language == "ts":
+                delay = ('await requirePendingRun(started, deadline.signal, "waiting for wait_for_join");',
+                         "await new Promise(resolve => setTimeout(resolve, 1500));")
+                gap = ("const read = root.contextAsync();", "releaseJoin();\n      const read = root.contextAsync();")
+            else:
+                delay = ('await require_pending_run(started.wait(), "waiting for wait_for_join")',
+                         "await asyncio.sleep(1.5)")
+                gap = ("read = asyncio.create_task(root.context_async())",
+                       "release.set()\n                read = asyncio.create_task(root.context_async())")
+            for scenario, mutation in (("early", delay), ("gap", gap)):
+                with self.subTest(language=language, scenario=scenario):
+                    result, _ = self.run_port(language, scenario, mutation)
+                    self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+                    self.assertTrue("The run ended before joining" in result.stderr
+                                    or "the late joiner received live deltas" in result.stderr,
+                                    result.stdout + result.stderr)
+                    self.assertNotIn("event text delta:", result.stdout)
 
 
 if __name__ == "__main__":
