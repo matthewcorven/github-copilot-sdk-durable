@@ -55,6 +55,7 @@ async def main() -> None:
                     "no answer was empty",
                 )
                 Check.that(len(stored) >= 1, "the stored transcript kept its entries")
+                Check.that(len(context) > 0, "the model context is not empty")
             finally:
                 unsubscribe()
         finally:
