@@ -524,9 +524,9 @@ conversation that definition owns, submits one prompt, and prints what the runti
 durable guarantee above is the library's; the host only decides *which* store, *which* agent, and
 *what to print*.
 
-- **Commands.** `run` executes one turn and exits. `serve` and `schedule` parse the same options and
-  delegate; they are delivered by later work (HTTP transport, scheduler) and exit `4`
-  (`NotAvailable`) naming the issue that delivers them. `--help` documents all three and every flag.
+- **Commands.** `run` executes one turn and exits. `serve` serves turns over HTTP (§3.12).
+  `schedule` parses the same options and delegates; it is delivered by later work and exits `4`
+  (`NotAvailable`) naming the issue that delivers it. `--help` documents all three and every flag.
 - **Exit codes.** `0` succeeded, `1` the agent or the host failed, `2` a usage error, `3` the turn
   completed but did not succeed, `4` the command is not implemented in this build.
 - **Store ownership before the client.** `DurableHarness.OpenAsync` starts the SDK client *before*
@@ -610,6 +610,73 @@ entries rather than over SDK session events. It is the durable layer's own type:
 A watch is a convenience over the store, not a second source of truth: everything a frame
 reports is already readable through `Entries` and `Snapshot`, and a host that never opens a
 watch loses no state.
+
+### 3.12 The HTTP transport — `serve --http`
+
+`serve --http` is the same host as `run`, with the turn reached over a socket instead of the
+command line. It opens the store, claims it, imports and validates the definition, and classifies
+containment exactly as `run` does — including refusing to start with `None` unless
+`--allow-uncontained` is passed — and then serves one durable turn per request. The turn itself is
+the same code path: `run` and `serve` both call one shared turn executor, so a turn served over
+HTTP produces the same admission, the same checkpoint, and the same run result as a turn run from
+the command line.
+
+- **Binding.** `--port <port>` selects the port; the default is `0`, which asks the operating
+  system for an unused one. The host binds loopback only and prints the port it bound to stderr as
+  `listening on http://127.0.0.1:{port}` before it accepts anything, so a caller never has to guess
+  a port and two hosts can run at once. `--http` is required: this build serves HTTP only, and
+  `serve` without it is a usage error rather than a silent no-op.
+- **Request.** `POST /` (or `POST /turns`) with a JSON object body:
+
+  | Property | Required | Meaning |
+  |---|---|---|
+  | `input` | yes | The prompt for this turn. Must be a non-empty string. |
+  | `agent` | no | The agent to run. When present it must name the agent this host serves; a different name is refused rather than silently ignored. |
+  | `newConversation` | no | `true` starts a fresh conversation instead of resuming the agent's existing one. Defaults to `false`. |
+
+  ```json
+  { "input": "review the change", "newConversation": false }
+  ```
+
+- **Response.** `200 OK`, `Content-Type: application/x-ndjson`, chunked. The body is newline-
+  delimited JSON: zero or more event lines, then exactly one result line.
+
+  ```json
+  {"type":"event","event":{ ... }}
+  {"type":"event","event":{ ... }}
+  {"type":"result","result":{ ... }}
+  ```
+
+  An event line carries the session event as the runtime reported it, under `event` — the same
+  shape `examples/18-json.cs` prints. A result line carries the run result of §3.9 under `result`,
+  compact rather than indented because it shares a line with the framing. The result is the last
+  line and the only line of its type, so a client can stop reading at it.
+- **Streaming.** Events are written as the turn produces them, not collected and flushed at the
+  end: chunked transfer encoding is what makes each line reach the client while the turn is still
+  running. A client therefore observes a turn in progress — the session starting, the assistant
+  speaking, the session going idle — rather than only its outcome. Events are queued through a
+  channel and written by a pump task, because the runtime delivers them on its own event thread and
+  a slow client must not stall it. Turns are serialized: a second request waits for the first to
+  finish, because a conversation admits one turn at a time.
+- **Refusals.** A bad request is a response, never a crash, and never takes the server down:
+
+  | Status | When | Body |
+  |---|---|---|
+  | `400` | The body is not JSON, is not an object, has no `input`, has an empty `input`, or names an agent this host does not serve. | `{"error": "..."}` naming the problem, or the agent. |
+  | `404` | The path is not `/` or `/turns`. | `{"error": "..."}` naming the route. |
+  | `405` | The method is not `POST`. | `{"error": "..."}` naming the method. |
+
+- **Graceful shutdown.** `SIGTERM` and `SIGINT` stop the accept loop and nothing else. The signal
+  is cancelled so the process is not torn down underneath a turn, connections already accepted keep
+  running, and the host waits up to 60 seconds for them before exiting `0`. A turn in flight
+  therefore reaches its checkpoint and settles its admission instead of being abandoned: cancelling
+  the turn would skip both the turn checkpoint and the admission settle, leaving an admission
+  `admitted` and a conversation a later `run` could not resume. The durable layer exists so a turn
+  can be resumed; a server that killed one on `SIGTERM` would defeat it. A turn that outlives the
+  grace period is reported on stderr and the process exits anyway.
+- **Out of scope.** Authentication, TLS termination, and multi-tenancy are not part of this
+  transport; it binds loopback and assumes a trusted caller. The RPC transport and the scheduler
+  are separate work.
 
 ## 4. Example suite (38 examples: Pi `00`–`30` mirrored one-to-one, plus seven C#-only additions)
 

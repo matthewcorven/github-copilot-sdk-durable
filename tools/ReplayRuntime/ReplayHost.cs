@@ -44,6 +44,7 @@ public sealed class ReplayHost
     private readonly TextWriter _stdout;
     private readonly TextWriter _stderr;
     private readonly TimeSpan _toolResultTimeout;
+    private readonly TimeSpan _idleDelay;
     private readonly Dictionary<string, SessionState> _sessions = new(StringComparer.Ordinal);
 
     /// <summary>
@@ -63,16 +64,22 @@ public sealed class ReplayHost
     private bool _shutdownRequested;
 
     public ReplayHost(Fixture fixture, TextWriter stdout, TextWriter stderr)
-        : this(fixture, stdout, stderr, DefaultToolResultTimeout)
+        : this(fixture, stdout, stderr, DefaultToolResultTimeout, DefaultIdleDelay)
     {
     }
 
-    public ReplayHost(Fixture fixture, TextWriter stdout, TextWriter stderr, TimeSpan toolResultTimeout)
+    public ReplayHost(
+        Fixture fixture,
+        TextWriter stdout,
+        TextWriter stderr,
+        TimeSpan toolResultTimeout,
+        TimeSpan idleDelay)
     {
         _fixture = fixture;
         _stdout = stdout;
         _stderr = stderr;
         _toolResultTimeout = toolResultTimeout;
+        _idleDelay = idleDelay;
     }
 
     /// <summary>Methods this runtime answers. Anything else is an unrecorded request.</summary>
@@ -103,10 +110,12 @@ public sealed class ReplayHost
     {
         string fixturePath;
         TimeSpan toolResultTimeout;
+        TimeSpan idleDelay;
         try
         {
             fixturePath = ResolveFixturePath(args);
             toolResultTimeout = ResolveToolResultTimeout(args);
+            idleDelay = ResolveIdleDelay(args);
         }
         catch (FixtureException ex)
         {
@@ -125,7 +134,7 @@ public sealed class ReplayHost
             return 2;
         }
 
-        var host = new ReplayHost(fixture, stdout, stderr, toolResultTimeout);
+        var host = new ReplayHost(fixture, stdout, stderr, toolResultTimeout, idleDelay);
         return await host.ServeAsync(stdin);
     }
 
@@ -156,6 +165,46 @@ public sealed class ReplayHost
         }
 
         throw new FixtureException("no fixture supplied; pass --fixture <path>");
+    }
+
+    /// <summary>
+    /// How long the runtime waits before announcing that a turn has settled. The default is short
+    /// because a recorded turn has nothing to wait for; a caller that needs to observe a turn in
+    /// flight, or to interrupt one, asks for a longer delay.
+    /// </summary>
+    private static TimeSpan ResolveIdleDelay(string[] args)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            string? value = null;
+            if (args[i] is "--idle-delay" or "-d")
+            {
+                if (i + 1 >= args.Length)
+                {
+                    throw new FixtureException("--idle-delay requires a value in seconds");
+                }
+
+                value = args[i + 1];
+            }
+            else if (args[i].StartsWith("--idle-delay=", StringComparison.Ordinal))
+            {
+                value = args[i]["--idle-delay=".Length..];
+            }
+
+            if (value is null)
+            {
+                continue;
+            }
+
+            if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds) || seconds < 0)
+            {
+                throw new FixtureException($"--idle-delay must be a number of seconds, zero or more, got '{value}'");
+            }
+
+            return TimeSpan.FromSeconds(seconds);
+        }
+
+        return DefaultIdleDelay;
     }
 
     private static TimeSpan ResolveToolResultTimeout(string[] args)
@@ -522,7 +571,7 @@ public sealed class ReplayHost
         // has already subscribed by the time the turn's completion is announced.
         _ = Task.Run(async () =>
         {
-            await Task.Delay(IdleDelay);
+            await Task.Delay(_idleDelay);
             EmitIdleIfSettled(state);
         });
 
@@ -570,7 +619,7 @@ public sealed class ReplayHost
             EnterToolWaitIfNeeded(state, turn);
             _ = Task.Run(async () =>
             {
-                await Task.Delay(IdleDelay);
+                await Task.Delay(_idleDelay);
                 EmitIdleIfSettled(state);
             });
         }
@@ -656,7 +705,7 @@ public sealed class ReplayHost
     /// How long the runtime waits before announcing that a turn has settled, so the notification
     /// arrives after the response to the request that started the turn.
     /// </summary>
-    private static readonly TimeSpan IdleDelay = TimeSpan.FromMilliseconds(50);
+    private static readonly TimeSpan DefaultIdleDelay = TimeSpan.FromMilliseconds(50);
 
     /// <summary>
     /// Emits <c>session.idle</c> once a turn has nothing left in flight, which is what a client
