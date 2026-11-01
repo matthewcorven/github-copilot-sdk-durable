@@ -30,6 +30,12 @@ from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 from pathlib import Path
 from typing import Any, ClassVar, Final, Generic, TypeVar, get_type_hints
+from uuid import uuid4
+
+from copilot import CopilotClient, RuntimeConnection
+from copilot.generated.rpc import (
+    PermissionDecisionApproveOnce, PermissionDecisionReject, SandboxConfig, SessionsForkRequest,
+)
 
 __all__ = [
     "AgentChoices",
@@ -534,7 +540,7 @@ class DurableJson:
             return {
                 _camel(f.name): DurableJson.to_wire(getattr(value, f.name))
                 for f in dataclasses.fields(value)
-                if getattr(value, f.name) is not None
+                if getattr(value, f.name) is not None and not f.metadata.get("json_ignore")
             }
         if isinstance(value, Mapping):
             return {str(key): DurableJson.to_wire(item) for key, item in value.items()}
@@ -624,6 +630,20 @@ def bookkeeping_entries(
 # ---------------------------------------------------------------------------
 # Conversations
 # ---------------------------------------------------------------------------
+
+def _event_kind(event: Any) -> str | None:
+    kind = event.get("type") if isinstance(event, Mapping) else getattr(event, "type", None)
+    return kind.value if isinstance(kind, Enum) else kind
+
+
+def _event_data(event: Any) -> Any:
+    return event.get("data", {}) if isinstance(event, Mapping) else getattr(event, "data", None)
+
+
+def _event_field(data: Any, name: str) -> Any:
+    if isinstance(data, Mapping):
+        return data.get(name, data.get(_camel(name)))
+    return getattr(data, name, None)
 
 
 @dataclass(slots=True)
@@ -2390,6 +2410,13 @@ def _from_wire(cls: type[T], value: Any) -> T | None:
             annotation = hints.get(field.name)
             if isinstance(annotation, type) and issubclass(annotation, IntEnum):
                 item = annotation(item)
+        if isinstance(item, Mapping):
+            annotation = hints.get(field.name)
+            candidates = (annotation, *getattr(annotation, "__args__", ()))
+            nested = next((candidate for candidate in candidates
+                           if isinstance(candidate, type) and dataclasses.is_dataclass(candidate)), None)
+            if nested is not None:
+                item = _from_wire(nested, item)
         kwargs[field.name] = item
     return cls(**kwargs)  # type: ignore[call-arg]
 
@@ -2611,11 +2638,10 @@ class PermissionPolicy:
         async def decide(request: Any, _invocation: Any = None) -> Any:
             kind, scope = PermissionPolicy.describe(request)
             if PermissionPolicy.is_granted(grants, kind, scope):
-                return PermissionDecision(approved=True)
+                return PermissionDecisionApproveOnce()
 
             target = kind if scope is None else f"{kind} ({scope})"
-            return PermissionDecision(
-                approved=False,
+            return PermissionDecisionReject(
                 feedback=(
                     f"denied by durable policy: no grant for {target}. "
                     f'Add "{kind}" or "{kind}:{scope if scope is not None else "*"}" to the '
@@ -2958,6 +2984,13 @@ class DurableConversation:
         self._turn_models: list[DurableModelReport] = []
         self._model_waiters: list[asyncio.Future[DurableModelReport]] = []
         self._busy = False
+        self._unsubscribe: Callable[[], None] | None = None
+        self._submit_gate = asyncio.Lock()
+        self._pending_submissions = 0
+        self._harness: DurableHarness | None = None
+        self._hooks: Any = None
+        self._effective_model = NOT_REPORTED
+        self._pass_open = False
         self.record = record
 
     # -- identity ------------------------------------------------------------
@@ -2991,7 +3024,7 @@ class DurableConversation:
     @property
     def busy(self) -> bool:
         """Whether the conversation has a run in flight, from an input until its final answer."""
-        return self._busy
+        return self._busy or self._pending_submissions > 0
 
     @property
     def sandbox_decisions(self) -> Sequence[Any]:
@@ -3011,10 +3044,16 @@ class DurableConversation:
 
     def attach(self, session: Any) -> None:
         """Attaches the session serving this conversation."""
+        if self._unsubscribe is not None:
+            self._unsubscribe()
         self._session = session
+        self._unsubscribe = session.on(self.observe)
 
     def detach(self) -> None:
         """Detaches the session, so an event arriving during disposal cannot write."""
+        if self._unsubscribe is not None:
+            self._unsubscribe()
+            self._unsubscribe = None
         self._session = None
 
     def set_busy(self, busy: bool) -> None:
@@ -3027,30 +3066,43 @@ class DurableConversation:
         Kept separate from the subscription so the observation rules can be exercised
         without a live session.
         """
-        kind = getattr(event, "type", None)
-        if kind is None and isinstance(event, Mapping):
-            kind = event.get("type")
+        kind = _event_kind(event)
+        data = _event_data(event)
 
         if kind == "assistant.message":
-            content = getattr(event, "content", None)
-            if content is None and isinstance(event, Mapping):
-                content = event.get("content")
+            content = _event_field(data, "content")
             if isinstance(content, str) and content:
                 self.record_answer(content)
             # The answer ends the pass being recorded, so the next model report starts a
             # new turn instead of refining this one.
-            self._turn_models.append(NOT_REPORTED)
+            if not self._pass_open:
+                self._turn_models.append(NOT_REPORTED)
+            self._pass_open = False
 
         if kind == "sandbox.decision":
             self.record_sandbox_decision(event)
 
-        model = getattr(event, "model", None)
-        if isinstance(model, str) and model.strip():
-            report = DurableModelReport.from_event(model, "turn")
-            if self._turn_models:
-                self._turn_models[-1] = report
+        model = None
+        source = None
+        if kind == "session.start":
+            model, source = _event_field(data, "selected_model"), "session"
+        elif kind == "session.model_change":
+            model, source = _event_field(data, "new_model"), "session"
+        elif kind in ("assistant.turn_start", "assistant.usage"):
+            model = _event_field(data, "model")
+            source = "usage" if kind == "assistant.usage" else "turn"
+            report = DurableModelReport.from_event(model, source)
+            if self._pass_open:
+                if report.has_model:
+                    self._turn_models[-1] = report
             else:
                 self._turn_models.append(report)
+                self._pass_open = True
+        if source is not None and isinstance(model, str) and model.strip():
+            report = DurableModelReport.from_event(model, source)
+            self._effective_model = report
+            if self._harness is not None:
+                self._harness._effective_model = report
             self._release_model_waiters(report)
 
     def record_answer(self, answer: str) -> None:
@@ -3150,7 +3202,124 @@ class DurableConversation:
 
     def choices(self) -> AgentChoices | None:
         """The agent choices this conversation was last configured with."""
-        return self.snapshot(AGENT_DOCUMENT)
+        choices = self.snapshot(AGENT_DOCUMENT)
+        if choices is not None:
+            choices.hooks = self._hooks
+        return choices
+
+    @property
+    def effective_model(self) -> DurableModelReport:
+        return self._effective_model
+
+    def agent(self) -> ResolvedAgent:
+        if self._harness is None:
+            raise RuntimeError("Conversation has no SDK-bound harness.")
+        choices = self.choices() or AgentChoices()
+        extensions = self._harness.resolve_extensions(choices.extensions)
+        return ResolvedAgent(
+            choices.model, choices.reasoning_effort, choices.working_directory,
+            choices.instructions, choices.streaming, choices.hooks, choices.infinite_sessions,
+            extensions, self._harness.resolve_tools(extensions, choices.tools),
+            choices.permissions, choices.sandbox,
+        )
+
+    async def wait_for_effective_model_async(self, timeout: float = 30.0) -> DurableModelReport:
+        if self._effective_model.has_model:
+            return self._effective_model
+        future: asyncio.Future[DurableModelReport] = asyncio.get_running_loop().create_future()
+        self._model_waiters.append(future)
+        try:
+            return await asyncio.wait_for(future, timeout)
+        finally:
+            if future in self._model_waiters:
+                self._model_waiters.remove(future)
+
+    async def configure_async(self, choices: AgentChoices) -> None:
+        self._hooks = choices.hooks
+        async def body(tx: Transaction) -> None:
+            draft = tx.doc(AGENT_DOCUMENT, self.id)
+            draft.value = choices
+            draft.save(tx.append_entry(self.id, "agent"))
+        await self.commit_async(body)
+        if self._session is not None:
+            await self._session.set_tools(list(self.agent().tools))
+
+    async def context_async(self) -> list[Any]:
+        if self._session is None:
+            raise RuntimeError(f"Conversation '{self.id}' has no attached SDK session.")
+        return await self._session.get_events()
+
+    async def abort_async(self) -> None:
+        if self._session is None:
+            raise RuntimeError(f"Conversation '{self.id}' has no attached SDK session.")
+        await self._session.abort()
+
+    async def fork_async(self, entry_id: str) -> "DurableConversation":
+        if self._harness is None:
+            raise RuntimeError("Conversation has no SDK-bound harness.")
+        return await self._harness.fork_async(self, entry_id)
+
+    async def submit_async(self, prompt: str, timeout: float = 180.0) -> Any:
+        if self._session is None:
+            raise RuntimeError(f"Conversation '{self.id}' has no attached SDK session.")
+        self._pending_submissions += 1
+        try:
+            async with self._submit_gate:
+                admission_id = f"a{uuid4().hex}"
+                async def admit(tx: Transaction) -> None:
+                    draft = tx.doc(ADMISSION_DOCUMENT, self.id)
+                    draft.value = InputAdmission(admission_id=admission_id, prompt=prompt,
+                                                 state="admitted", admitted_at=datetime.now(timezone.utc).isoformat())
+                    draft.save(tx.append_entry(self.id, "admission"))
+                await self.commit_async(admit)
+                try:
+                    completion: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+                    last: Any = None
+                    def observe(event: Any) -> None:
+                        nonlocal last
+                        if _event_field(event, "agent_id"):
+                            return
+                        kind = _event_kind(event)
+                        if kind == "assistant.message":
+                            last = event
+                        elif kind == "session.idle" and not completion.done():
+                            completion.set_result(last)
+                        elif kind == "session.error" and not completion.done():
+                            completion.set_exception(RuntimeError(_event_field(_event_data(event), "message")))
+                    stop = self._session.on(observe)
+                    try:
+                        await self._session.send(prompt)
+                        answer = await asyncio.wait_for(completion, timeout)
+                    finally:
+                        stop()
+                    async def complete(tx: Transaction) -> None:
+                        if answer is not None:
+                            data = _event_data(answer)
+                            checkpoint = tx.doc(CHECKPOINT_DOCUMENT, self.id)
+                            checkpoint.value = ConversationCheckpoint(
+                                checkpoint_id=f"c{uuid4().hex}", kind="turn",
+                                event_id=str(_event_field(answer, "id")),
+                                message_id=_event_field(data, "message_id"),
+                                content=_event_field(data, "content"),
+                                recorded_at=datetime.now(timezone.utc).isoformat(),
+                            )
+                            checkpoint.save(tx.append_entry(self.id, "checkpoint"))
+                        draft = tx.doc(ADMISSION_DOCUMENT, self.id)
+                        assert draft.value is not None
+                        draft.value.state = "completed"
+                        draft.save(tx.append_entry(self.id, "admission"))
+                    await self.commit_async(complete)
+                    return answer
+                except BaseException:
+                    async def uncertain(tx: Transaction) -> None:
+                        draft = tx.doc(ADMISSION_DOCUMENT, self.id)
+                        assert draft.value is not None
+                        draft.value.state = "uncertain"
+                        draft.save(tx.append_entry(self.id, "admission"))
+                    await self.commit_async(uncertain)
+                    raise
+        finally:
+            self._pending_submissions -= 1
 
     # -- durable writes ------------------------------------------------------
 
@@ -3284,6 +3453,8 @@ class DurableHarness:
         self._running_tasks: set[str] = set()
         self._task_completions: dict[str, asyncio.Future[TaskOutcome]] = {}
         self._in_flight: dict[str, asyncio.Task[TaskOutcome]] = {}
+        self._closed = False
+        self._store.claim_task_scheduler(self, self._start_task)
 
     @property
     def client(self) -> Any:
@@ -3331,6 +3502,7 @@ class DurableHarness:
             return None
 
         conversation = DurableConversation(self._store, record, self._registry)
+        conversation._harness = self
         self._conversations[conversation_id] = conversation
         return conversation
 
@@ -3355,15 +3527,17 @@ class DurableHarness:
         resolved = options if options is not None else DurableHarnessOptions()
         runtime_path = resolve_runtime_path(resolved)
 
-        if client_factory is None:
-            raise RuntimeError(
-                "DurableHarness.open_async needs a client_factory: the Python SDK binding "
-                "is not part of the durable core port, so the host supplies the client. "
-                f"The resolved runtime path is {runtime_path!r}."
-            )
-
-        client = await client_factory(runtime_path, resolved.runtime_arguments)
-        return DurableHarness(client, store, registry, resolved)
+        if client_factory is not None:
+            client = await client_factory(runtime_path, resolved.runtime_arguments)
+        else:
+            client = CopilotClient(connection=RuntimeConnection.for_stdio(
+                path=runtime_path, args=resolved.runtime_arguments))
+            await client.start()
+        try:
+            return DurableHarness(client, store, registry, resolved)
+        except BaseException:
+            await client.stop()
+            raise
 
     async def create_conversation_async(
         self,
@@ -3386,18 +3560,163 @@ class DurableHarness:
 
         record = await self._store.commit_async(body)
         conversation = DurableConversation(self._store, record, self._registry)
+        conversation._harness = self
+        conversation._hooks = selected.hooks
         self._conversations[record.id] = conversation
+        conversation.attach(await self._create_pinned_session_async(conversation, selected))
+        for event in await conversation.context_async():
+            conversation.observe(event)
         return conversation
 
     async def root_async(self, choices: AgentChoices | None = None) -> DurableConversation:
         """Returns the root conversation, creating it on first use."""
         for record in self._store.conversations:
-            if record.parent_conversation_id is None and record.owner_task_id is None:
+            if (record.parent_conversation_id is None and record.owner_task_id is None
+                    and record.owner_conversation_id is None):
                 existing = self.find_conversation(record.id)
                 if existing is not None:
-                    return existing
+                    return await self.resume_conversation_async(existing.id)
 
         return await self.create_conversation_async(choices)
+
+    async def resume_conversation_async(self, conversation_id: str) -> DurableConversation:
+        conversation = self.find_conversation(conversation_id)
+        if conversation is None:
+            raise ValueError(f"Unknown conversation '{conversation_id}'.")
+        if conversation.session is not None:
+            return conversation
+        admission = conversation.admission()
+        if admission is not None and admission.state != "completed":
+            raise DurableRecoveryRequiredException(conversation_id, conversation.session_id)
+        binding = conversation.binding()
+        if binding is None or binding.session_id is None:
+            session = await self._create_pinned_session_async(conversation, conversation.choices())
+        else:
+            config = await self.build_session_config(conversation.choices(), conversation)
+            config.pop("trust_working_directory", None)
+            session = await self._client.resume_session(
+                binding.session_id, **config, suppress_resume_event=True, continue_pending_work=False)
+        conversation.attach(session)
+        for event in await conversation.context_async():
+            conversation.observe(event)
+        return conversation
+
+    def resolve_extensions(self, names: Sequence[str] | None) -> list[Extension]:
+        return self._registry.extensions if names is None else [
+            extension for name in names if (extension := self._registry.find(name)) is not None]
+
+    def resolve_tools(self, extensions: Sequence[Extension], names: Sequence[str] | None) -> list[Any]:
+        tools: dict[str, Any] = {}
+        for extension in extensions:
+            for tool in extension.tools:
+                name = tool["name"] if isinstance(tool, Mapping) else tool.name
+                tools[name] = tool
+        for extension in extensions:
+            for wrapper in extension.wraps:
+                if wrapper.tool_name in tools:
+                    tools[wrapper.tool_name] = wrapper.wrap(tools[wrapper.tool_name])
+        return list(tools.values()) if names is None else [tools[name] for name in names if name in tools]
+
+    async def build_system_message(
+        self, agent: ResolvedAgent, sections: Sequence[PromptSection],
+        conversation: DurableConversation | None,
+    ) -> str:
+        parts: list[str] = []
+        for section in sections:
+            text = await section.render(SectionInput(conversation, agent.tools, agent.extensions, agent.working_directory))
+            if text and text.strip():
+                parts.append(f"<{section.key}>\n{text}\n</{section.key}>" if section.tag else text)
+        if agent.instructions and agent.instructions.strip():
+            parts.append(f"<instructions>\n{agent.instructions}\n</instructions>")
+        return "\n\n".join(parts)
+
+    async def render_sections_async(self, conversation: DurableConversation) -> str:
+        agent = conversation.agent()
+        return await self.build_system_message(agent, [
+            section for extension in agent.extensions for section in extension.sections], conversation)
+
+    @staticmethod
+    def build_sandbox_config(policy: DurableSandboxPolicy, working_directory: str | None = None) -> SandboxConfig:
+        validate_sandbox_policy(policy)
+        wire = DurableJson.to_wire(policy)
+        for name in ("trustWorkingDirectory", "filesystem", "network", "keychainAccess", "credentials"):
+            wire.pop(name, None)
+        user_policy: dict[str, Any] = {}
+        if policy.filesystem is not None:
+            user_policy["filesystem"] = {
+                **DurableJson.to_wire(policy.filesystem),
+                "deniedPaths": expand_paths(policy.filesystem.denied_paths, working_directory),
+                "readonlyPaths": expand_paths(policy.filesystem.readonly_paths, working_directory),
+                "readwritePaths": expand_paths(policy.filesystem.readwrite_paths, working_directory),
+            }
+        if policy.network is not None:
+            network = DurableJson.to_wire(policy.network)
+            if policy.network.proxy is not None and policy.network.proxy.url is None:
+                network.pop("proxy", None)
+            network.setdefault("allowedHosts", [])
+            network.setdefault("blockedHosts", [])
+            user_policy["network"] = network
+        if policy.keychain_access is not None:
+            user_policy["seatbelt"] = {"keychainAccess": policy.keychain_access}
+        if user_policy:
+            wire["userPolicy"] = user_policy
+        if policy.credentials is not None and policy.credentials.env_vars is not None:
+            wire["credentials"] = {"envVars": {
+                name: {"injectHosts": list(hosts)} for name, hosts in policy.credentials.env_vars.items()}}
+        return SandboxConfig.from_dict(wire)
+
+    async def build_session_config(
+        self, choices: AgentChoices | None = None, conversation: DurableConversation | None = None,
+    ) -> dict[str, Any]:
+        choices = choices or AgentChoices()
+        extensions = self.resolve_extensions(choices.extensions)
+        tools = self.resolve_tools(extensions, choices.tools)
+        agent = ResolvedAgent(choices.model, choices.reasoning_effort, choices.working_directory,
+            choices.instructions, choices.streaming, choices.hooks, choices.infinite_sessions,
+            extensions, tools, choices.permissions, choices.sandbox)
+        hooks = dict(choices.hooks or {})
+        config: dict[str, Any] = {
+            "model": choices.model or self.DEFAULT_MODEL,
+            "tools": tools, "hooks": hooks,
+            "on_permission_request": self._options.permission_handler or PermissionPolicy.handler(choices.permissions),
+        }
+        for name in ("working_directory", "streaming", "infinite_sessions"):
+            value = getattr(choices, name)
+            if value is not None:
+                config[name] = value
+        if self._options.enable_file_hooks is not None:
+            config["enable_file_hooks"] = self._options.enable_file_hooks
+        if choices.reasoning_effort is not None:
+            models = await self._client.list_models()
+            model = next((m for m in models if m.id == config["model"]), None)
+            if model is not None and model.capabilities.supports.reasoning_effort:
+                config["reasoning_effort"] = choices.reasoning_effort
+        sections = [section for extension in extensions for section in extension.sections]
+        system_message = await self.build_system_message(agent, sections, conversation)
+        if system_message:
+            config["system_message"] = {"mode": "append", "content": system_message}
+        if sections and conversation is not None:
+            original = hooks.get("on_user_prompt_submitted")
+            async def on_prompt(input: Any, invocation: Any) -> Any:
+                output = await original(input, invocation) if original else None
+                output = dict(output or {})
+                rendered = await self.render_sections_async(conversation)
+                output["additionalContext"] = "\n\n".join(
+                    part for part in (output.get("additionalContext"), rendered) if part)
+                return output
+            hooks["on_user_prompt_submitted"] = on_prompt
+        if choices.sandbox is not None:
+            config["sandbox_config"] = self.build_sandbox_config(choices.sandbox, choices.working_directory)
+            if choices.sandbox.trust_working_directory is not None:
+                config["trust_working_directory"] = "user" if choices.sandbox.trust_working_directory else "session"
+        return config
+
+    def task_graph(self) -> list[tuple[DurableTaskRecord, str | None]]:
+        return [(task, task.owner_task_id or task.owner_conversation_id) for task in self._store.tasks]
+
+    async def resume_async(self, cancellation: asyncio.Event | None = None) -> list[TaskOutcome]:
+        return await asyncio.gather(*(self.run_task_async(task.id, cancellation) for task in self._store.tasks
+            if task.status in (TaskStatus.RUNNING, TaskStatus.WAITING)))
 
     # -- forks ---------------------------------------------------------------
 
@@ -3461,6 +3780,7 @@ class DurableHarness:
         record = await self._store.commit_async(body)
 
         conversation = DurableConversation(self._store, record, self._registry)
+        conversation._harness = self
         session = await self._fork_session_async(parent, conversation, choices)
         conversation.attach(session)
         # A fork names its own session: the binding document is ForkPolicy.INITIAL, so a
@@ -3487,25 +3807,13 @@ class DurableHarness:
         durable half of the fork is already committed. The session is then recorded on the
         intent so a later open can find it again.
         """
-        forked_session_id: str | None = None
-        rpc = getattr(self._client, "rpc", None)
-        sessions = getattr(rpc, "sessions", None)
-        fork = getattr(sessions, "fork_async", None)
-        if fork is not None:
-            forked = await fork(parent.session_id, None, None)
-            forked_session_id = getattr(forked, "session_id", None)
-
-        if forked_session_id is None:
-            session = await self._create_pinned_session_async(conversation, choices)
-        else:
-            resume = getattr(self._client, "resume_session_async", None)
-            if resume is None:
-                raise RuntimeError(
-                    "The client cannot resume the forked session "
-                    f"'{forked_session_id}': it has no resume_session_async. The durable "
-                    "half of the fork is committed; supply a client that can resume it."
-                )
-            session = await resume(forked_session_id, self._session_config(conversation, choices))
+        if parent.session_id is None:
+            raise DurableRecoveryRequiredException(parent.id, None)
+        forked = await self._client.rpc.sessions.fork(SessionsForkRequest(session_id=parent.session_id))
+        config = await self.build_session_config(choices, conversation)
+        config.pop("trust_working_directory", None)
+        session = await self._client.resume_session(
+            forked.session_id, **config, suppress_resume_event=True, continue_pending_work=False)
 
         async def body(tx: Transaction) -> None:
             intent = tx.doc(FORK_DOCUMENT, conversation.id)
@@ -3524,13 +3832,20 @@ class DurableHarness:
         choices: AgentChoices | None,
     ) -> Any:
         """Creates a new session over a fork's inherited transcript."""
-        create = getattr(self._client, "create_session_async", None)
-        if create is None:
-            raise RuntimeError(
-                "The client cannot create a session: it has no create_session_async. The "
-                "durable half of the fork is committed; supply a client that can start one."
-            )
-        return await create(self._session_config(conversation, choices))
+        binding = conversation.binding()
+        if binding is None or not binding.pinned or not binding.session_id:
+            async def pin(tx: Transaction) -> None:
+                draft = tx.doc(SESSION_BINDING_DOCUMENT, conversation.id)
+                draft.value = SessionBinding(session_id=f"s{uuid4().hex}", pinned=True,
+                    model=choices.model if choices else self.DEFAULT_MODEL,
+                    bound_at=datetime.now(timezone.utc).isoformat())
+                draft.save(tx.append_entry(conversation.id, "session-binding"))
+            await self._store.commit_async(pin)
+            binding = conversation.binding()
+        if binding is None or binding.session_id is None:
+            raise DurableRecoveryRequiredException(conversation.id, None)
+        config = await self.build_session_config(choices, conversation)
+        return await self._client.create_session(session_id=binding.session_id, **config)
 
     def _session_config(
         self,
@@ -3538,10 +3853,7 @@ class DurableHarness:
         choices: AgentChoices | None,
     ) -> Any:
         """The session configuration a fork's session is created or resumed with."""
-        return {
-            "conversation_id": conversation.id,
-            "choices": choices if choices is not None else AgentChoices(),
-        }
+        raise RuntimeError("Use await build_session_config for the SDK keyword arguments.")
 
     async def abandon_fork_async(self, conversation_id: str) -> None:
         """Marks a fork abandoned, so it is never given a session."""
@@ -3773,6 +4085,16 @@ class DurableHarness:
         for conversation in self._conversations.values():
             conversation.detach()
         self._conversations.clear()
+        self._store.release_task_scheduler(self)
+
+    async def close_async(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self.close()
+        if self._in_flight:
+            await asyncio.gather(*self._in_flight.values())
+        await self._client.stop()
 
 
 # ---------------------------------------------------------------------------
