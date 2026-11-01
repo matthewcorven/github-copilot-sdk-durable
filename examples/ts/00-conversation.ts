@@ -4,7 +4,12 @@ import { runExample } from "./example.ts";
 
 await runExample(async (harness, store) => {
   const standalone = await store.commitAsync(tx => tx.createConversation());
+  console.log(`standalone conversation: ${standalone.id}`);
+  console.log(`  parent: ${standalone.parentConversationId ?? "(none)"}`);
+  console.log(`  owner: ${standalone.ownerTaskId ?? "(none)"}`);
   const conversation = await harness.createConversationAsync();
+  console.log(`copilot session: ${conversation.sessionId}`);
+  console.log(`conversation count: ${store.conversations.length}`);
   console.log(`effective model: ${(await conversation.waitForEffectiveModelAsync()).model ?? "(not reported)"}`);
   Check.that(standalone.id.length > 0, "a conversation has an id");
   Check.equal(null, standalone.parentConversationId, "a standalone conversation has no parent");

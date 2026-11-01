@@ -19,5 +19,6 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["*.ts", "../../lib/ts/durable.ts"]
+  "include": ["*.ts", "../../lib/ts/durable.ts"],
+  "exclude": ["harness.ts", "runtime.ts"]
 }
