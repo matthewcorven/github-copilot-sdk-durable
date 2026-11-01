@@ -195,8 +195,9 @@ test("real SDK recorded-runtime lifecycle and honest model report", { skip: !pro
       return () => { observer = undefined; };
     });
     let errorMessage = "postToolUse hook: Operation not permitted";
+    let emitAnswer = true;
     const send = mock.method(chat.session, "send", async () => {
-      observer?.(answer);
+      if (emitAnswer) observer?.(answer);
       observer?.({
         type: "session.error", id: "host-error", timestamp: new Date().toISOString(), parentId: null,
         data: { errorType: "hook", message: errorMessage },
@@ -209,6 +210,9 @@ test("real SDK recorded-runtime lifecycle and honest model report", { skip: !pro
       assert.equal(await chat.submitAsync("tolerated denial"), answer);
       errorMessage = "hook timed out";
       await assert.rejects(chat.submitAsync("other failure"), /hook timed out/);
+      errorMessage = "postToolUse hook: Operation not permitted";
+      emitAnswer = false;
+      assert.equal(await chat.submitAsync("denial without an answer"), undefined);
     } finally {
       send.mock.restore(); subscription.mock.restore();
     }
