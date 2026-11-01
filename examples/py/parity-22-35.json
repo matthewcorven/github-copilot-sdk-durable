@@ -1,0 +1,175 @@
+{
+  "schemaVersion": 1,
+  "language": "python",
+  "range": [22, 35],
+  "status": "partial",
+  "notes": [
+    "Pending entries are assertion mappings, not runnable ports or completed acceptance criteria.",
+    "LIVE denotes a reference assertion the recording cannot satisfy, not permission to skip a missing native SDK API.",
+    "SDK-dependent examples await the coordinated shared-library prerequisite; no shadow implementation is supplied."
+  ],
+  "examples": [
+    {
+      "number": 22,
+      "name": "subagent-background",
+      "source": "examples/22-subagent-background.cs",
+      "status": "pending",
+      "mode": "LIVE",
+      "pendingReason": "Native SDK tool dispatch, persistent session restoration, submissions, and model observations are missing.",
+      "assertions": ["reader survives reopen", "the subagent conversation ID is unchanged", "reopened runtime status names reader"],
+      "liveReason": "Needs a subagent request the recorded runtime does not answer."
+    },
+    {
+      "number": 23,
+      "name": "child-tasks",
+      "source": "examples/23-child-tasks.cs",
+      "status": "pending",
+      "mode": "deterministic",
+      "pendingReason": "The task core exists, but native session/model reporting and the public task ownership graph are missing.",
+      "assertions": ["four payment children and conversation ownership", "declined checkout fails with an error", "expired card is never charged", "visa-1 remains charged", "fail-fast aborts exactly visa-3 and visa-4", "cancelled checkout and all four children are aborted and terminal", "aborted charges are undone", "both abort fan-outs reach the exact expected card set"]
+    },
+    {
+      "number": 24,
+      "name": "compaction",
+      "source": "examples/24-compaction.cs",
+      "status": "pending",
+      "mode": "LIVE",
+      "pendingReason": "Native infinite-session configuration, compaction events, submission, context, and model observations are missing.",
+      "assertions": ["five nonempty answers", "stored transcript retains entries"],
+      "liveReason": "Needs a compaction request the recorded runtime does not answer."
+    },
+    {
+      "number": 25,
+      "name": "coding-agent",
+      "source": "examples/25-coding-agent.cs",
+      "status": "pending",
+      "mode": "LIVE",
+      "pendingReason": "Native tools, conversation configuration, agent resolution, and submissions are missing.",
+      "assertions": ["initial working directory equals workspace", "actual tool answer names workspace", "configured directory changes to app", "actual second tool answer names app"],
+      "liveReason": "Asserts the tool ran in the conversation's directory; the recording has no tool call."
+    },
+    {
+      "number": 26,
+      "name": "plan-mode",
+      "source": "examples/26-plan-mode.cs",
+      "status": "pending",
+      "mode": "LIVE",
+      "pendingReason": "Native tool selection, built-in override, configure, and tool dispatch are missing.",
+      "assertions": ["coding tools are read_file", "plan tools are submit_plan", "leaving plan mode restores read_file", "tool writes a nonempty plan document", "every plan step has content"],
+      "liveReason": "Asserts the plan was written to the document; the recording has no tool call."
+    },
+    {
+      "number": 27,
+      "name": "reviewer",
+      "source": "examples/27-reviewer.cs",
+      "status": "pending",
+      "mode": "LIVE",
+      "pendingReason": "Native stop hooks, resolved tools, submissions, and answer observations are missing.",
+      "assertions": ["reviewer choices retain requested model, extension, read-only tool, and directory", "at least two review passes and answers", "last answer contains No further findings."],
+      "liveReason": "Asserts the review loop ran more than one pass; the recording has no tool call."
+    },
+    {
+      "number": 28,
+      "name": "sandbox-per-conversation",
+      "source": "examples/28-sandbox-per-conversation.cs",
+      "status": "pending",
+      "mode": "policy",
+      "sandboxMode": "pending",
+      "pendingReason": "Native SDK dispatch/session identity and policy-to-SDK wire mapping are missing. The C# reference uses a custom-tool sandbox document, not SDK sandbox configuration.",
+      "assertions": ["distinct per-conversation directories", "each document points at its own directory", "requested policy survives the SDK wire"],
+      "liveAssertions": [
+        {"assertion": "alice's note contains from alice in alice's sandbox", "status": "LIVE", "reason": "Asserts a file the sandboxed tool wrote; the recording has no tool call."},
+        {"assertion": "bob's note contains from bob in bob's sandbox", "status": "LIVE", "reason": "Asserts a file the sandboxed tool wrote; the recording has no tool call."}
+      ]
+    },
+    {
+      "number": 29,
+      "name": "tool-override",
+      "source": "examples/29-tool-override.cs",
+      "status": "pending",
+      "mode": "LIVE",
+      "pendingReason": "Native resolved/wrapped tools, tool dispatch, submissions, and answer observations are missing.",
+      "assertions": ["venv answer contains .venv", "plain answer does not contain .venv", "wrapper times exactly two shell calls"],
+      "liveReason": "Asserts the venv shell replaced the plain one; the recording has no tool call."
+    },
+    {
+      "number": 30,
+      "name": "reload-and-restart",
+      "source": "examples/30-reload-and-restart.cs",
+      "status": "pending",
+      "mode": "LIVE",
+      "timeoutSeconds": 180,
+      "notes": ["The C# original takes approximately 124 seconds in this environment. Allow at least 180 seconds for the port's eventual invocation; the default runner timeout is not evidence of assertion failure."],
+      "pendingReason": "Native configure/tool rebinding, in-flight dispatch, and persistent session reopening are missing.",
+      "assertions": ["in-flight call finishes on v1", "next call uses v2", "restarted process initially has no installed tool", "installing code binds stored extension name to version"],
+      "liveReason": "Waits for a runtime restart the recording does not perform."
+    },
+    {
+      "number": 31,
+      "name": "permissions",
+      "source": "examples/31-permissions.cs",
+      "status": "pending",
+      "mode": "LIVE",
+      "pendingReason": "Native fail-closed permission handler, session restoration/submission, tool effects, and SDK fork binding are missing.",
+      "assertions": ["denied and reopened tool effects remain zero with runtime answers", "reopened choices have no grants", "granted tool runs exactly once with an answer", "fork inherits exact grant snapshot", "path scope matches at a boundary, not a sibling prefix", "absent grants confer no capability"],
+      "liveReason": "Asserts a permission request the recording does not contain."
+    },
+    {
+      "number": 32,
+      "name": "jsonl-store",
+      "source": "examples/32-jsonl-store.cs",
+      "file": "examples/py/32-jsonl-store.py",
+      "status": "implemented",
+      "mode": "store-only",
+      "invocation": ["python3", "examples/py/32-jsonl-store.py"],
+      "timeoutSeconds": 30,
+      "assertions": ["explicit path selects persistent tier", "commit creates the store file", "multiple JSONL record envelopes", "reopen restores the committed document", "committed version survives torn tail", "torn tail is physically truncated at open", "default path is absolute under durable/durable-store.jsonl", "ephemeral tier persists nothing"],
+      "liveAssertions": []
+    },
+    {
+      "number": 33,
+      "name": "sandbox-sdk-filesystem",
+      "source": "examples/33-sandbox-sdk-filesystem.cs",
+      "status": "pending",
+      "mode": "policy",
+      "sandboxMode": "pending",
+      "pendingReason": "Native sandbox policy-to-SDK wire mapping and session decision observations are missing.",
+      "assertions": ["filesystem fields survive the SDK wire", "workspace token expands against the conversation directory", "no unexpanded policy paths remain"],
+      "liveAssertions": [
+        {"assertion": "permitted write lands on disk with content permitted", "status": "LIVE", "reason": "The recording has no tool call, so no sandboxed write lands on disk."},
+        {"assertion": "engaged backend reports a filesystem denial and the denied file retains its original content", "status": "LIVE", "reason": "Requires an engaged sandbox backend and a real denied tool call; preserve the C# backend-engaged guard."}
+      ]
+    },
+    {
+      "number": 34,
+      "name": "sandbox-sdk-network-credentials",
+      "source": "examples/34-sandbox-sdk-network-credentials.cs",
+      "status": "pending",
+      "mode": "policy",
+      "sandboxMode": "pending",
+      "pendingReason": "Native policy-to-SDK wire mapping, submissions, and decision observations are missing.",
+      "assertions": ["locked and permissive network flags and host lists survive the wire", "auth, dev-tool, MCP, and LSP fields survive the wire", "credential policy carries only variable names and inject hosts", "proxy fields map only when configured", "resolved-policy fields agree when reported"],
+      "liveAssertions": [
+        {"assertion": "both sandboxed shells see a nonempty masked credential whose digest differs from the generated value", "status": "LIVE", "reason": "The recording has no tool call to produce the digest/length report; missing or empty output is not evidence of masking."},
+        {"assertion": "allowed-host and blocked-host observations reflect the sandbox's network policy", "status": "LIVE", "reason": "Requires real network tool calls and backend observations; retain the C# engaged/report guards and do not invent HTTP success."}
+      ]
+    },
+    {
+      "number": 35,
+      "name": "sandbox-sdk-observability-bypass",
+      "source": "examples/35-sandbox-sdk-observability-bypass.cs",
+      "status": "pending",
+      "mode": "policy",
+      "deterministic": true,
+      "sandboxMode": "pending",
+      "pendingReason": "Native SDK policy/trust mapping and decision/permission observation are missing, not a replay tool-effect limitation.",
+      "notes": ["The C# original runs deterministically without a successful tool call. Do not classify this entire example as LIVE.", "No backend engagement skips the three-part enforcement proof; no offered escalation asserts zero declines and zero bypass_decided events, explicitly leaving the host decline branch unproven."],
+      "assertions": ["policy survives the SDK wire", "top-level seatbelt keychain field takes precedence over deprecated experimental.seatbelt", "durable mapping never emits deprecated seatbelt fields", "trust true maps to User and false maps to Session", "AllowBypass false records no bypass decision", "no offered escalation means zero declines and zero bypass decisions"],
+      "liveAssertions": [
+        {"assertion": "engaged backend provides permission approval, sandbox denial, tool refusal, unchanged denied file, and successful control write", "status": "LIVE", "reason": "Conditional enforcement proof requires a real engaged backend and tool effects absent from the recording."},
+        {"assertion": "macOS reports the requested keychain capability when the backend engages", "status": "LIVE", "reason": "Conditional platform/backend observation cannot be invented from a configured policy."},
+        {"assertion": "offered escalation produces exactly one inspected host decline and one declined model-requested bypass decision", "status": "LIVE", "reason": "Conditional on an actual offered escalation; the SDK cannot force the prompt and the recording does not exercise the host decline branch."}
+      ]
+    }
+  ]
+}
