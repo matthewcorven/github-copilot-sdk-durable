@@ -22,12 +22,18 @@ await runExample(async (harness) => {
     return entry;
   });
   const branch = await harness.forkAsync(chat, firstEntry);
+  console.log(`fork transcript: ${branch.entries(10).join(", ")}`);
+  console.log(`fork notes: ${branch.snapshot(notes)!.text}`);
   const forkNotesAtFork = branch.snapshot(notes)!.text;
   await branch.commitAsync(tx => {
     const draft = tx.doc(notes, branch.id);
     draft.value.text = "changed only in the fork";
     draft.save(tx.appendEntry(branch.id, "note", "edit"));
   });
+  console.log(`fork notes after edit: ${branch.snapshot(notes)!.text}`);
+  console.log(`parent notes after edit: ${chat.snapshot(notes)!.text}`);
+  console.log(`fork parent: ${branch.record.parentConversationId}`);
+  console.log(`fork entry: ${branch.record.forkEntryId}`);
   const forkEntries = branch.entries(10);
   Check.equal(2, forkEntries.length, "the fork holds the inherited entry and its own edit");
   Check.equal(firstEntry, forkEntries.at(-1), "the inherited entry is the oldest one in the fork");

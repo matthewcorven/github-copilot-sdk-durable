@@ -7,7 +7,10 @@ await runExample(async (harness, store) => {
   const root = await harness.rootAsync(new AgentChoices({ model: "gpt-6-luna", reasoningEffort: "high" }));
   const hello = await root.commitAsync(tx => tx.appendEntry(root.id, "message", "hello"));
   console.log(`effective model: ${(await root.waitForEffectiveModelAsync()).model ?? "(not reported)"}`);
-  const helper = await harness.createConversationAsync(new AgentChoices({ model: "mai-code-1.1-flash", reasoningEffort: "minimal" }));
+  // Preserve C#'s raw wire value; never substitute "low" to make parity pass.
+  const helper = await harness.createConversationAsync(new AgentChoices({
+    model: "mai-code-1.1-flash", reasoningEffort: "minimal",
+  }));
   const retry = await harness.forkAsync(root, hello);
   Check.equal("mai-code-1.1-flash", helper.agent().model, "the created conversation uses its own model");
   Check.equal("minimal", helper.agent().reasoningEffort, "the created conversation uses its own reasoning effort");

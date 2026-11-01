@@ -31,6 +31,7 @@ await runExample(async (harness, store, registry) => {
   console.log(`effective model: ${(await chat.waitForEffectiveModelAsync()).model ?? "(not reported)"}`);
   const reply = await chat.submitAsync("Add 'fix the build' to my todo list, then confirm.");
   console.log(`answer: ${reply?.data.content ?? "(no answer)"}`);
+  console.log(`todos: [${(chat.snapshot(todos) ?? []).join(", ")}]`);
   for (const event of await chat.contextAsync()) {
     if (event.type === "system.message") console.log(`system message: ${event.data.content}`);
   }
