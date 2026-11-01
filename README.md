@@ -93,6 +93,76 @@ copilot
 
 ## Running an example
 
+### TypeScript and Python parity (`00`–`35`)
+
+The ports bind to the official SDK packages **`@github/copilot-sdk`** (npm) and
+**`github-copilot-sdk`** (PyPI), pinned by the existing language manifests. They use
+the same durable concepts and JSONL store, not a replacement runtime. The global
+contract is [`examples/parity.json`](examples/parity.json); its schema, conditional
+LIVE assertions, and language mapping are documented in [DESIGN §3.15.1](docs/DESIGN.md#3151-language-ports-and-the-parity-contract).
+The newer C#-only examples `36` and `37` are outside this parity contract.
+
+From the repository root, restore the declared language dependencies once:
+
+```bash
+npm --prefix lib/ts ci
+npm --prefix examples/ts ci
+python3 -m venv examples/py/.venv
+source examples/py/.venv/bin/activate
+python -m pip install -e examples/py
+```
+
+The persistent TypeScript store requires the declared native `fs-ext` lock binding.
+Missing native locking fails explicitly; it never falls back to unlocked persistence.
+Installation and locking have been exercised on macOS, not certified on every platform.
+
+Run every ported example against the signed-in native CLI, including sandbox LIVE effects:
+
+```bash
+npm run examples:ts
+python examples/run_all.py
+```
+
+`--all-available` explicitly selects the same default mode. Missing APIs, assertions,
+timeouts, or runtime failures produce a nonzero exit; they are not successful skips.
+Remove `DURABLE_RUNTIME_PATH` and replay-fixture overrides before this mode.
+
+For the sign-in-free suite and **four full-output comparisons per language to actual
+checked-in C# output**, build the real ReplayRuntime and use deterministic mode:
+
+```bash
+dotnet build tools/ReplayRuntime/ReplayRuntime.csproj --nologo -v q
+npm run examples:ts -- --deterministic
+python examples/run_all.py --deterministic
+npm run examples:ts -- --deterministic --list
+python examples/run_all.py --deterministic --list
+```
+
+Both runners select `00,01,03,04,05,06,09,11,12,14,17,18,23,32,35` and print every
+exclusion with the exact reason from `scripts/validate.sh`. `17`, `18`, and `35`
+also have conditional LIVE behavior: inclusion here is not LIVE/model proof.
+Sessions generated from replay fixtures are explicitly **synthesised, not recorded
+transcripts**. Optional exact IDs can narrow a run, for example `--deterministic 00 01`.
+
+The parity facts include real process-crash/reopen recovery, exact fork transcript
+counts, rollback, and persisted abort outcomes. Run them and their real-source
+regression gates with:
+
+```bash
+npm run test:parity:ts
+python -m unittest discover -s tests/parity -p 'test_*.py' -v
+python examples/parity_manifest.py
+python tests/parity/capture_reference.py
+```
+
+The last command re-executes the four C# reference scenarios without rewriting their
+outputs. To deliberately refresh artifacts after an approved source/range change, use
+`python examples/parity_manifest.py --write` and
+`python tests/parity/capture_reference.py --write`; neither runner learns expected
+output from the ports.
+
+### C#
+
 Every example is one file. Run it from the `examples/` directory:
 
 ```bash
