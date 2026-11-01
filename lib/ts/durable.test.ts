@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, readFileSync, appendFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, appendFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import {
   AgentChoices, DocumentDefinition, DurableHarness, DurableHarnessOptions, DurableStore,
   DurableStoreOptions, DurableStoreFormat, ExtensionRegistry, PermissionPolicy, DurableTask,
@@ -10,6 +12,59 @@ import {
   Extension, ToolWrapper, DurableTaskRunner, TaskStatus, DurableConversation,
 } from "./durable.js";
 import { CopilotClient } from "@github/copilot-sdk";
+
+test("JSONL native lock refuses another process and releases after a crash", { timeout: 5000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "durable-ts-lock-"));
+  const file = join(dir, "store.jsonl");
+  const child = spawn(process.execPath, ["-e",
+    'const fs=require("node:fs"), ext=require("fs-ext"); const fd=fs.openSync(process.argv[1],"a+"); ext.flockSync(fd,"exnb"); console.log("locked"); setInterval(()=>{},1000);',
+    `${file}.lock`], { stdio: ["ignore", "pipe", "pipe"] });
+  const exited = once(child, "exit");
+  try {
+    await Promise.race([
+      once(child.stdout, "data"),
+      exited.then(() => { throw new Error("Lock helper exited before acquiring its native lock."); }),
+    ]);
+    const options = Object.assign(new DurableStoreOptions(), { path: file, format: DurableStoreFormat.Jsonl });
+    assert.throws(() => DurableStore.create(options), /lock|locked/i);
+    child.kill("SIGKILL");
+    await exited;
+    const reopened = DurableStore.create(options);
+    reopened.dispose();
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) { child.kill("SIGKILL"); await exited; }
+    rmSync(dir, { recursive: true });
+  }
+});
+
+test("JSONL retains exact CRLF/mixed UTF8 boundaries and discards all unterminated tails", async () => {
+  for (const endings of [["\r\n", "\r\n"], ["\n", "\r\n"]]) {
+    for (const tail of ["", '{"v":1', JSON.stringify({
+      v: 1, seq: 3, type: "conversation", payload: { id: "torn", createdAt: "2026-11-01T00:00:00Z" },
+    })]) {
+      const dir = mkdtempSync(join(tmpdir(), "durable-ts-boundary-"));
+      const file = join(dir, "store.jsonl");
+      const options = Object.assign(new DurableStoreOptions(), { path: file, format: DurableStoreFormat.Jsonl });
+      const ids = ["\u96ea\u00e9", "\u03bb"];
+      const prefix = ids.map((id, i) => JSON.stringify({
+        v: 1, seq: i + 1, type: "conversation", payload: { id, createdAt: "2026-11-01T00:00:00Z" },
+      }) + endings[i]).join("");
+      writeFileSync(file, prefix + tail);
+      let store = DurableStore.create(options);
+      try {
+        assert.deepEqual(store.conversations.map(c => c.id), ids);
+        assert.equal(readFileSync(file).byteLength, Buffer.byteLength(prefix));
+        assert.equal(readFileSync(file, "utf8"), prefix);
+        assert.throws(() => DurableStore.create(options), /lock|locked/i);
+        const added = await store.commitAsync(tx => tx.createConversation());
+        store.dispose();
+        store = DurableStore.create(options);
+        assert.deepEqual(store.conversations.map(c => c.id), [...ids, added.id]);
+        assert(readFileSync(file, "utf8").endsWith("\n"));
+      } finally { store.dispose(); rmSync(dir, { recursive: true }); }
+    }
+  }
+});
 
 test("JSONL commits, rollback, task memos and torn-tail reopen", async () => {
   const dir = mkdtempSync(join(tmpdir(), "durable-ts-"));
@@ -81,6 +136,18 @@ test("real SDK recorded-runtime lifecycle and honest model report", { skip: !pro
     assert.equal(defaultConfig.reasoningEffort, undefined);
     const explicitConfig = await harness.buildSessionConfig(new AgentChoices({ model: "replay-model", reasoningEffort: "high" }), chat);
     assert.equal(explicitConfig.reasoningEffort, undefined);
+    const listModels = harness.client.rpc.models.list.bind(harness.client.rpc.models);
+    harness.client.rpc.models.list = async params => {
+      const models = await listModels(params);
+      const wire: unknown = models;
+      assert(wire !== null && typeof wire === "object" && "list" in wire && Array.isArray(wire.list));
+      for (const model of wire.list) model.supportedReasoningEfforts = ["low"];
+      return models;
+    };
+    const rawConfig = await harness.buildSessionConfig(new AgentChoices({
+      model: "replay-model", reasoningEffort: "minimal",
+    }), chat);
+    assert.equal(rawConfig.reasoningEffort, "minimal");
     assert.equal(chat.effectiveModel.model, "replay-model");
     assert.equal(chat.turnModels[0]?.model, null);
   } finally { await harness.disposeAsync(); store.dispose(); }
