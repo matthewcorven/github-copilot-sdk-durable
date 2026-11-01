@@ -9,6 +9,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import { CopilotClient, RuntimeConnection } from "@github/copilot-sdk";
 import type { AssistantMessageEvent, CopilotSession, SessionConfig, SessionEvent, Tool, SandboxConfig } from "@github/copilot-sdk";
 export { defineTool } from "@github/copilot-sdk";
@@ -1161,6 +1162,7 @@ export class InMemoryStoreProvider implements IDurableStoreProvider {
     export class JsonlStoreProvider extends InMemoryStoreProvider {
       private file = "";
       private lock: number | null = null;
+      private flock: typeof import("fs-ext") | null = null;
       private committed = new Map<string, string>();
 
       override get isPersistent(): boolean { return true; }
@@ -1244,7 +1246,14 @@ export class InMemoryStoreProvider implements IDurableStoreProvider {
 
       private acquireLock(): void {
         if (this.lock !== null) return;
-        this.lock = fs.openSync(`${this.file}.lock`, "wx", 0o600);
+        try {
+          this.flock = createRequire(import.meta.url)("fs-ext") as typeof import("fs-ext");
+        } catch (error) {
+          throw new Error("JSONL requires the optional fs-ext native file-lock module on this platform; no unlocked fallback is used.", { cause: error });
+        }
+        const fd = fs.openSync(`${this.file}.lock`, "a", 0o600);
+        try { this.flock.flockSync(fd, "exnb"); this.lock = fd; }
+        catch (error) { fs.closeSync(fd); throw new Error(`JSONL store '${this.file}' is already locked.`, { cause: error }); }
       }
 
       private records(): Map<string, string> {
@@ -1296,9 +1305,9 @@ export class InMemoryStoreProvider implements IDurableStoreProvider {
 
       override dispose(): void {
         if (this.lock !== null) {
+          this.flock!.flockSync(this.lock, "un");
           fs.closeSync(this.lock);
           this.lock = null;
-          fs.unlinkSync(`${this.file}.lock`);
         }
       }
     }
@@ -2554,7 +2563,7 @@ export class DurableSandboxPolicy {
 
 export class AgentChoices {
   extensions: string[] | null = null; tools: string[] | null = null;
-  model: string | null = null; reasoningEffort?: SessionConfig["reasoningEffort"];
+  model: string | null = null; reasoningEffort: string | null = null;
   workingDirectory: string | null = null; instructions: string | null = null;
   streaming?: boolean; infiniteSessions?: SessionConfig["infiniteSessions"];
   permissions: string[] | null = null; sandbox: DurableSandboxPolicy | null = null;
@@ -2621,6 +2630,9 @@ export class DurableConversation {
   private tail: Promise<unknown> = Promise.resolve();
   private hooks?: SessionConfig["hooks"];
   private passOpen = false;
+  private checkpointTail: Promise<void> = Promise.resolve();
+  private checkpointFailure: unknown = null;
+  private readonly toolCalls = new Map<string, Record<string, unknown>>();
   readonly answers: string[] = [];
   readonly turnModels: DurableModelReport[] = [];
   readonly sandboxDecisions: SessionEvent[] = [];
@@ -2642,6 +2654,26 @@ export class DurableConversation {
   observe(event: SessionEvent): void {
     if (event.type === "assistant.message" && event.data.content) this.answers.push(event.data.content);
     const data = event.data as unknown as Record<string, unknown>;
+    if (event.type === "tool.execution_start") this.toolCalls.set(event.data.toolCallId, data);
+    if (event.type === "tool.execution_complete") {
+      const started = this.toolCalls.get(event.data.toolCallId);
+      this.toolCalls.delete(event.data.toolCallId);
+      const result = data["result"] as Record<string, unknown> | undefined;
+      const error = data["error"] as Record<string, unknown> | undefined;
+      const checkpoint: JsonObject = {
+        checkpointId: randomUUID(), kind: "tool", eventId: `tool:${event.data.toolCallId}`,
+        toolName: typeof started?.["toolName"] === "string" ? started["toolName"] : null,
+        toolArgs: started?.["arguments"] === undefined ? null : JSON.stringify(started["arguments"]),
+        success: event.data.success, content: typeof result?.["content"] === "string" ? result["content"] : null,
+        error: typeof error?.["message"] === "string" ? error["message"] : null,
+        recordedAt: new Date().toISOString(),
+      };
+      this.checkpointTail = this.checkpointTail.then(() => this.commitAsync(tx => {
+        const draft = tx.doc(checkpointDocument, this.id);
+        if (draft.value?.["eventId"] === checkpoint["eventId"]) return;
+        draft.value = checkpoint; draft.save(tx.appendEntry(this.id, "checkpoint"));
+      })).catch(error => { this.checkpointFailure ??= error; });
+    }
     const model = event.type === "session.start" ? data["selectedModel"] :
       event.type === "session.model_change" ? data["newModel"] :
       ["assistant.turn_start", "assistant.usage"].includes(event.type) ? data["model"] : null;
@@ -2669,6 +2701,13 @@ export class DurableConversation {
   snapshotAsOf<T extends JsonValue>(definition: DocumentDefinition<T>, entryId: string): T | null {
     return DurableJson.fromElement<T>(this.harness.store.document(definition.kind, this.id)?.asOf(entryId));
   }
+  binding(): JsonObject | null { return this.snapshot(bindingDocument); }
+  admission(): JsonObject | null { return this.snapshot(admissionDocument); }
+  checkpoint(): JsonObject | null { return this.snapshot(checkpointDocument); }
+  async checkpointBarrierAsync(): Promise<void> {
+    await this.checkpointTail;
+    if (this.checkpointFailure) throw new Error(`Conversation '${this.id}' failed to persist a tool checkpoint.`, { cause: this.checkpointFailure });
+  }
   choices(): AgentChoices {
     return new AgentChoices({ ...this.snapshot(agentDocument), hooks: this.hooks });
   }
@@ -2679,14 +2718,16 @@ export class DurableConversation {
   }
   entries(limit = 20): string[] {
     const anchors = new Map<string, Set<string>>();
+    const lineage = conversationLineage(this.harness.store, this.id);
+    const owners = new Set(lineage.map(c => c.id));
     for (const doc of this.harness.store.documents) {
-      if (doc.ownerId !== this.id) continue;
+      if (!owners.has(doc.ownerId)) continue;
       for (const version of doc.versions) {
         const kinds = anchors.get(version.entryId) ?? new Set<string>();
         kinds.add(doc.kind); anchors.set(version.entryId, kinds);
       }
     }
-    const boundaries = new Set(conversationLineage(this.harness.store, this.id).map(c => c.forkEntryId));
+    const boundaries = new Set(lineage.map(c => c.forkEntryId));
     return [...this.harness.store.entries(this.id)].reverse().filter(entry => {
       const kinds = anchors.get(entry);
       return boundaries.has(entry) || !kinds || [...kinds].some(kind => !internalKinds.has(kind));
@@ -2726,6 +2767,7 @@ export class DurableConversation {
           const timer = setTimeout(() => { stop(); reject(new Error(`Submission timed out after ${timeoutMs}ms.`)); }, timeoutMs);
           void this.session.send({ prompt }).catch(error => { clearTimeout(timer); stop(); reject(error); });
         });
+        await this.checkpointBarrierAsync();
         await this.commitAsync(tx => {
           if (answer) {
             const checkpoint = tx.doc(checkpointDocument, this.id);
@@ -2869,10 +2911,22 @@ export class DurableHarness {
       enableFileHooks: this.options.enableFileHooks,
       onPermissionRequest: this.options.permissionHandler ?? PermissionPolicy.handler(choices.permissions),
     };
-    if (choices.reasoningEffort) {
-      const models = await this.client.listModels();
-      const model = models.find(m => m.id === config.model);
-      if (model?.capabilities.supports.reasoningEffort) config.reasoningEffort = choices.reasoningEffort;
+    if (choices.reasoningEffort && choices.model && choices.model !== "auto") {
+      // Generated RPC uses {list}; the SDK convenience method expects {models}.
+      // Read the native RPC and accept both published envelope shapes.
+      const result: unknown = await this.client.rpc.models.list({});
+      const models: readonly unknown[] | null = Array.isArray(result) ? result :
+        result !== null && typeof result === "object" && "list" in result && Array.isArray(result.list) ? result.list :
+        result !== null && typeof result === "object" && "models" in result && Array.isArray(result.models) ? result.models : null;
+      if (!models) throw new Error("Runtime models.list returned no model array in its list/models envelope.");
+      const model = models.find((item: unknown): item is Record<string, unknown> =>
+        item !== null && typeof item === "object" && "id" in item && item.id === choices.model);
+      const effort = choices.reasoningEffort;
+      if (Array.isArray(model?.["supportedReasoningEfforts"]) && model["supportedReasoningEfforts"].length) {
+        if (effort !== "low" && effort !== "medium" && effort !== "high" && effort !== "xhigh" && effort !== "max")
+          throw new Error(`SDK 1.0.28 cannot configure reasoning effort '${effort}'; it remains persisted but must not be narrowed silently.`);
+        config.reasoningEffort = effort;
+      }
     }
     const systemMessage = await this.buildSystemMessage(agent, sections, conversation);
     if (systemMessage) config.systemMessage = { mode: "append", content: systemMessage };
@@ -2969,6 +3023,7 @@ export class DurableHarness {
   }
   async disposeAsync(): Promise<void> {
     for (const conversation of this.handles.values()) conversation.detach();
+    await Promise.all(this.conversations.map(conversation => conversation.checkpointBarrierAsync()));
     await this.runner.disposeAsync();
     await this.client.stop();
   }
