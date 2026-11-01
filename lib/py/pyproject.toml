@@ -15,6 +15,6 @@ py-modules = ["durable"]
 [tool.pyright]
 venvPath = "."
 venv = ".venv"
-include = ["durable.py"]
+include = ["durable.py", "test_sdk.py"]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"

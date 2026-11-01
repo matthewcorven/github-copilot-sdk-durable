@@ -3,7 +3,8 @@ import os
 import tempfile
 import unittest
 import json
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
+from types import SimpleNamespace
 
 from durable import (
     AgentChoices, DurableHarness, DurableStore, DurableStoreOptions, ExtensionRegistry,
@@ -16,6 +17,24 @@ from copilot.tools import Tool, ToolResult
 
 
 class SdkTests(unittest.IsolatedAsyncioTestCase):
+    async def test_close_stops_sdk_after_checkpoint_failure(self):
+        store = DurableStore.create_ephemeral()
+        client = SimpleNamespace(stop=AsyncMock())
+        harness = DurableHarness(client, store, ExtensionRegistry())
+        try:
+            async def create(tx):
+                return tx.create_conversation()
+            record = await store.commit_async(create)
+            chat = harness.find_conversation(record.id)
+            assert chat is not None
+            chat.checkpoint_barrier_async = AsyncMock(side_effect=RuntimeError("checkpoint failed"))
+            with self.assertRaisesRegex(RuntimeError, "checkpoint failed"):
+                await harness.close_async()
+            await harness.close_async()
+            client.stop.assert_awaited_once()
+        finally:
+            store.close()
+
     async def test_jsonl_exact_crlf_mixed_utf8_and_unterminated_tail_boundaries(self):
         from durable import DurableStoreFormat
         for endings in [("\r\n", "\r\n"), ("\n", "\r\n")]:
@@ -25,7 +44,7 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
             })]:
                 with tempfile.TemporaryDirectory() as directory:
                     path = os.path.join(directory, "store.jsonl")
-                    ids = ["\u96ea\u00e9", "\u03bb"]
+                    ids = ["\u96ea\u00e9", "\U0001f680"]
                     prefix = "".join(json.dumps({
                         "v": 1, "seq": i + 1, "type": "conversation",
                         "payload": {"id": identifier, "createdAt": "2026-11-01T00:00:00Z"},
@@ -46,6 +65,20 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual([c.id for c in store.conversations], ids + [added.id])
                     finally:
                         store.close()
+
+    async def test_jsonl_all_tail_file_truncates_to_zero(self):
+        from durable import DurableStoreFormat
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "store.jsonl")
+            for tail in [b'{"v":1', b'{"v":1,"seq":1,"type":"conversation","payload":{"id":"tail"}}']:
+                with open(path, "wb") as handle:
+                    handle.write(tail)
+                store = DurableStore.create(DurableStoreOptions(path=path, format=DurableStoreFormat.JSONL))
+                try:
+                    self.assertEqual(len(store.conversations), 0)
+                    self.assertEqual(os.path.getsize(path), 0)
+                finally:
+                    store.close()
     def test_sandbox_wire_and_boundary_policy(self):
         config = DurableHarness.build_sandbox_config(DurableSandboxPolicy(
             enabled=True, allow_bypass=False, sandbox_mcp_servers=False,
@@ -81,8 +114,10 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(chat.effective_model.model, "replay-model")
                 self.assertEqual(chat.effective_model.source, "session")
                 self.assertIsNone(chat.turn_models[0].model)
-                self.assertEqual(chat.admission().state, "completed")
-                self.assertEqual(chat.checkpoint().content, answer.data.content)
+                admission, checkpoint = chat.admission(), chat.checkpoint()
+                assert admission is not None and checkpoint is not None
+                self.assertEqual(admission.state, "completed")
+                self.assertEqual(checkpoint.content, answer.data.content)
                 self.assertEqual(chat.entries(), [])
                 session_id = chat.session_id
             finally:
@@ -93,8 +128,10 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
             try:
                 chat = await harness.root_async()
                 self.assertEqual(chat.session_id, session_id)
-                self.assertEqual(chat.choices().extensions, [])
-                self.assertEqual(chat.admission().state, "completed")
+                choices, admission = chat.choices(), chat.admission()
+                assert choices is not None and admission is not None
+                self.assertEqual(choices.extensions, [])
+                self.assertEqual(admission.state, "completed")
             finally:
                 await harness.close_async()
                 store.close()
@@ -119,7 +156,9 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
                 kwargs = client.create_session.call_args.kwargs
                 self.assertEqual(kwargs["tools"], [])
                 self.assertTrue(kwargs["session_id"].startswith("s"))
-                self.assertEqual(chat.binding().session_id, kwargs["session_id"])
+                binding = chat.binding()
+                assert binding is not None
+                self.assertEqual(binding.session_id, kwargs["session_id"])
                 self.assertEqual(client.create_session.call_args.args, ())
             finally:
                 await harness.close_async()
