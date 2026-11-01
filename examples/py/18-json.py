@@ -1,11 +1,12 @@
 """18 - JSON mode (LIVE). A snapshot followed by actual SDK event JSON lines."""
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib" / "py"))
-from durable import AgentChoices, Check, DurableHarness, DurableStore, Extension, ExtensionRegistry, PromptSection
+from durable import AgentChoices, Check, DurableHarness, DurableHarnessOptions, DurableStore, Extension, ExtensionRegistry, PromptSection
 
 
 async def main():
@@ -17,7 +18,9 @@ async def main():
         return "You are a concise coding assistant."
 
     registry.install(Extension("coding", sections=[PromptSection("preamble", preamble, tag=False)]))
-    harness = await DurableHarness.open_async(store, registry)
+    fixture = os.environ.get("DURABLE_EXAMPLE_FIXTURE")
+    harness = await DurableHarness.open_async(store, registry, DurableHarnessOptions(
+        runtime_arguments=["--fixture", fixture] if fixture else []))
     unsubscribe = None
     try:
         root = await harness.root_async(AgentChoices(extensions=["coding"], permissions=["read"]))
@@ -34,11 +37,11 @@ async def main():
 
         def observe(event):
             data = None
-            if event.type in ("user.message", "assistant.message"):
+            if event.type.value in ("user.message", "assistant.message"):
                 data = event.data.content
-            elif event.type == "tool.execution_start":
+            elif event.type.value == "tool.execution_start":
                 data = event.data.tool_name
-            emit({"type": "event", "event": event.type, "id": event.id,
+            emit({"type": "event", "event": event.type.value, "id": str(event.id),
                   "agentId": getattr(event, "agent_id", None), "data": data})
 
         unsubscribe = root.session.on(observe)

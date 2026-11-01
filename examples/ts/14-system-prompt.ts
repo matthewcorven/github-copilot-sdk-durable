@@ -36,6 +36,9 @@ try {
   const packages = join(repo, "packages");
   mkdirSync(packages);
   await root.configureAsync(new AgentChoices({ extensions: ["coding", "agents-md"], workingDirectory: packages }));
+  console.log(`root cwd now: ${root.agent().workingDirectory}`);
+  console.log(`subagent cwd still: ${subagent.agent().workingDirectory}`);
+  console.log(`subagent instructions still: ${subagent.agent().instructions}`);
   Check.equal(packages, root.agent().workingDirectory, "the root's working directory changed");
   Check.that(subagent.agent().workingDirectory !== packages, "the subagent's working directory is unchanged");
   Check.equal(subagentInstructions, subagent.agent().instructions, "the subagent's instructions are unchanged");

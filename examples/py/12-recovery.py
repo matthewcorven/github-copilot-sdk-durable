@@ -77,6 +77,8 @@ async def main():
         try:
             saved = copy.deepcopy(Check.not_none(reader_store.task(record.id), "the saved task exists"))
             Check.equal([1, 2], printed, "opening the reader did not resume the task")
+            print(f"closed; saved checkpoint: {saved.checkpoint['phase']} n={saved.checkpoint['n']}")
+            print(f"saved memos: {len(saved.memos)}")
         finally:
             reader_store.close()
 
@@ -95,7 +97,8 @@ async def main():
             Check.equal(True, saved.memos["printed-2"], "tick 2's memo survived the interrupted write")
             Check.equal(True, await second_store.memo_async(record.id, "printed-2"),
                         "the replay retained tick 2's original memo")
-            print(f"after reopen: {counted.status} {counted.result}; attempts: {attempted}; printed: {printed}")
+            print(f"after reopen: {counted.status} {counted.result}")
+            print(f"ticks printed in total: {printed}")
         finally:
             second.close()
             second_store.close()

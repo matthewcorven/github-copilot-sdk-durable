@@ -18,7 +18,7 @@ async def main():
         follow_up = asyncio.create_task(root.submit_async("A follow-up: what is 3+3? Answer with just the number."))
         first_answer, follow_up_answer = await asyncio.gather(first, follow_up)
         context = await root.context_async()
-        messages = [e.data.content for e in context if e.type == "user.message"]
+        messages = [e.data.content for e in context if e.type.value == "user.message"]
         Check.equal(2, len(messages), "both prompts are in the transcript")
         Check.that(any("2+2" in m for m in messages), "the first prompt is in the transcript")
         Check.that(any("3+3" in m for m in messages), "the queued prompt is in the transcript")
