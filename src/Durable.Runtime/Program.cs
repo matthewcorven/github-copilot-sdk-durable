@@ -60,7 +60,8 @@ internal static class Program
         new("permission-handler", true, "approve-all, grants, or deny-all. Defaults to grants."),
         new("require-effective-model", false, "Fail when the runtime reports no model."),
         new("allow-uncontained", false, "Allow serve and schedule to start with containment None."),
-        new("http", false, "Serve over HTTP. Required by serve."),
+        new("http", false, "Serve over HTTP. One of --http or --rpc is required by serve."),
+        new("rpc", false, "Serve JSON lines over standard input and output. One of --http or --rpc is required by serve."),
         new("port", true, "The port to listen on. Defaults to 0, which asks the operating system."),
         new("runtime-arg", true, "Pass an argument to the runtime process. Repeatable."),
         new("every", true, "The schedule interval, e.g. 30s, 5m, or 1h. Required by schedule."),
@@ -479,9 +480,11 @@ internal static class Program
     private static async Task<int> ServeAsync(string[] args)
     {
         var options = ParseHostOptions(args, requireInput: false);
-        if (!options.Http)
+        if (options.Http == options.Rpc)
         {
-            throw new UsageException("serve requires --http; this build serves HTTP only.");
+            throw new UsageException(
+                "serve needs exactly one transport: pass --http to serve over HTTP, or --rpc to "
+                + "serve JSON lines over standard input and output.");
         }
 
         using var store = OpenStore(options);
@@ -508,8 +511,6 @@ internal static class Program
         };
         await using var harness = await DurableHarness.OpenAsync(store, registry, harnessOptions);
 
-        await using var transport = HttpTransport.Start(options.Port);
-
         // One turn at a time. A conversation admits one turn, so a second concurrent request
         // would be refused by the durable layer; queueing it here is the honest answer, and it
         // keeps the store's admission history readable.
@@ -518,6 +519,13 @@ internal static class Program
 
         using var sigterm = RegisterShutdown(PosixSignal.SIGTERM, stopping);
         using var sigint = RegisterShutdown(PosixSignal.SIGINT, stopping);
+
+        if (options.Rpc)
+        {
+            return await ServeRpcAsync(harness, store, definition, options, containment, reason, turnGate, stopping);
+        }
+
+        await using var transport = HttpTransport.Start(options.Port);
 
         Console.Error.WriteLine($"listening on http://127.0.0.1:{transport.Port}");
 
@@ -530,6 +538,151 @@ internal static class Program
         Console.Error.WriteLine("stopped accepting connections.");
         return ExitCodes.Succeeded;
     }
+
+    /// <summary>
+    /// Serves the same turns over standard input and output, one JSON request per line and the
+    /// turn's lines back.
+    /// </summary>
+    /// <remarks>
+    /// The transport is the only difference from HTTP: the store, the definition, the containment
+    /// gate, the harness, and the turn gate are the ones <see cref="ServeAsync"/> already built,
+    /// and the turn itself runs through the same <see cref="ExecuteTurnAsync"/>. Standard output
+    /// is the wire here, so the startup line goes to standard error like every other diagnostic.
+    /// </remarks>
+    private static async Task<int> ServeRpcAsync(
+        DurableHarness harness,
+        DurableStore store,
+        AgentDefinition definition,
+        HostOptions options,
+        Containment containment,
+        string containmentReason,
+        SemaphoreSlim turnGate,
+        CancellationTokenSource stopping)
+    {
+        var transport = RpcTransport.Standard();
+
+        Console.Error.WriteLine($"serving agent '{definition.Name}' as JSON lines on standard input and output.");
+
+        await transport.RunAsync(
+            request => HandleRpcAsync(
+                request, transport, harness, store, definition, options, containment, containmentReason, turnGate),
+            stopping.Token,
+            ShutdownGrace);
+
+        Console.Error.WriteLine("stopped reading requests.");
+        return ExitCodes.Succeeded;
+    }
+
+    /// <summary>
+    /// Serves one request line: validate it, run one turn, and write the turn's lines.
+    /// </summary>
+    /// <remarks>
+    /// The lines are the ones <c>examples/18-json.cs</c> prints, so a client written against the
+    /// example reads this host unchanged: a <c>snapshot</c> line for the state the turn starts
+    /// from, an <c>event</c> line per session event, and a <c>result</c> line last. The request's
+    /// id rides on every line as <c>requestId</c>, because <c>id</c> on an event line is the
+    /// event's own id and a client pipelining requests needs to tell whose line is whose.
+    /// </remarks>
+    private static async Task HandleRpcAsync(
+        RpcRequest request,
+        RpcTransport transport,
+        DurableHarness harness,
+        DurableStore store,
+        AgentDefinition definition,
+        HostOptions options,
+        Containment containment,
+        string containmentReason,
+        SemaphoreSlim turnGate)
+    {
+        if (request.Agent is { } requested
+            && !string.Equals(requested, definition.Name, StringComparison.Ordinal))
+        {
+            await transport.WriteErrorAsync(
+                request.Id,
+                request.Line,
+                request.Text,
+                $"agent '{requested}' is not served by this host; this host serves '{definition.Name}'.");
+            return;
+        }
+
+        await turnGate.WaitAsync();
+        try
+        {
+            var conversation = await OpenConversationAsync(
+                harness, store, definition, options with { NewConversation = request.NewConversation });
+
+            // The snapshot is the state a late joiner would see, which is what makes the stream
+            // self-contained: a client that attaches mid-conversation still learns the history.
+            var snapshot = await conversation.ContextAsync();
+            await transport.WriteObjectAsync(new JsonObject
+            {
+                ["type"] = "snapshot",
+                ["requestId"] = request.Id,
+                ["events"] = snapshot.Count,
+            });
+
+            // Events are queued rather than written from the subscription callback: the callback
+            // runs on the runtime's event thread, and a slow client must not stall it.
+            var events = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
+            var pump = Task.Run(async () =>
+            {
+                await foreach (var line in events.Reader.ReadAllAsync())
+                {
+                    await transport.WriteLineAsync(line);
+                }
+            });
+
+            TurnExecution execution;
+            var subscription = conversation.Session.On<SessionEvent>(
+                evt => events.Writer.TryWrite(RpcEventLine(request.Id, evt)));
+            try
+            {
+                execution = await ExecuteTurnAsync(
+                    store, conversation, definition, options, containment, containmentReason, request.Input);
+            }
+            finally
+            {
+                subscription.Dispose();
+            }
+
+            // The result is written only after every event has been flushed, so a client that
+            // reads to the end sees the turn in the order it happened.
+            events.Writer.TryComplete();
+            await pump;
+
+            await transport.WriteObjectAsync(new JsonObject
+            {
+                ["type"] = "result",
+                ["requestId"] = request.Id,
+                ["result"] = JsonNode.Parse(JsonSerializer.Serialize(execution.Result, CompactResultJson)),
+            });
+        }
+        finally
+        {
+            turnGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// One session event, in the shape <c>examples/18-json.cs</c> prints, plus the request it
+    /// belongs to.
+    /// </summary>
+    private static string RpcEventLine(string requestId, SessionEvent evt) =>
+        new JsonObject
+        {
+            ["type"] = "event",
+            ["requestId"] = requestId,
+            ["event"] = evt.Type,
+            ["id"] = evt.Id,
+            ["agentId"] = evt.AgentId,
+            ["data"] = evt switch
+            {
+                UserMessageEvent user => user.Data.Content,
+                AssistantMessageEvent assistant => assistant.Data.Content,
+                ToolExecutionStartEvent tool => tool.Data.ToolName,
+                _ => null,
+            },
+        }.ToJsonString();
 
     private static DurableHarnessOptions HarnessOptions(HostOptions options) => new()
     {
@@ -781,6 +934,7 @@ internal static class Program
             RequireEffectiveModel: parsed.Has("require-effective-model"),
             AllowUncontained: parsed.Has("allow-uncontained"),
             Http: parsed.Has("http"),
+            Rpc: parsed.Has("rpc"),
             Port: ParsePort(parsed.Last("port")),
             RuntimeArguments: parsed.All("runtime-arg").ToList(),
             Every: parsed.Last("every") is { } every ? ParseInterval(every) : null,
@@ -1135,8 +1289,8 @@ internal static class Program
 
         Commands:
           run       Run one durable turn for an agent and print the run result as JSON.
-          serve     Serve an agent over HTTP: one turn per request, events streamed ahead of the
-                    result. Requires --http.
+          serve     Serve an agent: one turn per request, events streamed ahead of the result.
+                    Requires exactly one of --http or --rpc.
           schedule  Run an agent on a schedule. Delivered by #97.
 
         Options:
@@ -1150,7 +1304,9 @@ internal static class Program
                                       leaves every request to the durable fail-closed policy.
           --require-effective-model   Fail when the runtime reports no model.
           --allow-uncontained         Allow serve and schedule to start with containment None.
-          --http                      Serve over HTTP. Required by serve.
+          --http                      Serve over HTTP. One of --http or --rpc is required by serve.
+          --rpc                       Serve JSON lines over standard input and output. One of
+                                      --http or --rpc is required by serve.
           --port <port>               The port to listen on. Defaults to 0, which asks the operating
                                       system for an ephemeral port.
           --runtime-arg <arg>         Pass an argument to the runtime process. Repeatable.
@@ -1186,6 +1342,7 @@ internal static class Program
         bool RequireEffectiveModel,
         bool AllowUncontained,
         bool Http,
+        bool Rpc,
         int Port,
         IReadOnlyList<string> RuntimeArguments,
         TimeSpan? Every,

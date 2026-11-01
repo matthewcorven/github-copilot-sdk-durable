@@ -524,8 +524,9 @@ conversation that definition owns, submits one prompt, and prints what the runti
 durable guarantee above is the library's; the host only decides *which* store, *which* agent, and
 *what to print*.
 
-- **Commands.** `run` executes one turn and exits. `serve` serves turns over HTTP
-  (§3.12). `schedule` registers and drives a recurring durable task (§3.13). `--help`
+- **Commands.** `run` executes one turn and exits. `serve` serves turns over one transport —
+  HTTP (§3.12) or JSON lines over standard input and output (§3.15) — and requires exactly one of
+  `--http` or `--rpc`. `schedule` registers and drives a recurring durable task (§3.13). `--help`
   documents all three and every flag.
 - **Exit codes.** `0` succeeded, `1` the agent or the host failed, `2` a usage error, `3` the turn
   completed but did not succeed, `4` the command is not implemented in this build.
@@ -624,8 +625,8 @@ the command line.
 - **Binding.** `--port <port>` selects the port; the default is `0`, which asks the operating
   system for an unused one. The host binds loopback only and prints the port it bound to stderr as
   `listening on http://127.0.0.1:{port}` before it accepts anything, so a caller never has to guess
-  a port and two hosts can run at once. `--http` is required: this build serves HTTP only, and
-  `serve` without it is a usage error rather than a silent no-op.
+  a port and two hosts can run at once. `--http` selects this transport: `serve` needs exactly one
+  of `--http` or `--rpc`, and neither or both is a usage error rather than a silent no-op.
 - **Request.** `POST /` (or `POST /turns`) with a JSON object body:
 
   | Property | Required | Meaning |
@@ -675,8 +676,8 @@ the command line.
   can be resumed; a server that killed one on `SIGTERM` would defeat it. A turn that outlives the
   grace period is reported on stderr and the process exits anyway.
 - **Out of scope.** Authentication, TLS termination, and multi-tenancy are not part of this
-  transport; it binds loopback and assumes a trusted caller. The RPC transport and the scheduler
-  are separate work.
+  transport; it binds loopback and assumes a trusted caller. The JSON-lines transport (§3.15) and
+  the scheduler (§3.13) are separate work.
 
 ### 3.13 The persistent scheduler — `schedule`
 
@@ -738,6 +739,99 @@ resumes the sleep or applies the missed-run policy. Nothing about the cadence li
 - **What this is not.** No cron expressions, no calendar awareness (weekends, holidays), and no
   time zones beyond UTC and local. Two hosts scheduling the same store is a coordination question
   the store's ownership rules answer, not this command.
+
+### 3.15 The JSON-lines transport — `serve --rpc`
+
+`serve --rpc` is the same host as `run` and `serve --http`, with the turn reached over the
+process's own standard streams instead of a socket or the command line. It opens the store, claims
+it, imports and validates the definition, and classifies containment exactly as `run` does —
+including refusing to start with `None` unless `--allow-uncontained` is passed — and then serves
+one durable turn per request line. The turn is the same shared executor the other two commands
+call, so a turn served over standard input produces the same admission, the same checkpoint, and
+the same run result as a turn run from the command line.
+
+The transport exists because a socket is not always available. A parent process that already owns
+a child's pipes — an editor extension, a test harness, a supervisor — can drive the host without
+allocating a port, discovering it, and racing to connect. Standard input and output are the
+channel the parent already has.
+
+- **Framing.** Newline-delimited JSON in both directions: one request per line on standard input,
+  and the lines a request produces on standard output. A line is one JSON object and never spans
+  lines, so a reader needs no length prefix and no parser state. Blank lines are ignored, which
+  makes a trailing newline harmless. Standard output carries protocol lines only; diagnostics go to
+  standard error, so a client can parse every line it reads.
+- **Request.** One JSON object per line:
+
+  | Property | Required | Meaning |
+  |---|---|---|
+  | `id` | yes | The caller's correlation id. Must be a non-empty string. |
+  | `input` | yes | The prompt for this turn. Must be a non-empty string. |
+  | `agent` | no | The agent to run. When present it must name the agent this host serves; a different name is refused rather than silently ignored. |
+  | `newConversation` | no | `true` starts a fresh conversation instead of resuming the agent's existing one. Defaults to `false`. |
+
+  ```json
+  {"id":"1","input":"review the change","newConversation":false}
+  ```
+
+  The properties are the HTTP transport's (§3.12) plus `id`, because a stream has no request
+  boundary to correlate on and a socket does.
+- **Response.** Zero or more event lines, then exactly one result line, then — for a request that
+  could not be run at all — one error line instead of the result. Every line a request produces
+  carries that request's `id` as `requestId`:
+
+  ```json
+  {"type":"snapshot","requestId":"1","events":4}
+  {"type":"event","requestId":"1","event":"assistant.message","id":"...","agentId":"...","data":"..."}
+  {"type":"result","requestId":"1","result":{ ... }}
+  ```
+
+  | `type` | Meaning |
+  |---|---|
+  | `snapshot` | The conversation's transcript length before the turn, so a client knows what it is about to be told about. Always first. |
+  | `event` | One session event as the runtime reported it: `event` is the event type, `id` and `agentId` are the runtime's, and `data` is the event's text — the user message's content, the assistant message's content, or a tool call's name, and `null` for an event that carries none. |
+  | `result` | The run result of §3.9 under `result`, compact rather than indented because it shares a line with the framing. Always last. |
+  | `error` | The request was refused. Carries `line` (the 1-based input line), `lineText` (the line as received), and `error` (what was wrong with it). |
+
+- **The correlation key is `requestId`, not `id`.** An event line already uses `id` for the
+  *session event's* id — that is the shape `examples/18-json.cs` prints, and the transport keeps it
+  rather than renaming the runtime's own field. The request id therefore travels beside it as
+  `requestId`, on every line, so a client can attribute a line without knowing which request is
+  currently running. `examples/18-json.cs` is the protocol's definition: the snapshot, event, and
+  result lines carry exactly its properties, and a test asserts that agreement by reading the
+  example and checking each property it names against a live host's output.
+- **Interleaving.** A request's lines are contiguous and ordered: `snapshot`, then its events in
+  the order the runtime emitted them, then its result. The result is the last line and the only
+  line of its type, so a client can stop reading a request at it. Events are written as the turn
+  produces them, not collected and flushed at the end, so a client observes a turn in progress —
+  the session starting, the assistant speaking, the session going idle — rather than only its
+  outcome. Events are queued through a channel and written by a pump task, because the runtime
+  delivers them on its own event thread and a slow reader must not stall it.
+- **Pipelining.** Requests are read and answered one at a time, in the order they arrive: a second
+  request waits for the first to finish, because a conversation admits one turn at a time. A client
+  may therefore write several request lines before reading anything, and receives each request's
+  lines as a contiguous block in request order. Correlation is by `requestId` rather than by
+  position, so a client that does read ahead is not required to count.
+- **Refusals.** A bad line is a response, never a crash, and never stops the host:
+
+  | When | `requestId` | `error` names |
+  |---|---|---|
+  | The line is not JSON, or is not a JSON object. | `null` | The parse failure. |
+  | `id` is missing, empty, or not a string. | `null` | `id`. |
+  | `input` is missing, empty, or not a string. | The request's `id`. | `input`. |
+  | `agent` is not a string, or `newConversation` is not a boolean. | The request's `id`. | The property. |
+  | `agent` names an agent this host does not serve. | The request's `id`. | The agent. |
+
+  The id is salvaged wherever the line carried one, because a client that pipelined requests needs
+  to know which of them was refused, and a line can be wrong in its `input` and still be right in
+  its `id`. The host keeps reading after every refusal: the next line is served normally.
+- **Shutdown.** End of standard input ends the host: the read loop returns, the host waits up to 60
+  seconds for a turn already in flight, and exits `0`. `SIGTERM` and `SIGINT` do the same, and the
+  signal is cancelled so the process is not torn down underneath a turn — a turn in flight reaches
+  its checkpoint and settles its admission instead of being abandoned, for the reason §3.12 gives.
+  A turn that outlives the grace period is reported on standard error and the process exits anyway.
+- **Out of scope.** Authentication and multi-tenancy are not part of this transport; it assumes the
+  parent process is a trusted caller, which is what owning the pipes means. The HTTP transport
+  (§3.12) and the scheduler (§3.13) are separate work.
 
 ## 4. Example suite (38 examples: Pi `00`–`30` mirrored one-to-one, plus seven C#-only additions)
 

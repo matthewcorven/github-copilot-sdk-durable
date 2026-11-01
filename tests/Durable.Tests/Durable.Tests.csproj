@@ -28,6 +28,7 @@
     <None Include="..\..\tools\ReplayRuntime\fixtures\missing-tool-call.json" Link="fixtures\missing-tool-call.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\tools\ReplayRuntime\fixtures\basic.json" Link="fixtures\basic.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\tools\ReplayRuntime\fixtures\no-model.json" Link="fixtures\no-model.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\examples\18-json.cs" Link="examples\18-json.cs" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>
