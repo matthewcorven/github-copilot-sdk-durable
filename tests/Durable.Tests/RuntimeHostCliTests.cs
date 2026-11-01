@@ -52,6 +52,7 @@ public sealed class RuntimeHostCliTests
             "--require-effective-model",
             "--allow-uncontained",
             "--http",
+            "--rpc",
             "--port",
             "--runtime-arg",
             "--every",
@@ -267,13 +268,24 @@ public sealed class RuntimeHostCliTests
         Assert.Contains("refusing to serve", refused.Stderr, StringComparison.Ordinal);
         Assert.Contains("--allow-uncontained", refused.Stderr, StringComparison.Ordinal);
 
-        var withoutHttp = await RunHostAsync(
+        var withoutTransport = await RunHostAsync(
             "serve", "--agent", "reviewer",
             "--store", storePath, "--format", "jsonl",
             "--permission-handler", "approve-all", "--allow-uncontained");
 
-        Assert.Equal(2, withoutHttp.ExitCode);
-        Assert.Contains("--http", withoutHttp.Stderr, StringComparison.Ordinal);
+        Assert.Equal(2, withoutTransport.ExitCode);
+        Assert.Contains("--http", withoutTransport.Stderr, StringComparison.Ordinal);
+        Assert.Contains("--rpc", withoutTransport.Stderr, StringComparison.Ordinal);
+
+        // Two transports is as ambiguous as none: the host refuses rather than picking one.
+        var bothTransports = await RunHostAsync(
+            "serve", "--agent", "reviewer",
+            "--store", storePath, "--format", "jsonl",
+            "--permission-handler", "approve-all", "--allow-uncontained",
+            "--http", "--rpc");
+
+        Assert.Equal(2, bothTransports.ExitCode);
+        Assert.Contains("exactly one transport", bothTransports.Stderr, StringComparison.Ordinal);
     }
 
     [Fact]
