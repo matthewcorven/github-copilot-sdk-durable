@@ -74,7 +74,9 @@ async function main() {
           assertPolicy(requested,config.sandboxConfig,workspace,`the ${label} session policy`);
           conversations.push({ label,requested,conversation: await harness.createConversationAsync(choices) });
         }
-        const effective=await conversations[1].conversation.waitForEffectiveModelAsync();
+        const permissive=conversations.find(({ label }) => label==="permissive");
+        assert.ok(permissive,"the permissive native session was created");
+        const effective=await permissive.conversation.waitForEffectiveModelAsync();
         console.log(`effective model: ${effective.model??"(not reported)"}`);
         if(live) {
           for(const { label,conversation } of conversations) {

@@ -153,8 +153,10 @@ async function main() {
           assert.equal(declinedBypasses,1,"exactly one host-handler invocation declined the bypass");
           assert.ok(hostInvocations>=declinedBypasses,"every declined bypass came from an inspected prompt");
           assert.equal(bypasses.length,1,"the declined bypass is recorded as one bypass_decided event");
-          assert.equal(bypasses[0].outcome,"declined","the bypass decision records the host's decline");
-          assert.equal(bypasses[0].source,"model_requested","the bypass was requested by the model");
+          const bypass=bypasses[0];
+          assert.ok(bypass,"the declined bypass decision is present");
+          assert.equal(bypass.outcome,"declined","the bypass decision records the host's decline");
+          assert.equal(bypass.source,"model_requested","the bypass was requested by the model");
         } else {
           assert.equal(declinedBypasses,0,"no bypass was declined because none was offered");
           assert.equal(bypasses.length,0,"no bypass_decided event was reported because none was offered");
