@@ -43,7 +43,11 @@ try {
   const rerun = await runner.waitForTaskAsync(task.id);
   Check.equal("completed", rerun.status, "waiting on a finished task returns its outcome");
   Check.equal(1, payments.size, "waiting on a finished task does not repeat the effect");
-  console.log("payment outcome: completed; receipt: 500; payments charged: 1");
+  console.log(`payment outcome: ${paid.status}`);
+  console.log(`receipt: ${result["receipt"]}`);
+  console.log("task status: Terminal");
+  console.log(`task checkpoint: ${checkpoint["phase"]}`);
+  console.log(`payments charged: ${payments.size}`);
 } finally {
   await runner.disposeAsync();
   store.dispose();

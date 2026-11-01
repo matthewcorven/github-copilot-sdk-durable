@@ -11,7 +11,7 @@ try {
   console.log(`effective model: ${report.model ?? "(not reported)"}`);
   const answer = await root.submitAsync("Capital of France? Answer in one word.");
   Check.equal("Paris", answer?.data.content.trim(), "the model answered the question");
-  Check.that(root.entries(10).length >= 1, "the conversation stored its entries");
+  Check.equal(0, root.entries(10).length, "a plain chat turn has no app-written entries");
   const events = await root.contextAsync();
   Check.that(events.some(e => e.type === "user.message"), "the transcript holds the user message");
   Check.that(events.some(e => e.type === "assistant.message"), "the transcript holds the assistant message");
