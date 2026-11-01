@@ -21,8 +21,17 @@ await runExample(async (harness, store) => {
     draft.save(tx.appendEntry(main.id, "agent", "researcher registered"));
     return { supervisorId: task.id, child };
   });
+  console.log(`supervisor task: ${setup.supervisorId}`);
+  console.log(`child conversation: ${setup.child.id}`);
+  console.log(`child owner task: ${setup.child.ownerTaskId}`);
+  console.log(`child owner conversation: ${setup.child.ownerConversationId ?? "(none)"}`);
   const registryValue = main.snapshot(agentRegistry)!;
+  console.log("registry:");
+  for (const [name, entry] of Object.entries(registryValue)) {
+    console.log(`  ${name}: conversationId=${entry["conversationId"]} requestId=${entry["requestId"]}`);
+  }
   const task = Check.notNull(store.task(setup.supervisorId), "the supervisor task is in the store");
+  console.log(`supervisor status: ${task.status[0]!.toUpperCase()}${task.status.slice(1)} (background: ${task.background ? "True" : "False"})`);
   Check.notNull(store.conversation(setup.child.id), "the child conversation is in the store");
   Check.equal(setup.supervisorId, setup.child.ownerTaskId, "the child records its owning task");
   Check.equal(null, setup.child.ownerConversationId, "the child has no owning conversation");

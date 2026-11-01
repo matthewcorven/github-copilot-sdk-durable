@@ -22,6 +22,13 @@ await runExample(async (harness, store) => {
     return entry;
   });
   const document = Check.notNull(store.document(notes.kind, chat.id), "the notes document exists");
+  console.log(`latest notes: ${chat.snapshot(notes)!.text}`);
+  console.log(`notes at first entry: ${chat.snapshotAsOf(notes, firstEntry)!.text}`);
+  console.log(`notes at second entry: ${chat.snapshotAsOf(notes, secondEntry)!.text}`);
+  console.log(`committed versions: ${document.versions.length}`);
+  for (const version of document.versions) {
+    console.log(`  ${version.entryId}: ${(version.value as { text: string }).text}`);
+  }
   Check.equal("after goodbye", chat.snapshot(notes)!.text, "the latest value is the last one written");
   Check.equal("after hello", chat.snapshotAsOf(notes, firstEntry)!.text, "the value as of the first entry is readable");
   Check.equal("after goodbye", chat.snapshotAsOf(notes, secondEntry)!.text, "the value as of the second entry is readable");

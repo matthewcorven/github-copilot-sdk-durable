@@ -8,7 +8,12 @@ async def main(harness, store, registry):
         return tx.create_conversation()
 
     standalone = await store.commit_async(create)
+    print(f"standalone conversation: {standalone.id}")
+    print(f"  parent: {standalone.parent_conversation_id or '(none)'}")
+    print(f"  owner: {standalone.owner_task_id or '(none)'}")
     conversation = await harness.create_conversation_async()
+    print(f"copilot session: {conversation.session_id}")
+    print(f"conversation count: {len(store.conversations)}")
     print(f"effective model: {(await conversation.wait_for_effective_model_async()).model or '(not reported)'}")
     Check.that(len(standalone.id) > 0, "a conversation has an id")
     Check.equal(None, standalone.parent_conversation_id, "a standalone conversation has no parent")
