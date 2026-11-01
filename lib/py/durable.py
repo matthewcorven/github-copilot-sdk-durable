@@ -1388,17 +1388,19 @@ class JsonlStoreProvider(InMemoryStoreProvider):
             return
 
         self._lock = StoreFileLock.acquire(self._path)
-        if not os.path.exists(self._path):
-            return
-
-        if DurableStore.detect_format(self._path) is DurableStoreFormat.LEGACY_JSON:
-            # Convert on open, into memory only. The committed baseline stays empty so
-            # the first commit emits the whole state as JSONL records.
-            self._restore_snapshot(DurableStore.read_legacy_snapshot(self._path))
-            self._replace_on_commit = True
-            return
-
-        self._replay(self._path)
+        try:
+            if not os.path.exists(self._path):
+                return
+            if DurableStore.detect_format(self._path) is DurableStoreFormat.LEGACY_JSON:
+                # Convert on open, into memory only. The committed baseline stays empty so
+                # the first commit emits the whole state as JSONL records.
+                self._restore_snapshot(DurableStore.read_legacy_snapshot(self._path))
+                self._replace_on_commit = True
+                return
+            self._replay(self._path)
+        except BaseException:
+            self.close()
+            raise
 
     def close(self) -> None:
         if self._lock is not None:
@@ -1893,6 +1895,8 @@ class DurableStore:
             if isinstance(whole, dict):
                 return DurableStoreFormat.LEGACY_JSON
         except json.JSONDecodeError as error:
+            if b"\n" not in Path(path).read_bytes():
+                return DurableStoreFormat.JSONL
             raise ValueError(
                 f"The file '{path}' is not a durable store: it is neither JSONL records nor "
                 f"a legacy JSON snapshot ({error})."
@@ -3560,10 +3564,9 @@ class DurableHarness:
         ``DURABLE_RUNTIME_PATH``, else ``None`` for the bundled runtime -- so a path that
         names no existing file fails the open before any process starts.
 
-        ``client_factory`` receives the resolved runtime path and the runtime arguments and
-        returns a started client. The Python SDK binding is not part of this port, so the
-        factory is the seam a host supplies; without one the open fails rather than
-        silently running against a different runtime than the one recorded.
+        By default the official SDK client is started with this runtime connection.
+        Optional ``client_factory`` receives the resolved path and arguments and returns
+        a started client for hosts that supply their own SDK connection.
         """
         resolved = options if options is not None else DurableHarnessOptions()
         runtime_path = resolve_runtime_path(resolved)
@@ -3888,14 +3891,6 @@ class DurableHarness:
         config = await self.build_session_config(choices, conversation)
         return await self._client.create_session(session_id=binding.session_id, **config)
 
-    def _session_config(
-        self,
-        conversation: DurableConversation,
-        choices: AgentChoices | None,
-    ) -> Any:
-        """The session configuration a fork's session is created or resumed with."""
-        raise RuntimeError("Use await build_session_config for the SDK keyword arguments.")
-
     async def abandon_fork_async(self, conversation_id: str) -> None:
         """Marks a fork abandoned, so it is never given a session."""
 
@@ -4136,10 +4131,12 @@ class DurableHarness:
         self._closed = True
         conversations = list(self._conversations.values())
         self.close()
-        await asyncio.gather(*(conversation.checkpoint_barrier_async() for conversation in conversations))
-        if self._in_flight:
-            await asyncio.gather(*self._in_flight.values())
-        await self._client.stop()
+        try:
+            await asyncio.gather(*(conversation.checkpoint_barrier_async() for conversation in conversations))
+            if self._in_flight:
+                await asyncio.gather(*self._in_flight.values())
+        finally:
+            await self._client.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -4477,14 +4474,20 @@ class DurableCopilotClient:
             return
         self._closed = True
 
-        if self._harness is not None:
-            self._harness.close()
-            if self._harness._in_flight:
-                await asyncio.gather(*self._harness._in_flight.values())
-        if self._owns_client and self._client is not None:
-            await self._close_client_async(self._client)
-        if self._owns_store and self._store is not None:
-            self._store.close()
+        try:
+            if self._harness is not None:
+                conversations = list(self._harness._conversations.values())
+                self._harness.close()
+                await asyncio.gather(*(conversation.checkpoint_barrier_async() for conversation in conversations))
+                if self._harness._in_flight:
+                    await asyncio.gather(*self._harness._in_flight.values())
+        finally:
+            try:
+                if self._owns_client and self._client is not None:
+                    await self._close_client_async(self._client)
+            finally:
+                if self._owns_store and self._store is not None:
+                    self._store.close()
 
 
 # ---------------------------------------------------------------------------

@@ -159,10 +159,12 @@ Replay fixtures without permission requests, sandbox decisions or original syste
 history cannot prove those native assertions. The example range owners validate originals
 separately; shared support does not imply that all examples pass.
 
-TypeScript JSONL locking is verified on macOS with `fs-ext@2.1.1`; Linux/Windows runner
-execution is not verified here. A compiled addon and a supported local-filesystem `flock`
-implementation are required; Windows/unavailable native locking is an explicit compatibility
-gap, not an unlocked fallback. NFS is not supported by this locking contract. Python retains
+TypeScript JSONL locking is verified on macOS with `fs-ext@2.1.1`, including second-writer
+refusal and release after killing the lock holder. Its source uses POSIX `flock` on Linux/macOS
+and Windows `LockFileEx`/`UnlockFileEx`, but Linux/Windows installation and runner execution
+are not verified here. A compiled addon and supported local filesystem are required;
+unavailable native locking fails explicitly, not through an unlocked fallback. NFS is not
+supported by this locking contract. Python retains
 its POSIX `fcntl`/Windows `msvcrt` provider locks. Python SDK 1.0.28 currently emits unclosed
 subprocess-pipe `ResourceWarning`s on Python 3.15 after passing integration checks; the
 adapter calls the public SDK stop method, rather than modifying private SDK process state.
