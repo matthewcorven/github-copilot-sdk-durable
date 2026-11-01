@@ -3,16 +3,33 @@ import subprocess
 import sys
 import unittest
 import json
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 class DeterministicParityTests(unittest.TestCase):
-    def run_example(self, path, mutation=None):
+    def run_example(self, path, mutation=None, env=None):
         if mutation is None:
             command = (["node", "--experimental-transform-types"] if path.suffix == ".ts"
                        else [sys.executable]) + [str(path)]
+        elif path.suffix == ".ts":
+            old, new = mutation
+            self.assertIn(old, path.read_text(), f"mutation must target the actual artifact: {path}")
+            script = (
+                "import { createRequire } from 'node:module'; "
+                f"const require = createRequire({json.dumps((ROOT / 'lib/ts/package.json').as_uri())}); "
+                "const fs = require('node:fs'); "
+                f"const ts = require({json.dumps(str(ROOT / 'lib/ts/node_modules/typescript'))}); "
+                f"let source = fs.readFileSync({json.dumps(str(path))}, 'utf8'); "
+                f"source = source.replace({json.dumps(old)}, {json.dumps(new)}); "
+                f"source = source.replace('../../lib/ts/durable.ts', {json.dumps((ROOT / 'lib/ts/durable.ts').as_uri())}); "
+                "const code = ts.transpileModule(source, {compilerOptions: "
+                "{target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext}}).outputText; "
+                "import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));"
+            )
+            command = ["node", "--experimental-transform-types", "--input-type=module", "-e", script]
         else:
             old, new = mutation
             source = path.read_text()
@@ -24,7 +41,7 @@ class DeterministicParityTests(unittest.TestCase):
                        f"s = s.replace({old!r}, {new!r}, 1); "
                        "exec(compile(s, str(p), 'exec'), "
                        "{'__name__': '__main__', '__file__': str(p)})"]
-        return subprocess.run(command, cwd=ROOT, text=True, capture_output=True, timeout=15)
+        return subprocess.run(command, cwd=ROOT, text=True, capture_output=True, timeout=15, env=env)
 
     def test_tasks_standalone(self):
         for language, suffix in [("ts", "ts"), ("py", "py")]:
@@ -37,6 +54,29 @@ class DeterministicParityTests(unittest.TestCase):
         result = self.run_example(ROOT / "examples/py/12-recovery.py")
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("attempts: [1, 2, 2, 3, 4, 5]; printed: [1, 2, 3, 4, 5]", result.stdout)
+
+    def test_typescript_recovery_standalone(self):
+        result = self.run_example(ROOT / "examples/ts/12-recovery.ts")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("attempts: [1,2,2,3,4,5]; printed: [1,2,3,4,5]", result.stdout)
+
+    def test_system_prompts_standalone(self):
+        runtime = Path(os.environ.get("DURABLE_RUNTIME_PATH",
+                                      str(ROOT / "tools/ReplayRuntime/bin/Debug/net10.0/ReplayRuntime")))
+        self.assertTrue(runtime.is_file(), "Build tools/ReplayRuntime/ReplayRuntime.csproj before running parity tests")
+        env = dict(os.environ, DURABLE_RUNTIME_PATH=str(runtime),
+                   DURABLE_EXAMPLE_FIXTURE=str(ROOT / "examples/ts/14-system-prompt.fixture.json"))
+        for language, suffix in [("ts", "ts"), ("py", "py")]:
+            with self.subTest(language=language):
+                result = self.run_example(ROOT / "examples" / language / f"14-system-prompt.{suffix}", env=env)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertIn("root system prompt:", result.stdout)
+                self.assertIn("subagent system prompt:", result.stdout)
+                self.assertIn("Only read; never edit files.", result.stdout)
+                self.assertIn("effective model: (not reported)", result.stdout)
+                # Configuration evidence only: native generated session IDs cause replay
+                # to report synthesized sessions. This is not a recorded model transcript.
+                self.assertIn("synthesised session", result.stderr)
 
     def test_failed_payment_assertion_exits_nonzero(self):
         result = self.run_example(ROOT / "examples/py/11-tasks.py",
@@ -54,22 +94,16 @@ class DeterministicParityTests(unittest.TestCase):
         self.assertIn("found [1, 2, 2, 3, 4, 5]", result.stderr)
 
     def test_failed_typescript_payment_assertion_exits_nonzero(self):
-        path = ROOT / "examples/ts/11-tasks.ts"
-        script = (
-            "const fs = require('node:fs'); "
-            f"const ts = require({json.dumps(str(ROOT / 'lib/ts/node_modules/typescript'))}); "
-            f"let source = fs.readFileSync({json.dumps(str(path))}, 'utf8'); "
-            "if (!source.includes('Check.equal(500, result')) throw new Error('missing mutation target'); "
-            "source = source.replace('Check.equal(500, result', 'Check.equal(501, result'); "
-            f"source = source.replace('../../lib/ts/durable.ts', {json.dumps((ROOT / 'lib/ts/durable.ts').as_uri())}); "
-            "const code = ts.transpileModule(source, {compilerOptions: "
-            "{target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext}}).outputText; "
-            "import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));"
-        )
-        result = subprocess.run(["node", "--experimental-transform-types", "-e", script],
-                                cwd=ROOT, text=True, capture_output=True, timeout=15)
+        result = self.run_example(ROOT / "examples/ts/11-tasks.ts",
+                                  ("Check.equal(500, result", "Check.equal(501, result"))
         self.assertNotEqual(0, result.returncode)
         self.assertIn("Assertion failed: the receipt holds the amount", result.stderr)
+
+    def test_typescript_missing_memo_repeats_effect_and_fails(self):
+        result = self.run_example(ROOT / "examples/ts/12-recovery.ts",
+                                  ('if (await runtime.memoAsync(`printed-${n}`) === null) {', 'if (true) {'))
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Assertion failed: no tick was printed twice, and none was skipped", result.stderr)
 
     def test_range_metadata_preserves_inventory_and_live_classification(self):
         stems = ["11-tasks", "12-recovery", "13-chat", "14-system-prompt", "15-real-model",
@@ -86,8 +120,7 @@ class DeterministicParityTests(unittest.TestCase):
                     self.assertEqual(number in live, item["live"], item["file"])
                     if item["live"]:
                         self.assertTrue(item["liveReason"], item["file"])
-                    if item["status"] == "implemented-core":
-                        self.assertTrue((ROOT / "examples" / language / item["file"]).is_file())
+                    self.assertTrue((ROOT / "examples" / language / item["file"]).is_file())
 
 
 if __name__ == "__main__":

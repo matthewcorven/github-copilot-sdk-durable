@@ -49,7 +49,10 @@ async def main():
         first = DurableHarness(None, first_store, registry)
         run = None
         try:
-            root = await first.root_async()
+            async def create_root(tx):
+                return tx.create_conversation()
+
+            root = await first_store.commit_async(create_root)
 
             async def create(tx):
                 return tx.create_task(ticker, {"to": 5}, owner_conversation_id=root.id)
@@ -59,7 +62,10 @@ async def main():
             await asyncio.wait_for(tick_two.wait(), 5)
             run.cancel()
             await run
-            Check.that(first_store.task(record.id).outcome is None, "interruption saved no terminal outcome")
+            interrupted = first_store.task(record.id)
+            if interrupted is None:
+                raise RuntimeError("The interrupted task is missing from its store")
+            Check.that(interrupted.outcome is None, "interruption saved no terminal outcome")
         finally:
             if run is not None and not run.done():
                 run.cancel()
