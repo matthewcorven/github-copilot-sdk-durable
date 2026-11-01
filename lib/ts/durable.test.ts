@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, mock } from "node:test";
 import { mkdtempSync, readFileSync, appendFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,7 @@ import {
   DurableStoreOptions, DurableStoreFormat, ExtensionRegistry, PermissionPolicy, DurableTask,
   TaskCommit, DurableSandboxPolicy,
   Extension, ToolWrapper, DurableTaskRunner, TaskStatus, DurableConversation,
+  type SessionEvent,
 } from "./durable.js";
 import { CopilotClient } from "@github/copilot-sdk";
 
@@ -26,6 +27,15 @@ test("harness disposal is idempotent and stops SDK after checkpoint failure", as
     await assert.rejects(harness.disposeAsync(), /checkpoint failed/);
     assert.equal(stops, 1);
   } finally { store.dispose(); }
+});
+
+test("host hook tolerance is opt-in and matches only the C# denial classifier", () => {
+  assert.equal(new DurableHarnessOptions().tolerateHostHookFailures, false);
+  assert.equal(new DurableHarnessOptions({ tolerateHostHookFailures: true }).tolerateHostHookFailures, true);
+  for (const message of ["postToolUse hook: Operation not permitted", "HOOK denied by SANDBOX", "hook exited with code 126"])
+    assert.equal(DurableConversation.isHostHookFailure(message), true);
+  for (const message of [null, "", "Operation not permitted", "tool failed", "hook timed out"])
+    assert.equal(DurableConversation.isHostHookFailure(message), false);
 });
 
 test("JSONL native lock refuses another process and releases after a crash", { timeout: 5000 }, async () => {
@@ -178,6 +188,30 @@ test("real SDK recorded-runtime lifecycle and honest model report", { skip: !pro
       model: "replay-model", reasoningEffort: "minimal",
     }), chat);
     assert.equal(rawConfig.reasoningEffort, "minimal");
+    assert(answer);
+    let observer: ((event: SessionEvent) => void) | undefined;
+    const subscription = mock.method(chat.session, "on", (handler: (event: SessionEvent) => void) => {
+      observer = handler;
+      return () => { observer = undefined; };
+    });
+    let errorMessage = "postToolUse hook: Operation not permitted";
+    const send = mock.method(chat.session, "send", async () => {
+      observer?.(answer);
+      observer?.({
+        type: "session.error", id: "host-error", timestamp: new Date().toISOString(), parentId: null,
+        data: { errorType: "hook", message: errorMessage },
+      });
+      return "native-message";
+    });
+    try {
+      await assert.rejects(chat.submitAsync("denial"), /Operation not permitted/);
+      harness.options.tolerateHostHookFailures = true;
+      assert.equal(await chat.submitAsync("tolerated denial"), answer);
+      errorMessage = "hook timed out";
+      await assert.rejects(chat.submitAsync("other failure"), /hook timed out/);
+    } finally {
+      send.mock.restore(); subscription.mock.restore();
+    }
     assert.equal(chat.effectiveModel.model, "replay-model");
     assert.equal(chat.turnModels[0]?.model, null);
   } finally { await harness.disposeAsync(); store.dispose(); }
