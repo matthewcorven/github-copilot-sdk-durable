@@ -78,6 +78,9 @@ try {
     const record = Check.notNull(readerStore.task(taskId), "the saved task exists");
     saved = { checkpoint: structuredClone(record.checkpoint), memos: structuredClone(record.memos) };
     Check.sequence([1, 2], printed, "opening the reader did not resume the task");
+    if (saved.checkpoint === null || typeof saved.checkpoint !== "object") throw new Error("Invalid checkpoint");
+    console.log(`closed; saved checkpoint: ${Reflect.get(saved.checkpoint, "phase")} n=${Reflect.get(saved.checkpoint, "n")}`);
+    console.log(`saved memos: ${Object.keys(saved.memos).length}`);
   } finally {
     readerStore.dispose();
   }
@@ -97,7 +100,8 @@ try {
     Check.equal(2, Object.keys(saved.memos).length, "the memos for the two printed ticks were saved");
     Check.sequence([1, 2, 2, 3, 4, 5], attempted, "tick 2 really reran after reopening");
     Check.equal(true, saved.memos["printed-2"], "tick 2's memo survived the interrupted write");
-    console.log(`after reopen: ${counted.status} ${counted.result}; attempts: ${JSON.stringify(attempted)}; printed: ${JSON.stringify(printed)}`);
+    console.log(`after reopen: ${counted.status} ${counted.result}`);
+    console.log(`ticks printed in total: [${printed.join(", ")}]`);
   } finally {
     await second.disposeAsync();
     secondStore.dispose();

@@ -48,17 +48,23 @@ class DeterministicParityTests(unittest.TestCase):
             with self.subTest(language=language):
                 result = self.run_example(ROOT / "examples" / language / f"11-tasks.{suffix}")
                 self.assertEqual(0, result.returncode, result.stderr)
-                self.assertIn("receipt: 500; payments charged: 1", result.stdout)
+                self.assertIn("receipt: 500", result.stdout)
+                self.assertIn("payments charged: 1", result.stdout)
+                self.assertIn("task status: Terminal", result.stdout)
 
     def test_recovery_standalone(self):
         result = self.run_example(ROOT / "examples/py/12-recovery.py")
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("attempts: [1, 2, 2, 3, 4, 5]; printed: [1, 2, 3, 4, 5]", result.stdout)
+        self.assertIn("closed; saved checkpoint: tick n=2", result.stdout)
+        self.assertIn("saved memos: 2", result.stdout)
+        self.assertIn("ticks printed in total: [1, 2, 3, 4, 5]", result.stdout)
 
     def test_typescript_recovery_standalone(self):
         result = self.run_example(ROOT / "examples/ts/12-recovery.ts")
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("attempts: [1,2,2,3,4,5]; printed: [1,2,3,4,5]", result.stdout)
+        self.assertIn("closed; saved checkpoint: tick n=2", result.stdout)
+        self.assertIn("saved memos: 2", result.stdout)
+        self.assertIn("ticks printed in total: [1, 2, 3, 4, 5]", result.stdout)
 
     def test_system_prompts_standalone(self):
         runtime = Path(os.environ.get("DURABLE_RUNTIME_PATH",
@@ -76,6 +82,35 @@ class DeterministicParityTests(unittest.TestCase):
                 self.assertIn("effective model: (not reported)", result.stdout)
                 # Configuration evidence only: native generated session IDs cause replay
                 # to report synthesized sessions. This is not a recorded model transcript.
+                self.assertIn("synthesised session", result.stderr)
+
+    def test_fixture_print_mode_standalone(self):
+        runtime = ROOT / "tools/ReplayRuntime/bin/Debug/net10.0/ReplayRuntime"
+        env = dict(os.environ, DURABLE_RUNTIME_PATH=str(runtime),
+                   DURABLE_EXAMPLE_FIXTURE=str(ROOT / "tools/ReplayRuntime/fixtures/basic.json"))
+        for language, suffix in [("ts", "ts"), ("py", "py")]:
+            with self.subTest(language=language):
+                result = self.run_example(ROOT / "examples" / language / f"17-print.{suffix}", env=env)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual("Hello from the recorded transcript.", result.stdout.strip())
+                self.assertIn("effective model: replay-model", result.stderr)
+                self.assertIn("synthesised session", result.stderr)
+
+    def test_fixture_json_mode_standalone(self):
+        runtime = ROOT / "tools/ReplayRuntime/bin/Debug/net10.0/ReplayRuntime"
+        env = dict(os.environ, DURABLE_RUNTIME_PATH=str(runtime),
+                   DURABLE_EXAMPLE_FIXTURE=str(ROOT / "tools/ReplayRuntime/fixtures/basic.json"))
+        for language, suffix in [("ts", "ts"), ("py", "py")]:
+            with self.subTest(language=language):
+                result = self.run_example(ROOT / "examples" / language / f"18-json.{suffix}", env=env)
+                self.assertEqual(0, result.returncode, result.stderr)
+                lines = [json.loads(line) for line in result.stdout.splitlines()]
+                self.assertTrue(all(isinstance(line, dict) for line in lines))
+                self.assertEqual("snapshot", lines[0]["type"])
+                events = [line for line in lines if line["type"] == "event"]
+                answers = [line for line in events if line["event"] == "assistant.message"]
+                self.assertEqual(1, len(answers))
+                self.assertEqual("Hello from the recorded transcript.", answers[0]["data"])
                 self.assertIn("synthesised session", result.stderr)
 
     def test_failed_payment_assertion_exits_nonzero(self):
@@ -117,6 +152,11 @@ class DeterministicParityTests(unittest.TestCase):
                                  [item["file"] for item in metadata["examples"]])
                 for item in metadata["examples"]:
                     number = int(item["file"][:2])
+                    self.assertEqual(str(number), item["id"])
+                    self.assertEqual(item["file"].rsplit(".", 1)[0] + ".cs", item["source"])
+                    self.assertEqual(f"examples/{language}/{item['file']}", item["path"])
+                    self.assertEqual("ported", item["status"])
+                    self.assertEqual("not-applicable", item["sandboxMode"])
                     self.assertEqual(number in live, item["live"], item["file"])
                     if item["live"]:
                         self.assertTrue(item["liveReason"], item["file"])

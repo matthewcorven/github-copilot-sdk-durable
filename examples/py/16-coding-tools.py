@@ -77,11 +77,11 @@ async def main():
             print(f"effective model: {report.model or '(not reported)'}")
             answer = await root.submit_async("Use the read tool on notes.txt, then the edit tool to replace 'world' with 'durable', then the bash tool to run 'cat notes.txt'. Then tell me what the file says.")
             context = await root.context_async()
-            names = [e.data.tool_name for e in context if e.type == "tool.execution_start"]
+            names = [e.data.tool_name for e in context if e.type.value == "tool.execution_start"]
             Check.that("read_file" in names, "the app's read_file tool ran")
             Check.that("edit_file" in names, "the app's edit_file tool ran")
             Check.that("run_shell" in names, "the app's run_shell tool ran")
-            failures = [e for e in context if e.type == "tool.execution_complete" and e.data.error is not None]
+            failures = [e for e in context if e.type.value == "tool.execution_complete" and e.data.error is not None]
             Check.equal(0, len(failures), "no tool call failed")
             Check.equal("hello durable", (workspace / "notes.txt").read_text().strip(), "the edit reached the file")
             Check.equal(1, len(timings), "the hook timed the shell call")

@@ -23,16 +23,16 @@ async def main():
         deltas = []
 
         def observe(event):
-            if event.type == "assistant.message_delta" and event.data.delta_content:
+            if event.type.value == "assistant.message_delta" and event.data.delta_content:
                 deltas.append(event.data.delta_content)
                 print(f"event text delta: {event.data.delta_content}")
             else:
-                print(f"event: {event.type}")
+                print(f"event: {event.type.value}")
 
         unsubscribe = root.session.on(observe)
         answer = await run
         Check.that(len(snapshot) >= 1, "the late joiner received the current state")
-        Check.that(any(e.type == "user.message" for e in snapshot), "the snapshot holds the user message")
+        Check.that(any(e.type.value == "user.message" for e in snapshot), "the snapshot holds the user message")
         Check.that(len(deltas) >= 1, "the late joiner received live deltas")
         Check.that(answer is not None, "the run finished")
         Check.that(len(answer.data.content.strip()) > 0, "the answer is not empty")

@@ -25,7 +25,7 @@ async def main():
 
         def observe(event):
             nonlocal printed
-            if event.type == "assistant.message_delta" and event.data.delta_content:
+            if event.type.value == "assistant.message_delta" and event.data.delta_content:
                 text = event.data.delta_content
                 print(text, end="", flush=True)
                 printed += len(text.encode("utf-16-le")) // 2

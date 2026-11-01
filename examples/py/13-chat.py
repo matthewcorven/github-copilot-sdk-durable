@@ -22,15 +22,15 @@ async def main():
         print(f"effective model: {report.model or '(not reported)'}")
         answer = await root.submit_async("Capital of France? Answer in one word.")
         Check.equal("Paris", answer.data.content.strip() if answer else None, "the model answered the question")
-        Check.that(len(root.entries(10)) >= 1, "the conversation stored its entries")
+        Check.equal(0, len(root.entries(10)), "a plain chat turn has no app-written entries")
         events = await root.context_async()
-        Check.that(any(e.type == "user.message" for e in events), "the transcript holds the user message")
-        Check.that(any(e.type == "assistant.message" for e in events), "the transcript holds the assistant message")
-        Check.that(any(e.type == "system.message" for e in events), "the transcript holds the system message")
+        Check.that(any(e.type.value == "user.message" for e in events), "the transcript holds the user message")
+        Check.that(any(e.type.value == "assistant.message" for e in events), "the transcript holds the assistant message")
+        Check.that(any(e.type.value == "system.message" for e in events), "the transcript holds the system message")
         print(f"answer: {answer.data.content}")
         for event in events:
-            if event.type in ("user.message", "assistant.message", "system.message"):
-                print(f"  {event.type}: {event.data.content}")
+            if event.type.value in ("user.message", "assistant.message", "system.message"):
+                print(f"  {event.type.value}: {event.data.content}")
     finally:
         await harness.close_async()
         store.close()
