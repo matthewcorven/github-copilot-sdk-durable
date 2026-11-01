@@ -114,7 +114,7 @@ class RunnerContractTests(unittest.TestCase):
                     handle.write('\nconsole.log("incorrect inventory count: 99");\n' if language == "ts"
                                  else '\nprint("incorrect inventory count: 99")\n')
                 result = execute(root, language, "--deterministic", "00")
-                self.assertNotEqual(result.returncode, 0)
+                self.assertNotEqual(result.returncode, 0, "Runner accepted mismatched actual example output")
                 self.assertIn("actual C# output mismatch", result.stderr)
                 self.assertIn("incorrect inventory count: 99", result.stderr)
 

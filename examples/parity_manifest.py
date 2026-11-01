@@ -35,9 +35,12 @@ def build(root=ROOT):
         for range_name in RANGES:
             path = root / "examples" / language / f"parity-{range_name}.json"
             declaration = json.loads(path.read_text())
+            first, last = map(int, range_name.split("-"))
+            if declaration.get("schemaVersion") != 1 or declaration.get("range") != [first, last]:
+                raise ValueError(f"{path}: unsupported range schema/version")
             for row in declaration["examples"]:
                 identifier = row.get("id")
-                if identifier not in {f"{n:02}" for n in range(36)} or identifier in rows[language]:
+                if identifier not in {f"{n:02}" for n in range(first, last + 1)} or identifier in rows[language]:
                     raise ValueError(f"{path}: invalid or duplicate id {identifier!r}")
                 source = next(s for s in sources if s[:2] == identifier)
                 if row.get("source") != source:
