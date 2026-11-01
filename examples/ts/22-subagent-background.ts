@@ -69,7 +69,7 @@ async function main() {
   options.path=join(directory,"session.jsonl");
   try {
     const firstStore=DurableStore.create(options);
-    let before: Record<string,{ conversationId: string; reported: string }>;
+    let beforeReaderId: string;
     try {
       host=await DurableHarness.openAsync(firstStore,registry);
       try {
@@ -80,14 +80,14 @@ async function main() {
           ["spawn","Use the subagent tool to spawn a subagent named reader."],
           ["send","Use the subagent tool to send 'What is the whale called?' to reader."],
           ["status","Use the subagent tool to list my subagents."],
-        ]) {
+        ] as const) {
           const answer=await chat.submitAsync(prompt);
           console.log(`${label}: ${answer?.data.content??""}`);
         }
         const snapshot=chat.snapshot(subagents);
         assert.ok(snapshot?.reader,"the first process registered the reader subagent");
-        before=snapshot;
-        console.log(`registry before restart: ${Object.keys(before).join(", ")}`);
+        beforeReaderId=snapshot.reader.conversationId;
+        console.log(`registry before restart: ${Object.keys(snapshot).join(", ")}`);
       } finally { await host.disposeAsync(); }
     } finally { firstStore.dispose(); }
     console.log("(process restarts)");
@@ -101,7 +101,7 @@ async function main() {
         console.log(`registry after restart: ${Object.keys(after).join(", ")}`);
         const listed=await chat.submitAsync("Use the subagent tool to list my subagents.");
         console.log(`status after restart: ${listed?.data.content??""}`);
-        assert.equal(after.reader.conversationId,before.reader.conversationId,
+        assert.equal(after.reader.conversationId,beforeReaderId,
           "the restarted process points at the same subagent conversation");
         assert.ok(listed,"the restarted process can list the subagent");
         assert.ok(listed.data.content.includes("reader"),"the restarted process still knows the subagent by name");

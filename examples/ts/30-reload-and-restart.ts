@@ -71,8 +71,10 @@ async function run(directory: string,phase: string) {
     } finally { await harness.disposeAsync(); }
   } finally { store.dispose(); }
   // Preserve the current TS loader; close the first writer before spawning the second.
+  const sourcePath=process.argv[1];
+  assert.ok(sourcePath,"the restarted process has the standalone script path");
   const result=await new Promise<{ code: number|null; output: string; error: string }>((resolveResult,reject) => {
-    const child=spawn(process.execPath,[...process.execArgv,resolve(process.argv[1]),"second"],{
+    const child=spawn(process.execPath,[...process.execArgv,resolve(sourcePath),"second"],{
       env: { ...process.env,DURABLE_RELOAD_DIR: directory },
       stdio: ["ignore","pipe","pipe"],
       timeout: 180_000,
