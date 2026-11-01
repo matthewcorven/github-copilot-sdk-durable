@@ -8,6 +8,22 @@ from test_runners import isolated_contract
 
 
 class FactMutationTests(unittest.TestCase):
+    def test_real_runner_comparison_regressions_make_the_actual_output_gate_red(self):
+        for language, name, before, after in [
+            ("ts", "run_all.mjs", "if (actual !== expected) throw new Error", "if (false) throw new Error"),
+            ("py", "run_all.py", "if actual != expected:", "if False:"),
+        ]:
+            with self.subTest(language=language), isolated_contract() as root:
+                path = root / "examples" / name
+                original = path.read_text()
+                self.assertEqual(original.count(before), 1)
+                path.write_text(original.replace(before, after))
+                result = subprocess.run([sys.executable, "-m", "unittest",
+                    "test_runners.RunnerContractTests.test_real_example_output_delta_fails_comparison"],
+                    cwd=root / "tests/parity", capture_output=True, text=True, timeout=60)
+                self.assertNotEqual(result.returncode, 0, f"{language}: real runner comparison mutation survived")
+                self.assertIn("Runner accepted mismatched actual example output", result.stderr)
+
     def test_four_facts_reject_realistic_library_regressions_in_both_languages(self):
         mutations = {
             "ts": [

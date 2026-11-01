@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
@@ -35,7 +35,7 @@ export function loadManifest() {
   const sources = readdirSync(join(root, "examples")).filter(path => /^[0-3][0-9]-.*\.cs$/.test(path)
     && Number(path.slice(0, 2)) <= 35).sort();
   const ids = Array.from({ length: 36 }, (_, n) => String(n).padStart(2, "0"));
-  if (manifest.schemaVersion !== 1 || !isDeepStrictEqual(manifest.scope, [0, 35])
+  if (manifest.schemaVersion !== 1 || manifest.reference !== "scripts/validate.sh" || !isDeepStrictEqual(manifest.scope, [0, 35])
       || !isDeepStrictEqual(sources.map(source => source.slice(0, 2)), ids)
       || !isDeepStrictEqual(manifest.examples.map(entry => entry.id), ids)) {
     throw new Error("Inventory must contain all 36 C# examples exactly once, 00..35");
@@ -45,8 +45,13 @@ export function loadManifest() {
     declarations[language] = new Map();
     for (const range of ["00-10", "11-21", "22-35"]) {
       const path = `examples/${language}/parity-${range}.json`;
-      for (const evidence of readJson(path).examples) {
-        if (!ids.includes(evidence.id) || declarations[language].has(evidence.id)) {
+      const declaration = readJson(path);
+      const [first, last] = range.split("-").map(Number);
+      if (declaration.schemaVersion !== 1 || !isDeepStrictEqual(declaration.range, [first, last])) {
+        throw new Error(`${path}: unsupported range schema/version`);
+      }
+      for (const evidence of declaration.examples) {
+        if (!ids.slice(first, last + 1).includes(evidence.id) || declarations[language].has(evidence.id)) {
           throw new Error(`${path}: invalid or duplicate id ${evidence.id}`);
         }
         declarations[language].set(evidence.id, { evidence, path });
@@ -173,6 +178,7 @@ export function main(argv = process.argv.slice(2)) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (process.argv[1] && existsSync(process.argv[1])
+    && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   process.exitCode = main();
 }
