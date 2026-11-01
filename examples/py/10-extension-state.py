@@ -1,5 +1,5 @@
 """10 — Extension state. LIVE: a recorded answer cannot prove a tool wrote state."""
-from copilot import define_tool
+from copilot import SessionEventType, define_tool
 from pydantic import BaseModel, Field
 from example import d, run_example
 from check import Check
@@ -35,8 +35,9 @@ async def main(harness, store, registry):
     print(f"effective model: {(await chat.wait_for_effective_model_async()).model or '(not reported)'}")
     reply = await chat.submit_async("Add 'fix the build' to my todo list, then confirm.")
     print(f"answer: {reply.data.content if reply else '(no answer)'}")
+    print(f"todos: [{', '.join(chat.snapshot(todos) or [])}]")
     for event in await chat.context_async():
-        if event.type == "system.message":
+        if event.type == SessionEventType.SYSTEM_MESSAGE:
             print(f"system message: {event.data.content}")
     Check.sequence(["fix the build"], chat.snapshot(todos) or [], "the tool wrote the todo into the document")
     Check.not_none(reply, "the model answered")
