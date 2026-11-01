@@ -6,9 +6,13 @@
 // the places where TypeScript genuinely lacks a C# equivalent are recorded in
 // `docs/COMPARATIVE_ANALYSIS.md` §8.
 //
-// Scope of this pass: conversations, documents, durable tasks, the extension registry,
-// transactions, and the watch stream. The JSONL and legacy single-file backends are
-// deferred; see `DurableStoreFormat` below.
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { randomUUID } from "node:crypto";
+import { CopilotClient, RuntimeConnection } from "@github/copilot-sdk";
+import type { AssistantMessageEvent, CopilotSession, SessionConfig, SessionEvent, Tool, SandboxConfig } from "@github/copilot-sdk";
+export { defineTool } from "@github/copilot-sdk";
+export type { Tool, ToolInvocation, SessionEvent, SessionConfig, SandboxConfig, SessionHooks } from "@github/copilot-sdk";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // JSON
@@ -1126,6 +1130,12 @@ export class InMemoryStoreProvider implements IDurableStoreProvider {
 
   /** Restores the state from a snapshot. */
   protected restoreSnapshot(snapshot: StoreSnapshot): void {
+    this.documentStates.clear();
+    this.taskRecords.clear();
+    this.conversationRecords.clear();
+    this.taskStates.clear();
+    this.entryLists.clear();
+    this.entryRecords.clear();
     this.sequenceCounter = snapshot.sequence;
 
     for (const conversation of snapshot.conversations) {
@@ -1136,32 +1146,162 @@ export class InMemoryStoreProvider implements IDurableStoreProvider {
       this.taskRecords.set(task.id, task);
       this.taskStates.set(task.id, TaskStateSnapshot.capture(task));
     }
-
     for (const document of snapshot.documents) {
-      const state = new DocumentState(
-        document.kind,
-        document.ownerId,
-        document.fork,
-        document.initial === null ? null : DurableJson.clone(document.initial),
-      );
-      for (const version of document.versions) {
-        state.versions.push(
-          new DocumentVersion(version.entryId, DurableJson.clone(version.value), version.sequence),
-        );
-      }
-
+      const state = new DocumentState(document.kind, document.ownerId, document.fork, document.initial);
+      for (const version of document.versions)
+        state.versions.push(new DocumentVersion(version.entryId, DurableJson.clone(version.value), version.sequence));
       this.documentStates.set(InMemoryStoreProvider.documentKey(document.kind, document.ownerId), state);
     }
-
-    for (const [key, value] of Object.entries(snapshot.entries)) {
-      this.entryLists.set(key, [...value]);
-    }
-
-    for (const record of snapshot.entryRecords) {
-      this.entryRecords.set(record.id, record);
-    }
+    for (const [key, value] of Object.entries(snapshot.entries)) this.entryLists.set(key, [...value]);
+    for (const record of snapshot.entryRecords) this.entryRecords.set(record.id, record);
   }
 }
+
+    /** Append-only, fsynced JSONL storage using the shared v1 record envelope. */
+    export class JsonlStoreProvider extends InMemoryStoreProvider {
+      private file = "";
+      private lock: number | null = null;
+      private committed = new Map<string, string>();
+
+      override get isPersistent(): boolean { return true; }
+
+      override open(options: DurableStoreOptions): void {
+        if (!options.path) throw new Error("A JSONL store requires a path.");
+        this.file = path.resolve(options.path);
+        if (!fs.existsSync(path.dirname(this.file))) return;
+        this.acquireLock();
+        try {
+          if (!fs.existsSync(this.file)) return;
+          const bytes = fs.readFileSync(this.file);
+          let offset = 0;
+          const snapshot = {
+            sequence: 0, conversations: [] as ConversationRecord[], tasks: [] as DurableTaskRecord[],
+            documents: [] as Array<{ kind: string; ownerId: string; fork: ForkPolicy; initial: JsonValue; versions: DocumentVersionSnapshot[] }>,
+            entries: {} as Record<string, string[]>, entryRecords: [] as EntryRecord[],
+          };
+          while (offset < bytes.length) {
+            const newline = bytes.indexOf(10, offset);
+            const end = newline < 0 ? bytes.length : newline;
+            let record: { v: number; seq: number; type: string; payload: Record<string, unknown> };
+            try {
+              record = JSON.parse(bytes.subarray(offset, end).toString("utf8"));
+            } catch (error) {
+              if (newline >= 0) throw new Error(`Invalid JSONL record at byte ${offset}.`, { cause: error });
+              fs.truncateSync(this.file, offset);
+              break;
+            }
+            if (record.v !== 1 || !Number.isSafeInteger(record.seq) || !record.payload) {
+              throw new Error(`Unsupported JSONL record at byte ${offset}.`);
+            }
+            const p = record.payload;
+            snapshot.sequence = Math.max(snapshot.sequence, record.seq);
+            switch (record.type) {
+              case "conversation": {
+                const item = Object.assign(new ConversationRecord(String(p["id"])), p);
+                snapshot.conversations = snapshot.conversations.filter(c => c.id !== item.id);
+                snapshot.conversations.push(item);
+                break;
+              }
+              case "entry":
+                (snapshot.entries[String(p["conversationId"])] ??= []).push(String(p["entryId"]));
+                break;
+              case "entry-record":
+                snapshot.entryRecords.push(Object.assign(new EntryRecord("", "", "", null, 0), p));
+                break;
+              case "document": {
+                const fork = typeof p["fork"] === "number"
+                  ? [ForkPolicy.AsOf, ForkPolicy.Current, ForkPolicy.Initial][p["fork"]] : p["fork"];
+                snapshot.documents.push({ kind: String(p["kind"]), ownerId: String(p["ownerId"]),
+                  fork: fork as ForkPolicy, initial: (p["initial"] ?? null) as JsonValue, versions: [] });
+                break;
+              }
+              case "document-version": {
+                const doc = snapshot.documents.find(d => d.kind === p["kind"] && d.ownerId === p["ownerId"]);
+                if (!doc) throw new Error("JSONL document version precedes its definition.");
+                doc.versions.push(new DocumentVersionSnapshot(String(p["entryId"]), Number(p["sequence"]),
+                  p["value"] as JsonValue));
+                break;
+              }
+              case "task": {
+                const task = Object.assign(new DurableTaskRecord("", "", null, null), p);
+                if (typeof p["status"] === "number") task.status =
+                  [TaskStatus.Pending, TaskStatus.Running, TaskStatus.Waiting, TaskStatus.Sleeping, TaskStatus.Terminal][p["status"]]!;
+                snapshot.tasks = snapshot.tasks.filter(t => t.id !== task.id);
+                snapshot.tasks.push(task);
+                break;
+              }
+              default: throw new Error(`Unknown JSONL record type '${record.type}'.`);
+            }
+            offset = newline < 0 ? bytes.length : end + 1;
+          }
+          this.restoreSnapshot(snapshot);
+          this.committed = this.records();
+        } catch (error) {
+          this.dispose();
+          throw error;
+        }
+      }
+
+      private acquireLock(): void {
+        if (this.lock !== null) return;
+        this.lock = fs.openSync(`${this.file}.lock`, "wx", 0o600);
+      }
+
+      private records(): Map<string, string> {
+        const records = new Map<string, string>();
+        const add = (key: string, type: string, payload: unknown) =>
+          records.set(key, JSON.stringify({ v: 1, seq: this.sequence, type, payload }));
+        for (const c of this.conversations) add(`c:${c.id}`, "conversation", c);
+        for (const [id, entries] of this.entryLists) entries.forEach((entryId, i) =>
+          add(`e:${id}:${i}`, "entry", { conversationId: id, entryId }));
+        for (const e of this.entryRecords.values()) add(`r:${e.id}`, "entry-record", e);
+        for (const d of this.documents) {
+          const fork = [ForkPolicy.AsOf, ForkPolicy.Current, ForkPolicy.Initial].indexOf(d.fork);
+          add(`d:${d.kind}@${d.ownerId}`, "document", { kind: d.kind, ownerId: d.ownerId, fork, initial: d.initial });
+          d.versions.forEach((v, i) => add(`v:${d.kind}@${d.ownerId}:${i}`, "document-version",
+            { kind: d.kind, ownerId: d.ownerId, fork, ...v }));
+        }
+        for (const t of this.tasks) add(`t:${t.id}`, "task", {
+          ...t, status: Object.values(TaskStatus).indexOf(t.status),
+        });
+        return records;
+      }
+
+      override commit(): void {
+        try { this.persist(); this.endTransaction(); }
+        catch (error) { this.rollback(); throw error; }
+      }
+
+      protected override persist(): void {
+        fs.mkdirSync(path.dirname(this.file), { recursive: true });
+        this.acquireLock();
+        const records = this.records();
+        const changed = [...records].filter(([key, text]) => {
+          const previous = this.committed.get(key);
+          return !previous || JSON.stringify(JSON.parse(previous).payload) !== JSON.stringify(JSON.parse(text).payload);
+        }).map(([, text]) => text);
+        if (!changed.length) return;
+        const fd = fs.openSync(this.file, "a+", 0o600);
+        const size = fs.fstatSync(fd).size;
+        try {
+          fs.writeFileSync(fd, `${changed.join("\n")}\n`);
+          fs.fsyncSync(fd);
+          this.committed = records;
+        } catch (error) {
+          fs.ftruncateSync(fd, size);
+          fs.fsyncSync(fd);
+          throw error;
+        } finally { fs.closeSync(fd); }
+      }
+
+      override dispose(): void {
+        if (this.lock !== null) {
+          fs.closeSync(this.lock);
+          this.lock = null;
+          fs.unlinkSync(`${this.file}.lock`);
+        }
+      }
+    }
 
 /** A listener told about every successful commit. */
 export type CommitListener = () => void;
@@ -1264,11 +1404,9 @@ export class DurableStore {
       case DurableStoreFormat.InMemory:
         return new InMemoryStoreProvider();
       case DurableStoreFormat.Jsonl:
+        return new JsonlStoreProvider();
       case DurableStoreFormat.LegacyJson:
-        throw new Error(
-          `The '${options.format}' file backend is not part of this port yet. ` +
-            "This pass ports the six model areas; the file backends are tracked separately.",
-        );
+        throw new Error("Legacy JSON is unsupported in the TypeScript port; use JSONL.");
       default:
         // Auto without a path means the in-memory tier. `create` resolves the per-user
         // default path for every non-InMemory format, so a path here means a file.
@@ -1276,10 +1414,7 @@ export class DurableStore {
           return new InMemoryStoreProvider();
         }
 
-        throw new Error(
-          "The file backends are not part of this port yet. " +
-            "This pass ports the six model areas; the file backends are tracked separately.",
-        );
+        return new JsonlStoreProvider();
     }
   }
 
@@ -1772,6 +1907,9 @@ export class DocumentDraft<T extends JsonValue> {
 export interface DurableTool {
   readonly name: string;
   readonly description?: string;
+  readonly parameters?: Tool["parameters"];
+  readonly handler?: Tool["handler"];
+  readonly overridesBuiltInTool?: boolean;
 }
 
 /** A wrapper that decorates whichever tool with a given name wins. */
@@ -1788,7 +1926,7 @@ export class ToolWrapper {
 export class SectionInput {
   constructor(
     /** The conversation the prompt is being built for. */
-    readonly conversation: ConversationRecord | null,
+    readonly conversation: DurableConversation | null,
     /** The tools the agent will be offered. */
     readonly tools: readonly DurableTool[],
     /** The selected extensions. */
@@ -2361,6 +2499,11 @@ export function watchDocument<T extends JsonValue>(
 
 /** The options a harness is opened with. */
 export class DurableHarnessOptions {
+  runtimePath: string | null = null;
+  runtimeArguments: string[] = [];
+  permissionHandler?: SessionConfig["onPermissionRequest"];
+  enableFileHooks?: boolean;
+  constructor(options: Partial<DurableHarnessOptions> = {}) { Object.assign(this, options); }
   /**
    * The environment variable that names the runtime the harness targets. The port
    * reads the runtime from here rather than assuming one.
@@ -2372,6 +2515,462 @@ export class DurableHarnessOptions {
     const processLike = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
     const value = processLike?.env?.[DurableHarnessOptions.runtimePathEnvironmentVariable];
     return value === undefined || value.length === 0 ? null : value;
+  }
+}
+
+export class DurableSandboxAuth {
+  gh?: boolean; git?: boolean;
+  constructor(value: Partial<DurableSandboxAuth> = {}) { Object.assign(this, value); }
+}
+export class DurableSandboxCredentials {
+  envVars?: Record<string, string[]>;
+  constructor(value: Partial<DurableSandboxCredentials> = {}) { Object.assign(this, value); }
+}
+export class DurableSandboxFilesystem {
+  clearPolicyOnExit?: boolean; deniedPaths?: string[]; readonlyPaths?: string[]; readwritePaths?: string[];
+  constructor(value: Partial<DurableSandboxFilesystem> = {}) { Object.assign(this, value); }
+}
+export class DurableSandboxProxy {
+  url?: string; username?: string; password?: string;
+  constructor(value: Partial<DurableSandboxProxy> = {}) { Object.assign(this, value); }
+}
+export class DurableSandboxNetwork {
+  allowedHosts?: string[]; blockedHosts?: string[]; allowOutbound?: boolean; allowLocalNetwork?: boolean;
+  proxy?: DurableSandboxProxy;
+  constructor(value: Partial<DurableSandboxNetwork> = {}) { Object.assign(this, value); }
+}
+export class DurableSandboxPolicy {
+  static readonly workspaceToken = "{workspace}";
+  enabled = false;
+  addCurrentWorkingDirectory?: boolean; allowBypass?: boolean; allowDevToolAccess?: boolean;
+  sandboxMcpServers?: boolean; sandboxLspServers?: boolean; trustWorkingDirectory?: boolean;
+  auth?: DurableSandboxAuth; credentials?: DurableSandboxCredentials; filesystem?: DurableSandboxFilesystem;
+  network?: DurableSandboxNetwork; keychainAccess?: boolean;
+  constructor(value: Partial<DurableSandboxPolicy> = {}) { Object.assign(this, value); }
+  static expandPath(value: string, cwd?: string | null): string {
+    return value.replaceAll(this.workspaceToken, cwd ?? process.cwd());
+  }
+}
+
+export class AgentChoices {
+  extensions: string[] | null = null; tools: string[] | null = null;
+  model: string | null = null; reasoningEffort?: SessionConfig["reasoningEffort"];
+  workingDirectory: string | null = null; instructions: string | null = null;
+  streaming?: boolean; infiniteSessions?: SessionConfig["infiniteSessions"];
+  permissions: string[] | null = null; sandbox: DurableSandboxPolicy | null = null;
+  hooks?: SessionConfig["hooks"];
+  constructor(value: Partial<AgentChoices> = {}) { Object.assign(this, value); }
+}
+export interface ResolvedAgent extends Omit<AgentChoices, "extensions" | "tools"> {
+  extensions: readonly Extension[];
+  tools: readonly DurableTool[];
+}
+export class DurableModelReport {
+  static readonly NotReported = new DurableModelReport();
+  constructor(readonly model: string | null = null, readonly source: string | null = null) {}
+  get hasModel(): boolean { return !!this.model?.trim(); }
+  get requiredModel(): string {
+    if (!this.hasModel) throw new Error("The runtime reported no model.");
+    return this.model!;
+  }
+}
+export class PermissionGrant {
+  constructor(readonly kind: string, readonly scope: string | null = null) {}
+  static parse(text: string): PermissionGrant {
+    const at = text.indexOf(":");
+    return at < 0 ? new PermissionGrant(text.trim()) : new PermissionGrant(text.slice(0, at).trim(), text.slice(at + 1).trim());
+  }
+  toString(): string { return this.scope === null ? this.kind : `${this.kind}:${this.scope}`; }
+}
+export const PermissionPolicy = {
+  isGranted(grants: readonly string[] | null, kind: string, scope: string | null): boolean {
+    return (grants ?? []).some(text => {
+      const grant = PermissionGrant.parse(text);
+      if (grant.kind !== "*" && grant.kind.toLowerCase() !== kind.toLowerCase()) return false;
+      return !grant.scope || grant.scope === "*" || scope !== null &&
+        (scope === grant.scope || scope.startsWith(grant.scope) && "/\\ :;,".includes(scope.charAt(grant.scope.length)));
+    });
+  },
+  handler(grants: readonly string[] | null): NonNullable<SessionConfig["onPermissionRequest"]> {
+    const captured = grants?.slice() ?? null;
+    return request => {
+      const fields = request as unknown as Record<string, unknown>;
+      const scope = ["toolName", "resolvedPath", "path", "fileName", "fullCommandText", "url", "name", "extensionName"]
+        .map(key => fields[key]).find(value => typeof value === "string");
+      return PermissionPolicy.isGranted(captured, request.kind, typeof scope === "string" ? scope : null)
+        ? { kind: "approve-once" } : { kind: "reject", feedback: `denied by durable policy: no grant for ${request.kind}` };
+    };
+  },
+};
+
+const agentDocument = new DocumentDefinition<JsonObject>("durable.agent");
+const forkDocument = new DocumentDefinition<JsonObject>("durable.fork", DocumentHistory.Rewindable, ForkPolicy.Initial);
+const bindingDocument = new DocumentDefinition<JsonObject>("durable.session-binding", DocumentHistory.Rewindable, ForkPolicy.Initial);
+const admissionDocument = new DocumentDefinition<JsonObject>("durable.admission");
+const checkpointDocument = new DocumentDefinition<JsonObject>("durable.checkpoint");
+const internalKinds = new Set([agentDocument, forkDocument, bindingDocument, admissionDocument, checkpointDocument].map(d => d.kind));
+function wireChoices(choices: AgentChoices): JsonObject {
+  const { hooks: _hooks, ...data } = choices;
+  return JSON.parse(JSON.stringify(data));
+}
+
+export class DurableConversation {
+  private attached: CopilotSession | null = null;
+  private unsubscribe?: () => void;
+  private pending = 0;
+  private tail: Promise<unknown> = Promise.resolve();
+  private hooks?: SessionConfig["hooks"];
+  private passOpen = false;
+  readonly answers: string[] = [];
+  readonly turnModels: DurableModelReport[] = [];
+  readonly sandboxDecisions: SessionEvent[] = [];
+  effectiveModel = DurableModelReport.NotReported;
+  constructor(readonly harness: DurableHarness, readonly record: ConversationRecord) {}
+  get id(): string { return this.record.id; }
+  get session(): CopilotSession {
+    if (!this.attached) throw new Error(`Conversation '${this.id}' has no attached SDK session.`);
+    return this.attached;
+  }
+  get sessionId(): string | null { return this.attached?.sessionId ?? null; }
+  get busy(): boolean { return this.pending > 0; }
+  attach(session: CopilotSession): void {
+    this.unsubscribe?.();
+    this.attached = session;
+    this.unsubscribe = session.on(event => this.observe(event));
+  }
+  detach(): void { this.unsubscribe?.(); this.attached = null; }
+  observe(event: SessionEvent): void {
+    if (event.type === "assistant.message" && event.data.content) this.answers.push(event.data.content);
+    const data = event.data as unknown as Record<string, unknown>;
+    const model = event.type === "session.start" ? data["selectedModel"] :
+      event.type === "session.model_change" ? data["newModel"] :
+      ["assistant.turn_start", "assistant.usage"].includes(event.type) ? data["model"] : null;
+    const source = ["session.start", "session.model_change"].includes(event.type) ? "session" :
+      event.type === "assistant.usage" ? "usage" : "turn";
+    if (["assistant.turn_start", "assistant.usage"].includes(event.type)) {
+      const report = typeof model === "string" && model.trim() ? new DurableModelReport(model, source) : DurableModelReport.NotReported;
+      if (this.passOpen) {
+        if (report.hasModel) this.turnModels[this.turnModels.length - 1] = report;
+      } else { this.turnModels.push(report); this.passOpen = true; }
+    }
+    if (typeof model === "string" && model.trim()) {
+      this.effectiveModel = new DurableModelReport(model, source);
+      this.harness.effectiveModel = this.effectiveModel;
+    }
+    if (event.type === "assistant.message") {
+      if (!this.passOpen) this.turnModels.push(DurableModelReport.NotReported);
+      this.passOpen = false;
+    }
+    if (String(event.type) === "sandbox.decision") this.sandboxDecisions.push(event);
+  }
+  snapshot<T extends JsonValue>(definition: DocumentDefinition<T>): T | null {
+    return DurableJson.fromElement<T>(this.harness.store.document(definition.kind, this.id)?.latest);
+  }
+  snapshotAsOf<T extends JsonValue>(definition: DocumentDefinition<T>, entryId: string): T | null {
+    return DurableJson.fromElement<T>(this.harness.store.document(definition.kind, this.id)?.asOf(entryId));
+  }
+  choices(): AgentChoices {
+    return new AgentChoices({ ...this.snapshot(agentDocument), hooks: this.hooks });
+  }
+  agent(): ResolvedAgent {
+    const choices = this.choices();
+    const extensions = this.harness.resolveExtensions(choices.extensions);
+    return { ...choices, extensions, tools: this.harness.resolveTools(extensions, choices.tools) };
+  }
+  entries(limit = 20): string[] {
+    const anchors = new Map<string, Set<string>>();
+    for (const doc of this.harness.store.documents) {
+      if (doc.ownerId !== this.id) continue;
+      for (const version of doc.versions) {
+        const kinds = anchors.get(version.entryId) ?? new Set<string>();
+        kinds.add(doc.kind); anchors.set(version.entryId, kinds);
+      }
+    }
+    const boundaries = new Set(conversationLineage(this.harness.store, this.id).map(c => c.forkEntryId));
+    return [...this.harness.store.entries(this.id)].reverse().filter(entry => {
+      const kinds = anchors.get(entry);
+      return boundaries.has(entry) || !kinds || [...kinds].some(kind => !internalKinds.has(kind));
+    }).slice(0, limit);
+  }
+  commitAsync<T>(body: (tx: Transaction) => T | Promise<T>): Promise<T> { return this.harness.store.commitAsync(body); }
+  appendEntryAsync(kind: string, data: JsonValue | null = null): Promise<string> {
+    return this.commitAsync(tx => tx.appendEntry(this.id, kind, data));
+  }
+  async configureAsync(choices: AgentChoices): Promise<void> {
+    this.hooks = choices.hooks;
+    await this.commitAsync(tx => {
+      const draft = tx.doc(agentDocument, this.id); draft.value = wireChoices(choices);
+      draft.save(tx.appendEntry(this.id, "agent"));
+    });
+    if (this.attached) await this.session.setTools([...this.agent().tools]);
+  }
+  submitAsync(prompt: string, timeoutMs = 180000): Promise<AssistantMessageEvent | undefined> {
+    this.pending++;
+    // Serialize legacy runtimes too: their idle event is session-wide, not input-correlated.
+    const run = this.tail.then(async () => {
+      const admissionId = randomUUID();
+      await this.commitAsync(tx => {
+        const draft = tx.doc(admissionDocument, this.id);
+        draft.value = { admissionId, prompt, state: "admitted", admittedAt: new Date().toISOString() };
+        draft.save(tx.appendEntry(this.id, "admission"));
+      });
+      try {
+        const answer = await new Promise<AssistantMessageEvent | undefined>((resolve, reject) => {
+          let last: AssistantMessageEvent | undefined;
+          const stop = this.session.on(event => {
+            if (event.agentId) return;
+            if (event.type === "assistant.message") last = event;
+            if (event.type === "session.idle") { clearTimeout(timer); stop(); resolve(last); }
+            if (event.type === "session.error") { clearTimeout(timer); stop(); reject(new Error(event.data.message)); }
+          });
+          const timer = setTimeout(() => { stop(); reject(new Error(`Submission timed out after ${timeoutMs}ms.`)); }, timeoutMs);
+          void this.session.send({ prompt }).catch(error => { clearTimeout(timer); stop(); reject(error); });
+        });
+        await this.commitAsync(tx => {
+          if (answer) {
+            const checkpoint = tx.doc(checkpointDocument, this.id);
+            checkpoint.value = { checkpointId: randomUUID(), kind: "turn", eventId: answer.id,
+              messageId: answer.data.messageId ?? null, content: answer.data.content ?? null,
+              recordedAt: new Date().toISOString() };
+            checkpoint.save(tx.appendEntry(this.id, "checkpoint"));
+          }
+          const admission = tx.doc(admissionDocument, this.id);
+          admission.value = { ...admission.value, state: "completed" };
+          admission.save(tx.appendEntry(this.id, "admission"));
+        });
+        return answer;
+      } catch (error) {
+        await this.commitAsync(tx => {
+          const admission = tx.doc(admissionDocument, this.id);
+          admission.value = { ...admission.value, state: "uncertain" };
+          admission.save(tx.appendEntry(this.id, "admission"));
+        });
+        throw error;
+      }
+    });
+    this.tail = run.catch(() => {});
+    return run.finally(() => { this.pending--; });
+  }
+  contextAsync(): Promise<SessionEvent[]> { return this.session.getEvents(); }
+  abortAsync(): Promise<void> { return this.session.abort(); }
+  forkAsync(entryId: string): Promise<DurableConversation> { return this.harness.forkAsync(this, entryId); }
+  async waitForEffectiveModelAsync(timeoutMs = 30000): Promise<DurableModelReport> {
+    if (this.effectiveModel.hasModel) return this.effectiveModel;
+    return this.waitForEvent(() => this.effectiveModel.hasModel, () => this.effectiveModel, timeoutMs, "effective model");
+  }
+  async waitForSandboxDecisionAsync(match: (event: SessionEvent) => boolean, timeoutMs = 30000): Promise<SessionEvent> {
+    const existing = this.sandboxDecisions.find(match);
+    if (existing) return existing;
+    return this.waitForEvent(() => this.sandboxDecisions.some(match), () => this.sandboxDecisions.find(match)!, timeoutMs, "sandbox decision");
+  }
+  private waitForEvent<T>(match: () => boolean, value: () => T, timeoutMs: number, label: string): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const stop = this.session.on(() => {
+        if (match()) { clearTimeout(timer); stop(); resolve(value()); }
+      });
+      const timer = setTimeout(() => { stop(); reject(new Error(`No ${label} reported within ${timeoutMs}ms.`)); }, timeoutMs);
+    });
+  }
+}
+
+export class DurableHarness {
+  static readonly DefaultModel = "gpt-6-luna";
+  readonly agentDocument = agentDocument;
+  readonly runner: DurableTaskRunner;
+  private readonly handles = new Map<string, DurableConversation>();
+  effectiveModel = DurableModelReport.NotReported;
+  constructor(readonly client: CopilotClient, readonly store: DurableStore,
+    readonly registry: ExtensionRegistry, readonly options = new DurableHarnessOptions()) {
+    this.runner = new DurableTaskRunner(store, registry);
+  }
+  static async openAsync(store: DurableStore, registry: ExtensionRegistry,
+    options = new DurableHarnessOptions()): Promise<DurableHarness> {
+    const runtimePath = options.runtimePath ?? DurableHarnessOptions.runtimePath();
+    if (runtimePath && !fs.existsSync(runtimePath)) throw new Error(`Runtime executable does not exist: '${runtimePath}'.`);
+    const client = new CopilotClient({ connection: RuntimeConnection.forStdio({
+      path: runtimePath ?? undefined, args: options.runtimeArguments,
+    }) });
+    try { await client.start(); return new DurableHarness(client, store, registry, options); }
+    catch (error) { await client.stop(); throw error; }
+  }
+  get conversations(): DurableConversation[] { return [...this.handles.values()]; }
+  findConversation(id: string): DurableConversation | null {
+    const record = this.store.conversation(id);
+    if (!record) return null;
+    let handle = this.handles.get(id);
+    if (!handle) { handle = new DurableConversation(this, record); this.handles.set(id, handle); }
+    return handle;
+  }
+  resolveExtensions(names: readonly string[] | null): Extension[] {
+    return names === null ? [...this.registry.extensions] :
+      names.map(name => this.registry.find(name)).filter((e): e is Extension => e !== null);
+  }
+  resolveTools(extensions: readonly Extension[], names: readonly string[] | null): DurableTool[] {
+    const tools = new Map<string, DurableTool>();
+    for (const extension of extensions) for (const tool of extension.tools) tools.set(tool.name, tool);
+    for (const extension of extensions) for (const wrapper of extension.wraps) {
+      const tool = tools.get(wrapper.toolName);
+      if (tool) tools.set(wrapper.toolName, wrapper.wrap(tool));
+    }
+    return names === null ? [...tools.values()] : names.map(name => tools.get(name)).filter((t): t is DurableTool => !!t);
+  }
+  async buildSystemMessage(agent: ResolvedAgent, sections: readonly PromptSection[],
+    conversation: DurableConversation | null): Promise<string> {
+    const parts: string[] = [];
+    for (const section of sections) {
+      const text = await section.render(new SectionInput(conversation, agent.tools, agent.extensions, agent.workingDirectory));
+      if (text?.trim()) parts.push(section.tag ? `<${section.key}>\n${text}\n</${section.key}>` : text);
+    }
+    if (agent.instructions?.trim()) parts.push(`<instructions>\n${agent.instructions}\n</instructions>`);
+    return parts.join("\n\n");
+  }
+  renderSectionsAsync(conversation: DurableConversation): Promise<string> {
+    const agent = conversation.agent();
+    return this.buildSystemMessage(agent, agent.extensions.flatMap(e => [...e.sections]), conversation);
+  }
+  static buildSandboxConfig(policy: DurableSandboxPolicy, cwd: string | null = null): SandboxConfig {
+    if (!policy.enabled && (policy.auth || policy.credentials || policy.filesystem || policy.network || policy.keychainAccess !== undefined)) {
+      throw new Error("A disabled sandbox cannot enforce configured restrictions.");
+    }
+    const { trustWorkingDirectory: _trust, filesystem, network, keychainAccess, credentials, ...base } = policy;
+    const config: SandboxConfig = { ...base };
+    if (credentials?.envVars) {
+      config.credentials = { envVars: {} };
+      for (const [name, hosts] of Object.entries(credentials.envVars)) {
+        if (!name.trim() || !hosts.length || hosts.some(host => !host.trim() || host.trim() === "*")) {
+          throw new Error(`Invalid credential inject hosts for '${name}'.`);
+        }
+        config.credentials.envVars[name] = { injectHosts: [...hosts] };
+      }
+    }
+    if (filesystem || network || keychainAccess !== undefined) config.userPolicy = {};
+    if (filesystem) config.userPolicy!.filesystem = {
+      clearPolicyOnExit: filesystem.clearPolicyOnExit,
+      deniedPaths: (filesystem.deniedPaths ?? []).map(p => DurableSandboxPolicy.expandPath(p, cwd)),
+      readonlyPaths: (filesystem.readonlyPaths ?? []).map(p => DurableSandboxPolicy.expandPath(p, cwd)),
+      readwritePaths: (filesystem.readwritePaths ?? []).map(p => DurableSandboxPolicy.expandPath(p, cwd)),
+    };
+    if (network) {
+      const { proxy, ...rest } = network;
+      config.userPolicy!.network = { ...rest, allowedHosts: network.allowedHosts ?? [], blockedHosts: network.blockedHosts ?? [] };
+      if (proxy?.url) config.userPolicy!.network.proxy = { ...proxy, url: proxy.url };
+    }
+    if (keychainAccess !== undefined) config.userPolicy!.seatbelt = { keychainAccess };
+    return config;
+  }
+  async buildSessionConfig(choices = new AgentChoices(), conversation: DurableConversation | null = null): Promise<SessionConfig> {
+    const extensions = this.resolveExtensions(choices.extensions);
+    const agent: ResolvedAgent = { ...choices, extensions, tools: this.resolveTools(extensions, choices.tools) };
+    const sections = extensions.flatMap(e => [...e.sections]);
+    const config: SessionConfig = {
+      model: choices.model ?? DurableHarness.DefaultModel, workingDirectory: choices.workingDirectory ?? undefined,
+      streaming: choices.streaming, infiniteSessions: choices.infiniteSessions,
+      tools: [...agent.tools], hooks: { ...choices.hooks },
+      enableFileHooks: this.options.enableFileHooks,
+      onPermissionRequest: this.options.permissionHandler ?? PermissionPolicy.handler(choices.permissions),
+    };
+    if (choices.reasoningEffort) {
+      const models = await this.client.listModels();
+      const model = models.find(m => m.id === config.model);
+      if (model?.capabilities.supports.reasoningEffort) config.reasoningEffort = choices.reasoningEffort;
+    }
+    const systemMessage = await this.buildSystemMessage(agent, sections, conversation);
+    if (systemMessage) config.systemMessage = { mode: "append", content: systemMessage };
+    if (sections.length && conversation) {
+      const original = choices.hooks?.onUserPromptSubmitted;
+      config.hooks!.onUserPromptSubmitted = async (input, invocation) => {
+        const output = await original?.(input, invocation);
+        const rendered = await this.renderSectionsAsync(conversation);
+        return { ...output, additionalContext: [output?.additionalContext, rendered].filter(Boolean).join("\n\n") };
+      };
+    }
+    if (choices.sandbox) {
+      config.sandboxConfig = DurableHarness.buildSandboxConfig(choices.sandbox, choices.workingDirectory);
+      if (choices.sandbox.trustWorkingDirectory !== undefined)
+        config.trustWorkingDirectory = choices.sandbox.trustWorkingDirectory ? "user" : "session";
+    }
+    return config;
+  }
+  async createConversationAsync(choices = new AgentChoices(), ownerTaskId: string | null = null,
+    ownerConversationId: string | null = null): Promise<DurableConversation> {
+    const record = await this.store.commitAsync(tx => tx.createConversation({ ownerTaskId, ownerConversationId }));
+    const conversation = this.findConversation(record.id)!;
+    await conversation.configureAsync(choices);
+    await this.createSession(conversation);
+    return conversation;
+  }
+  private async createSession(conversation: DurableConversation): Promise<void> {
+    let binding = conversation.snapshot(bindingDocument);
+    if (!binding?.["sessionId"]) {
+      await this.store.commitAsync(tx => {
+        const draft = tx.doc(bindingDocument, conversation.id);
+        draft.value = { sessionId: `s${randomUUID()}`, pinned: true, model: conversation.choices().model, boundAt: new Date().toISOString() };
+        draft.save(tx.appendEntry(conversation.id, "session-binding"));
+      });
+      binding = conversation.snapshot(bindingDocument);
+    }
+    const config = await this.buildSessionConfig(conversation.choices(), conversation);
+    config.sessionId = String(binding!["sessionId"]);
+    conversation.attach(await this.client.createSession(config));
+    for (const event of await conversation.contextAsync()) conversation.observe(event);
+  }
+  async resumeConversationAsync(id: string): Promise<DurableConversation> {
+    const conversation = this.findConversation(id);
+    if (!conversation) throw new Error(`Unknown conversation '${id}'.`);
+    if (conversation.sessionId) return conversation;
+    const admission = conversation.snapshot(admissionDocument);
+    if (admission && admission["state"] !== "completed") throw new Error(`Conversation '${id}' has an unsettled admission; automatic replay is unsafe.`);
+    const binding = conversation.snapshot(bindingDocument);
+    if (!binding?.["sessionId"]) { await this.createSession(conversation); return conversation; }
+    const { sessionId: _id, trustWorkingDirectory: _trust, ...config } = await this.buildSessionConfig(conversation.choices(), conversation);
+    conversation.attach(await this.client.resumeSession(String(binding["sessionId"]), {
+      ...config, suppressResumeEvent: true, continuePendingWork: false,
+    }));
+    for (const event of await conversation.contextAsync()) conversation.observe(event);
+    return conversation;
+  }
+  async rootAsync(choices = new AgentChoices()): Promise<DurableConversation> {
+    const root = this.store.conversations.find(c => !c.parentConversationId && !c.ownerTaskId && !c.ownerConversationId);
+    return root ? this.resumeConversationAsync(root.id) : this.createConversationAsync(choices);
+  }
+  async forkAsync(parent: DurableConversation, entryId: string): Promise<DurableConversation> {
+    if (!this.store.entries(parent.id).includes(entryId)) throw new Error(`Unknown fork entry '${entryId}'.`);
+    const record = await this.store.commitAsync(tx => {
+      const fork = tx.createConversation({ parentConversationId: parent.id, forkEntryId: entryId });
+      this.store.storeProvider.copyEntries(parent.id, fork.id, entryId);
+      for (const doc of [...this.store.documents].filter(d => d.ownerId === parent.id))
+        this.store.storeProvider.copyDocument(doc, fork.id, entryId);
+      const intent = tx.doc(forkDocument, fork.id);
+      intent.value = { parentConversationId: parent.id, forkEntryId: entryId, state: "pending" };
+      intent.save(tx.appendEntry(fork.id, "fork"));
+      return fork;
+    });
+    const conversation = this.findConversation(record.id)!;
+    // SDK boundary is exclusive. App-created entries have no SDK event identity; the
+    // reference C# fork uses all native context for those boundaries.
+    const forked = await this.client.rpc.sessions.fork({ sessionId: parent.session.sessionId });
+    await this.store.commitAsync(tx => {
+      const binding = tx.doc(bindingDocument, record.id);
+      binding.value = { sessionId: forked.sessionId, pinned: true };
+      binding.save(tx.appendEntry(record.id, "session-binding"));
+      const intent = tx.doc(forkDocument, record.id);
+      intent.value = { ...intent.value, sessionId: forked.sessionId, state: "completed" };
+      intent.save(tx.appendEntry(record.id, "fork"));
+    });
+    return this.resumeConversationAsync(conversation.id);
+  }
+  createTaskAsync(...args: Parameters<DurableTaskRunner["createTaskAsync"]>): ReturnType<DurableTaskRunner["createTaskAsync"]> { return this.runner.createTaskAsync(...args); }
+  runTaskAsync(...args: Parameters<DurableTaskRunner["runTaskAsync"]>): ReturnType<DurableTaskRunner["runTaskAsync"]> { return this.runner.runTaskAsync(...args); }
+  waitForTaskAsync(...args: Parameters<DurableTaskRunner["waitForTaskAsync"]>): ReturnType<DurableTaskRunner["waitForTaskAsync"]> { return this.runner.waitForTaskAsync(...args); }
+  abortTaskAsync(...args: Parameters<DurableTaskRunner["abortTaskAsync"]>): ReturnType<DurableTaskRunner["abortTaskAsync"]> { return this.runner.abortTaskAsync(...args); }
+  resumeAsync(...args: Parameters<DurableTaskRunner["resumeAsync"]>): ReturnType<DurableTaskRunner["resumeAsync"]> { return this.runner.resumeAsync(...args); }
+  taskGraph(): Array<{ task: DurableTaskRecord; owner: string | null }> {
+    return this.store.tasks.map(task => ({ task, owner: task.ownerTaskId ?? task.ownerConversationId }));
+  }
+  async disposeAsync(): Promise<void> {
+    for (const conversation of this.handles.values()) conversation.detach();
+    await this.runner.disposeAsync();
+    await this.client.stop();
   }
 }
 
