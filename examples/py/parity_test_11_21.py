@@ -4,7 +4,9 @@ import sys
 import unittest
 import json
 import os
+import ast
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -119,6 +121,49 @@ class DeterministicParityTests(unittest.TestCase):
                                    'Check.equal(501, paid.result["receipt"]'))
         self.assertNotEqual(0, result.returncode)
         self.assertIn("Assertion failed: the receipt holds the amount", result.stderr)
+
+    def test_coding_tools_accept_canonical_workspace_and_reject_escape(self):
+        source = ROOT / "examples/py/16-coding-tools.py"
+        content = source.read_text()
+        with TemporaryDirectory(prefix="durable-path-guard-") as directory:
+            base = Path(directory).resolve()
+            workspace = base / "workspace"
+            workspace.mkdir()
+            notes = workspace / "notes.txt"
+            notes.write_text("hello world\n")
+            alias = base / "alias"
+            alias.symlink_to(workspace, target_is_directory=True)
+
+            def load_guard(text):
+                main = next(node for node in ast.parse(text).body
+                            if isinstance(node, ast.AsyncFunctionDef) and node.name == "main")
+                scope = next(node for node in main.body if isinstance(node, ast.With))
+                nodes = [node for node in scope.body
+                         if (isinstance(node, ast.Assign)
+                             and any(isinstance(target, ast.Name) and target.id == "workspace"
+                                     for target in node.targets))
+                         or (isinstance(node, ast.FunctionDef) and node.name == "file_for")]
+                self.assertEqual(2, len(nodes), "extract the actual workspace and file guard")
+                namespace = {"Path": Path, "directory": str(alias)}
+                exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), "exec"), namespace)
+                return namespace["file_for"]
+
+            guard = load_guard(content)
+            self.assertEqual(notes, guard("notes.txt"))
+            with self.assertRaisesRegex(ValueError, "outside the example workspace"):
+                guard("../outside.txt")
+            sibling = base / "workspace-sibling"
+            sibling.mkdir()
+            with self.assertRaisesRegex(ValueError, "outside the example workspace"):
+                guard("../workspace-sibling/notes.txt")
+            (workspace / "escape").symlink_to(sibling, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "outside the example workspace"):
+                guard("escape/notes.txt")
+            old = "workspace = Path(directory).resolve()"
+            self.assertIn(old, content)
+            broken = load_guard(content.replace(old, "workspace = Path(directory)", 1))
+            with self.assertRaisesRegex(ValueError, "outside the example workspace"):
+                broken("notes.txt")
 
     def test_missing_memo_repeats_effect_and_fails(self):
         result = self.run_example(ROOT / "examples/py/12-recovery.py",
