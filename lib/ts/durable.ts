@@ -1183,7 +1183,11 @@ export class InMemoryStoreProvider implements IDurableStoreProvider {
           };
           while (offset < bytes.length) {
             const newline = bytes.indexOf(10, offset);
-            const end = newline < 0 ? bytes.length : newline;
+            if (newline < 0) {
+              fs.truncateSync(this.file, offset);
+              break;
+            }
+            const end = newline;
             let record: { v: number; seq: number; type: string; payload: Record<string, unknown> };
             try {
               record = JSON.parse(bytes.subarray(offset, end).toString("utf8"));
@@ -2912,8 +2916,8 @@ export class DurableHarness {
       onPermissionRequest: this.options.permissionHandler ?? PermissionPolicy.handler(choices.permissions),
     };
     if (choices.reasoningEffort && choices.model && choices.model !== "auto") {
-      // Generated RPC uses {list}; the SDK convenience method expects {models}.
-      // Read the native RPC and accept both published envelope shapes.
+      // ReplayRuntime returns {list}; the SDK convenience method expects {models}
+      // while generated RPC types declare an array. Normalize at the wire boundary.
       const result: unknown = await this.client.rpc.models.list({});
       const models: readonly unknown[] | null = Array.isArray(result) ? result :
         result !== null && typeof result === "object" && "list" in result && Array.isArray(result.list) ? result.list :
@@ -2923,9 +2927,9 @@ export class DurableHarness {
         item !== null && typeof item === "object" && "id" in item && item.id === choices.model);
       const effort = choices.reasoningEffort;
       if (Array.isArray(model?.["supportedReasoningEfforts"]) && model["supportedReasoningEfforts"].length) {
-        if (effort !== "low" && effort !== "medium" && effort !== "high" && effort !== "xhigh" && effort !== "max")
-          throw new Error(`SDK 1.0.28 cannot configure reasoning effort '${effort}'; it remains persisted but must not be narrowed silently.`);
-        config.reasoningEffort = effort;
+        // The SDK serializes this string unchanged; its static union omits the
+        // C# reference's "minimal", which the native runtime accepts.
+        config.reasoningEffort = effort as SessionConfig["reasoningEffort"];
       }
     }
     const systemMessage = await this.buildSystemMessage(agent, sections, conversation);

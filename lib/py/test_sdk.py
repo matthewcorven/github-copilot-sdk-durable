@@ -2,6 +2,7 @@ import asyncio
 import os
 import tempfile
 import unittest
+import json
 from unittest.mock import patch
 
 from durable import (
@@ -15,6 +16,36 @@ from copilot.tools import Tool, ToolResult
 
 
 class SdkTests(unittest.IsolatedAsyncioTestCase):
+    async def test_jsonl_exact_crlf_mixed_utf8_and_unterminated_tail_boundaries(self):
+        from durable import DurableStoreFormat
+        for endings in [("\r\n", "\r\n"), ("\n", "\r\n")]:
+            for tail in ["", '{"v":1', json.dumps({
+                "v": 1, "seq": 3, "type": "conversation",
+                "payload": {"id": "torn", "createdAt": "2026-11-01T00:00:00Z"},
+            })]:
+                with tempfile.TemporaryDirectory() as directory:
+                    path = os.path.join(directory, "store.jsonl")
+                    ids = ["\u96ea\u00e9", "\u03bb"]
+                    prefix = "".join(json.dumps({
+                        "v": 1, "seq": i + 1, "type": "conversation",
+                        "payload": {"id": identifier, "createdAt": "2026-11-01T00:00:00Z"},
+                    }, ensure_ascii=False) + endings[i] for i, identifier in enumerate(ids)).encode("utf-8")
+                    with open(path, "wb") as handle:
+                        handle.write(prefix + tail.encode("utf-8"))
+                    options = DurableStoreOptions(path=path, format=DurableStoreFormat.JSONL)
+                    store = DurableStore.create(options)
+                    try:
+                        self.assertEqual([c.id for c in store.conversations], ids)
+                        with open(path, "rb") as handle:
+                            self.assertEqual(handle.read(), prefix)
+                        async def create(tx):
+                            return tx.create_conversation()
+                        added = await store.commit_async(create)
+                        store.close()
+                        store = DurableStore.create(options)
+                        self.assertEqual([c.id for c in store.conversations], ids + [added.id])
+                    finally:
+                        store.close()
     def test_sandbox_wire_and_boundary_policy(self):
         config = DurableHarness.build_sandbox_config(DurableSandboxPolicy(
             enabled=True, allow_bypass=False, sandbox_mcp_servers=False,
