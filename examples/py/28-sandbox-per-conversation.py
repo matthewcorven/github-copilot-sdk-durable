@@ -57,7 +57,8 @@ async def main() -> None:
          TemporaryDirectory(prefix="durable-sandbox-bob-") as bob_path, \
          DurableStore.create_ephemeral() as store:
         harness = await DurableHarness.open_async(
-            store, registry, DurableHarnessOptions(enable_file_hooks=False, tolerate_host_hook_failures=True)
+            store, registry, DurableHarnessOptions(
+                enable_file_hooks=False, tolerate_host_hook_failures=live)
         )
         try:
             async def conversation_for(path):
