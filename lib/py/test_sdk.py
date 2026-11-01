@@ -23,11 +23,12 @@ REPLAY_FIXTURES = Path(__file__).resolve().parents[2] / "tools" / "ReplayRuntime
 class SdkTests(unittest.IsolatedAsyncioTestCase):
     async def test_host_hook_tolerance_is_opt_in_and_preserves_error_and_answer(self):
         from unittest.mock import Mock
-        for tolerant, message, succeeds in [
-            (False, "postToolUse hook: Operation not permitted", False),
-            (True, "postToolUse hook: Operation not permitted", True),
-            (True, "hook timed out", False),
-            (True, "Operation not permitted", False),
+        for tolerant, message, succeeds, emit_answer in [
+            (False, "postToolUse hook: Operation not permitted", False, True),
+            (True, "postToolUse hook: Operation not permitted", True, True),
+            (True, "hook timed out", False, True),
+            (True, "Operation not permitted", False, True),
+            (True, "postToolUse hook: Operation not permitted", True, False),
         ]:
             store = DurableStore.create_ephemeral()
             client = SimpleNamespace(stop=AsyncMock())
@@ -39,7 +40,8 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
                 return lambda: listeners.remove(handler)
             answer = {"type": "assistant.message", "id": "answer", "data": {"content": "actual event"}}
             async def send(_prompt):
-                for event in [answer, {"type": "session.error", "data": {"message": message}}]:
+                events = ([answer] if emit_answer else []) + [{"type": "session.error", "data": {"message": message}}]
+                for event in events:
                     for listener in list(listeners):
                         listener(event)
                 return "message"
@@ -54,11 +56,11 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
                 assert chat is not None
                 chat.attach(session)
                 if succeeds:
-                    self.assertIs(await chat.submit_async("hello", timeout=1), answer)
+                    self.assertIs(await chat.submit_async("hello", timeout=1), answer if emit_answer else None)
                 else:
                     with self.assertRaisesRegex(RuntimeError, message):
                         await chat.submit_async("hello", timeout=1)
-                self.assertIn("actual event", chat.answers)
+                self.assertEqual(chat.answers, ["actual event"] if emit_answer else [])
                 self.assertEqual(DurableConversation.is_host_hook_failure(message),
                                  "hook" in message.lower() and "Operation not permitted" in message)
             finally:
