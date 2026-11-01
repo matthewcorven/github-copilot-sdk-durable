@@ -1463,6 +1463,7 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
             FileAccess.Write,
             FileShare.Read);
         using var writer = new StreamWriter(stream, new UTF8Encoding(false));
+        writer.NewLine = "\n";
         foreach (var record in records)
         {
             writer.WriteLine(JsonSerializer.Serialize(record, DurableJson.Options));
@@ -1482,14 +1483,18 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
     /// </summary>
     private void Replay(string path)
     {
-        long? truncateAfter = null;
+        long? truncateAfter = 0;
         using (var reader = new StreamReader(path, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: false))
         {
             var offset = 0L;
-            while (reader.ReadLine() is { } line)
+            while (ReadJsonlLine(reader, out var terminated) is { } line)
             {
-                // ReadLine consumes the terminator, so the byte offset of the next
-                // line is the offset after this line's text plus its newline.
+                if (!terminated)
+                {
+                    break;
+                }
+
+                // Retain CR in the text so CRLF and LF both count their exact UTF-8 bytes.
                 var lineEnd = offset + Encoding.UTF8.GetByteCount(line) + 1;
                 JsonlRecord? record = null;
                 try
@@ -1529,6 +1534,24 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
         }
 
         SeedCommittedFromReplay();
+    }
+
+    private static string? ReadJsonlLine(StreamReader reader, out bool terminated)
+    {
+        var line = new StringBuilder();
+        terminated = false;
+        while (reader.Read() is var value && value >= 0)
+        {
+            if (value == '\n')
+            {
+                terminated = true;
+                return line.ToString();
+            }
+
+            line.Append((char)value);
+        }
+
+        return line.Length == 0 ? null : line.ToString();
     }
 
     /// <summary>Applies one replayed record to the in-memory state.</summary>

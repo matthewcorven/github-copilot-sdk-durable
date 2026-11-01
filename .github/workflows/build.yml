@@ -26,7 +26,7 @@ jobs:
       - name: Build runtime host
         run: dotnet build src/Durable.Runtime -c Release --nologo
       - name: Smoke CLI, HTTP, RPC and portability contracts
-        run: dotnet test tests/Durable.Tests -c Release --nologo --filter "FullyQualifiedName~RuntimeHost" --logger "trx;LogFileName=host-smoke.trx"
+        run: dotnet test tests/Durable.Tests -c Release --nologo --filter "FullyQualifiedName~RuntimeHost|FullyQualifiedName~JsonlBackend" --logger "trx;LogFileName=host-smoke.trx"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

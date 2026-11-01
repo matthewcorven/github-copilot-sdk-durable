@@ -774,6 +774,13 @@ tests restrict `PATH` so even a locally installed CLI cannot be used inadvertent
 signal-specific graceful-shutdown test runs only on POSIX, not as evidence of Windows signal
 handling. Each smoke job uploads its TRX results.
 
+The smoke jobs also run JSONL storage regressions because persistence is part of host portability.
+New records use LF on every platform. Replay accepts LF and existing CRLF records, retains the
+CR while calculating UTF-8 byte offsets, and discards unterminated tails before applying them.
+Recovery truncates only at the exact last complete record boundary; reopening a valid Windows
+store therefore cannot trim bytes from its final record. Tests compare exact bytes through
+recovery, append and reopen, including mixed terminators and multi-byte UTF-8 identifiers.
+
 ### 3.15 The JSON-lines transport — `serve --rpc`
 
 `serve --rpc` is the same host as `run` and `serve --http`, with the turn reached over the
