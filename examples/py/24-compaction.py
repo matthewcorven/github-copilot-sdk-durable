@@ -1,4 +1,4 @@
-"""Infinite-session context management; requires a live runtime with compaction."""
+"""Infinite-session context management; compaction is observed, not promised."""
 
 import asyncio
 import sys
@@ -54,7 +54,7 @@ async def main() -> None:
                     all(answer is not None and answer.data.content.strip() for answer in answers),
                     "no answer was empty",
                 )
-                Check.that(len(stored) >= 1, "the stored transcript kept its entries")
+                Check.equal(0, len(stored), "plain chat checkpoints are not public app entries")
                 Check.that(len(context) > 0, "the model context is not empty")
             finally:
                 unsubscribe()

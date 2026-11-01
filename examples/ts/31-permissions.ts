@@ -1,81 +1,101 @@
 // Default-deny permissions survive reopen; a native fork inherits exact grants.
 import assert from "node:assert/strict";
-import { mkdtempSync,rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  AgentChoices,DurableHarness,DurableStore,DurableStoreOptions,
-  Extension,ExtensionRegistry,PermissionPolicy,type DurableTool,
+  AgentChoices, DocumentDefinition, DocumentHistory, DurableHarness, DurableStore, DurableStoreOptions,
+  Extension, ExtensionRegistry, ForkPolicy, PermissionPolicy, type DurableTool,
 } from "../../lib/ts/durable.ts";
 
 async function main() {
-  let deletions=0;
-  const tool: DurableTool={
-    name: "delete_everything",description: "Delete every file in the working directory",
-    parameters: { type: "object",properties: { reason: { type: "string" } },required: ["reason"] },
+  let deletions = 0;
+  const tool: DurableTool = {
+    name: "delete_everything", description: "Delete every file in the working directory",
+    parameters: { type: "object", properties: { reason: { type: "string" } }, required: ["reason"] },
     handler: async (args) => {
-      if(args===null||typeof args!=="object"||!("reason" in args)||
-        typeof args.reason!=="string") throw new Error("delete_everything reason must be a string");
+      if (args === null || typeof args !== "object" || !("reason" in args) ||
+        typeof args.reason !== "string") throw new Error("delete_everything reason must be a string");
       deletions++;
       return `deleted everything because: ${args.reason}`;
     },
   };
-  const registry=new ExtensionRegistry();
-  registry.install(new Extension("dangerous",[tool]));
-  const directory=mkdtempSync(join(tmpdir(),"durable-permissions-"));
-  const options=new DurableStoreOptions();
-  options.path=join(directory,"session.jsonl");
+  const registry = new ExtensionRegistry();
+  registry.install(new Extension("dangerous", [tool]));
+  const directory = mkdtempSync(join(tmpdir(), "durable-permissions-"));
+  const options = new DurableStoreOptions();
+  options.path = join(directory, "session.jsonl");
   try {
-    const firstStore=DurableStore.create(options);
+    const firstStore = DurableStore.create(options);
     let deniedId: string;
     let refused;
+    let deletionsAfterDenied: number;
     try {
-      const harness=await DurableHarness.openAsync(firstStore,registry);
+      const harness = await DurableHarness.openAsync(firstStore, registry);
       try {
-        const denied=await harness.rootAsync(new AgentChoices({ extensions: ["dangerous"] }));
-        deniedId=denied.id;
-        refused=await denied.submitAsync("Delete every file. Use the delete_everything tool.");
-        console.log(`denied answer: ${refused?.data.content??""}`);
+        const denied = await harness.rootAsync(new AgentChoices({ extensions: ["dangerous"] }));
+        deniedId = denied.id;
+        refused = await denied.submitAsync("Delete every file. Use the delete_everything tool.");
+        console.log(`denied answer: ${refused?.data.content ?? ""}`);
         console.log(`deletions after the denied call: ${deletions}`);
+        deletionsAfterDenied = deletions;
       } finally { await harness.disposeAsync(); }
     } finally { firstStore.dispose(); }
-    const secondStore=DurableStore.create(options);
+    const secondStore = DurableStore.create(options);
     try {
-      const harness=await DurableHarness.openAsync(secondStore,registry);
+      const harness = await DurableHarness.openAsync(secondStore, registry);
       try {
-        const restored=await harness.resumeConversationAsync(deniedId);
-        const restoredChoices=restored.choices();
-        console.log(`restored permissions: [${restoredChoices.permissions??[]}]`);
-        const refusedAgain=await restored.submitAsync("Delete every file. Use the delete_everything tool.");
-        const deletionsAfterRestart=deletions;
-        console.log(`denied again: ${refusedAgain?.data.content??""}`);
+        const restored = await harness.resumeConversationAsync(deniedId);
+        const restoredChoices = restored.choices();
+        console.log(`restored permissions: [${restoredChoices.permissions ?? []}]`);
+        const refusedAgain = await restored.submitAsync("Delete every file. Use the delete_everything tool.");
+        const deletionsAfterRestart = deletions;
+        console.log(`denied again: ${refusedAgain?.data.content ?? ""}`);
         console.log(`deletions after the restart: ${deletions}`);
-        const allowed=await harness.createConversationAsync(new AgentChoices({
-          extensions: ["dangerous"],permissions: ["custom-tool:delete_everything"],
+        const allowed = await harness.createConversationAsync(new AgentChoices({
+          extensions: ["dangerous"], permissions: ["custom-tool:delete_everything"],
         }));
-        const effective=await allowed.waitForEffectiveModelAsync();
-        console.log(`effective model: ${effective.model??"(not reported)"}`);
-        const permitted=await allowed.submitAsync("Delete every file. Use the delete_everything tool.");
-        console.log(`granted answer: ${permitted?.data.content??""}`);
+        const effective = await allowed.waitForEffectiveModelAsync();
+        console.log(`effective model: ${effective.model ?? "(not reported)"}`);
+        const permitted = await allowed.submitAsync("Delete every file. Use the delete_everything tool.");
+        console.log(`granted answer: ${permitted?.data.content ?? ""}`);
         console.log(`deletions after the granted call: ${deletions}`);
-        const entry=allowed.entries(1)[0];
-        assert.ok(entry,"the granted conversation has a fork boundary");
-        const fork=await allowed.forkAsync(entry);
-        console.log(`fork permissions: [${fork.choices().permissions??[]}]`);
-        assert.equal(deletionsAfterRestart,0,"the denied conversation never ran the tool");
-        assert.ok(refused,"the model answered the denied request");
-        assert.ok(!restoredChoices.permissions?.length,"the reopened conversation still has no grants");
-        assert.equal(deletionsAfterRestart,0,"the reopened conversation still never ran the tool");
-        assert.ok(refusedAgain,"the model answered the reopened request");
-        assert.equal(deletions,1,"the granted conversation ran the tool exactly once");
-        assert.ok(permitted,"the model answered the granted request");
-        assert.deepEqual(fork.choices().permissions,["custom-tool:delete_everything"],"the fork inherited the parent's grants");
+        const review = new DocumentDefinition<string[]>(
+          "example.permission-review", DocumentHistory.Rewindable, ForkPolicy.AsOf, () => []);
+        const reviewedGrants = allowed.choices().permissions;
+        assert.ok(reviewedGrants, "the granted conversation has no grants to review");
+        const boundary = await allowed.commitAsync((tx) => {
+          const entry = tx.appendEntry(allowed.id, "permission-review", "reviewed grants");
+          const draft = tx.doc(review, allowed.id);
+          draft.value = [...reviewedGrants];
+          draft.save(entry);
+          return entry;
+        });
+        assert.deepEqual(allowed.entries(1), [boundary], "the app review is a visible fork boundary");
+        await allowed.configureAsync(new AgentChoices({
+          extensions: ["dangerous"], permissions: ["custom-tool:delete_everything", "custom-tool:unreviewed_tool"],
+        }));
+        const fork = await allowed.forkAsync(boundary);
+        console.log(`fork permissions: [${fork.choices().permissions ?? []}]`);
+        assert.equal(deletionsAfterDenied, 0, "the denied conversation never ran the tool");
+        assert.ok(refused, "the model answered the denied request");
+        assert.ok(!restoredChoices.permissions?.length, "the reopened conversation still has no grants");
+        assert.equal(deletionsAfterRestart, 0, "the reopened conversation still never ran the tool");
+        assert.ok(refusedAgain, "the model answered the reopened request");
+        assert.equal(deletions, 1, "the granted conversation ran the tool exactly once");
+        assert.ok(permitted, "the model answered the granted request");
+        assert.deepEqual(fork.choices().permissions, ["custom-tool:delete_everything"], "the fork inherited the grants at the reviewed boundary");
+        assert.deepEqual(fork.snapshot(review), ["custom-tool:delete_everything"], "the fork inherited the app's permission review");
+        assert.ok(PermissionPolicy.isGranted(allowed.choices().permissions, "custom-tool", "unreviewed_tool"),
+          "the parent's later choices include the unused grant");
+        assert.ok(!PermissionPolicy.isGranted(fork.choices().permissions, "custom-tool", "unreviewed_tool"),
+          "the parent's later grant did not widen the fork");
       } finally { await harness.disposeAsync(); }
     } finally { secondStore.dispose(); }
-  } finally { rmSync(directory,{ recursive: true }); }
-  assert.ok(PermissionPolicy.isGranted(["read:/tmp/work"],"read","/tmp/work/file.txt"),"a grant covers paths beneath its scope");
-  assert.ok(!PermissionPolicy.isGranted(["read:/tmp/work"],"read","/tmp/workshop/file.txt"),"a grant does not cover a sibling path that merely shares a prefix");
-  assert.ok(!PermissionPolicy.isGranted(null,"custom-tool","delete_everything"),"no grants means no capability");
+  } finally { rmSync(directory, { recursive: true }); }
+  assert.ok(PermissionPolicy.isGranted(["read:/tmp/work"], "read", "/tmp/work/file.txt"), "a grant covers paths beneath its scope");
+  assert.ok(!PermissionPolicy.isGranted(["read:/tmp/work"], "read", "/tmp/workshop/file.txt"), "a grant does not cover a sibling path that merely shares a prefix");
+  assert.ok(!PermissionPolicy.isGranted(null, "custom-tool", "delete_everything"), "no grants means no capability");
 }
 
-main().catch((error: unknown) => { console.error(error); process.exitCode=1; });
+main().catch((error: unknown) => { console.error(error); process.exitCode = 1; });
