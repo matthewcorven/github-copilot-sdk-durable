@@ -7,7 +7,8 @@
     "All fourteen files are runnable ports. Ported does not mean LIVE tool-effect assertions were validated.",
     "LIVE denotes a reference assertion the recording cannot satisfy, not permission to skip a missing native SDK API.",
     "Uses the official SDK through the frozen shared native library, not a shadow implementation.",
-    "Replay validated 23, 32, 35 and policy-mode 28, 33, 34. Other LIVE assertions remain unproven.",
+    "Replay validated 23, 32, 35 and policy-mode 28, 33, 34. Authenticated native SDK validated 22, 25, 26, 27, 29, 30, 33, 34, added SDK --live policy mode 28 and the engaged-backend proof in 35.",
+    "Examples 24 and 31 mirror the accountable C# reference correction 7448ed34956966b0afa2df79adc76a76031312e0, preserving public-entry filtering and adding a real app-owned permission-review boundary.",
     "TypeScript JSONL native locking was verified on macOS; Linux/Windows native install/run remains unverified, not blanket unsupported."
   ],
   "examples": [
@@ -41,7 +42,9 @@
       "file": "examples/py/24-compaction.py",
       "status": "ported",
       "mode": "LIVE",
-      "assertions": ["five nonempty answers", "stored transcript retains entries", "model context is not empty"],
+      "assertions": ["five nonempty answers", "plain chat checkpoints produce zero public app entries", "model context is not empty"],
+      "referenceCommit": "7448ed34956966b0afa2df79adc76a76031312e0",
+      "nativeVerification": "Corrected native run passed five nonempty answers, exactly zero public entries and nonempty SDK context. Internal checkpoints remain persisted; compaction count is observational and was zero.",
       "liveReason": "needs a compaction request the runtime does not answer"
     },
     {
@@ -87,8 +90,8 @@
       "mode": "policy",
       "sandboxMode": "supported",
       "liveReason": "asserts a file the sandboxed tool wrote; the recording has no tool call",
-      "verification": "Actual SDK session creation, policy wire and distinct document directories passed in policy mode; --live enables original file-content assertions.",
-      "notes": ["The C# reference confines a custom tool using a sandbox document. This port preserves that document and also verifies the required native SDK filesystem policy."],
+      "verification": "Policy mode passed native SDK wire and distinct document directories. Added SDK --live policy mode passed actual alice/bob file contents with explicit narrowly classified host-hook tolerance; the default non-tolerant live attempt reported the installed hook's sandbox denial.",
+      "notes": ["The C# reference confines a custom tool using a sandbox document. This port preserves that document and also verifies the required native SDK filesystem policy.", "Only the added actual-SDK --live policy mode explicitly tolerates narrowly classified host hook sandbox denials. The library and this example's default policy-mode option remain false; file-content and policy assertions remain active."],
       "assertions": ["distinct per-conversation directories", "each document points at its own directory", "requested policy survives the SDK wire"],
       "liveAssertions": [
         {"assertion": "alice's note contains from alice in alice's sandbox", "status": "LIVE", "reason": "Asserts a file the sandboxed tool wrote; the recording has no tool call."},
@@ -127,7 +130,9 @@
       "file": "examples/py/31-permissions.py",
       "status": "ported",
       "mode": "LIVE",
-      "assertions": ["denied and reopened tool effects remain zero with runtime answers", "reopened choices have no grants", "granted tool runs exactly once with an answer", "fork inherits exact grant snapshot", "path scope matches at a boundary, not a sibling prefix", "absent grants confer no capability"],
+      "assertions": ["independently captured denied and reopened effects remain zero with runtime answers", "reopened choices have no grants", "granted tool runs exactly once with an answer", "permission-review app document is anchored to exactly the visible boundary", "fork choices and review inherit the exact earlier single grant", "parent's later unused grant remains absent from the fork", "path scope matches at a boundary, not a sibling prefix", "absent grants confer no capability"],
+      "referenceCommit": "7448ed34956966b0afa2df79adc76a76031312e0",
+      "nativeVerification": "Corrected native run passed denied/reopened effects zero, granted effect exactly one, explicit reviewed boundary, exact fork choices/review snapshot and no inheritance of the parent's later unused grant. Store-backed assertions run before teardown.",
       "liveReason": "asserts a permission request the recording does not contain"
     },
     {
@@ -154,7 +159,7 @@
       "mode": "policy",
       "sandboxMode": "supported",
       "liveReason": "asserts a write landed on disk; the recording has no tool call",
-      "verification": "Actual SDK session and exact filesystem wire passed in policy mode; --live enables original tool-effect assertions.",
+      "verification": "Actual SDK policy mode passed. Native --live on macOS seatbelt passed permitted file content, denied filesystem classification/outcome and unchanged denied file; original explicit host-hook-denial tolerance is used.",
       "assertions": ["filesystem fields survive the SDK wire", "workspace token expands against the conversation directory", "no unexpanded policy paths remain"],
       "liveAssertions": [
         {"assertion": "permitted write lands on disk with content permitted", "status": "LIVE", "reason": "The recording has no tool call, so no sandboxed write lands on disk."},
@@ -171,7 +176,7 @@
       "mode": "policy",
       "sandboxMode": "supported",
       "liveReason": "asserts the sandboxed shell sees a masked credential; the recording has no tool call",
-      "verification": "Both native SDK session policies passed exact wire assertions. --live requires actual nonempty credential reports and backend-gated network observations.",
+      "verification": "Both native SDK policies passed exact wire assertions. Native --live on macOS seatbelt proved both nonempty masked credential digest/length reports, no allowed-host denial, and permissive blocked-host denial. Locked connection produced no classified denial, so that original conditional assertion was explicitly skipped.",
       "assertions": ["locked and permissive network flags and host lists survive the wire", "auth, dev-tool, MCP, and LSP fields survive the wire", "credential policy carries only variable names and inject hosts", "proxy fields map only when configured", "resolved-policy fields agree when reported"],
       "liveAssertions": [
         {"assertion": "both sandboxed shells see a nonempty masked credential whose digest differs from the generated value", "status": "LIVE", "reason": "The recording has no tool call to produce the digest/length report; missing or empty output is not evidence of masking."},
@@ -189,7 +194,7 @@
       "deterministic": true,
       "sandboxMode": "supported",
       "liveReason": null,
-      "verification": "Deterministic actual SDK ReplayRuntime run passed policy/trust/legacy precedence and zero-escalation assertions; stdout matches C# apart from temporary paths.",
+      "verification": "Replay passed deterministic policy/trust/legacy/zero-escalation assertions. Native macOS seatbelt passed permission approval, sandbox filesystem denial, tool refusal, unchanged denied file, successful control write, sandboxed call and keychain assertions. One normal host prompt was inspected; no escalation was offered, so the actual decline branch remains unproven.",
       "notes": ["The C# original runs deterministically without a successful tool call. Do not classify this entire example as LIVE.", "No backend engagement skips the three-part enforcement proof; no offered escalation asserts zero declines and zero bypass_decided events, explicitly leaving the host decline branch unproven."],
       "assertions": ["policy survives the SDK wire", "top-level seatbelt keychain field takes precedence over deprecated experimental.seatbelt", "durable mapping never emits deprecated seatbelt fields", "trust true maps to User and false maps to Session", "AllowBypass false records no bypass decision", "no offered escalation means zero declines and zero bypass decisions"],
       "liveAssertions": [
