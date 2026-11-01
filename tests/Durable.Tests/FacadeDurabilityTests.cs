@@ -25,6 +25,66 @@ public class FacadeDurabilityTests
     private static readonly DocumentDefinition<SessionBinding> BindingDocument =
         new("durable.session-binding", DocumentHistory.Rewindable, ForkPolicy.Initial);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Submit_SeparatesSdkHistoryFromAppWrittenEntries(bool writeDocument)
+    {
+        var store = DurableStore.CreateEphemeral();
+        await using var harness = await DurableHarness.OpenAsync(store, new ExtensionRegistry(), ReplayOptions());
+        var conversation = await harness.CreateConversationAsync(new AgentChoices { Model = "replay-model" });
+        var document = new DocumentDefinition<string>("test.chat-note", DocumentHistory.Rewindable, ForkPolicy.AsOf);
+        string? documentEntry = null;
+
+        if (writeDocument)
+        {
+            documentEntry = await conversation.CommitAsync(tx =>
+            {
+                // A caller-supplied kind must not make an app document's anchor internal.
+                var entry = tx.AppendEntry(conversation.Id, "checkpoint", "app note");
+                var draft = tx.Doc(document, conversation.Id);
+                draft.Value = "app note";
+                draft.Save(entry);
+                return Task.FromResult(entry);
+            });
+        }
+
+        Assert.Empty(conversation.Answers);
+        var entriesBefore = store.Entries(conversation.Id).Count;
+        var answer = await conversation.SubmitAsync("hello").WaitAsync(EventTimeout);
+
+        Assert.NotNull(answer);
+        Assert.Equal("Hello from the recorded transcript.", answer.Data.Content);
+        Assert.Equal(new[] { answer.Data.Content }, conversation.Answers);
+        Assert.Equal("completed", conversation.Admission()!.State);
+        Assert.Equal("hello", conversation.Admission()!.Prompt);
+        Assert.Equal("turn:msg-0001", conversation.Checkpoint()!.EventId);
+        Assert.Equal(answer.Data.Content, conversation.Checkpoint()!.Content);
+        Assert.Equal(entriesBefore + 3, store.Entries(conversation.Id).Count);
+
+        if (documentEntry is null)
+        {
+            Assert.Empty(conversation.Entries(10));
+        }
+        else
+        {
+            Assert.Equal(new[] { documentEntry }, conversation.Entries(10));
+            Assert.Equal("app note", conversation.Snapshot(document));
+        }
+
+        // Context is the SDK's recorded lifecycle, not a fabricated user/system transcript.
+        var context = await conversation.ContextAsync().WaitAsync(EventTimeout);
+        Assert.Collection(context,
+            evt => Assert.IsType<SessionStartEvent>(evt),
+            evt =>
+            {
+                var message = Assert.IsType<AssistantMessageEvent>(evt);
+                Assert.Equal(answer.Data.MessageId, message.Data.MessageId);
+                Assert.Equal(answer.Data.Content, message.Data.Content);
+            },
+            evt => Assert.IsType<SessionIdleEvent>(evt));
+    }
+
     [Fact]
     public async Task Turn_LeavesACheckpointAndASessionBinding()
     {
