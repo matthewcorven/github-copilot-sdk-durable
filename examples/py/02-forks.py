@@ -25,6 +25,8 @@ async def main(harness, store, registry):
     first_entry = await chat.commit_async(hello)
     second_entry = await chat.commit_async(goodbye)
     branch = await harness.fork_async(chat, first_entry)
+    print(f"fork transcript: {', '.join(branch.entries(10))}")
+    print(f"fork notes: {branch.snapshot(notes)['text']}")
     fork_notes_at_fork = branch.snapshot(notes)["text"]
 
     async def edit(tx):
@@ -33,6 +35,10 @@ async def main(harness, store, registry):
         draft.save(tx.append_entry(branch.id, "note", "edit"))
 
     await branch.commit_async(edit)
+    print(f"fork notes after edit: {branch.snapshot(notes)['text']}")
+    print(f"parent notes after edit: {chat.snapshot(notes)['text']}")
+    print(f"fork parent: {branch.record.parent_conversation_id}")
+    print(f"fork entry: {branch.record.fork_entry_id}")
     fork_entries = branch.entries(10)
     Check.equal(2, len(fork_entries), "the fork holds the inherited entry and its own edit")
     Check.equal(first_entry, fork_entries[-1], "the inherited entry is the oldest one in the fork")

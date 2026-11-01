@@ -25,6 +25,12 @@ async def main(harness, store, registry):
     first_entry = await chat.commit_async(hello)
     second_entry = await chat.commit_async(goodbye)
     document = Check.not_none(store.document(notes.kind, chat.id), "the notes document exists")
+    print(f"latest notes: {chat.snapshot(notes)['text']}")
+    print(f"notes at first entry: {chat.snapshot_as_of(notes, first_entry)['text']}")
+    print(f"notes at second entry: {chat.snapshot_as_of(notes, second_entry)['text']}")
+    print(f"committed versions: {len(document.versions)}")
+    for version in document.versions:
+        print(f"  {version.entry_id}: {version.value['text']}")
     Check.equal("after goodbye", chat.snapshot(notes)["text"], "the latest value is the last one written")
     Check.equal("after hello", chat.snapshot_as_of(notes, first_entry)["text"], "the value as of the first entry is readable")
     Check.equal("after goodbye", chat.snapshot_as_of(notes, second_entry)["text"], "the value as of the second entry is readable")
