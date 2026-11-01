@@ -6,8 +6,8 @@
   "complete": false,
   "implementationComplete": true,
   "liveValidationComplete": false,
-  "implementation": "All eleven files exist and typecheck against shared API milestones 5b083e6 and 4682509. LIVE model runs are not validated. Example 13 follows the tested C# reference correction 9763763.",
-  "requirements": ["Restore declared dependencies with npm --prefix lib/ts ci.", "Standalone Node execution uses --experimental-transform-types; strict compile checks also pass.", "JSONL examples require the native fs-ext advisory-lock binding on supported POSIX platforms. Missing native support fails explicitly, not through an unlocked fallback.", "Build tools/ReplayRuntime/ReplayRuntime.csproj before running configuration parity tests."],
+  "implementation": "All eleven files exist and typecheck against shared API freeze 92e8d76 (including 5b083e6, 4682509 and 8b939ca). LIVE model runs are not validated. Example 13 follows the tested C# reference correction 9763763.",
+  "requirements": ["Restore declared dependencies with npm --prefix lib/ts ci.", "Standalone Node execution uses --experimental-transform-types; strict compile checks also pass.", "JSONL uses native fs-ext flock on POSIX and LockFileEx on Windows. macOS lock refusal and crash release were validated; other platforms were not run. Missing native support fails explicitly, not through an unlocked fallback.", "Build tools/ReplayRuntime/ReplayRuntime.csproj before running configuration parity tests."],
   "testCommand": ["lib/py/.venv/bin/python", "examples/py/parity_test_11_21.py"],
   "examples": [
     {

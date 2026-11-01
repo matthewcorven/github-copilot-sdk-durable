@@ -6,9 +6,9 @@
   "complete": false,
   "implementationComplete": true,
   "liveValidationComplete": false,
-  "implementation": "All eleven files exist and pyright checks against shared API milestones 5b083e6 and 4682509. LIVE model runs are not validated. Example 13 follows the tested C# reference correction 9763763.",
+  "implementation": "All eleven files exist and pyright checks against shared API freeze 92e8d76 (including 5b083e6, 4682509 and 8b939ca). LIVE model runs are not validated. Example 13 follows the tested C# reference correction 9763763.",
   "requirements": ["Create lib/py/.venv and install the declared project with lib/py/.venv/bin/python -m pip install -e lib/py.", "Use the interpreter where the declared GitHub Copilot SDK dependency is installed.", "Build tools/ReplayRuntime/ReplayRuntime.csproj before running configuration parity tests."],
-  "validationWarning": "The separate native SDK suite passed 6/6 on Python 3.15 but emitted ResourceWarning for unclosed SDK subprocess FileIO handles. No LIVE model run or model availability claim follows from those tests.",
+  "validationWarning": "The separate native SDK suite passed 9/9 on Python 3.15 but emitted ResourceWarning for unclosed SDK subprocess FileIO handles. No LIVE model run or model availability claim follows from those tests.",
   "testCommand": ["lib/py/.venv/bin/python", "examples/py/parity_test_11_21.py"],
   "examples": [
     {
