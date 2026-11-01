@@ -51,6 +51,8 @@ public sealed class RuntimeHostCliTests
             "--permission-handler",
             "--require-effective-model",
             "--allow-uncontained",
+            "--http",
+            "--port",
             "--runtime-arg",
             "--help",
         })
@@ -254,19 +256,19 @@ public sealed class RuntimeHostCliTests
         var refused = await RunHostAsync(
             "serve", "--agent", "reviewer",
             "--definition", definitionPath, "--store", storePath, "--format", "jsonl",
-            "--permission-handler", "approve-all");
+            "--http", "--permission-handler", "approve-all");
 
         Assert.NotEqual(0, refused.ExitCode);
         Assert.Contains("refusing to serve", refused.Stderr, StringComparison.Ordinal);
         Assert.Contains("--allow-uncontained", refused.Stderr, StringComparison.Ordinal);
 
-        var allowed = await RunHostAsync(
+        var withoutHttp = await RunHostAsync(
             "serve", "--agent", "reviewer",
             "--store", storePath, "--format", "jsonl",
             "--permission-handler", "approve-all", "--allow-uncontained");
 
-        Assert.Equal(4, allowed.ExitCode);
-        Assert.Contains("#95", allowed.Stderr, StringComparison.Ordinal);
+        Assert.Equal(2, withoutHttp.ExitCode);
+        Assert.Contains("--http", withoutHttp.Stderr, StringComparison.Ordinal);
     }
 
     [Fact]

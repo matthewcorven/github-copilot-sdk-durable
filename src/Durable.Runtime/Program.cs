@@ -1,4 +1,7 @@
+using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Threading.Channels;
 using GitHub.Copilot;
 using GitHub.Copilot.Rpc;
 
@@ -34,6 +37,17 @@ internal static class Program
     /// <summary>How long the host waits for the runtime to report a model.</summary>
     private static readonly TimeSpan ModelReportTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// How long a shutdown waits for an in-flight turn to reach its checkpoint before the process
+    /// leaves anyway.
+    /// </summary>
+    /// <remarks>
+    /// The wait is bounded because a runtime that never settles would otherwise make the host
+    /// unkillable. It is generous because the alternative — leaving early — abandons a turn the
+    /// durable layer exists to finish.
+    /// </remarks>
+    private static readonly TimeSpan ShutdownGrace = TimeSpan.FromSeconds(60);
+
     private static readonly OptionSpec[] HostSpecs =
     [
         new("agent", true, "The agent definition to run. Required."),
@@ -45,6 +59,8 @@ internal static class Program
         new("permission-handler", true, "approve-all, grants, or deny-all. Defaults to grants."),
         new("require-effective-model", false, "Fail when the runtime reports no model."),
         new("allow-uncontained", false, "Allow serve and schedule to start with containment None."),
+        new("http", false, "Serve over HTTP. Required by serve."),
+        new("port", true, "The port to listen on. Defaults to 0, which asks the operating system."),
         new("runtime-arg", true, "Pass an argument to the runtime process. Repeatable."),
     ];
 
@@ -61,7 +77,7 @@ internal static class Program
             return args[0] switch
             {
                 "run" => await RunAsync(args),
-                "serve" => await NotYetAsync(args, "serve", "#95"),
+                "serve" => await ServeAsync(args),
                 "schedule" => await NotYetAsync(args, "schedule", "#97"),
                 _ => throw new UsageException(
                     $"unknown command '{args[0]}'. Commands are run, serve, and schedule."),
@@ -100,7 +116,6 @@ internal static class Program
     private static async Task<int> RunAsync(string[] args)
     {
         var options = ParseHostOptions(args, requireInput: true);
-        var input = options.Input!;
 
         using var store = OpenStore(options);
         ClaimOwnership(store, options.StorePath);
@@ -120,6 +135,43 @@ internal static class Program
 
         var conversation = await OpenConversationAsync(harness, store, definition, options);
 
+        var result = await ExecuteTurnAsync(
+            store, conversation, definition, options, containment, reason, options.Input!);
+
+        if (result.Answer is not null)
+        {
+            Console.Error.WriteLine($"answer: {result.Answer}");
+        }
+
+        Console.Error.WriteLine($"effective model: {result.Report}");
+        Console.Out.WriteLine(result.Result.ToJson());
+
+        return result.ExitCode;
+    }
+
+    /// <summary>
+    /// Runs one turn and describes it as a <see cref="RunResult"/>.
+    /// </summary>
+    /// <remarks>
+    /// This is the whole of a turn, shared by <c>run</c> and <c>serve</c> so the two transports
+    /// cannot drift: the same admission, the same checkpoint, the same effective-model wait, and
+    /// the same outcome vocabulary. A transport decides only how the result is delivered.
+    /// <para>
+    /// The turn is never cancelled. A cancelled <see cref="DurableConversation.SubmitAsync"/> skips
+    /// both the turn checkpoint and the admission's settle, which would leave the store describing
+    /// a turn that neither finished nor failed. A shutdown therefore waits for this method rather
+    /// than interrupting it.
+    /// </para>
+    /// </remarks>
+    private static async Task<TurnExecution> ExecuteTurnAsync(
+        DurableStore store,
+        DurableConversation conversation,
+        AgentDefinition definition,
+        HostOptions options,
+        Containment containment,
+        string containmentReason,
+        string input)
+    {
         AssistantMessageEvent? message = null;
         string? error = null;
         try
@@ -171,26 +223,247 @@ internal static class Program
                 : null,
             ModelReported = report.HasModel,
             Containment = containment.ToString(),
-            ContainmentReason = reason,
+            ContainmentReason = containmentReason,
             Outcome = outcome,
             Error = error,
         };
 
-        if (message is not null)
+        return new TurnExecution(
+            result,
+            message?.Text(),
+            report,
+            outcome switch
+            {
+                "succeeded" => ExitCodes.Succeeded,
+                "turnUnsuccessful" => ExitCodes.TurnUnsuccessful,
+                _ => ExitCodes.AgentFailed,
+            });
+    }
+
+    /// <summary>
+    /// Serves one agent over HTTP: a JSON request runs one durable turn, and the response streams
+    /// the turn's events before its result.
+    /// </summary>
+    /// <remarks>
+    /// The server is a process contract like <c>run</c>, so it reuses the same store ownership
+    /// probe, the same definition loading, the same containment gate, and the same
+    /// <see cref="ExecuteTurnAsync"/>. What it adds is a lifetime: it accepts requests until it is
+    /// asked to stop, and a stop waits for the turn in flight rather than interrupting it.
+    /// </remarks>
+    private static async Task<int> ServeAsync(string[] args)
+    {
+        var options = ParseHostOptions(args, requireInput: false);
+        if (!options.Http)
         {
-            Console.Error.WriteLine($"answer: {message.Text()}");
+            throw new UsageException("serve requires --http; this build serves HTTP only.");
         }
 
-        Console.Error.WriteLine($"effective model: {report}");
-        Console.Out.WriteLine(result.ToJson());
+        using var store = OpenStore(options);
+        ClaimOwnership(store, options.StorePath);
 
-        return outcome switch
+        var registry = BuildRegistry();
+        var definition = await LoadDefinitionAsync(store, registry, options);
+
+        var (containment, reason) = ContainmentClassifier.Classify(definition, options.PermissionHandler is not null);
+        ReportContainment(definition.Name, containment, reason);
+
+        if (containment == Containment.None && !options.AllowUncontained)
         {
-            "succeeded" => ExitCodes.Succeeded,
-            "turnUnsuccessful" => ExitCodes.TurnUnsuccessful,
-            _ => ExitCodes.AgentFailed,
+            Console.Error.WriteLine(
+                $"error: refusing to serve agent '{definition.Name}': containment is None ({reason}). "
+                + "Pass --allow-uncontained to start anyway.");
+            return ExitCodes.AgentFailed;
+        }
+
+        var harnessOptions = new DurableHarnessOptions
+        {
+            PermissionHandler = options.PermissionHandler,
+            RuntimeArguments = options.RuntimeArguments.ToList(),
         };
+        await using var harness = await DurableHarness.OpenAsync(store, registry, harnessOptions);
+
+        await using var transport = HttpTransport.Start(options.Port);
+
+        // One turn at a time. A conversation admits one turn, so a second concurrent request
+        // would be refused by the durable layer; queueing it here is the honest answer, and it
+        // keeps the store's admission history readable.
+        using var turnGate = new SemaphoreSlim(1, 1);
+        using var stopping = new CancellationTokenSource();
+
+        using var sigterm = RegisterShutdown(PosixSignal.SIGTERM, stopping);
+        using var sigint = RegisterShutdown(PosixSignal.SIGINT, stopping);
+
+        Console.Error.WriteLine($"listening on http://127.0.0.1:{transport.Port}");
+
+        await transport.RunAsync(
+            (request, response) => HandleAsync(
+                request, response, harness, store, definition, options, containment, reason, turnGate),
+            stopping.Token,
+            ShutdownGrace);
+
+        Console.Error.WriteLine("stopped accepting connections.");
+        return ExitCodes.Succeeded;
     }
+
+    /// <summary>
+    /// Turns a signal into a request to stop accepting connections. The signal is cancelled so the
+    /// process is not torn down underneath a turn that is still reaching its checkpoint.
+    /// </summary>
+    private static PosixSignalRegistration RegisterShutdown(PosixSignal signal, CancellationTokenSource stopping) =>
+        PosixSignalRegistration.Create(signal, context =>
+        {
+            context.Cancel = true;
+            Console.Error.WriteLine(
+                $"received {context.Signal}: finishing the turn in flight, then exiting.");
+            stopping.Cancel();
+        });
+
+    /// <summary>
+    /// Serves one request: validate it, run one turn, and stream the turn's events ahead of its
+    /// result.
+    /// </summary>
+    /// <remarks>
+    /// A refusal is a response, never an exception: a malformed body or an agent this host does
+    /// not serve must leave the server running, so every check answers with a 4xx that names the
+    /// problem and returns.
+    /// </remarks>
+    private static async Task HandleAsync(
+        HttpRequest request,
+        HttpResponse response,
+        DurableHarness harness,
+        DurableStore store,
+        AgentDefinition definition,
+        HostOptions options,
+        Containment containment,
+        string containmentReason,
+        SemaphoreSlim turnGate)
+    {
+        if (request.Method != "POST")
+        {
+            await response.WriteErrorAsync(
+                405, "Method Not Allowed", $"this host accepts POST, not {request.Method}.");
+            return;
+        }
+
+        if (request.Path is not ("/" or "/turns"))
+        {
+            await response.WriteErrorAsync(
+                404, "Not Found", $"'{request.Path}' is not a route this host serves. POST / or POST /turns.");
+            return;
+        }
+
+        string input;
+        bool newConversation;
+        try
+        {
+            var body = JsonNode.Parse(request.Body) as JsonObject
+                ?? throw new JsonException("the body must be a JSON object.");
+
+            if (body["agent"] is { } agentNode)
+            {
+                var requested = ReadString(agentNode, "agent");
+                if (!string.Equals(requested, definition.Name, StringComparison.Ordinal))
+                {
+                    await response.WriteErrorAsync(
+                        400, "Bad Request",
+                        $"agent '{requested}' is not served by this host; this host serves '{definition.Name}'.");
+                    return;
+                }
+            }
+
+            input = body["input"] is { } inputNode
+                ? ReadString(inputNode, "input")
+                : throw new JsonException("the body has no 'input' property.");
+
+            if (input.Length == 0)
+            {
+                throw new JsonException("'input' is empty.");
+            }
+
+            newConversation = body["newConversation"] is { } flag && flag.GetValue<bool>();
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
+        {
+            await response.WriteErrorAsync(
+                400, "Bad Request", $"the request body is not a valid turn request: {ex.Message}");
+            return;
+        }
+
+        await turnGate.WaitAsync();
+        try
+        {
+            var conversation = await OpenConversationAsync(
+                harness, store, definition, options with { NewConversation = newConversation });
+
+            await response.StartAsync(200, "OK", "application/x-ndjson");
+
+            // Events are queued rather than written from the subscription callback: the callback
+            // runs on the runtime's event thread, and a slow client must not stall it.
+            var events = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
+            var pump = Task.Run(async () =>
+            {
+                await foreach (var line in events.Reader.ReadAllAsync())
+                {
+                    await response.WriteLineAsync(line);
+                }
+            });
+
+            TurnExecution execution;
+            var subscription = conversation.Session.On<SessionEvent>(
+                evt => events.Writer.TryWrite(EventLine(evt)));
+            try
+            {
+                execution = await ExecuteTurnAsync(
+                    store, conversation, definition, options, containment, containmentReason, input);
+            }
+            finally
+            {
+                subscription.Dispose();
+            }
+
+            // The result is written only after every event has been flushed, so a client that
+            // reads to the end sees the turn in the order it happened.
+            events.Writer.TryComplete();
+            await pump;
+
+            await response.WriteLineAsync(ResultLine(execution.Result));
+            await response.CompleteAsync();
+        }
+        finally
+        {
+            turnGate.Release();
+        }
+    }
+
+    private static string ReadString(JsonNode node, string name) =>
+        node.GetValueKind() == JsonValueKind.String
+            ? node.GetValue<string>()
+            : throw new JsonException($"'{name}' must be a string.");
+
+    /// <summary>One streamed event, as a single newline-delimited JSON line.</summary>
+    private static string EventLine(SessionEvent evt) =>
+        new JsonObject
+        {
+            ["type"] = "event",
+            ["event"] = JsonNode.Parse(evt.ToJson()),
+        }.ToJsonString();
+
+    /// <summary>
+    /// The turn's result, as the last newline-delimited JSON line.
+    /// </summary>
+    /// <remarks>
+    /// The result is serialized compactly. <see cref="RunResult.Json"/> is indented for a human
+    /// reading standard output, and an indented object cannot be one line of a stream.
+    /// </remarks>
+    private static string ResultLine(RunResult result) =>
+        new JsonObject
+        {
+            ["type"] = "result",
+            ["result"] = JsonNode.Parse(JsonSerializer.Serialize(result, CompactResultJson)),
+        }.ToJsonString();
+
+    private static readonly JsonSerializerOptions CompactResultJson =
+        new(RunResult.Json) { WriteIndented = false };
 
     /// <summary>
     /// Parses and validates a command whose implementation is delivered by another issue, then
@@ -251,7 +524,28 @@ internal static class Program
             PermissionHandler: ParsePermissionHandler(parsed.Last("permission-handler")),
             RequireEffectiveModel: parsed.Has("require-effective-model"),
             AllowUncontained: parsed.Has("allow-uncontained"),
+            Http: parsed.Has("http"),
+            Port: ParsePort(parsed.Last("port")),
             RuntimeArguments: parsed.All("runtime-arg").ToList());
+    }
+
+    /// <summary>
+    /// Reads the port to bind. Zero is the default and means "ask the operating system", which is
+    /// what makes two hosts runnable at once and a test runnable twice.
+    /// </summary>
+    private static int ParsePort(string? text)
+    {
+        if (text is null or "")
+        {
+            return 0;
+        }
+
+        if (!int.TryParse(text, out var port) || port is < 0 or > 65535)
+        {
+            throw new UsageException($"--port must be a number between 0 and 65535, got '{text}'.");
+        }
+
+        return port;
     }
 
     private static DurableStoreFormat ParseFormat(string? text) => text switch
@@ -490,7 +784,8 @@ internal static class Program
 
         Commands:
           run       Run one durable turn for an agent and print the run result as JSON.
-          serve     Serve an agent over HTTP. Delivered by #95.
+          serve     Serve an agent over HTTP: one turn per request, events streamed ahead of the
+                    result. Requires --http.
           schedule  Run an agent on a schedule. Delivered by #97.
 
         Options:
@@ -504,6 +799,9 @@ internal static class Program
                                       leaves every request to the durable fail-closed policy.
           --require-effective-model   Fail when the runtime reports no model.
           --allow-uncontained         Allow serve and schedule to start with containment None.
+          --http                      Serve over HTTP. Required by serve.
+          --port <port>               The port to listen on. Defaults to 0, which asks the operating
+                                      system for an ephemeral port.
           --runtime-arg <arg>         Pass an argument to the runtime process. Repeatable.
           --help                      Show this help.
 
@@ -528,5 +826,17 @@ internal static class Program
         Func<PermissionRequest, PermissionInvocation, Task<PermissionDecision>>? PermissionHandler,
         bool RequireEffectiveModel,
         bool AllowUncontained,
+        bool Http,
+        int Port,
         IReadOnlyList<string> RuntimeArguments);
+
+    /// <summary>
+    /// One turn, as the transport that ran it needs to see it: the serialized result, the answer
+    /// for a human reading stderr, the model report, and the exit code the turn maps to.
+    /// </summary>
+    private sealed record TurnExecution(
+        RunResult Result,
+        string? Answer,
+        DurableModelReport Report,
+        int ExitCode);
 }
