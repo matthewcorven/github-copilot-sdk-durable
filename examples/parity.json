@@ -820,10 +820,21 @@
             "liveReason": "Original submits a model turn and asserts the answer is Paris plus user/assistant/system transcript events.",
             "exclusionReason": "asserts the model's answer; the recording has no model answer",
             "status": "ported",
-            "validationStatus": "live-unverified",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "answer": "Paris",
+              "contextKinds": [
+                "user.message",
+                "assistant.message",
+                "system.message"
+              ],
+              "visibleEntries": 0
+            },
             "referenceCorrection": "9763763737615ba5d55b08607df37aee09613337 changes the stale >=1 entry assertion to exactly zero app-written entries; Paris and user/assistant/system assertions remain unchanged.",
             "limitations": [
-              "No LIVE model run was claimed. The basic recorded fixture lacks Paris, user.message and system.message, so it cannot prove this example."
+              "Native assertions passed; raw system-prompt content is not published. The basic replay fixture still cannot prove Paris or user/system history."
             ],
             "requiredAssertions": [
               "trimmed answer == Paris",
@@ -849,10 +860,21 @@
             "liveReason": "Original submits a model turn and asserts Paris plus user/assistant/system transcript events.",
             "exclusionReason": "asserts the model's answer; the recording has no model answer",
             "status": "ported",
-            "validationStatus": "live-unverified",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "answer": "Paris",
+              "contextKinds": [
+                "user.message",
+                "assistant.message",
+                "system.message"
+              ],
+              "visibleEntries": 0
+            },
             "referenceCorrection": "9763763737615ba5d55b08607df37aee09613337 changes the stale >=1 entry assertion to exactly zero app-written entries; Paris and user/assistant/system assertions remain unchanged.",
             "limitations": [
-              "No LIVE model run was claimed. The basic recorded fixture lacks Paris, user.message and system.message, so it cannot prove this example."
+              "Native assertions passed; raw system-prompt content is not published. The basic replay fixture still cannot prove Paris or user/system history."
             ],
             "requiredAssertions": [
               "trimmed answer == Paris",
@@ -969,9 +991,15 @@
             "liveReason": "Original streams real model output and compares all delta characters to final answer length.",
             "exclusionReason": "asserts the answer streamed as deltas; the recording has no model answer",
             "status": "ported",
-            "validationStatus": "live-unverified",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "streamedCharacters": 120,
+              "finalCharacters": 120
+            },
             "limitations": [
-              "Strict typecheck passes; no real-model streaming run was performed."
+              "Native streaming assertions passed; this is not replay-transcript evidence."
             ],
             "requiredAssertions": [
               "answer exists",
@@ -996,9 +1024,15 @@
             "liveReason": "Original streams real model output and compares all delta characters to final answer length.",
             "exclusionReason": "asserts the answer streamed as deltas; the recording has no model answer",
             "status": "ported",
-            "validationStatus": "live-unverified",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "streamedCharacters": 113,
+              "finalCharacters": 113
+            },
             "limitations": [
-              "Pyright checks pass; no real-model streaming run was performed. Character counts use UTF-16 code units to match C# and TypeScript."
+              "Native streaming assertions passed. Character counts use UTF-16 code units to match C# and TypeScript."
             ],
             "requiredAssertions": [
               "answer exists",
@@ -1033,9 +1067,21 @@
             "liveReason": "Original asks a model to select read/edit/shell tools and verifies actual file effects and hook timings.",
             "exclusionReason": "asserts the app's read_file tool ran; the recording has no tool call",
             "status": "ported",
-            "validationStatus": "live-unverified",
+            "validationStatus": "live-flaky",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "passingExitCode": 0,
+              "tools": [
+                "read_file",
+                "edit_file",
+                "run_shell"
+              ],
+              "toolFailures": 0,
+              "file": "hello durable",
+              "shellTimings": 1
+            },
             "limitations": [
-              "Strict typecheck passes; model-selected tool order, actual tool effects and hook timing were not validated in a LIVE run.",
+              "Initial native run failed because run_shell was not called; unchanged-source repeats passed all original assertions. Model tool selection is not deterministic.",
               "File tools reject paths outside the temporary workspace; shell calls have a ten-second timeout. Failed commands surface as tool failures."
             ],
             "requiredAssertions": [
@@ -1063,9 +1109,21 @@
             "liveReason": "Original asks a model to select read/edit/shell tools and verifies actual file effects and hook timings.",
             "exclusionReason": "asserts the app's read_file tool ran; the recording has no tool call",
             "status": "ported",
-            "validationStatus": "live-unverified",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "tools": [
+                "read_file",
+                "edit_file",
+                "run_shell"
+              ],
+              "toolFailures": 0,
+              "file": "hello durable",
+              "shellTimings": 1
+            },
             "limitations": [
-              "Pyright checks pass; model-selected tool order, actual tool effects and hook timing were not validated in a LIVE run.",
+              "Initial native failures exposed /var versus /private/var containment mismatch. Canonicalizing the workspace fixed it; unchanged original effect assertions passed, and a real-source alias/escape mutation regression protects the guard.",
               "File tools reject paths outside the temporary workspace; shell calls have a ten-second timeout. Failed commands surface as tool failures."
             ],
             "requiredAssertions": [
@@ -1103,12 +1161,18 @@
             "liveReason": "Original awaits one model submission with built-in read permission and prints its final answer.",
             "exclusionReason": null,
             "status": "ported",
-            "validationStatus": "live-unverified",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "nonemptyAnswer": true,
+              "answers": 1
+            },
             "deterministicValidation": "passed-fixture",
             "fixture": "tools/ReplayRuntime/fixtures/basic.json",
             "fixtureEnvironmentVariable": "DURABLE_EXAMPLE_FIXTURE",
             "limitations": [
-              "Strict typecheck passes; no LIVE answer run was performed."
+              "Native answer assertions passed in a disposable directory. Model diagnostics remain on stderr, separate from answer stdout."
             ],
             "requiredAssertions": [
               "answer exists",
@@ -1132,12 +1196,18 @@
             "liveReason": "Original awaits one model submission with built-in read permission and prints its final answer.",
             "exclusionReason": null,
             "status": "ported",
-            "validationStatus": "live-unverified",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "nonemptyAnswer": true,
+              "answers": 1
+            },
             "deterministicValidation": "passed-fixture",
             "fixture": "tools/ReplayRuntime/fixtures/basic.json",
             "fixtureEnvironmentVariable": "DURABLE_EXAMPLE_FIXTURE",
             "limitations": [
-              "Pyright checks pass; no LIVE answer run was performed."
+              "Native answer assertions passed in a disposable directory. Model diagnostics remain on stderr, separate from answer stdout."
             ],
             "requiredAssertions": [
               "answer exists",
@@ -1171,12 +1241,20 @@
             "liveReason": "Original emits a snapshot followed by session events from a model/tool run, serialized as JSON objects.",
             "exclusionReason": null,
             "status": "ported",
-            "validationStatus": "live-unverified",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "jsonLines": 115,
+              "snapshotFirst": true,
+              "toolStarts": 2,
+              "assistantMessages": 3
+            },
             "deterministicValidation": "passed-fixture",
             "fixture": "tools/ReplayRuntime/fixtures/basic.json",
             "fixtureEnvironmentVariable": "DURABLE_EXAMPLE_FIXTURE",
             "limitations": [
-              "Strict typecheck passes; no LIVE JSON event run was performed. Model-report diagnostics go to stderr, leaving stdout JSON-only."
+              "Native snapshot/event JSON assertions passed. Model-report diagnostics go to stderr, leaving stdout JSON-only."
             ],
             "requiredAssertions": [
               "lines count >= 1",
@@ -1201,12 +1279,21 @@
             "liveReason": "Original emits a snapshot followed by session events from a model/tool run, serialized as JSON objects.",
             "exclusionReason": null,
             "status": "ported",
-            "validationStatus": "live-unverified",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "jsonLines": 110,
+              "snapshotFirst": true,
+              "toolStarts": 2,
+              "assistantMessages": 3,
+              "sdkUnknownEvents": 24
+            },
             "deterministicValidation": "passed-fixture",
             "fixture": "tools/ReplayRuntime/fixtures/basic.json",
             "fixtureEnvironmentVariable": "DURABLE_EXAMPLE_FIXTURE",
             "limitations": [
-              "Pyright checks pass; no LIVE JSON event run was performed. Model-report diagnostics go to stderr, leaving stdout JSON-only."
+              "Native snapshot/event JSON assertions passed. SDK 1.0.28 decoded 24 newer CLI 1.0.105 event kinds as unknown; no complete future-event schema claim is made. Model-report diagnostics go to stderr, leaving stdout JSON-only."
             ],
             "requiredAssertions": [
               "lines count >= 1",
@@ -1241,9 +1328,17 @@
             "liveReason": "Original submits overlapping model turns and checks both inputs and per-submission answers were retained.",
             "exclusionReason": "asserts both prompts are in the transcript; the recording has no user-message events",
             "status": "ported",
-            "validationStatus": "live-unverified",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "firstAnswer": "4",
+              "followUpAnswer": "6",
+              "userMessages": 2,
+              "answers": 2
+            },
             "limitations": [
-              "Strict typecheck passes; real overlapping model turns and transcript retention were not validated in a LIVE run.",
+              "Native overlapping-submission assertions passed.",
               "The original release gate is unused and does not control model completion; this port does not claim a deterministic busy barrier."
             ],
             "requiredAssertions": [
@@ -1273,9 +1368,17 @@
             "liveReason": "Original submits overlapping model turns and checks both inputs and per-submission answers were retained.",
             "exclusionReason": "asserts both prompts are in the transcript; the recording has no user-message events",
             "status": "ported",
-            "validationStatus": "live-unverified",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "firstAnswer": "4",
+              "followUpAnswer": "6",
+              "userMessages": 2,
+              "answers": 2
+            },
             "limitations": [
-              "Pyright checks pass; real overlapping model turns and transcript retention were not validated in a LIVE run.",
+              "Native overlapping-submission assertions passed.",
               "The original release gate is unused and does not control model completion; this port does not claim a deterministic busy barrier."
             ],
             "requiredAssertions": [
@@ -1315,9 +1418,84 @@
             "liveReason": "Original joins a streaming model run after 1.5 seconds and requires live deltas after the snapshot; timing is not guaranteed by a completed recording.",
             "exclusionReason": "asserts the snapshot holds the user message; the recording has no user-message events",
             "status": "ported",
-            "validationStatus": "live-unverified",
+            "validationStatus": "live-passed",
+            "referenceStatus": "synchronized-reference-ported",
+            "referenceCorrection": {
+              "commit": "fdf325bae125768aff8d8e1b8f0eec7fc4ee2955",
+              "pullRequest": "https://github.com/matthewcorven/github-copilot-sdk-durable/pull/128",
+              "contract": "Actual async wait_for_join SDK tool; exact custom-tool grant; completion/error races; actual user history before subscription; subscription before release; host cancellation and release in finally. All five original assertions remain."
+            },
+            "synchronization": {
+              "tool": "wait_for_join",
+              "deadlineClockSeconds": 90,
+              "historyDeadlineSeconds": 15,
+              "conditionalHistoryPollMilliseconds": 50,
+              "subscriptionBeforeRelease": true,
+              "bootstrapCancellationGuaranteed": false
+            },
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "cliVersion": "1.0.105",
+              "sdkVersion": "1.0.28",
+              "runs": [
+                {
+                  "exitCode": 0,
+                  "durationSeconds": 7.84,
+                  "snapshotEvents": 11,
+                  "snapshotUserEvent": true,
+                  "deltasAfterJoin": 11,
+                  "completedAnswerCharacters": 38
+                },
+                {
+                  "exitCode": 0,
+                  "durationSeconds": 7.97,
+                  "snapshotEvents": 10,
+                  "snapshotUserEvent": true,
+                  "deltasAfterJoin": 12,
+                  "completedAnswerCharacters": 34,
+                  "answer": "One.\nTwo.\nThree.\nFour.\nFive.\nDONE."
+                }
+              ],
+              "subscriptionBeforeDelta": true,
+              "representativeAnswer": "One.\n\nTwo.\n\nThree.\n\nFour.\n\nFive.\n\nDONE",
+              "earlierSynchronizedRuns": [
+                {
+                  "exitCode": 0,
+                  "durationSeconds": 7.39,
+                  "snapshotEvents": 10,
+                  "deltasAfterJoin": 11,
+                  "completedAnswerCharacters": 38
+                },
+                {
+                  "exitCode": 0,
+                  "durationSeconds": 9.09,
+                  "snapshotEvents": 10,
+                  "deltasAfterJoin": 11,
+                  "completedAnswerCharacters": 38
+                }
+              ]
+            },
+            "historicalNativeEvidence": {
+              "reference": "pre-fdf325b fixed 1.5-second join",
+              "reportedModel": "gpt-6-luna",
+              "passingExitCode": 0,
+              "passingSnapshotEvents": 4,
+              "failingExitCode": 1,
+              "failedAssertion": "the snapshot holds the user message",
+              "failingSnapshotKinds": [
+                "session.start"
+              ]
+            },
+            "sdkTransportEvidence": [
+              "Delayed user history is read conditionally until the third post-submission SDK snapshot.",
+              "Missing invocation, early completion, original model errors, missing/stalled history, no deltas, empty/missing answer and no idle fail loudly.",
+              "Actual handler cleanup runs without a success result after cancellation.",
+              "Actual-source mutations restoring the old delay and releasing before the snapshot fail nonzero."
+            ],
             "limitations": [
-              "Strict typecheck passes; no LIVE late-join run was performed. If a model finishes before the 1.5-second join, the original delta assertion fails honestly."
+              "Original liveReason is retained verbatim as historical classification; the tested reference replaces the uncoordinated 1.5-second delay with a real tool barrier, not manufactured history.",
+              "The original basic replay recording still cannot prove user history or streaming; the new SDK protocol peer is deterministic test evidence only.",
+              "The 90-second clock bounds joining and completion once a harness is owned. Facade bootstrap has no cancellation parameter; interruption of an open that never settles is not guaranteed or proved by these tests."
             ],
             "requiredAssertions": [
               "snapshot count >= 1",
@@ -1343,9 +1521,84 @@
             "liveReason": "Original joins a streaming model run after 1.5 seconds and requires live deltas after the snapshot; timing is not guaranteed by a completed recording.",
             "exclusionReason": "asserts the snapshot holds the user message; the recording has no user-message events",
             "status": "ported",
-            "validationStatus": "live-unverified",
+            "validationStatus": "live-passed",
+            "referenceStatus": "synchronized-reference-ported",
+            "referenceCorrection": {
+              "commit": "fdf325bae125768aff8d8e1b8f0eec7fc4ee2955",
+              "pullRequest": "https://github.com/matthewcorven/github-copilot-sdk-durable/pull/128",
+              "contract": "Actual async wait_for_join SDK tool; exact custom-tool grant; completion/error races; actual user history before subscription; subscription before release; host cancellation and release in finally. All five original assertions remain."
+            },
+            "synchronization": {
+              "tool": "wait_for_join",
+              "deadlineClockSeconds": 90,
+              "historyDeadlineSeconds": 15,
+              "conditionalHistoryPollMilliseconds": 50,
+              "subscriptionBeforeRelease": true,
+              "bootstrapCancellationGuaranteed": false
+            },
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "cliVersion": "1.0.105",
+              "sdkVersion": "1.0.28",
+              "runs": [
+                {
+                  "exitCode": 0,
+                  "durationSeconds": 8.06,
+                  "snapshotEvents": 10,
+                  "snapshotUserEvent": true,
+                  "deltasAfterJoin": 11,
+                  "completedAnswerCharacters": 38
+                },
+                {
+                  "exitCode": 0,
+                  "durationSeconds": 10.92,
+                  "snapshotEvents": 10,
+                  "snapshotUserEvent": true,
+                  "deltasAfterJoin": 11,
+                  "completedAnswerCharacters": 38
+                }
+              ],
+              "subscriptionBeforeDelta": true,
+              "representativeAnswer": "One.\n\nTwo.\n\nThree.\n\nFour.\n\nFive.\n\nDONE",
+              "earlierSynchronizedRuns": [
+                {
+                  "exitCode": 0,
+                  "durationSeconds": 7.79,
+                  "snapshotEvents": 10,
+                  "deltasAfterJoin": 11,
+                  "completedAnswerCharacters": 38
+                },
+                {
+                  "exitCode": 0,
+                  "durationSeconds": 11.26,
+                  "snapshotEvents": 10,
+                  "deltasAfterJoin": 11,
+                  "completedAnswerCharacters": 38
+                }
+              ]
+            },
+            "historicalNativeEvidence": {
+              "reference": "pre-fdf325b fixed 1.5-second join",
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 1,
+              "failedAssertion": "the snapshot holds the user message",
+              "snapshotKinds": [
+                "session.start"
+              ],
+              "eventualUserMessages": 1,
+              "deltasAfterJoin": 11
+            },
+            "sdkTransportEvidence": [
+              "Delayed user history is read conditionally until the third post-submission SDK snapshot.",
+              "Missing invocation, early completion, original model errors, missing/stalled history, no deltas, empty/missing answer and no idle fail loudly.",
+              "Actual handler cleanup runs without a success result after cancellation.",
+              "Actual-source mutations restoring the old delay and releasing before the snapshot fail nonzero."
+            ],
             "limitations": [
-              "Pyright checks pass; no LIVE late-join run was performed. If a model finishes before the 1.5-second join, the original delta assertion fails honestly."
+              "Original liveReason is retained verbatim as historical classification; the tested reference replaces the uncoordinated 1.5-second delay with a real tool barrier, not manufactured history.",
+              "Python SDK ToolInvocation has no cancellation signal field: SDK task cancellation propagates and the host cancelled/deadline guard runs before ToolResult. No SDK token or new production Abort API is invented.",
+              "The original basic replay recording still cannot prove user history or streaming; the new SDK protocol peer is deterministic test evidence only.",
+              "The 90-second clock bounds joining and completion once a harness is owned. Facade bootstrap has no cancellation parameter; interruption of an open that never settles is not guaranteed or proved by these tests."
             ],
             "requiredAssertions": [
               "snapshot count >= 1",
@@ -1381,10 +1634,20 @@
             "liveReason": "Original requires a parent model tool call to create an owned child session, await its answer, and return it to the parent.",
             "exclusionReason": "asserts a subagent tool created a child conversation; the recording has no tool call",
             "status": "ported",
-            "validationStatus": "live-unverified",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedParentModel": "gpt-6-luna",
+              "exitCode": 0,
+              "ownedChildren": 1,
+              "returnedPrimes": [
+                2,
+                3,
+                5
+              ]
+            },
             "limitations": [
-              "Strict typecheck passes; no LIVE nested tool/model run was performed.",
-              "The child requests the original mai-code-1.1-flash choice, not a claim about model availability or runtime substitution.",
+              "Native parent-tool/owned-child assertions passed.",
+              "The child requests the original mai-code-1.1-flash choice; its effective model was not reported by this example and is not inferred from the request.",
               "The original creates a new child on every tool invocation; no crash-reuse or task-owned cancellation guarantee is claimed."
             ],
             "requiredAssertions": [
@@ -1411,10 +1674,23 @@
             "liveReason": "Original requires a parent model tool call to create an owned child session, await its answer, and return it to the parent.",
             "exclusionReason": "asserts a subagent tool created a child conversation; the recording has no tool call",
             "status": "ported",
-            "validationStatus": "live-unverified",
+            "validationStatus": "live-flaky",
+            "nativeEvidence": {
+              "reportedParentModel": "gpt-6-luna",
+              "passingExitCode": 0,
+              "ownedChildren": 1,
+              "returnedPrimes": [
+                2,
+                3,
+                5
+              ],
+              "failingExitCode": 1,
+              "failedAssertion": "the subagent tool created exactly one child conversation",
+              "failingChildren": 0
+            },
             "limitations": [
-              "Pyright checks pass; no LIVE nested tool/model run was performed.",
-              "The child requests the original mai-code-1.1-flash choice, not a claim about model availability or runtime substitution.",
+              "A native run with diagnostic-only instrumentation preserving all assertions passed the actual parent-tool/owned-child flow. Uninstrumented runs also failed with zero children; passing evidence does not erase model/tool-choice flakiness.",
+              "The child requests the original mai-code-1.1-flash choice; its effective model was not reported by this example and is not inferred from the request.",
               "The original creates a new child on every tool invocation; no crash-reuse or task-owned cancellation guarantee is claimed."
             ],
             "requiredAssertions": [
@@ -1577,9 +1853,11 @@
             "mode": "LIVE",
             "assertions": [
               "five nonempty answers",
-              "stored transcript retains entries",
+              "plain chat checkpoints produce zero public app entries",
               "model context is not empty"
             ],
+            "referenceCommit": "7448ed34956966b0afa2df79adc76a76031312e0",
+            "nativeVerification": "Corrected native run passed five nonempty answers, exactly zero public entries and nonempty SDK context. Internal checkpoints remain persisted; compaction count is observational and was zero.",
             "liveReason": "needs a compaction request the runtime does not answer"
           }
         },
@@ -1600,9 +1878,11 @@
             "mode": "LIVE",
             "assertions": [
               "five nonempty answers",
-              "stored transcript retains entries",
+              "plain chat checkpoints produce zero public app entries",
               "model context is not empty"
             ],
+            "referenceCommit": "7448ed34956966b0afa2df79adc76a76031312e0",
+            "nativeVerification": "Corrected native run passed five nonempty answers, exactly zero public entries and nonempty SDK context. Internal checkpoints remain persisted; compaction count is observational and was zero.",
             "liveReason": "needs a compaction request the runtime does not answer"
           }
         }
@@ -1806,9 +2086,10 @@
             "mode": "policy",
             "sandboxMode": "supported",
             "liveReason": "asserts a file the sandboxed tool wrote; the recording has no tool call",
-            "verification": "Actual SDK session creation, policy wire and distinct document directories passed in policy mode; --live enables original file-content assertions.",
+            "verification": "Policy mode passed native SDK wire and distinct document directories. Added SDK --live policy mode passed actual alice/bob file contents with explicit narrowly classified host-hook tolerance; the default non-tolerant live attempt reported the installed hook's sandbox denial.",
             "notes": [
-              "The C# reference confines a custom tool using a sandbox document. This port preserves that document and also verifies the required native SDK filesystem policy."
+              "The C# reference confines a custom tool using a sandbox document. This port preserves that document and also verifies the required native SDK filesystem policy.",
+              "Only the added actual-SDK --live policy mode explicitly tolerates narrowly classified host hook sandbox denials. The library and this example's default policy-mode option remain false; file-content and policy assertions remain active."
             ],
             "assertions": [
               "distinct per-conversation directories",
@@ -1845,9 +2126,10 @@
             "mode": "policy",
             "sandboxMode": "supported",
             "liveReason": "asserts a file the sandboxed tool wrote; the recording has no tool call",
-            "verification": "Actual SDK session creation, policy wire and distinct document directories passed in policy mode; --live enables original file-content assertions.",
+            "verification": "Policy mode passed native SDK wire and distinct document directories. Added SDK --live policy mode passed actual alice/bob file contents with explicit narrowly classified host-hook tolerance; the default non-tolerant live attempt reported the installed hook's sandbox denial.",
             "notes": [
-              "The C# reference confines a custom tool using a sandbox document. This port preserves that document and also verifies the required native SDK filesystem policy."
+              "The C# reference confines a custom tool using a sandbox document. This port preserves that document and also verifies the required native SDK filesystem policy.",
+              "Only the added actual-SDK --live policy mode explicitly tolerates narrowly classified host hook sandbox denials. The library and this example's default policy-mode option remain false; file-content and policy assertions remain active."
             ],
             "assertions": [
               "distinct per-conversation directories",
@@ -2016,13 +2298,17 @@
             "status": "ported",
             "mode": "LIVE",
             "assertions": [
-              "denied and reopened tool effects remain zero with runtime answers",
+              "independently captured denied and reopened effects remain zero with runtime answers",
               "reopened choices have no grants",
               "granted tool runs exactly once with an answer",
-              "fork inherits exact grant snapshot",
+              "permission-review app document is anchored to exactly the visible boundary",
+              "fork choices and review inherit the exact earlier single grant",
+              "parent's later unused grant remains absent from the fork",
               "path scope matches at a boundary, not a sibling prefix",
               "absent grants confer no capability"
             ],
+            "referenceCommit": "7448ed34956966b0afa2df79adc76a76031312e0",
+            "nativeVerification": "Corrected native run passed denied/reopened effects zero, granted effect exactly one, explicit reviewed boundary, exact fork choices/review snapshot and no inheritance of the parent's later unused grant. Store-backed assertions run before teardown.",
             "liveReason": "asserts a permission request the recording does not contain"
           }
         },
@@ -2042,13 +2328,17 @@
             "status": "ported",
             "mode": "LIVE",
             "assertions": [
-              "denied and reopened tool effects remain zero with runtime answers",
+              "independently captured denied and reopened effects remain zero with runtime answers",
               "reopened choices have no grants",
               "granted tool runs exactly once with an answer",
-              "fork inherits exact grant snapshot",
+              "permission-review app document is anchored to exactly the visible boundary",
+              "fork choices and review inherit the exact earlier single grant",
+              "parent's later unused grant remains absent from the fork",
               "path scope matches at a boundary, not a sibling prefix",
               "absent grants confer no capability"
             ],
+            "referenceCommit": "7448ed34956966b0afa2df79adc76a76031312e0",
+            "nativeVerification": "Corrected native run passed denied/reopened effects zero, granted effect exactly one, explicit reviewed boundary, exact fork choices/review snapshot and no inheritance of the parent's later unused grant. Store-backed assertions run before teardown.",
             "liveReason": "asserts a permission request the recording does not contain"
           }
         }
@@ -2158,7 +2448,7 @@
             "mode": "policy",
             "sandboxMode": "supported",
             "liveReason": "asserts a write landed on disk; the recording has no tool call",
-            "verification": "Actual SDK session and exact filesystem wire passed in policy mode; --live enables original tool-effect assertions.",
+            "verification": "Actual SDK policy mode passed. Native --live on macOS seatbelt passed permitted file content, denied filesystem classification/outcome and unchanged denied file; original explicit host-hook-denial tolerance is used.",
             "assertions": [
               "filesystem fields survive the SDK wire",
               "workspace token expands against the conversation directory",
@@ -2194,7 +2484,7 @@
             "mode": "policy",
             "sandboxMode": "supported",
             "liveReason": "asserts a write landed on disk; the recording has no tool call",
-            "verification": "Actual SDK session and exact filesystem wire passed in policy mode; --live enables original tool-effect assertions.",
+            "verification": "Actual SDK policy mode passed. Native --live on macOS seatbelt passed permitted file content, denied filesystem classification/outcome and unchanged denied file; original explicit host-hook-denial tolerance is used.",
             "assertions": [
               "filesystem fields survive the SDK wire",
               "workspace token expands against the conversation directory",
@@ -2240,7 +2530,7 @@
             "mode": "policy",
             "sandboxMode": "supported",
             "liveReason": "asserts the sandboxed shell sees a masked credential; the recording has no tool call",
-            "verification": "Both native SDK session policies passed exact wire assertions. --live requires actual nonempty credential reports and backend-gated network observations.",
+            "verification": "Both native SDK policies passed exact wire assertions. Native --live on macOS seatbelt proved both nonempty masked credential digest/length reports, no allowed-host denial, and permissive blocked-host denial. Locked connection produced no classified denial, so that original conditional assertion was explicitly skipped.",
             "assertions": [
               "locked and permissive network flags and host lists survive the wire",
               "auth, dev-tool, MCP, and LSP fields survive the wire",
@@ -2278,7 +2568,7 @@
             "mode": "policy",
             "sandboxMode": "supported",
             "liveReason": "asserts the sandboxed shell sees a masked credential; the recording has no tool call",
-            "verification": "Both native SDK session policies passed exact wire assertions. --live requires actual nonempty credential reports and backend-gated network observations.",
+            "verification": "Both native SDK policies passed exact wire assertions. Native --live on macOS seatbelt proved both nonempty masked credential digest/length reports, no allowed-host denial, and permissive blocked-host denial. Locked connection produced no classified denial, so that original conditional assertion was explicitly skipped.",
             "assertions": [
               "locked and permissive network flags and host lists survive the wire",
               "auth, dev-tool, MCP, and LSP fields survive the wire",
@@ -2327,7 +2617,7 @@
             "deterministic": true,
             "sandboxMode": "supported",
             "liveReason": null,
-            "verification": "Deterministic actual SDK ReplayRuntime run passed policy/trust/legacy precedence and zero-escalation assertions; stdout matches C# apart from temporary paths.",
+            "verification": "Replay passed deterministic policy/trust/legacy/zero-escalation assertions. Native macOS seatbelt passed permission approval, sandbox filesystem denial, tool refusal, unchanged denied file, successful control write, sandboxed call and keychain assertions. One normal host prompt was inspected; no escalation was offered, so the actual decline branch remains unproven.",
             "notes": [
               "The C# original runs deterministically without a successful tool call. Do not classify this entire example as LIVE.",
               "No backend engagement skips the three-part enforcement proof; no offered escalation asserts zero declines and zero bypass_decided events, explicitly leaving the host decline branch unproven."
@@ -2376,7 +2666,7 @@
             "deterministic": true,
             "sandboxMode": "supported",
             "liveReason": null,
-            "verification": "Deterministic actual SDK ReplayRuntime run passed policy/trust/legacy precedence and zero-escalation assertions; stdout matches C# apart from temporary paths.",
+            "verification": "Replay passed deterministic policy/trust/legacy/zero-escalation assertions. Native macOS seatbelt passed permission approval, sandbox filesystem denial, tool refusal, unchanged denied file, successful control write, sandboxed call and keychain assertions. One normal host prompt was inspected; no escalation was offered, so the actual decline branch remains unproven.",
             "notes": [
               "The C# original runs deterministically without a successful tool call. Do not classify this entire example as LIVE.",
               "No backend engagement skips the three-part enforcement proof; no offered escalation asserts zero declines and zero bypass_decided events, explicitly leaving the host decline branch unproven."
