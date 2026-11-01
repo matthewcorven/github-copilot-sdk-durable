@@ -930,7 +930,7 @@ until the contract is deliberately updated.
 | `languages.ts` / `languages.py` | Exact source `path`, `status`, `sandboxMode`, `rangeManifest`, and the unchanged range row as `evidence`. |
 | `status` | `ported` means implemented; **does not mean LIVE-validated**. `pending-native-api` requires an actionable `evidence.pendingReason` and fails when selected, rather than becoming an exclusion or a pass. |
 | `sandboxMode` | `supported`, `unsupported`, or `not-applicable`; unsupported requires specific proven `evidence.sandboxReason`, never a blanket claim that the SDK lacks sandbox configuration. |
-| `evidence` | Preserves validation status, original assertions, conditional `liveAssertions`, known limits, fixture configuration, and optional `timeoutSeconds`. |
+| `evidence` | Preserves validation status, original assertions, conditional `liveAssertions`, known limits, fixture configuration, and optional positive-integer `timeoutSeconds`. Reasons must be nonempty strings. |
 
 **Runner modes and evidence.** `npm run examples:ts` and `python examples/run_all.py`
 default to `--all-available`: run the full inventory with the signed-in native CLI,

@@ -75,8 +75,9 @@ export function loadManifest() {
       if (row.path !== path || !existsSync(join(root, path))) throw new Error(`Missing example: ${path}`);
       if (!["ported", "pending-native-api"].includes(row.status)
           || !["supported", "unsupported", "not-applicable"].includes(row.sandboxMode)
-          || (row.status === "pending-native-api" && !row.evidence.pendingReason)
-          || (row.sandboxMode === "unsupported" && !row.evidence.sandboxReason)
+          || (row.status === "pending-native-api" && (typeof row.evidence.pendingReason !== "string" || !row.evidence.pendingReason.trim()))
+          || (row.sandboxMode === "unsupported" && (typeof row.evidence.sandboxReason !== "string" || !row.evidence.sandboxReason.trim()))
+          || ("timeoutSeconds" in row.evidence && (!Number.isSafeInteger(row.evidence.timeoutSeconds) || row.evidence.timeoutSeconds <= 0))
           || row.rangeManifest !== declaration.path
           || row.status !== declaration.evidence.status || row.sandboxMode !== declaration.evidence.sandboxMode
           || declaration.evidence.source !== source

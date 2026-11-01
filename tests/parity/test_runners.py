@@ -89,6 +89,26 @@ class RunnerContractTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("FAIL parity contract", result.stderr)
 
+    def test_invalid_boolean_or_timeout_shape_fails_inventory_validation(self):
+        for language in ("ts", "py"):
+            for field in ("live", "timeoutSeconds"):
+                with self.subTest(language=language, field=field), isolated_contract() as root:
+                    global_path = root / "examples/parity.json"
+                    manifest = json.loads(global_path.read_text())
+                    if field == "live":
+                        manifest["examples"][0]["live"] = 0
+                    else:
+                        row = manifest["examples"][0]["languages"][language]
+                        row["evidence"]["timeoutSeconds"] = 0
+                        range_path = root / row["rangeManifest"]
+                        declaration = json.loads(range_path.read_text())
+                        declaration["examples"][0] = row["evidence"]
+                        range_path.write_text(json.dumps(declaration))
+                    global_path.write_text(json.dumps(manifest))
+                    result = execute(root, language, "--list")
+                    self.assertNotEqual(result.returncode, 0, f"Invalid {field} passed inventory validation")
+                    self.assertIn("FAIL parity contract", result.stderr)
+
     def test_real_example_assertion_failure_exits_nonzero(self):
         for language in ("ts", "py"):
             with self.subTest(language=language), isolated_contract() as root:
