@@ -740,6 +740,40 @@ resumes the sleep or applies the missed-run policy. Nothing about the cadence li
   time zones beyond UTC and local. Two hosts scheduling the same store is a coordination question
   the store's ownership rules answer, not this command.
 
+### 3.14 Dev Tunnels and host portability
+
+`serve --http --dev-tunnel` opts into exposure through the optional `devtunnel` executable on
+`PATH`. It runs exactly `devtunnel host --port <port>`, with the port read from the bound socket
+so `--port 0` works. The child process's stdout and stderr are drained concurrently; the actual
+HTTP(S) URL reported under `*.devtunnels.ms` is printed as `dev tunnel: <url>` on host stderr.
+It is never guessed from a tunnel name, and all child diagnostics are prefixed `devtunnel:`.
+Standard output remains reserved for the transport contract.
+
+The flag is off by default and valid only with `serve --http`. Discovery and execution use
+`ProcessStartInfo` with an argument list and no shell. Missing tools and execution failures warn
+without changing HTTP readiness or the exit code; a CLI that exits later also warns while local
+serving continues. The child runs asynchronously after the listener binds: authentication waits,
+missing URL output, or a slow CLI cannot delay requests. Host disposal stops its child process
+tree, with a bounded five-second drain. No installation, provisioning, CLI configuration, consumer
+authentication, or containment override is provided. Explicit exposure therefore requires a
+trusted caller; D1/D2, ownership-before-harness-open, and containment gates still run first.
+
+Portability is enforced by `RuntimeHostPortabilityTests.CorePath_HasNoPlatformSpecificApis` over
+the actual runtime source files copied by the test project. All runtime orchestration, validation,
+turn execution, transports, scheduling and tunnel launch code is checked for OS probes, native
+imports, registry/Windows identity APIs, POSIX signals and drive-letter paths. The only excluded
+file is the named `HostShutdown.cs` infrastructure adapter: it maps POSIX SIGTERM/SIGINT and
+Windows console cancellation to the same cancellation token, leaving accepted turns to finish.
+The adapter is necessary because Windows does not support POSIX SIGTERM registration.
+
+`.github/workflows/build.yml` runs host smoke jobs on `ubuntu-latest` and `windows-latest`,
+building the host and running all `RuntimeHost*` tests against the recorded runtime. These inspect
+real wire results, persisted checkpoints, tool arguments, reported URLs, and warning-only
+fallbacks. The controlled tunnel fixture reports a reserved test URL and never opens a tunnel;
+tests restrict `PATH` so even a locally installed CLI cannot be used inadvertently. The POSIX
+signal-specific graceful-shutdown test runs only on POSIX, not as evidence of Windows signal
+handling. Each smoke job uploads its TRX results.
+
 ### 3.15 The JSON-lines transport — `serve --rpc`
 
 `serve --rpc` is the same host as `run` and `serve --http`, with the turn reached over the
@@ -1068,4 +1102,3 @@ These cost the most time to discover and are all exercised by the examples:
   `AssistantMessageDeltaEvent.Data.DeltaContent`.
 - **`ToolExecutionCompleteData`** has no `ToolName`; match on `ToolCallId`.
 - **`Console.WriteLine("a:", x)`** drops `x` — that is the format-string overload.
-

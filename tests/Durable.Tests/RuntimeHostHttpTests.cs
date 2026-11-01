@@ -46,6 +46,53 @@ public sealed class RuntimeHostHttpTests
         Assert.Equal("replay-model", (string?)result["effectiveModel"]!["model"]);
     }
 
+    [Theory]
+    [InlineData("off")]
+    [InlineData("missing")]
+    [InlineData("fail")]
+    [InlineData("stdout")]
+    [InlineData("stderr")]
+    public async Task Serve_DevTunnelIsOptionalAndUsesTheBoundPort(string mode)
+    {
+        using var scratch = new Scratch();
+        await using var host = await ServeHost.StartAsync(scratch, "basic.json", tunnelMode: mode);
+        var record = scratch.PathIn("tunnel-arguments.json");
+
+        if (mode == "missing")
+        {
+            await host.WaitForDiagnosticAsync("warning: devtunnel is unavailable:");
+        }
+        else if (mode == "fail")
+        {
+            await host.WaitForDiagnosticAsync("devtunnel exited with code 7");
+        }
+        else if (mode is "stdout" or "stderr")
+        {
+            await host.WaitForDiagnosticAsync("dev tunnel: https://controlled-123.devtunnels.ms/");
+        }
+
+        var (status, lines) = await host.PostAsync("""{"input":"hello"}""");
+        Assert.Equal(HttpStatusCode.OK, status);
+        var result = Assert.Single(lines, line => (string?)line["type"] == "result")["result"]!.AsObject();
+        Assert.Equal("succeeded", (string?)result["outcome"]);
+        Assert.NotNull(result["checkpointId"]);
+        Assert.True(result.ContainsKey("error"));
+        Assert.Null(result["error"]);
+        Assert.DoesNotContain("error:", host.Diagnostics, StringComparison.Ordinal);
+
+        if (mode is "off" or "missing")
+        {
+            Assert.False(File.Exists(record), "The optional tool must not run when off or missing.");
+            Assert.DoesNotContain("dev tunnel:", host.Diagnostics, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Equal(
+                new[] { "host", "--port", host.Port.ToString(System.Globalization.CultureInfo.InvariantCulture) },
+                System.Text.Json.JsonSerializer.Deserialize<string[]>(await File.ReadAllTextAsync(record)));
+        }
+    }
+
     [Fact]
     public async Task Serve_StreamsTheTurnsEventsBeforeItsResult()
     {
@@ -243,10 +290,34 @@ public sealed class RuntimeHostHttpTests
 
         public int Port { get; }
 
+        public string Diagnostics
+        {
+            get { lock (_stderr) { return _stderr.ToString(); } }
+        }
+
+        public async Task WaitForDiagnosticAsync(string text)
+        {
+            var deadline = Stopwatch.StartNew();
+            while (deadline.Elapsed < HostTimeout)
+            {
+                if (Diagnostics.Contains(text, StringComparison.Ordinal))
+                {
+                    return;
+                }
+                if (_process.HasExited)
+                {
+                    throw new InvalidOperationException($"Host exited: {Diagnostics}");
+                }
+                await Task.Delay(20);
+            }
+            throw new TimeoutException($"Missing diagnostic '{text}': {Diagnostics}");
+        }
+
         public static async Task<ServeHost> StartAsync(
             Scratch scratch,
             string fixture,
-            double idleDelaySeconds = 0)
+            double idleDelaySeconds = 0,
+            string? tunnelMode = null)
         {
             var storePath = scratch.PathIn("store.jsonl");
             var definitionPath = scratch.Write("reviewer.json", ReviewerDefinition);
@@ -271,6 +342,18 @@ public sealed class RuntimeHostHttpTests
             }
 
             startInfo.Environment["DURABLE_RUNTIME_PATH"] = ReplayRuntimePath();
+            // Restrict optional-tool discovery even in the default tests: never use an installed tunnel.
+            startInfo.Environment["PATH"] = tunnelMode is null or "missing"
+                ? scratch.PathIn("no-tools") : Path.Combine(AppContext.BaseDirectory, "tunnel-fixture");
+            if (tunnelMode is not null)
+            {
+                startInfo.Environment["DURABLE_TUNNEL_FIXTURE_RECORD"] = scratch.PathIn("tunnel-arguments.json");
+                startInfo.Environment["DURABLE_TUNNEL_FIXTURE_MODE"] = tunnelMode;
+                if (tunnelMode != "off")
+                {
+                    startInfo.ArgumentList.Add("--dev-tunnel");
+                }
+            }
             foreach (var argument in new[] { "--fixture", FixturePath(fixture) })
             {
                 startInfo.ArgumentList.Add("--runtime-arg");
