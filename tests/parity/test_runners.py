@@ -89,6 +89,17 @@ class RunnerContractTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("FAIL parity contract", result.stderr)
 
+    def test_changed_range_evidence_requires_explicit_manifest_regeneration(self):
+        for language in ("ts", "py"):
+            with self.subTest(language=language), isolated_contract() as root:
+                path = root / f"examples/{language}/parity-11-21.json"
+                declaration = json.loads(path.read_text())
+                declaration["examples"][0]["nativeEvidence"] = "changed owner evidence"
+                path.write_text(json.dumps(declaration))
+                result = execute(root, language, "--deterministic", "--list")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("FAIL parity contract", result.stderr)
+
     def test_invalid_boolean_or_timeout_shape_fails_inventory_validation(self):
         for language in ("ts", "py"):
             for field in ("live", "timeoutSeconds"):

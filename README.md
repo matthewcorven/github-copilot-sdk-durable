@@ -144,6 +144,13 @@ also have conditional LIVE behavior: inclusion here is not LIVE/model proof.
 Sessions generated from replay fixtures are explicitly **synthesised, not recorded
 transcripts**. Optional exact IDs can narrow a run, for example `--deterministic 00 01`.
 
+Range evidence records native successes and remaining acceptance gaps separately.
+Example `21` retains model/tool-selection flakiness; `35` does not claim host-decline
+behavior when no escalation was offered. Linux/Windows native enforcement remains
+uncertified. Example `20` tests synchronized late joining and post-open deadlines,
+but SDK bootstrap is noninterruptible: a never-settling SDK open is not proven bounded
+by the example's 90-second deadline.
+
 The parity facts include real process-crash/reopen recovery, exact fork transcript
 counts, rollback, and persisted abort outcomes. Run them and their real-source
 regression gates with:

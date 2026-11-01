@@ -910,6 +910,17 @@ Likewise, replay-generated session IDs carry explicit **synthesised, NOT recorde
 transcript** markers. Fixture interoperability proves the tested durable/SDK protocol
 scenario, not a LIVE model/tool selection.
 
+Native evidence is preserved from the range owners, including historical timing
+failures and subsequent synchronized example `20` runs. Its readiness barrier uses
+the real SDK tool handler; post-open failure races and cleanup have focused tests.
+SDK bootstrap remains noninterruptible, so a never-settling SDK open is not proven
+bounded by the 90-second example deadline. Example `21` still has a model/tool-choice
+acceptance gap. Example `35` retains the unexercised host-decline path when no escalation
+was offered, and macOS native evidence does not certify Linux/Windows enforcement.
+Corrected examples `24` and `31` distinguish SDK context from zero public app entries;
+permission review uses an app-owned document and verifies fork-boundary grants rather
+than treating internal checkpoint/admission anchors as public transcript entries.
+
 **Output comparison.** Deterministic runs compare the entire normalized stdout of four
 actual ported examples per language against `examples/expected/*.txt`. The files were
 captured by executing the same C# sources with ReplayRuntime `basic.json`, not invented
