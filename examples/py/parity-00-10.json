@@ -11,13 +11,15 @@
   "runtime": "Native Copilot SDK, or DURABLE_RUNTIME_PATH pointing to the real ReplayRuntime executable.",
   "store": "in-memory; no per-user or on-disk default path",
   "validation": {
-    "status": "all-original-assertions-verified; scripted-replay-framing-gap",
+    "status": "verified",
     "sdk": "1.0.28",
-    "sharedApiCommits": ["5b083e6", "4682509", "8b939ca", "92e8d76"],
-    "targetedTests": "7 source/schema/handler gates pass. Two real tool-state replay gates passed but intermittently encounter interleaved ReplayRuntime Content-Length headers; not claimed as stable green.",
+    "sharedApiCommits": ["5b083e6", "4682509", "8b939ca", "92e8d76", "9004144"],
+    "protocolCommit": "49f6769eba6770a1d42e503dd5b34f2b28eff779",
+    "targetedTests": "9 of 9 passed on four consecutive runs after the real ReplayRuntime frame-writer fix (36 test executions), including actual source mutations and missing-tool-call rejection",
     "replay": "00,01,03,04,05,06,09 passed through the actual SDK and ReplayRuntime; synthesised sessions, not recorded native transcripts; reported model replay-model",
     "native": "02,07,08,10 passed all original assertions against the native runtime; reported model gpt-6-luna; actual 08 model answer CONTEXT",
-    "pending": "Scripted tool-state replay gates require the ReplayRuntime framing correction; no native example assertion is pending.",
+    "scriptedToolReplay": "Additional 10 fixture proves real SDK tool handlers and durable document assertions, not LIVE model answers or recorded native transcripts.",
+    "pending": null,
     "stdoutCandidates": ["00", "01", "03", "04"]
   },
   "examples": [
