@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -62,6 +63,11 @@ internal static class Program
         new("http", false, "Serve over HTTP. Required by serve."),
         new("port", true, "The port to listen on. Defaults to 0, which asks the operating system."),
         new("runtime-arg", true, "Pass an argument to the runtime process. Repeatable."),
+        new("every", true, "The schedule interval, e.g. 30s, 5m, or 1h. Required by schedule."),
+        new("missed-run", true, "skip, coalesce, or run-once. Defaults to skip."),
+        new("remove", false, "Remove the agent's schedule instead of registering one."),
+        new("now", true, "Treat this instant as the current time. For tests and for catch-up."),
+        new("passes", true, "Run at most this many scheduler passes, then exit. Defaults to one."),
     ];
 
     private static async Task<int> Main(string[] args)
@@ -78,7 +84,7 @@ internal static class Program
             {
                 "run" => await RunAsync(args),
                 "serve" => await ServeAsync(args),
-                "schedule" => await NotYetAsync(args, "schedule", "#97"),
+                "schedule" => await ScheduleAsync(args),
                 _ => throw new UsageException(
                     $"unknown command '{args[0]}'. Commands are run, serve, and schedule."),
             };
@@ -126,13 +132,228 @@ internal static class Program
         var (containment, reason) = ContainmentClassifier.Classify(definition, options.PermissionHandler is not null);
         ReportContainment(definition.Name, containment, reason);
 
-        var harnessOptions = new DurableHarnessOptions
-        {
-            PermissionHandler = options.PermissionHandler,
-            RuntimeArguments = options.RuntimeArguments.ToList(),
-        };
-        await using var harness = await DurableHarness.OpenAsync(store, registry, harnessOptions);
+        await using var harness = await DurableHarness.OpenAsync(store, registry, HarnessOptions(options));
 
+        var result = await RunTurnAsync(
+            harness, store, definition, options, containment, reason, options.Input!);
+
+        Console.Out.WriteLine(result.ToJson());
+
+        return result.Outcome switch
+        {
+            "succeeded" => ExitCodes.Succeeded,
+            "turnUnsuccessful" => ExitCodes.TurnUnsuccessful,
+            _ => ExitCodes.AgentFailed,
+        };
+    }
+
+    /// <summary>
+    /// Registers, removes, or drives a durable schedule for an agent.
+    /// </summary>
+    /// <remarks>
+    /// The command has three shapes, and which one runs is decided by the options rather than by
+    /// a separate verb. <c>--every</c> registers a schedule and then drives it; <c>--remove</c>
+    /// disables the agent's schedule and stops; neither means "drive whatever the store already
+    /// holds", which is what a host that restarted does. The schedule itself is a document in the
+    /// store, so the second and third shapes see the first shape's work across a process boundary.
+    /// </remarks>
+    private static async Task<int> ScheduleAsync(string[] args)
+    {
+        var options = ParseHostOptions(args, requireInput: false);
+
+        if (options.Remove && options.Every is not null)
+        {
+            throw new UsageException("--remove and --every cannot be combined: a removal has no interval.");
+        }
+
+        using var store = OpenStore(options);
+        ClaimOwnership(store, options.StorePath);
+
+        var registry = BuildRegistry();
+        var definition = await LoadDefinitionAsync(store, registry, options);
+
+        var (containment, reason) = ContainmentClassifier.Classify(definition, options.PermissionHandler is not null);
+        ReportContainment(definition.Name, containment, reason);
+
+        if (containment == Containment.None && !options.AllowUncontained)
+        {
+            Console.Error.WriteLine(
+                $"error: refusing to schedule agent '{definition.Name}': containment is None ({reason}). "
+                + "Pass --allow-uncontained to start anyway.");
+            return ExitCodes.AgentFailed;
+        }
+
+        var clock = ClockFor(options);
+
+        if (options.Remove)
+        {
+            var removed = await RemoveScheduleAsync(store, definition.Name);
+            Console.Out.WriteLine(new ScheduleResult
+            {
+                Agent = definition.Name,
+                Schedule = removed is null ? null : ScheduleStateResult.From(removed),
+                Occurrences = [],
+            }.ToJson());
+            return ExitCodes.Succeeded;
+        }
+
+        if (options.Every is { } interval)
+        {
+            await RegisterScheduleAsync(store, definition.Name, interval, options, clock());
+        }
+
+        var occurrences = await DriveAsync(store, registry, definition, options, containment, reason, clock);
+
+        var current = ScheduleStore.Find(store, definition.Name);
+        Console.Out.WriteLine(new ScheduleResult
+        {
+            Agent = definition.Name,
+            Schedule = current is null ? null : ScheduleStateResult.From(current),
+            Occurrences = occurrences,
+        }.ToJson());
+
+        return ExitCodeFor(occurrences);
+    }
+
+    /// <summary>
+    /// Drives the persisted schedules for <c>--passes</c> passes, or until the process is
+    /// interrupted when no bound was given.
+    /// </summary>
+    /// <remarks>
+    /// The harness is opened once and reused across occurrences, because every occurrence is a
+    /// turn in the same agent conversation. A pass commits the advanced schedule before it runs
+    /// the turn, so an occurrence is claimed durably before it costs anything.
+    /// </remarks>
+    private static async Task<IReadOnlyList<RunResult>> DriveAsync(
+        DurableStore store,
+        ExtensionRegistry registry,
+        AgentDefinition definition,
+        HostOptions options,
+        Containment containment,
+        string reason,
+        Func<DateTimeOffset> clock)
+    {
+        if (options.Passes == 0)
+        {
+            return [];
+        }
+
+        using var cancellation = new CancellationTokenSource();
+        ConsoleCancelEventHandler onCancel = (_, eventArgs) =>
+        {
+            eventArgs.Cancel = true;
+            cancellation.Cancel();
+        };
+        Console.CancelKeyPress += onCancel;
+
+        try
+        {
+            await using var harness = await DurableHarness.OpenAsync(store, registry, HarnessOptions(options));
+
+            var scheduler = new Scheduler(
+                store,
+                clock,
+                (schedule, _) => RunTurnAsync(
+                    harness,
+                    store,
+                    definition,
+                    options,
+                    containment,
+                    reason,
+                    schedule.Input ?? options.Input ?? DefaultScheduleInput(definition.Name)));
+
+            var occurrences = new List<RunResult>();
+            for (var pass = 0; options.Passes is not { } limit || pass < limit; pass++)
+            {
+                try
+                {
+                    occurrences.AddRange(await scheduler.PassAsync(cancellation.Token));
+
+                    if (options.Passes is null)
+                    {
+                        await scheduler.DelayUntilNextDueAsync(cancellation.Token);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    // A stopped scheduler is a stopped scheduler, not a failed one.
+                    break;
+                }
+            }
+
+            return occurrences;
+        }
+        finally
+        {
+            Console.CancelKeyPress -= onCancel;
+        }
+    }
+
+    /// <summary>
+    /// Writes the schedule for an agent, keeping the existing cadence when nothing about the
+    /// schedule changed.
+    /// </summary>
+    /// <remarks>
+    /// Keeping the cadence is what makes a restart harmless: a host that comes back with the same
+    /// command must not push the next occurrence out by a whole interval, and must not forget the
+    /// instants it slept through. Only a changed interval or policy starts a fresh cadence.
+    /// </remarks>
+    private static Task RegisterScheduleAsync(
+        DurableStore store,
+        string agent,
+        TimeSpan interval,
+        HostOptions options,
+        DateTimeOffset now)
+    {
+        var existing = ScheduleStore.Find(store, agent);
+
+        var schedule = existing is { Enabled: true }
+            && existing.Interval == interval
+            && existing.MissedRun == options.MissedRun
+                ? existing with { Input = options.Input ?? existing.Input }
+                : new DurableSchedule
+                {
+                    Agent = agent,
+                    Every = FormatInterval(interval),
+                    EveryMilliseconds = (long)interval.TotalMilliseconds,
+                    MissedRun = options.MissedRun,
+                    NextDue = now + interval,
+                    Input = options.Input,
+                };
+
+        return ScheduleStore.SaveAsync(store, schedule);
+    }
+
+    /// <summary>
+    /// Disables an agent's schedule, or returns <see langword="null"/> when the store holds none.
+    /// </summary>
+    /// <remarks>
+    /// The store is append-only, so a removal commits a disabled version rather than deleting a
+    /// record. A scheduler treats a disabled schedule exactly as it treats an absent one, which is
+    /// why the runs stop.
+    /// </remarks>
+    private static async Task<DurableSchedule?> RemoveScheduleAsync(DurableStore store, string agent)
+    {
+        if (ScheduleStore.Find(store, agent) is not { } existing)
+        {
+            return null;
+        }
+
+        var removed = existing with { Enabled = false };
+        await ScheduleStore.SaveAsync(store, removed);
+        return removed;
+    }
+
+    /// <summary>Runs one durable turn and returns the run result without printing it.</summary>
+    private static async Task<RunResult> RunTurnAsync(
+        DurableHarness harness,
+        DurableStore store,
+        AgentDefinition definition,
+        HostOptions options,
+        Containment containment,
+        string reason,
+        string input)
+    {
         var conversation = await OpenConversationAsync(harness, store, definition, options);
 
         var result = await ExecuteTurnAsync(
@@ -144,9 +365,7 @@ internal static class Program
         }
 
         Console.Error.WriteLine($"effective model: {result.Report}");
-        Console.Out.WriteLine(result.Result.ToJson());
-
-        return result.ExitCode;
+        return result.Result;
     }
 
     /// <summary>
@@ -211,6 +430,13 @@ internal static class Program
         var outcome = error is not null
             ? "agentFailed"
             : message is null ? "turnUnsuccessful" : "succeeded";
+
+        if (message is not null)
+        {
+            Console.Error.WriteLine($"answer: {message.Text()}");
+        }
+
+        Console.Error.WriteLine($"effective model: {report}");
 
         var result = new RunResult
         {
@@ -303,6 +529,36 @@ internal static class Program
 
         Console.Error.WriteLine("stopped accepting connections.");
         return ExitCodes.Succeeded;
+    }
+
+    private static DurableHarnessOptions HarnessOptions(HostOptions options) => new()
+    {
+        PermissionHandler = options.PermissionHandler,
+        RuntimeArguments = options.RuntimeArguments.ToList(),
+    };
+
+    /// <summary>
+    /// The clock the scheduler reads. <c>--now</c> freezes it, which is how a test stands at a
+    /// chosen instant without waiting for one.
+    /// </summary>
+    private static Func<DateTimeOffset> ClockFor(HostOptions options) =>
+        options.Now is { } now ? () => now : () => DateTimeOffset.UtcNow;
+
+    /// <summary>The prompt an occurrence sends when neither the schedule nor the command gave one.</summary>
+    private static string DefaultScheduleInput(string agent) =>
+        $"Run the scheduled task for agent '{agent}'.";
+
+    /// <summary>The exit code for a set of occurrences: the worst outcome wins.</summary>
+    private static int ExitCodeFor(IReadOnlyList<RunResult> occurrences)
+    {
+        if (occurrences.Any(result => result.Outcome == "agentFailed"))
+        {
+            return ExitCodes.AgentFailed;
+        }
+
+        return occurrences.Any(result => result.Outcome == "turnUnsuccessful")
+            ? ExitCodes.TurnUnsuccessful
+            : ExitCodes.Succeeded;
     }
 
     /// <summary>
@@ -526,7 +782,102 @@ internal static class Program
             AllowUncontained: parsed.Has("allow-uncontained"),
             Http: parsed.Has("http"),
             Port: ParsePort(parsed.Last("port")),
-            RuntimeArguments: parsed.All("runtime-arg").ToList());
+            RuntimeArguments: parsed.All("runtime-arg").ToList(),
+            Every: parsed.Last("every") is { } every ? ParseInterval(every) : null,
+            MissedRun: MissedRunPolicies.Parse(parsed.Last("missed-run")),
+            Remove: parsed.Has("remove"),
+            Now: ParseNow(parsed.Last("now")),
+            Passes: ParsePasses(parsed.Last("passes")));
+    }
+
+    /// <summary>
+    /// Parses an interval such as <c>30s</c>, <c>5m</c>, or <c>1h</c>.
+    /// </summary>
+    /// <remarks>
+    /// A bare number is seconds, because that is the unit a person writes when they are in a
+    /// hurry and the unit the smallest useful schedule is expressed in. The suffix set stops at
+    /// hours on purpose: a daily or weekly cadence is calendar-aware scheduling, which this
+    /// command does not do.
+    /// </remarks>
+    private static TimeSpan ParseInterval(string text)
+    {
+        var trimmed = text.Trim();
+        if (trimmed.Length == 0)
+        {
+            throw new UsageException("option '--every' needs an interval, e.g. 30s, 5m, or 1h.");
+        }
+
+        var (digits, unit) = char.IsLetter(trimmed[^1])
+            ? (trimmed[..^1], char.ToLowerInvariant(trimmed[^1]))
+            : (trimmed, 's');
+
+        if (!long.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out var value) || value <= 0)
+        {
+            throw new UsageException(
+                $"'{text}' is not an interval. Write a positive number with an optional unit: "
+                + "30s, 5m, or 1h. A bare number is seconds.");
+        }
+
+        var milliseconds = unit switch
+        {
+            's' => value * 1000L,
+            'm' => value * 60_000L,
+            'h' => value * 3_600_000L,
+            _ => throw new UsageException(
+                $"'{text}' uses an unknown unit '{unit}'. The units are s, m, and h."),
+        };
+
+        return TimeSpan.FromMilliseconds(milliseconds);
+    }
+
+    /// <summary>Renders an interval the way <see cref="ParseInterval"/> reads it.</summary>
+    private static string FormatInterval(TimeSpan interval) =>
+        interval.TotalMilliseconds % 3_600_000 == 0 ? $"{interval.TotalHours:0}h"
+        : interval.TotalMilliseconds % 60_000 == 0 ? $"{interval.TotalMinutes:0}m"
+        : interval.TotalSeconds % 1 == 0 ? $"{interval.TotalSeconds:0}s"
+        : $"{interval.TotalMilliseconds:0}ms";
+
+    /// <summary>
+    /// The instant to treat as now, or <see langword="null"/> to read the wall clock.
+    /// </summary>
+    /// <remarks>
+    /// A schedule is a wall-clock thing, so the production path reads the clock. A test cannot
+    /// wait five minutes, so it names the instant instead and the scheduler believes it.
+    /// </remarks>
+    private static DateTimeOffset? ParseNow(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        if (!DateTimeOffset.TryParse(
+                text,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal,
+                out var now))
+        {
+            throw new UsageException(
+                $"'{text}' is not an instant. Write an ISO 8601 timestamp, e.g. 2026-01-01T00:00:00Z.");
+        }
+
+        return now;
+    }
+
+    /// <summary>How many scheduler passes to run, or <see langword="null"/> to run until stopped.</summary>
+    private static int? ParsePasses(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return 1;
+        }
+
+        if (!int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var passes) || passes < 0)
+        {
+            throw new UsageException($"'{text}' is not a pass count. Write a whole number, e.g. 1 or 3.");
+        }
+
+        return passes;
     }
 
     /// <summary>
@@ -803,6 +1154,14 @@ internal static class Program
           --port <port>               The port to listen on. Defaults to 0, which asks the operating
                                       system for an ephemeral port.
           --runtime-arg <arg>         Pass an argument to the runtime process. Repeatable.
+          --every <interval>          Register a schedule at this interval: 30s, 5m, or 1h.
+                                      A bare number is seconds. Required to register.
+          --missed-run <policy>       skip, coalesce, or run-once. Defaults to skip. Applies to
+                                      the occurrences a stopped host slept through.
+          --remove                    Disable the agent's schedule instead of registering one.
+          --now <instant>             Treat this ISO 8601 instant as the current time.
+          --passes <n>                Run at most this many scheduler passes, then exit.
+                                      Defaults to one. Pass 0 to register without running.
           --help                      Show this help.
 
         Exit codes:
@@ -812,8 +1171,8 @@ internal static class Program
           3  the turn was admitted and checkpointed but produced no assistant message
           4  the command is not implemented in this build
 
-        Standard output carries the run result JSON. Diagnostics, including the effective model
-        the runtime reported, go to standard error.
+        Standard output carries the run result JSON, or the schedule result JSON for schedule.
+        Diagnostics, including the effective model the runtime reported, go to standard error.
         """;
 
     private sealed record HostOptions(
@@ -828,7 +1187,12 @@ internal static class Program
         bool AllowUncontained,
         bool Http,
         int Port,
-        IReadOnlyList<string> RuntimeArguments);
+        IReadOnlyList<string> RuntimeArguments,
+        TimeSpan? Every,
+        MissedRunPolicy MissedRun,
+        bool Remove,
+        DateTimeOffset? Now,
+        int? Passes);
 
     /// <summary>
     /// One turn, as the transport that ran it needs to see it: the serialized result, the answer

@@ -3233,6 +3233,96 @@ public sealed class AgentDefinition
     };
 }
 
+/// <summary>What a scheduler does with the occurrences it missed while the host was down.</summary>
+/// <remarks>
+/// The three policies answer the same question — "the host was not running across a scheduled
+/// instant, so what now?" — and each answer is observable in the store afterwards. They are
+/// persisted by name rather than by number, because a schedule record is state a person reads.
+/// </remarks>
+[JsonConverter(typeof(JsonStringEnumConverter<MissedRunPolicy>))]
+public enum MissedRunPolicy
+{
+    /// <summary>
+    /// Abandon the missed occurrences. Nothing runs, and the cadence resumes at the first
+    /// instant after now.
+    /// </summary>
+    Skip,
+
+    /// <summary>
+    /// Collapse the whole missed window into one occurrence, run now, and resume the cadence
+    /// at the first instant after now.
+    /// </summary>
+    Coalesce,
+
+    /// <summary>
+    /// Run one occurrence per scheduler pass until the backlog is drained, so a long outage
+    /// is caught up gradually instead of all at once.
+    /// </summary>
+    RunOnce,
+}
+
+/// <summary>
+/// A recurring schedule for an agent, stored as durable state rather than as a timer.
+/// </summary>
+/// <remarks>
+/// A <see cref="System.Threading.Timer"/> dies with the process and takes the schedule with it.
+/// This record is the schedule: <see cref="NextDue"/> is the durable wake time, so a host that
+/// restarts reads the schedule back out of the store and either resumes the wait or applies
+/// <see cref="MissedRun"/> to the instants it slept through.
+/// <para>
+/// The record is owned by <c>schedule:{agent}</c> rather than by a conversation, so it outlives
+/// every conversation the agent creates and is never copied by a conversation fork. The prefix
+/// keeps the owner namespace disjoint from <c>c{n}</c>, <c>t{n}</c>, <c>e{n}</c>, and
+/// <c>agent:{name}</c>.
+/// </para>
+/// <para>
+/// <see cref="Enabled"/> is how a schedule is removed. The store is append-only, so a removal
+/// commits a disabled version rather than deleting a record; a scheduler treats a disabled
+/// schedule exactly as it treats an absent one.
+/// </para>
+/// </remarks>
+public sealed record DurableSchedule
+{
+    /// <summary>The document kind a schedule is stored under.</summary>
+    public const string DocumentKind = "durable.schedule";
+
+    /// <summary>The prefix of the owner id a schedule is stored under.</summary>
+    public const string OwnerPrefix = "schedule:";
+
+    /// <summary>The owner id a schedule for this agent is stored under.</summary>
+    public static string OwnerId(string agent) => $"{OwnerPrefix}{agent}";
+
+    /// <summary>The agent this schedule runs.</summary>
+    public required string Agent { get; init; }
+
+    /// <summary>The interval as it was written, e.g. <c>5m</c>, for listings.</summary>
+    public required string Every { get; init; }
+
+    /// <summary>The interval in milliseconds, so the cadence never depends on re-parsing text.</summary>
+    public required long EveryMilliseconds { get; init; }
+
+    /// <summary>What to do with the occurrences missed while the host was down.</summary>
+    public MissedRunPolicy MissedRun { get; init; } = MissedRunPolicy.Skip;
+
+    /// <summary>The next instant this schedule is due, in UTC.</summary>
+    public required DateTimeOffset NextDue { get; init; }
+
+    /// <summary>The instant of the most recent occurrence, or <c>null</c> if none has run.</summary>
+    public DateTimeOffset? LastRun { get; init; }
+
+    /// <summary>How many occurrences this schedule has run.</summary>
+    public long Runs { get; init; }
+
+    /// <summary>Whether the scheduler drives this schedule. A removal commits <c>false</c>.</summary>
+    public bool Enabled { get; init; } = true;
+
+    /// <summary>The prompt each occurrence sends, or <c>null</c> for the host's default.</summary>
+    public string? Input { get; init; }
+
+    /// <summary>The interval as a duration.</summary>
+    public TimeSpan Interval => TimeSpan.FromMilliseconds(EveryMilliseconds);
+}
+
 /// <summary>
 /// The model a runtime reported for a session or for one turn of it.
 /// </summary>
@@ -4939,6 +5029,7 @@ internal sealed class DurableRuntime : IAsyncDisposable
         AdmissionDocument.Kind,
         CheckpointDocument.Kind,
         AgentDefinitionDocument.Kind,
+        DurableSchedule.DocumentKind,
     ];
 
     private HashSet<string>? _internalDocumentKinds;

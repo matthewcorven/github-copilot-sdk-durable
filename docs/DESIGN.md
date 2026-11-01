@@ -524,9 +524,9 @@ conversation that definition owns, submits one prompt, and prints what the runti
 durable guarantee above is the library's; the host only decides *which* store, *which* agent, and
 *what to print*.
 
-- **Commands.** `run` executes one turn and exits. `serve` serves turns over HTTP (§3.12).
-  `schedule` parses the same options and delegates; it is delivered by later work and exits `4`
-  (`NotAvailable`) naming the issue that delivers it. `--help` documents all three and every flag.
+- **Commands.** `run` executes one turn and exits. `serve` serves turns over HTTP
+  (§3.12). `schedule` registers and drives a recurring durable task (§3.13). `--help`
+  documents all three and every flag.
 - **Exit codes.** `0` succeeded, `1` the agent or the host failed, `2` a usage error, `3` the turn
   completed but did not succeed, `4` the command is not implemented in this build.
 - **Store ownership before the client.** `DurableHarness.OpenAsync` starts the SDK client *before*
@@ -677,6 +677,67 @@ the command line.
 - **Out of scope.** Authentication, TLS termination, and multi-tenancy are not part of this
   transport; it binds loopback and assumes a trusted caller. The RPC transport and the scheduler
   are separate work.
+
+### 3.13 The persistent scheduler — `schedule`
+
+`schedule` is the command that makes an agent recur. The interesting part is not the loop; it is
+that the loop holds nothing. A `System.Threading.Timer` would die with the process and take the
+schedule with it, so the schedule is a document in the store and the loop is a reader of that
+document. A host that restarts discovers the same schedule, at the same `nextDue`, and either
+resumes the sleep or applies the missed-run policy. Nothing about the cadence lives in memory.
+
+- **The schedule record.** A document of kind `durable.schedule`, owner id `schedule:{agent}`,
+  `ForkPolicy.Initial`, listed in `InternalDocumentKinds` so it is bookkeeping rather than
+  transcript. The owner id keeps the schedule out of every conversation and out of every fork, so
+  a forked conversation does not inherit a second copy of the cadence. The value carries `agent`,
+  `every` (as written, for display), `everyMilliseconds` (so the cadence never depends on
+  re-parsing text), `missedRun`, `nextDue`, `lastRun`, `runs`, and `enabled`. `nextDue` is the
+  whole state machine: it is the only thing a restart needs in order to know what is owed.
+- **Registration keeps the cadence.** `schedule --every 5m --agent reviewer` writes the record and
+  stops, because the first occurrence is an interval away. Re-running the same command against the
+  same store keeps the existing `nextDue` rather than pushing it out by a whole interval, so a
+  restart with the same command is harmless. Only a changed interval or policy starts a fresh
+  cadence. `--passes 0` registers without driving; omitting `--passes` drives until interrupted.
+- **The loop re-reads the store every pass.** `Scheduler` holds no schedule of its own: each pass
+  calls `ScheduleStore.Enabled(store)` and filters to the agent. A schedule added, changed, or
+  removed by another process is therefore picked up on the next pass, and a store with no schedule
+  record drives nothing at all. The wait between passes is clamped to the earliest durable
+  `nextDue`, bounded above by 30 seconds so the store is re-read even when the next occurrence is
+  hours away, and below by 100 milliseconds so a due schedule cannot spin the process.
+- **An occurrence is claimed before it runs.** A pass commits the advanced schedule and only then
+  runs the turn. A host that dies mid-occurrence loses that occurrence rather than repeating it,
+  which is what "one occurrence per scheduled instant" means here: the durable `nextDue` has
+  already moved past the instant, so the restarted host finds nothing due. The alternative —
+  running first and committing after — would double-run every occurrence that straddled a crash.
+- **The three missed-run policies.** The host was down across one or more scheduled instants. Each
+  policy answers that differently, and the difference is observable in `nextDue`, `lastRun`,
+  `runs`, and the number of occurrences the pass reports. With a 5-minute schedule registered
+  at `00:00` and a host that comes back at `00:17` — three instants missed, `00:05`, `00:10`,
+  `00:15`:
+
+  | policy | runs | `lastRun` | `nextDue` | meaning |
+  |---|---|---|---|---|
+  | `skip` | 0 | `null` | `00:20` | Abandon the missed window. The cadence resumes at the first instant after now. |
+  | `coalesce` | 1 | `00:17` | `00:20` | Collapse the whole window into one occurrence, run now, resume after now. |
+  | `run-once` | 1 | `00:05` | `00:10` | Run the *oldest* missed instant and advance by one interval, so the backlog is still owed. |
+
+  `skip` and `coalesce` agree on where the cadence lands and differ on whether anything ran;
+  `coalesce` and `run-once` agree on running once and differ on which instant the run stands for
+  and where the cadence lands. `run-once` is the only policy that leaves work outstanding, so a
+  long outage is caught up one occurrence per pass rather than all at once. `skip` is the default,
+  because a schedule that silently runs a backlog is a schedule that surprises its owner.
+- **Removal is a disabled version, not a delete.** The store is append-only, so `--remove` commits
+  the record with `enabled: false`. A disabled schedule is driven exactly like an absent one: the
+  instant that would have been due runs nothing, and the record remains readable as history.
+  Deleting the record's lines from the store is equally effective, because discovery is a read.
+- **Intervals and clocks.** `--every` accepts `ms`, `s`, `m`, and `h` suffixes, with a bare number
+  read as seconds; a non-positive interval or an unknown unit is a usage error. `--now` pins the
+  clock to an ISO 8601 instant, which is how the tests stand at a chosen moment instead of sleeping
+  through a real interval. The production path uses the wall clock; the tests use `--now`, so the
+  suite is fast and deterministic while the host still honours the real interval.
+- **What this is not.** No cron expressions, no calendar awareness (weekends, holidays), and no
+  time zones beyond UTC and local. Two hosts scheduling the same store is a coordination question
+  the store's ownership rules answer, not this command.
 
 ## 4. Example suite (38 examples: Pi `00`–`30` mirrored one-to-one, plus seven C#-only additions)
 
