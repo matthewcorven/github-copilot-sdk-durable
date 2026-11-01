@@ -1432,10 +1432,12 @@ class JsonlStoreProvider(InMemoryStoreProvider):
             data = handle.read()
 
         offset = 0
-        truncate_after: int | None = None
+        truncate_after = 0
         while offset < len(data):
             newline = data.find(b"\n", offset)
             terminated = newline != -1
+            if not terminated:
+                break
             end = newline if terminated else len(data)
             raw = data[offset:end]
             line_end = end + 1 if terminated else len(data)
@@ -1455,7 +1457,7 @@ class JsonlStoreProvider(InMemoryStoreProvider):
             offset = line_end
             truncate_after = offset
 
-        if truncate_after is not None and os.path.getsize(path) != truncate_after:
+        if os.path.getsize(path) != truncate_after:
             with open(path, "r+b") as handle:
                 handle.truncate(truncate_after)
 
@@ -3729,8 +3731,6 @@ class DurableHarness:
             models = await self._client.list_models()
             model = next((m for m in models if m.id == config["model"]), None)
             if model is not None and model.supported_reasoning_efforts:
-                if choices.reasoning_effort not in ("low", "medium", "high", "xhigh", "max"):
-                    raise ValueError(f"SDK 1.0.28 cannot configure reasoning effort '{choices.reasoning_effort}'.")
                 config["reasoning_effort"] = choices.reasoning_effort
         sections = [section for extension in extensions for section in extension.sections]
         system_message = await self.build_system_message(agent, sections, conversation)
