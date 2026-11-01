@@ -1,11 +1,14 @@
 // 18 - JSON mode (LIVE). Snapshot followed by real SDK event JSON lines.
-import { AgentChoices, Check, DurableHarness, DurableStore, Extension, ExtensionRegistry, PromptSection } from "../../lib/ts/durable.ts";
+import { AgentChoices, Check, DurableHarness, DurableHarnessOptions, DurableStore, Extension, ExtensionRegistry, PromptSection } from "../../lib/ts/durable.ts";
 
 const prompt = process.argv[2] ?? "What is in this directory?";
 const store = DurableStore.createEphemeral();
 const registry = new ExtensionRegistry();
 registry.install(new Extension("coding", [], [new PromptSection("preamble", async () => "You are a concise coding assistant.", false)]));
-const harness = await DurableHarness.openAsync(store, registry);
+const fixture = process.env.DURABLE_EXAMPLE_FIXTURE;
+const harness = await DurableHarness.openAsync(store, registry, new DurableHarnessOptions({
+  runtimeArguments: fixture ? ["--fixture", fixture] : [],
+}));
 let unsubscribe: (() => void) | undefined;
 try {
   const root = await harness.rootAsync(new AgentChoices({ extensions: ["coding"], permissions: ["read"] }));

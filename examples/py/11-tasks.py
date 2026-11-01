@@ -50,7 +50,11 @@ async def main():
         rerun = await harness.wait_for_task_async(task.id)
         Check.equal("completed", rerun.status, "waiting on a finished task returns its outcome")
         Check.equal(1, len(payments), "waiting on a finished task does not repeat the effect")
-        print("payment outcome: completed; receipt: 500; payments charged: 1")
+        print(f"payment outcome: {paid.status}")
+        print(f"receipt: {paid.result['receipt']}")
+        print("task status: Terminal")
+        print(f"task checkpoint: {record.checkpoint['phase']}")
+        print(f"payments charged: {len(payments)}")
     finally:
         harness.close()
         store.close()
