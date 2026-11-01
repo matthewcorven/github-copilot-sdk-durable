@@ -13,12 +13,14 @@ await runExample(async (harness, store) => {
     draft.value.text = "first";
     draft.save(tx.appendEntry(chat.id, "note", "first"));
   });
+  console.log(`watch baseline: ${chat.snapshot(notes)!.text}`);
   const seen: string[] = [];
   let delivered!: () => void;
   const completion = new Promise<void>(resolve => { delivered = resolve; });
   const watch = watchDocument(store, notes, chat.id, async frame => {
     await delay(50);
     seen.push(frame.value.text);
+    console.log(`watch update: ${frame.value.text}`);
     delivered();
   });
   Check.equal("first", watch.baseline.text, "the watch acquisition baseline is stable");
@@ -42,6 +44,7 @@ await runExample(async (harness, store) => {
   } finally {
     watch.close();
   }
+  console.log(`watch stopped at: ${chat.snapshot(notes)!.text}`);
   Check.equal("observed asynchronously", chat.snapshot(notes)!.text, "the committed value is what the watch saw");
   Check.that(seen.length >= 1, "the watch delivered at least one update");
   Check.equal("observed asynchronously", seen.at(-1), "the last delivered frame is the committed value");

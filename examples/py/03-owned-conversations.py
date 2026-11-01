@@ -24,8 +24,16 @@ async def main(harness, store, registry):
         return task.id, child
 
     supervisor_id, child = await chat.commit_async(setup)
+    print(f"supervisor task: {supervisor_id}")
+    print(f"child conversation: {child.id}")
+    print(f"child owner task: {child.owner_task_id}")
+    print(f"child owner conversation: {child.owner_conversation_id or '(none)'}")
     registry_value = chat.snapshot(agent_registry)
+    print("registry:")
+    for name, entry in registry_value.items():
+        print(f"  {name}: conversationId={entry['conversationId']} requestId={entry['requestId']}")
     task = Check.not_none(store.task(supervisor_id), "the supervisor task is in the store")
+    print(f"supervisor status: {task.status.name.title()} (background: {task.background})")
     Check.not_none(store.conversation(child.id), "the child conversation is in the store")
     Check.equal(supervisor_id, child.owner_task_id, "the child records its owning task")
     Check.equal(None, child.owner_conversation_id, "the child has no owning conversation")

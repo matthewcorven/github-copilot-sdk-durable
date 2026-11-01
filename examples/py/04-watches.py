@@ -15,6 +15,7 @@ async def main(harness, store, registry):
         draft.save(tx.append_entry(chat.id, "note", "first"))
 
     await chat.commit_async(first)
+    print(f"watch baseline: {chat.snapshot(notes)['text']}")
     feed = d.DurableWatch(store, chat.id).frames()
     baseline = await anext(feed)
     Check.equal("baseline", baseline.kind, "the watch starts from a stable acquisition revision")
@@ -34,8 +35,10 @@ async def main(harness, store, registry):
             if kind == notes.kind and owner_id == chat.id:
                 await asyncio.sleep(0.05)
                 seen.append(store.document(kind, owner_id).as_of(entry_id)["text"])
+                print(f"watch update: {seen[-1]}")
     finally:
         await feed.aclose()
+    print(f"watch stopped at: {chat.snapshot(notes)['text']}")
     Check.equal("observed asynchronously", chat.snapshot(notes)["text"], "the committed value is what the watch saw")
     Check.that(len(seen) >= 1, "the watch delivered at least one update")
     Check.equal("observed asynchronously", seen[-1], "the last delivered frame is the committed value")
