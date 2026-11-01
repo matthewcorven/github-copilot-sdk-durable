@@ -54,6 +54,11 @@ public sealed class RuntimeHostCliTests
             "--http",
             "--port",
             "--runtime-arg",
+            "--every",
+            "--missed-run",
+            "--remove",
+            "--now",
+            "--passes",
             "--help",
         })
         {
@@ -289,10 +294,11 @@ public sealed class RuntimeHostCliTests
         var allowed = await RunHostAsync(
             "schedule", "--agent", "reviewer",
             "--store", storePath, "--format", "jsonl",
-            "--permission-handler", "deny-all", "--allow-uncontained");
+            "--permission-handler", "deny-all", "--allow-uncontained",
+            "--every", "5m", "--passes", "0");
 
-        Assert.Equal(4, allowed.ExitCode);
-        Assert.Contains("#97", allowed.Stderr, StringComparison.Ordinal);
+        Assert.Equal(0, allowed.ExitCode);
+        Assert.Contains("warning: containment: None", allowed.Stderr, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -477,6 +483,322 @@ public sealed class RuntimeHostCliTests
         Assert.NotEqual(0, exitCode);
         Assert.Contains("Reviewer Bot", stderr, StringComparison.Ordinal);
         Assert.Contains("^[a-z0-9][a-z0-9._-]*$", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Schedule_RegistersARecurringTaskThatSurvivesAHostRestart()
+    {
+        using var scratch = new Scratch();
+        var storePath = scratch.PathIn("store.jsonl");
+        var definitionPath = scratch.Write("reviewer.json", ReviewerDefinition);
+
+        // First process: register the schedule and stop. Nothing runs, because the first
+        // occurrence is an interval away.
+        var registered = await RunHostAsync(
+            "schedule", "--agent", "reviewer",
+            "--definition", definitionPath, "--store", storePath, "--format", "jsonl",
+            "--every", "5m", "--missed-run", "coalesce", "--passes", "0",
+            "--now", "2026-01-01T00:00:00Z");
+
+        Assert.Equal(0, registered.ExitCode);
+        var registeredSchedule = JsonNode.Parse(registered.Stdout)!["schedule"]!;
+        Assert.Equal("5m", (string?)registeredSchedule["every"]);
+        Assert.Equal("2026-01-01T00:05:00+00:00", (string?)registeredSchedule["nextDue"]);
+        Assert.Equal(0, (long?)registeredSchedule["runs"]);
+
+        // Second process: a different host, with no --every and no --definition. It discovers
+        // the schedule in the store and drives it, which is the whole point of the record being
+        // durable state rather than a timer.
+        var driven = await RunHostAsync(
+            "schedule", "--agent", "reviewer",
+            "--store", storePath, "--format", "jsonl",
+            "--now", "2026-01-01T00:05:00Z");
+
+        Assert.Equal(0, driven.ExitCode);
+        var drivenResult = JsonNode.Parse(driven.Stdout)!.AsObject();
+        Assert.Equal(1, (long?)drivenResult["schedule"]!["runs"]);
+        Assert.Equal("2026-01-01T00:10:00+00:00", (string?)drivenResult["schedule"]!["nextDue"]);
+        Assert.Single(drivenResult["occurrences"]!.AsArray());
+    }
+
+    [Fact]
+    public async Task Schedule_SkipAbandonsTheMissedWindowAndRunsNothing()
+    {
+        using var scratch = new Scratch();
+        var storePath = scratch.PathIn("store.jsonl");
+        var definitionPath = scratch.Write("reviewer.json", ReviewerDefinition);
+
+        await RegisterAsync(scratch, storePath, definitionPath, "skip");
+
+        // The host was down from 00:00 to 00:17, so three instants (00:05, 00:10, 00:15) passed
+        // unwatched. skip abandons all three: nothing runs, and the cadence resumes at 00:20.
+        var (exitCode, stdout, _) = await RunHostAsync(
+            "schedule", "--agent", "reviewer",
+            "--store", storePath, "--format", "jsonl",
+            "--now", "2026-01-01T00:17:00Z");
+
+        Assert.Equal(0, exitCode);
+        var result = JsonNode.Parse(stdout)!.AsObject();
+        Assert.Empty(result["occurrences"]!.AsArray());
+        Assert.Equal(0, (long?)result["schedule"]!["runs"]);
+        Assert.Null(result["schedule"]!["lastRun"]);
+        Assert.Equal("2026-01-01T00:20:00+00:00", (string?)result["schedule"]!["nextDue"]);
+    }
+
+    [Fact]
+    public async Task Schedule_CoalesceCollapsesTheMissedWindowIntoOneRunNow()
+    {
+        using var scratch = new Scratch();
+        var storePath = scratch.PathIn("store.jsonl");
+        var definitionPath = scratch.Write("reviewer.json", ReviewerDefinition);
+
+        await RegisterAsync(scratch, storePath, definitionPath, "coalesce");
+
+        var (exitCode, stdout, _) = await RunHostAsync(
+            "schedule", "--agent", "reviewer",
+            "--store", storePath, "--format", "jsonl",
+            "--now", "2026-01-01T00:17:00Z");
+
+        Assert.Equal(0, exitCode);
+        var result = JsonNode.Parse(stdout)!.AsObject();
+
+        // One occurrence, not three, and it stands for the whole missed window: lastRun is the
+        // instant the host came back, and the cadence resumes at 00:20.
+        Assert.Single(result["occurrences"]!.AsArray());
+        Assert.Equal(1, (long?)result["schedule"]!["runs"]);
+        Assert.Equal("2026-01-01T00:17:00+00:00", (string?)result["schedule"]!["lastRun"]);
+        Assert.Equal("2026-01-01T00:20:00+00:00", (string?)result["schedule"]!["nextDue"]);
+    }
+
+    [Fact]
+    public async Task Schedule_RunOnceRunsTheOldestMissedInstantAndKeepsTheBacklog()
+    {
+        using var scratch = new Scratch();
+        var storePath = scratch.PathIn("store.jsonl");
+        var definitionPath = scratch.Write("reviewer.json", ReviewerDefinition);
+
+        await RegisterAsync(scratch, storePath, definitionPath, "run-once");
+
+        var (exitCode, stdout, _) = await RunHostAsync(
+            "schedule", "--agent", "reviewer",
+            "--store", storePath, "--format", "jsonl",
+            "--now", "2026-01-01T00:17:00Z");
+
+        Assert.Equal(0, exitCode);
+        var result = JsonNode.Parse(stdout)!.AsObject();
+
+        // One occurrence, and it stands for the *oldest* missed instant rather than for now:
+        // lastRun is 00:05 and the cadence advances by exactly one interval, so 00:10 and 00:15
+        // are still owed to the next pass. That is what distinguishes run-once from coalesce.
+        Assert.Single(result["occurrences"]!.AsArray());
+        Assert.Equal(1, (long?)result["schedule"]!["runs"]);
+        Assert.Equal("2026-01-01T00:05:00+00:00", (string?)result["schedule"]!["lastRun"]);
+        Assert.Equal("2026-01-01T00:10:00+00:00", (string?)result["schedule"]!["nextDue"]);
+    }
+
+    [Fact]
+    public async Task Schedule_RunOnceDrainsTheBacklogOneOccurrencePerPass()
+    {
+        using var scratch = new Scratch();
+        var storePath = scratch.PathIn("store.jsonl");
+        var definitionPath = scratch.Write("reviewer.json", ReviewerDefinition);
+
+        await RegisterAsync(scratch, storePath, definitionPath, "run-once");
+
+        // The host was down from 00:00 to 00:12, so exactly two instants (00:05 and 00:10) are
+        // owed. run-once pays them back one per pass rather than collapsing them, so two passes
+        // run two occurrences and leave the cadence at 00:15 with nothing outstanding.
+        var (exitCode, stdout, _) = await RunHostAsync(
+            "schedule", "--agent", "reviewer",
+            "--store", storePath, "--format", "jsonl",
+            "--now", "2026-01-01T00:12:00Z", "--passes", "2");
+
+        Assert.Equal(0, exitCode);
+        var result = JsonNode.Parse(stdout)!.AsObject();
+        Assert.Equal(2, result["occurrences"]!.AsArray().Count);
+        Assert.Equal(2, (long?)result["schedule"]!["runs"]);
+        Assert.Equal("2026-01-01T00:10:00+00:00", (string?)result["schedule"]!["lastRun"]);
+        Assert.Equal("2026-01-01T00:15:00+00:00", (string?)result["schedule"]!["nextDue"]);
+    }
+
+    [Fact]
+    public async Task Schedule_ResumedSleepDoesNotDoubleRunTheSameInstant()
+    {
+        using var scratch = new Scratch();
+        var storePath = scratch.PathIn("store.jsonl");
+        var definitionPath = scratch.Write("reviewer.json", ReviewerDefinition);
+
+        await RegisterAsync(scratch, storePath, definitionPath, "coalesce");
+
+        var first = await RunHostAsync(
+            "schedule", "--agent", "reviewer",
+            "--store", storePath, "--format", "jsonl",
+            "--now", "2026-01-01T00:05:00Z");
+
+        Assert.Equal(0, first.ExitCode);
+        var firstResult = JsonNode.Parse(first.Stdout)!.AsObject();
+        Assert.Single(firstResult["occurrences"]!.AsArray());
+        Assert.Equal(1, (long?)firstResult["schedule"]!["runs"]);
+
+        // A second host starts at the same instant the first one already served. The occurrence
+        // was claimed durably before it ran, so the restart finds nothing due and runs nothing.
+        var second = await RunHostAsync(
+            "schedule", "--agent", "reviewer",
+            "--store", storePath, "--format", "jsonl",
+            "--now", "2026-01-01T00:05:00Z");
+
+        Assert.Equal(0, second.ExitCode);
+        var secondResult = JsonNode.Parse(second.Stdout)!.AsObject();
+        Assert.Empty(secondResult["occurrences"]!.AsArray());
+        Assert.Equal(1, (long?)secondResult["schedule"]!["runs"]);
+        Assert.Equal("2026-01-01T00:10:00+00:00", (string?)secondResult["schedule"]!["nextDue"]);
+    }
+
+    [Fact]
+    public async Task Schedule_RemovingTheStoredRecordStopsTheRuns()
+    {
+        using var scratch = new Scratch();
+        var storePath = scratch.PathIn("store.jsonl");
+        var definitionPath = scratch.Write("reviewer.json", ReviewerDefinition);
+
+        await RegisterAsync(scratch, storePath, definitionPath, "coalesce");
+
+        var removed = await RunHostAsync(
+            "schedule", "--agent", "reviewer",
+            "--store", storePath, "--format", "jsonl", "--remove");
+
+        Assert.Equal(0, removed.ExitCode);
+        Assert.False((bool?)JsonNode.Parse(removed.Stdout)!["schedule"]!["enabled"]);
+
+        // The record is still in the store, but disabled, and a disabled schedule is driven
+        // exactly like an absent one: the instant that would have been due runs nothing.
+        var afterRemoval = await RunHostAsync(
+            "schedule", "--agent", "reviewer",
+            "--store", storePath, "--format", "jsonl",
+            "--now", "2026-01-01T00:17:00Z");
+
+        Assert.Equal(0, afterRemoval.ExitCode);
+        var result = JsonNode.Parse(afterRemoval.Stdout)!.AsObject();
+        Assert.Empty(result["occurrences"]!.AsArray());
+        Assert.Equal(0, (long?)result["schedule"]!["runs"]);
+        Assert.False((bool?)result["schedule"]!["enabled"]);
+    }
+
+    [Fact]
+    public async Task Schedule_DeletingTheStoredRecordStopsTheRuns()
+    {
+        using var scratch = new Scratch();
+        var storePath = scratch.PathIn("store.jsonl");
+        var definitionPath = scratch.Write("reviewer.json", ReviewerDefinition);
+
+        await RegisterAsync(scratch, storePath, definitionPath, "coalesce");
+
+        // Delete the schedule's records from the store outright, rather than disabling them.
+        // The scheduler discovers schedules by reading the store, so a store without the record
+        // has nothing to drive and the instant that would have been due runs nothing.
+        var kept = File.ReadAllLines(storePath)
+            .Where(line => !line.Contains("durable.schedule", StringComparison.Ordinal))
+            .ToArray();
+        Assert.NotEmpty(kept);
+        File.WriteAllLines(storePath, kept);
+
+        var (exitCode, stdout, _) = await RunHostAsync(
+            "schedule", "--agent", "reviewer",
+            "--store", storePath, "--format", "jsonl",
+            "--now", "2026-01-01T00:17:00Z");
+
+        Assert.Equal(0, exitCode);
+        var result = JsonNode.Parse(stdout)!.AsObject();
+        Assert.Null(result["schedule"]);
+        Assert.Empty(result["occurrences"]!.AsArray());
+    }
+
+    [Fact]
+    public async Task Schedule_WithNoPersistedScheduleRunsNothing()
+    {
+        using var scratch = new Scratch();
+        var storePath = scratch.PathIn("store.jsonl");
+        var definitionPath = scratch.Write("reviewer.json", ReviewerDefinition);
+
+        // Import the definition, then drive a store that holds no schedule at all. The scheduler
+        // has nothing to discover, so it runs nothing and reports no schedule.
+        var (exitCode, stdout, _) = await RunHostAsync(
+            "schedule", "--agent", "reviewer",
+            "--definition", definitionPath, "--store", storePath, "--format", "jsonl",
+            "--now", "2026-01-01T00:17:00Z");
+
+        Assert.Equal(0, exitCode);
+        var result = JsonNode.Parse(stdout)!.AsObject();
+        Assert.Null(result["schedule"]);
+        Assert.Empty(result["occurrences"]!.AsArray());
+    }
+
+    [Fact]
+    public async Task Schedule_RejectsRemoveCombinedWithEvery()
+    {
+        using var scratch = new Scratch();
+        var storePath = scratch.PathIn("store.jsonl");
+        var definitionPath = scratch.Write("reviewer.json", ReviewerDefinition);
+
+        var (exitCode, _, stderr) = await RunHostAsync(
+            "schedule", "--agent", "reviewer",
+            "--definition", definitionPath, "--store", storePath, "--format", "jsonl",
+            "--remove", "--every", "5m");
+
+        Assert.Equal(2, exitCode);
+        Assert.Contains("--remove and --every cannot be combined", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Schedule_RejectsAnUnknownMissedRunPolicy()
+    {
+        using var scratch = new Scratch();
+        var storePath = scratch.PathIn("store.jsonl");
+        var definitionPath = scratch.Write("reviewer.json", ReviewerDefinition);
+
+        var (exitCode, _, stderr) = await RunHostAsync(
+            "schedule", "--agent", "reviewer",
+            "--definition", definitionPath, "--store", storePath, "--format", "jsonl",
+            "--every", "5m", "--missed-run", "catch-up");
+
+        Assert.Equal(2, exitCode);
+        Assert.Contains("catch-up", stderr, StringComparison.Ordinal);
+        Assert.Contains("skip, coalesce, and run-once", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Schedule_RejectsAnIntervalWithAnUnknownUnit()
+    {
+        using var scratch = new Scratch();
+        var storePath = scratch.PathIn("store.jsonl");
+        var definitionPath = scratch.Write("reviewer.json", ReviewerDefinition);
+
+        var (exitCode, _, stderr) = await RunHostAsync(
+            "schedule", "--agent", "reviewer",
+            "--definition", definitionPath, "--store", storePath, "--format", "jsonl",
+            "--every", "5d");
+
+        Assert.Equal(2, exitCode);
+        Assert.Contains("unknown unit", stderr, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Registers a schedule in its own process, so the test that follows is a restart rather
+    /// than a continuation.
+    /// </summary>
+    private static async Task RegisterAsync(
+        Scratch scratch,
+        string storePath,
+        string definitionPath,
+        string policy)
+    {
+        var (exitCode, _, _) = await RunHostAsync(
+            "schedule", "--agent", "reviewer",
+            "--definition", definitionPath, "--store", storePath, "--format", "jsonl",
+            "--every", "5m", "--missed-run", policy, "--passes", "0",
+            "--now", "2026-01-01T00:00:00Z");
+
+        Assert.Equal(0, exitCode);
     }
 
     [Fact]
