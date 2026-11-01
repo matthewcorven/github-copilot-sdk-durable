@@ -6,9 +6,17 @@
   "type": "module",
   "main": "durable.ts",
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test *.test.ts"
+  },
+  "dependencies": {
+    "@github/copilot-sdk": "1.0.28"
+  },
+  "overrides": {
+    "zod": "4.6.7"
   },
   "devDependencies": {
+    "tsx": "^4.20.0",
     "@types/node": "^22.20.5",
     "typescript": "^5.6.3"
   }

@@ -3,9 +3,11 @@ name = "copilot-durable"
 version = "0.1.0"
 description = "The durable layer of the Copilot SDK, ported to Python."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["github-copilot-sdk==1.0.28"]
 
 [tool.pyright]
+venvPath = "."
+venv = ".venv"
 include = ["durable.py"]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
