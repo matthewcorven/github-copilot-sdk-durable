@@ -46,4 +46,5 @@ try {
   console.log("payment outcome: completed; receipt: 500; payments charged: 1");
 } finally {
   await runner.disposeAsync();
+  store.dispose();
 }
