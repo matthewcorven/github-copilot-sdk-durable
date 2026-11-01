@@ -52,6 +52,7 @@ async function main() {
       assert.ok(answers.every((answer) => answer!==undefined&&answer.data.content.trim().length>0),
         "no answer was empty");
       assert.ok(stored.length>=1,"the stored transcript kept its entries");
+      assert.ok(context.length>0,"the model context is not empty");
     } finally {
       unsubscribe();
     }
