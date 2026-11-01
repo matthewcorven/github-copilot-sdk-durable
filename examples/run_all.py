@@ -31,6 +31,11 @@ def normalise_output(text):
 
 def load_manifest():
     manifest = json.loads((ROOT / "examples" / "parity.json").read_text())
+    if (type(manifest["schemaVersion"]) is not int
+            or any(type(value) is not int for value in manifest["scope"])
+            or any(type(entry["live"]) is not bool or type(entry["deterministic"]) is not bool
+                   for entry in manifest["examples"])):
+        raise ValueError("Global parity manifest has invalid version/scope/boolean field types")
     if manifest != build():
         raise ValueError("Global parity manifest differs from range/source declarations; regenerate explicitly")
     provenance = json.loads((ROOT / "examples" / "expected" / "provenance.json").read_text())

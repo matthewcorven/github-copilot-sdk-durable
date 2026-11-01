@@ -36,7 +36,9 @@ def build(root=ROOT):
             path = root / "examples" / language / f"parity-{range_name}.json"
             declaration = json.loads(path.read_text())
             first, last = map(int, range_name.split("-"))
-            if declaration.get("schemaVersion") != 1 or declaration.get("range") != [first, last]:
+            if (type(declaration.get("schemaVersion")) is not int or declaration["schemaVersion"] != 1
+                    or declaration.get("range") != [first, last]
+                    or any(type(value) is not int for value in declaration["range"])):
                 raise ValueError(f"{path}: unsupported range schema/version")
             for row in declaration["examples"]:
                 identifier = row.get("id")
@@ -53,13 +55,18 @@ def build(root=ROOT):
                 status = row.get("status")
                 if status not in ("ported", "pending-native-api"):
                     raise ValueError(f"{path}: {identifier} invalid implementation status {status}")
-                if status == "pending-native-api" and not row.get("pendingReason"):
+                if status == "pending-native-api" and not (
+                        isinstance(row.get("pendingReason"), str) and row["pendingReason"].strip()):
                     raise ValueError(f"{path}: {identifier} needs an actionable pendingReason")
                 sandbox = row.get("sandboxMode")
                 if sandbox not in ("supported", "unsupported", "not-applicable"):
                     raise ValueError(f"{path}: {identifier} missing sandboxMode")
-                if sandbox == "unsupported" and not row.get("sandboxReason"):
+                if sandbox == "unsupported" and not (
+                        isinstance(row.get("sandboxReason"), str) and row["sandboxReason"].strip()):
                     raise ValueError(f"{path}: {identifier} needs a proven sandboxReason")
+                if "timeoutSeconds" in row and (
+                        type(row["timeoutSeconds"]) is not int or row["timeoutSeconds"] <= 0):
+                    raise ValueError(f"{path}: {identifier} timeoutSeconds must be a positive integer")
                 rows[language][identifier] = {
                     "path": expected, "status": status, "sandboxMode": sandbox,
                     "rangeManifest": str(path.relative_to(root)), "evidence": row,
