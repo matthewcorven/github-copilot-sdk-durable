@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "language": "python",
+  "range": [0, 10],
+  "workingDirectory": "repository root",
+  "setupCommands": [
+    ["python3", "-m", "venv", "examples/py/.venv"],
+    ["examples/py/.venv/bin/python", "-m", "pip", "install", "-e", "examples/py"]
+  ],
+  "interpreter": "Use the activated examples/py/.venv environment, or replace python3 in each command with examples/py/.venv/bin/python.",
+  "runtime": "Native Copilot SDK, or DURABLE_RUNTIME_PATH pointing to the real ReplayRuntime executable.",
+  "store": "in-memory; no per-user or on-disk default path",
+  "validation": { "status": "pending-api-handoff", "sdk": "1.0.28" },
+  "examples": [
+    { "id": "00", "file": "00-conversation.py", "original": "../00-conversation.cs", "live": false, "liveReason": null, "deterministic": true, "deterministicExclusionReason": null, "command": ["python3", "examples/py/00-conversation.py"], "assertionParity": "all original facts ported; native execution pending" },
+    { "id": "01", "file": "01-documents.py", "original": "../01-documents.cs", "live": false, "liveReason": null, "deterministic": true, "deterministicExclusionReason": null, "command": ["python3", "examples/py/01-documents.py"], "assertionParity": "all original facts ported; native execution pending" },
+    { "id": "02", "file": "02-forks.py", "original": "../02-forks.cs", "live": false, "liveReason": null, "deterministic": false, "deterministicExclusionReason": "needs sessions.fork, which the runtime does not answer", "command": ["python3", "examples/py/02-forks.py"], "assertionParity": "all original facts ported; native execution pending" },
+    { "id": "03", "file": "03-owned-conversations.py", "original": "../03-owned-conversations.cs", "live": false, "liveReason": null, "deterministic": true, "deterministicExclusionReason": null, "command": ["python3", "examples/py/03-owned-conversations.py"], "assertionParity": "all original facts ported; native execution pending" },
+    { "id": "04", "file": "04-watches.py", "original": "../04-watches.cs", "live": false, "liveReason": null, "deterministic": true, "deterministicExclusionReason": null, "command": ["python3", "examples/py/04-watches.py"], "assertionParity": "all original facts ported; native execution pending" },
+    { "id": "05", "file": "05-harness.py", "original": "../05-harness.cs", "live": false, "liveReason": null, "deterministic": true, "deterministicExclusionReason": null, "command": ["python3", "examples/py/05-harness.py"], "assertionParity": "all original facts ported; native execution pending" },
+    { "id": "06", "file": "06-configuration.py", "original": "../06-configuration.cs", "live": false, "liveReason": null, "deterministic": true, "deterministicExclusionReason": null, "command": ["python3", "examples/py/06-configuration.py"], "assertionParity": "all original facts ported; native execution pending" },
+    { "id": "07", "file": "07-harness-conversations.py", "original": "../07-harness-conversations.cs", "live": true, "liveReason": "sets a reasoning effort, so the harness queries models.list for a model the fixture does not record", "deterministic": false, "deterministicExclusionReason": "sets a reasoning effort, so the harness queries models.list for a model the fixture does not record", "command": ["python3", "examples/py/07-harness-conversations.py"], "assertionParity": "all original facts ported; LIVE execution pending" },
+    { "id": "08", "file": "08-context.py", "original": "../08-context.cs", "live": true, "liveReason": "needs sessions.fork, which the runtime does not answer", "deterministic": false, "deterministicExclusionReason": "needs sessions.fork, which the runtime does not answer", "command": ["python3", "examples/py/08-context.py"], "assertionParity": "all original facts ported; LIVE execution pending" },
+    { "id": "09", "file": "09-registry-reload.py", "original": "../09-registry-reload.cs", "live": false, "liveReason": null, "deterministic": true, "deterministicExclusionReason": null, "command": ["python3", "examples/py/09-registry-reload.py"], "assertionParity": "all original facts ported; native execution pending" },
+    { "id": "10", "file": "10-extension-state.py", "original": "../10-extension-state.cs", "live": true, "liveReason": "asserts a tool wrote into the document; the recording has no tool call", "deterministic": false, "deterministicExclusionReason": "asserts a tool wrote into the document; the recording has no tool call", "command": ["python3", "examples/py/10-extension-state.py"], "assertionParity": "all original facts ported; LIVE execution pending" }
+  ]
+}
