@@ -50,7 +50,11 @@ public sealed class RuntimeHostHttpTests
     public async Task Serve_StreamsTheTurnsEventsBeforeItsResult()
     {
         using var scratch = new Scratch();
-        await using var host = await ServeHost.StartAsync(scratch, "basic.json", idleDelaySeconds: 2);
+        // The recording holds the turn open for five seconds. The margin the test can observe is
+        // that delay minus however long the runtime takes to start and answer the first request,
+        // which is a second or more on a loaded CI runner, so the delay is deliberately much
+        // larger than the margin asserted below.
+        await using var host = await ServeHost.StartAsync(scratch, "basic.json", idleDelaySeconds: 5);
 
         var clock = Stopwatch.StartNew();
         var (status, lines, firstEventAt, resultAt) = await host.PostTimedAsync("""{"input":"hello"}""");
@@ -58,18 +62,20 @@ public sealed class RuntimeHostHttpTests
         Assert.Equal(HttpStatusCode.OK, status);
 
         // The turn's events arrive while the turn is still running, not in one burst at the end.
-        // The recording holds the turn open for two seconds, so a transport that buffered the
-        // whole response would deliver the first event and the result at the same instant.
+        // A transport that buffered the whole response would deliver the first event and the
+        // result at the same instant.
         Assert.True(
-            resultAt - firstEventAt >= TimeSpan.FromSeconds(1),
+            resultAt - firstEventAt >= TimeSpan.FromSeconds(2),
             $"the first event arrived {resultAt - firstEventAt} before the result, which means the "
-            + "response was buffered rather than streamed.");
+            + "response was buffered rather than streamed. "
+            + $"timeline: firstEventAt={firstEventAt}, resultAt={resultAt}, "
+            + $"elapsed={clock.Elapsed}, lines={lines.Count}.");
 
         Assert.Equal("event", (string?)lines[0]["type"]);
         Assert.Equal("result", (string?)lines[^1]["type"]);
         Assert.Contains(lines, line => (string?)line["type"] == "event"
             && (string?)line["event"]!["type"] == "assistant.message");
-        Assert.True(clock.Elapsed >= TimeSpan.FromSeconds(1));
+        Assert.True(clock.Elapsed >= TimeSpan.FromSeconds(2));
     }
 
     [Fact]
