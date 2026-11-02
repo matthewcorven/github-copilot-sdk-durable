@@ -7,7 +7,7 @@ export async function runExample(
   const store = DurableStore.createEphemeral();
   const registry = new ExtensionRegistry();
   try {
-    const fixture = process.env["DURABLE_EXAMPLE_REPLAY_FIXTURE"];
+    const fixture = process.env["DURABLE_EXAMPLE_REPLAY_FIXTURE"] ?? process.env["DURABLE_EXAMPLE_FIXTURE"];
     if (fixture && !process.env["DURABLE_RUNTIME_PATH"]) {
       throw new Error("A replay fixture requires an explicit DURABLE_RUNTIME_PATH");
     }
