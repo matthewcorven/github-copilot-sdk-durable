@@ -67,7 +67,12 @@ using (var store = Open())
         throw new InvalidOperationException("Canonical document history was lost.");
     var forks = store.Documents.Where(d => d.Kind == intents.Kind).ToArray();
     foreach (var fork in forks)
+    {
         if (fork.Latest!.Value.Deserialize<ForkIntent>(DurableJson.Options)!.State != ForkIntentState.Completed)
             throw new InvalidOperationException("Fork intent is not canonically completed.");
+        var binding = store.Document(bindings.Kind, fork.OwnerId)?.Latest?.Deserialize<SessionBinding>(DurableJson.Options);
+        if (binding is { SessionId: not "canonical-child", Pinned: true })
+            throw new InvalidOperationException("Runtime-allocated fork id must not be pinned.");
+    }
     Console.WriteLine(JsonSerializer.Serialize(new { ownerId = document.OwnerId, forkIds = forks.Select(d => d.OwnerId) }, DurableJson.Options));
 }
