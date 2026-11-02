@@ -3069,6 +3069,7 @@ export class DurableHarness {
   readonly agentDocument = agentDocument;
   readonly runner: DurableTaskRunner;
   private readonly handles = new Map<string, DurableConversation>();
+  private readonly failedSessions = new Map<string, CopilotSession>();
   private readonly conversationOperations = new Set<Promise<void>>();
   private rootCreation: Promise<DurableConversation> | undefined;
   private disposal: Promise<void> | undefined;
@@ -3235,8 +3236,21 @@ export class DurableHarness {
     }
     const config = await this.buildSessionConfig(conversation.choices(), conversation);
     config.sessionId = String(binding!["sessionId"]);
-    conversation.attach(await this.client.createSession(config));
-    for (const event of await conversation.contextAsync()) conversation.observe(event, false);
+    await this.initializeSession(conversation, await this.client.createSession(config));
+  }
+  private async initializeSession(conversation: DurableConversation, session: CopilotSession): Promise<void> {
+    conversation.attach(session);
+    try {
+      for (const event of await conversation.contextAsync()) conversation.observe(event, false);
+    } catch (error) {
+      conversation.detach();
+      try { await session.disconnect(); }
+      catch (cleanupError) {
+        this.failedSessions.set(conversation.id, session);
+        throw new AggregateError([error, cleanupError], "Session initialization and partial-session cleanup failed.", { cause: error });
+      }
+      throw error;
+    }
   }
   resumeConversationAsync(id: string): Promise<DurableConversation> {
     return this.conversationOperation(() => this.resumeConversationCore(id));
@@ -3244,6 +3258,11 @@ export class DurableHarness {
   private async resumeConversationCore(id: string): Promise<DurableConversation> {
     const conversation = this.findConversation(id);
     if (!conversation) throw new Error(`Unknown conversation '${id}'.`);
+    const failedSession = this.failedSessions.get(id);
+    if (failedSession) {
+      await failedSession.disconnect();
+      this.failedSessions.delete(id);
+    }
     if (conversation.sessionId) return conversation;
     const binding = conversation.snapshot(bindingDocument);
     const intent = conversation.snapshot(forkDocument);
@@ -3271,8 +3290,7 @@ export class DurableHarness {
     }
     if (session.sessionId !== sessionId)
       throw new Error(`Conversation '${id}' received a mismatched native session; explicit recovery is required.`);
-    conversation.attach(session);
-    for (const event of await conversation.contextAsync()) conversation.observe(event, false);
+    await this.initializeSession(conversation, session);
     return conversation;
   }
   rootAsync(choices = new AgentChoices()): Promise<DurableConversation> {
