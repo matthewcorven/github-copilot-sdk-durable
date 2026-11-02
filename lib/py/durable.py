@@ -1581,6 +1581,9 @@ class JsonlStoreProvider(InMemoryStoreProvider):
         """Records the state the next commit diffs against."""
         self._emitted_conversations = {conversation.id for conversation in self.conversations}
         self._emitted_tasks = {task.id for task in self.tasks}
+        self._emitted_documents = {
+            self.document_key(document.kind, document.owner_id) for document in self.documents
+        }
         self._committed_tasks = {task.id: DurableJson.dumps(task) for task in self.tasks}
         self._committed_entries = {key: list(value) for key, value in self._entries.items()}
         self._committed_versions = {
@@ -3005,6 +3008,7 @@ class DurableConversation:
         self._checkpoint_chain: asyncio.Task[None] | None = None
         self._checkpoint_failure: BaseException | None = None
         self._tool_calls: dict[str, Any] = {}
+        self._observed_events: set[str] = set()
         self.record = record
 
     # -- identity ------------------------------------------------------------
@@ -3074,12 +3078,17 @@ class DurableConversation:
         """Tracks whether a run is in flight, so a caller can tell busy from idle."""
         self._busy = busy
 
-    def observe(self, event: Any) -> None:
+    def observe(self, event: Any, *, live: bool = True) -> None:
         """Records what one session event says about this conversation.
 
         Kept separate from the subscription so the observation rules can be exercised
-        without a live session.
+        without a live session. History hydration uses ``live=False`` to avoid writes.
         """
+        event_id = _event_field(event, "id")
+        if event_id:
+            if event_id in self._observed_events:
+                return
+            self._observed_events.add(event_id)
         kind = _event_kind(event)
         data = _event_data(event)
         if kind == "tool.execution_start":
@@ -3102,15 +3111,20 @@ class DurableConversation:
                     await previous
                 try:
                     async def body(tx: Transaction) -> None:
-                        draft = tx.doc(CHECKPOINT_DOCUMENT, self.id)
-                        if draft.value is not None and draft.value.event_id == checkpoint.event_id:
+                        document = self._store.document(CHECKPOINT_DOCUMENT.kind, self.id)
+                        if document is not None and any(
+                            _event_field(version.value, "event_id") == checkpoint.event_id
+                            for version in document.versions
+                        ):
                             return
+                        draft = tx.doc(CHECKPOINT_DOCUMENT, self.id)
                         draft.value = checkpoint
                         draft.save(tx.append_entry(self.id, "checkpoint"))
                     await self.commit_async(body)
                 except BaseException as error:
                     self._checkpoint_failure = self._checkpoint_failure or error
-            self._checkpoint_chain = asyncio.create_task(write())
+            if live:
+                self._checkpoint_chain = asyncio.create_task(write())
 
         if kind == "assistant.message":
             content = _event_field(data, "content")
@@ -3225,6 +3239,16 @@ class DurableConversation:
         """The most recent input admission, or ``None`` before one is written."""
         return _from_wire(InputAdmission, self._raw_snapshot(ADMISSION_DOCUMENT))
 
+    def _has_unsettled_admission(self) -> bool:
+        admission = self.admission()
+        if admission is None or admission.state == "completed":
+            return False
+        document = self._store.document(ADMISSION_DOCUMENT.kind, self.id)
+        version = document.versions[-1] if document is not None and document.versions else None
+        # Copied document snapshots are anchored at the fork boundary, not a child submission.
+        return (self.record.parent_conversation_id is None or version is None
+                or version.entry_id != self.record.fork_entry_id)
+
     def checkpoint(self) -> ConversationCheckpoint | None:
         """The most recent checkpoint, or ``None`` before one is written."""
         return _from_wire(ConversationCheckpoint, self._raw_snapshot(CHECKPOINT_DOCUMENT))
@@ -3314,6 +3338,9 @@ class DurableConversation:
         self._pending_submissions += 1
         try:
             async with self._submit_gate:
+                if self._has_unsettled_admission():
+                    binding = self.binding()
+                    raise DurableRecoveryRequiredException(self.id, binding.session_id if binding else self.session_id)
                 admission_id = f"a{uuid4().hex}"
                 async def admit(tx: Transaction) -> None:
                     draft = tx.doc(ADMISSION_DOCUMENT, self.id)
@@ -3342,10 +3369,15 @@ class DurableConversation:
                                 completion.set_exception(RuntimeError(message))
                     stop = self._session.on(observe)
                     try:
-                        await self._session.send(prompt)
-                        answer = await asyncio.wait_for(completion, timeout)
+                        async with asyncio.timeout(timeout):
+                            await self._session.send(prompt)
+                            answer = await completion
                     finally:
                         stop()
+                        if not completion.done():
+                            completion.cancel()
+                        elif not completion.cancelled():
+                            completion.exception()
                     await self.checkpoint_barrier_async()
                     async def complete(tx: Transaction) -> None:
                         if answer is not None:
@@ -3365,13 +3397,16 @@ class DurableConversation:
                         draft.save(tx.append_entry(self.id, "admission"))
                     await self.commit_async(complete)
                     return answer
-                except BaseException:
+                except BaseException as error:
                     async def uncertain(tx: Transaction) -> None:
                         draft = tx.doc(ADMISSION_DOCUMENT, self.id)
                         assert draft.value is not None
                         draft.value.state = "uncertain"
                         draft.save(tx.append_entry(self.id, "admission"))
-                    await self.commit_async(uncertain)
+                    try:
+                        await self.commit_async(uncertain)
+                    except BaseException as settlement_error:
+                        raise error from settlement_error
                     raise
         finally:
             self._pending_submissions -= 1
@@ -3619,7 +3654,7 @@ class DurableHarness:
         self._conversations[record.id] = conversation
         conversation.attach(await self._create_pinned_session_async(conversation, selected))
         for event in await conversation.context_async():
-            conversation.observe(event)
+            conversation.observe(event, live=False)
         return conversation
 
     async def root_async(self, choices: AgentChoices | None = None) -> DurableConversation:
@@ -3639,10 +3674,15 @@ class DurableHarness:
             raise ValueError(f"Unknown conversation '{conversation_id}'.")
         if conversation.session is not None:
             return conversation
-        admission = conversation.admission()
-        if admission is not None and admission.state != "completed":
-            raise DurableRecoveryRequiredException(conversation_id, conversation.session_id)
         binding = conversation.binding()
+        intent = self.fork_intent_of(conversation_id)
+        if (conversation.record.parent_conversation_id is not None or intent is not None) and (
+            intent is None or intent.state != ForkIntentState.COMPLETED
+            or binding is None or not binding.session_id or intent.session_id != binding.session_id
+        ):
+            raise DurableRecoveryRequiredException(conversation_id, binding.session_id if binding else None)
+        if conversation._has_unsettled_admission():
+            raise DurableRecoveryRequiredException(conversation_id, binding.session_id if binding else None)
         if binding is None or binding.session_id is None:
             session = await self._create_pinned_session_async(conversation, conversation.choices())
         else:
@@ -3652,7 +3692,7 @@ class DurableHarness:
                 binding.session_id, **config, suppress_resume_event=True, continue_pending_work=False)
         conversation.attach(session)
         for event in await conversation.context_async():
-            conversation.observe(event)
+            conversation.observe(event, live=False)
         return conversation
 
     def resolve_extensions(self, names: Sequence[str] | None) -> list[Extension]:
@@ -3752,7 +3792,9 @@ class DurableHarness:
         if sections and conversation is not None:
             original = hooks.get("on_user_prompt_submitted")
             async def on_prompt(input: Any, invocation: Any) -> Any:
-                output = await original(input, invocation) if original else None
+                output = original(input, invocation) if original else None
+                if inspect.isawaitable(output):
+                    output = await output
                 output = dict(output or {})
                 rendered = await self.render_sections_async(conversation)
                 output["additionalContext"] = "\n\n".join(
@@ -3846,6 +3888,8 @@ class DurableHarness:
             model if model is not None else self.DEFAULT_MODEL,
         )
         self._conversations[record.id] = conversation
+        for event in await conversation.context_async():
+            conversation.observe(event, live=False)
         return conversation
 
     async def _fork_session_async(
@@ -3854,13 +3898,7 @@ class DurableHarness:
         conversation: DurableConversation,
         choices: AgentChoices | None,
     ) -> Any:
-        """Gives a fork its native session.
-
-        A runtime that can fork natively is asked to; one that cannot continues as a new
-        session over the inherited transcript rather than failing outright, because the
-        durable half of the fork is already committed. The session is then recorded on the
-        intent so a later open can find it again.
-        """
+        """Forks native context, leaving a recoverable pending intent if the RPC fails."""
         if parent.session_id is None:
             raise DurableRecoveryRequiredException(parent.id, None)
         forked = await self._client.rpc.sessions.fork(SessionsForkRequest(session_id=parent.session_id))
@@ -3885,7 +3923,7 @@ class DurableHarness:
         conversation: DurableConversation,
         choices: AgentChoices | None,
     ) -> Any:
-        """Creates a new session over a fork's inherited transcript."""
+        """Creates the pinned native session for a new conversation."""
         binding = conversation.binding()
         if binding is None or not binding.pinned or not binding.session_id:
             async def pin(tx: Transaction) -> None:
