@@ -21,10 +21,11 @@ import functools
 import inspect
 import json
 import os
+import re
 import sys
 import threading
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
@@ -1391,7 +1392,15 @@ class JsonlStoreProvider(InMemoryStoreProvider):
         try:
             if not os.path.exists(self._path):
                 return
-            if DurableStore.detect_format(self._path) is DurableStoreFormat.LEGACY_JSON:
+            try:
+                format = DurableStore.detect_format(self._path)
+            except ValueError:
+                if options.format is not DurableStoreFormat.JSONL:
+                    raise
+                # Explicit JSONL selection permits an unidentifiable torn first tail;
+                # replay still rejects every malformed newline-committed record.
+                format = DurableStoreFormat.JSONL
+            if format is DurableStoreFormat.LEGACY_JSON:
                 # Convert on open, into memory only. The committed baseline stays empty so
                 # the first commit emits the whole state as JSONL records.
                 self._restore_snapshot(DurableStore.read_legacy_snapshot(self._path))
@@ -1869,36 +1878,32 @@ class DurableStore:
         ``type`` property is a JSONL record envelope; a file that parses as a single JSON
         object is the legacy single-file snapshot. Anything else raises ``ValueError``
         naming the path and the reason, so a corrupt file is reported instead of opening
-        as an empty store.
+        as an empty store. An unterminated first record is recoverable only when its raw
+        bytes identify a v1 JSONL envelope; malformed legacy/unknown input is never truncated.
         """
         if not os.path.exists(path):
             return DurableStoreFormat.JSONL
 
-        first_content_line: str | None = None
-        with open(path, encoding="utf-8") as handle:
-            for line in handle:
-                if line.strip():
-                    first_content_line = line
-                    break
-
+        content = Path(path).read_bytes()
+        first_content_line = next((line for line in content.split(b"\n") if line.strip()), None)
         if first_content_line is None:
             return DurableStoreFormat.JSONL
 
         try:
-            parsed = json.loads(first_content_line)
+            parsed = json.loads(first_content_line.decode("utf-8"))
             if isinstance(parsed, dict) and isinstance(parsed.get("type"), str):
                 return DurableStoreFormat.JSONL
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             # Not a JSONL record envelope; the whole-file check below decides whether it
             # is a legacy snapshot or not a durable store at all.
             pass
 
         try:
-            whole = json.loads(Path(path).read_text(encoding="utf-8"))
+            whole = json.loads(content.decode("utf-8"))
             if isinstance(whole, dict):
                 return DurableStoreFormat.LEGACY_JSON
-        except json.JSONDecodeError as error:
-            if b"\n" not in Path(path).read_bytes():
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            if b"\n" not in content and re.match(rb'\s*\{\s*"v"\s*:\s*1(?:\s*[,}]|\s*$)', content):
                 return DurableStoreFormat.JSONL
             raise ValueError(
                 f"The file '{path}' is not a durable store: it is neither JSONL records nor "
@@ -3811,8 +3816,9 @@ class DurableHarness:
         return [(task, task.owner_task_id or task.owner_conversation_id) for task in self._store.tasks]
 
     async def resume_async(self, cancellation: asyncio.Event | None = None) -> list[TaskOutcome]:
+        """Resumes committed pending work as well as interrupted running/waiting tasks."""
         return await asyncio.gather(*(self.run_task_async(task.id, cancellation) for task in self._store.tasks
-            if task.status in (TaskStatus.RUNNING, TaskStatus.WAITING)))
+            if task.status in (TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.WAITING)))
 
     # -- forks ---------------------------------------------------------------
 
@@ -3979,9 +3985,14 @@ class DurableHarness:
 
     def _start_task(self, task_id: str, cancellation: asyncio.Event | None) -> None:
         """Starts a task run without waiting for it, keeping a handle to drain on close."""
+        if task_id in self._in_flight:
+            return
         run = asyncio.ensure_future(self.run_task_async(task_id, cancellation))
         self._in_flight[task_id] = run
-        run.add_done_callback(lambda _: self._in_flight.pop(task_id, None))
+        def finished(_: asyncio.Future[TaskOutcome]) -> None:
+            if self._in_flight.get(task_id) is run:
+                self._in_flight.pop(task_id, None)
+        run.add_done_callback(finished)
 
     async def run_task_async(
         self,
@@ -4005,6 +4016,9 @@ class DurableHarness:
         if task_id in self._running_tasks:
             return await asyncio.shield(completion)
 
+        run = asyncio.current_task()
+        assert run is not None
+        self._in_flight[task_id] = run
         self._running_tasks.add(task_id)
         try:
             return await self._run_task_core_async(task_id, record, completion, cancellation)
@@ -4173,18 +4187,49 @@ class DurableHarness:
         self._conversations.clear()
         self._store.release_task_scheduler(self)
 
+    async def _drain_async(self) -> list[BaseException]:
+        self._closed = True
+        conversations = list(self._conversations.values())
+        for conversation in conversations:
+            conversation.detach()
+        self._conversations.clear()
+        failures: list[BaseException] = []
+
+        async def drain(awaitables: Iterable[Awaitable[Any]]) -> None:
+            pending = asyncio.gather(*awaitables, return_exceptions=True)
+            while not pending.done():
+                try:
+                    await asyncio.shield(pending)
+                except asyncio.CancelledError as error:
+                    # Cancellation belongs to the closer, not the writes/runs it must
+                    # drain before releasing the SDK, scheduler, or writer lock.
+                    failures.append(error)
+            failures.extend(result for result in pending.result() if isinstance(result, BaseException))
+
+        try:
+            await drain(conversation.checkpoint_barrier_async() for conversation in conversations)
+            while self._in_flight:
+                await drain(list(self._in_flight.values()))
+        finally:
+            self._store.release_task_scheduler(self)
+        return failures
+
+    @staticmethod
+    def _raise_close_errors(failures: list[BaseException]) -> None:
+        if failures:
+            if len(failures) > 1:
+                raise failures[0] from BaseExceptionGroup("Additional shutdown failures", failures[1:])
+            raise failures[0]
+
     async def close_async(self) -> None:
         if self._closed:
             return
-        self._closed = True
-        conversations = list(self._conversations.values())
-        self.close()
+        failures = await self._drain_async()
         try:
-            await asyncio.gather(*(conversation.checkpoint_barrier_async() for conversation in conversations))
-            if self._in_flight:
-                await asyncio.gather(*self._in_flight.values())
-        finally:
             await self._client.stop()
+        except BaseException as error:
+            failures.append(error)
+        self._raise_close_errors(failures)
 
 
 # ---------------------------------------------------------------------------
@@ -4522,20 +4567,19 @@ class DurableCopilotClient:
             return
         self._closed = True
 
+        failures = await self._harness._drain_async() if self._harness is not None else []
         try:
-            if self._harness is not None:
-                conversations = list(self._harness._conversations.values())
-                self._harness.close()
-                await asyncio.gather(*(conversation.checkpoint_barrier_async() for conversation in conversations))
-                if self._harness._in_flight:
-                    await asyncio.gather(*self._harness._in_flight.values())
+            if self._owns_client and self._client is not None:
+                await self._close_client_async(self._client)
+        except BaseException as error:
+            failures.append(error)
         finally:
             try:
-                if self._owns_client and self._client is not None:
-                    await self._close_client_async(self._client)
-            finally:
                 if self._owns_store and self._store is not None:
                     self._store.close()
+            except BaseException as error:
+                failures.append(error)
+        DurableHarness._raise_close_errors(failures)
 
 
 # ---------------------------------------------------------------------------

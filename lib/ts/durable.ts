@@ -857,8 +857,11 @@ class UndoLog {
   }
 
   /** Undoes an in-place task mutation. */
-  restore(snapshot: TaskStateSnapshot, task: DurableTaskRecord): void {
-    this.inverses.push(() => snapshot.applyTo(task));
+  restore(snapshot: TaskStateSnapshot, task: DurableTaskRecord, states: Map<string, TaskStateSnapshot>): void {
+    this.inverses.push(() => {
+      snapshot.applyTo(task);
+      states.set(task.id, snapshot);
+    });
   }
 
   /** Replays the inverses in reverse, then clears the log. */
@@ -1091,7 +1094,7 @@ export class InMemoryStoreProvider implements IDurableStoreProvider {
     const current = TaskStateSnapshot.capture(record);
     const previous = this.taskStates.get(record.id);
     if (this.undoLog !== null && previous !== undefined) {
-      this.undoLog.restore(previous, record);
+      this.undoLog.restore(previous, record, this.taskStates);
     }
 
     this.taskStates.set(record.id, current);
@@ -1224,8 +1227,9 @@ export class InMemoryStoreProvider implements IDurableStoreProvider {
               case "document": {
                 const fork = typeof p["fork"] === "number"
                   ? [ForkPolicy.AsOf, ForkPolicy.Current, ForkPolicy.Initial][p["fork"]] : p["fork"];
-                snapshot.documents.push({ kind: String(p["kind"]), ownerId: String(p["ownerId"]),
-                  fork: fork as ForkPolicy, initial: (p["initial"] ?? null) as JsonValue, versions: [] });
+                if (!snapshot.documents.some(d => d.kind === p["kind"] && d.ownerId === p["ownerId"]))
+                  snapshot.documents.push({ kind: String(p["kind"]), ownerId: String(p["ownerId"]),
+                    fork: fork as ForkPolicy, initial: (p["initial"] ?? null) as JsonValue, versions: [] });
                 break;
               }
               case "document-version": {
@@ -1638,20 +1642,26 @@ export class DurableStore {
           : TaskCommit.completed(task.outcome);
       }
 
-      const next = await commit();
-      task.status = next.status;
-      if (next.checkpoint !== null) {
-        task.checkpoint = next.checkpoint;
-      }
+      this.provider.beginTransaction();
+      try {
+        const next = await commit();
+        task.status = next.status;
+        if (next.checkpoint !== null) {
+          task.checkpoint = next.checkpoint;
+        }
 
-      if (next.outcome !== null) {
-        task.outcome = DurableJson.toElement(next.outcome.toJson());
-      }
+        if (next.outcome !== null) {
+          task.outcome = DurableJson.toElement(next.outcome.toJson());
+        }
 
-      this.provider.updateTask(task);
-      this.provider.commit();
-      this.notifyCommitted();
-      return next;
+        this.provider.updateTask(task);
+        this.provider.commit();
+        this.notifyCommitted();
+        return next;
+      } catch (error) {
+        this.provider.rollback();
+        throw error;
+      }
     });
   }
 
@@ -1664,13 +1674,17 @@ export class DurableStore {
       }
 
       if (value !== undefined) {
-        task.memos[key] = DurableJson.clone(value);
-        // A memo is written outside any transaction, so the provider is told about the
-        // task's new state directly.
-        this.provider.updateTask(task);
-        this.provider.commit();
-        this.notifyCommitted();
-        return value;
+        this.provider.beginTransaction();
+        try {
+          task.memos[key] = DurableJson.clone(value);
+          this.provider.updateTask(task);
+          this.provider.commit();
+          this.notifyCommitted();
+          return value;
+        } catch (error) {
+          this.provider.rollback();
+          throw error;
+        }
       }
 
       return task.memos[key] ?? null;
@@ -2161,10 +2175,10 @@ export class DurableTaskRunner {
     }));
   }
 
-  /** Re-enters every task that was running when the process stopped. */
+  /** Re-enters committed pending work and tasks interrupted while running or waiting. */
   async resumeAsync(cancellationToken: AbortSignal = new AbortController().signal): Promise<TaskOutcome[]> {
     const interrupted = this.store.tasks.filter(
-      (task) => task.status === TaskStatus.Running || task.status === TaskStatus.Waiting,
+      (task) => task.status === TaskStatus.Pending || task.status === TaskStatus.Running || task.status === TaskStatus.Waiting,
     );
 
     return Promise.all(interrupted.map((task) => this.runTaskAsync(task.id, cancellationToken)));
@@ -2177,8 +2191,19 @@ export class DurableTaskRunner {
     }
 
     this.disposed = true;
-    this.store.releaseTaskScheduler(this);
-    await Promise.allSettled([...this.inFlight.values()]);
+    const failures: unknown[] = [];
+    try {
+      while (this.inFlight.size) {
+        const results = await Promise.allSettled([...this.inFlight.values()]);
+        for (const result of results)
+          if (result.status === "rejected") failures.push(result.reason);
+      }
+    } finally {
+      this.store.releaseTaskScheduler(this);
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1)
+      throw new AggregateError(failures, "Task runs failed.", { cause: failures[0] });
   }
 
   private completionFor(taskId: string): Deferred<TaskOutcome> {
@@ -3024,7 +3049,8 @@ export class DurableHarness {
     const binding = conversation.snapshot(bindingDocument);
     const intent = conversation.snapshot(forkDocument);
     if ((conversation.record.parentConversationId || intent) &&
-        (intent?.["state"] !== "completed" || !binding?.["sessionId"] || intent["sessionId"] !== binding["sessionId"])) {
+        ((intent?.["state"] !== 1 && intent?.["state"] !== ForkIntentState.Completed) ||
+          !binding?.["sessionId"] || intent?.["sessionId"] !== binding["sessionId"])) {
       throw new Error(`Conversation '${id}' has an incomplete or abandoned native fork; explicit recovery is required.`);
     }
     if (hasUnsettledAdmission(this.store, conversation.record))
@@ -3049,7 +3075,7 @@ export class DurableHarness {
       for (const doc of [...this.store.documents].filter(d => d.ownerId === parent.id))
         this.store.storeProvider.copyDocument(doc, fork.id, entryId);
       const intent = tx.doc(forkDocument, fork.id);
-      intent.value = { parentConversationId: parent.id, forkEntryId: entryId, state: "pending" };
+      intent.value = { parentConversationId: parent.id, forkEntryId: entryId, state: 0 };
       intent.save(tx.appendEntry(fork.id, "fork"));
       return fork;
     });
@@ -3062,7 +3088,7 @@ export class DurableHarness {
       binding.value = { sessionId: forked.sessionId, pinned: true };
       binding.save(tx.appendEntry(record.id, "session-binding"));
       const intent = tx.doc(forkDocument, record.id);
-      intent.value = { ...intent.value, sessionId: forked.sessionId, state: "completed" };
+      intent.value = { ...intent.value, sessionId: forked.sessionId, state: 1 };
       intent.save(tx.appendEntry(record.id, "fork"));
     });
     return this.resumeConversationAsync(conversation.id);
@@ -3078,15 +3104,23 @@ export class DurableHarness {
   disposeAsync(): Promise<void> {
     return this.disposal ??= (async () => {
       for (const conversation of this.handles.values()) conversation.detach();
+      const failures: unknown[] = [];
+      const checkpoints = await Promise.allSettled(this.conversations.map(conversation => conversation.checkpointBarrierAsync()));
+      for (const result of checkpoints)
+        if (result.status === "rejected") failures.push(result.reason);
       try {
-        await Promise.all(this.conversations.map(conversation => conversation.checkpointBarrierAsync()));
-      } finally {
-        try { await this.runner.disposeAsync(); }
-        finally {
-          const errors = await this.client.stop();
-          if (errors.length) throw new AggregateError(errors, "The SDK client failed to stop cleanly.");
-        }
+        await this.runner.disposeAsync();
+      } catch (error) {
+        failures.push(error);
       }
+      try {
+        failures.push(...await this.client.stop());
+      } catch (error) {
+        failures.push(error);
+      }
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1)
+        throw new AggregateError(failures, "Durable shutdown failed.", { cause: failures[0] });
     })();
   }
 }
