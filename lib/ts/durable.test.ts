@@ -38,6 +38,187 @@ function knownNativeSessions(client: CopilotClient): void {
   });
 }
 
+async function operationPeer() {
+  const methods: string[] = [];
+  let held = "", failure = "";
+  let entered = barrier(), release = barrier();
+  const server = createServer(socket => {
+    const connection = createMessageConnection(new SocketMessageReader(socket), new SocketMessageWriter(socket));
+    connection.onRequest(async (method, raw) => {
+      methods.push(method);
+      const params: Record<string, unknown> = { ...raw };
+      if (method === held) {
+        entered.resolve();
+        await release.promise;
+        if (failure) throw new ResponseError(-32000, failure);
+      }
+      if (method === "connect") return { protocolVersion: 3 };
+      if (method === "session.create") return { sessionId: params["sessionId"], capabilities: {} };
+      if (method === "session.getMessages") return { events: [] };
+      if (method === "session.getMetadata") return {};
+      if (method === "session.detach") return { success: true };
+      if (method === "session.tools.set") return {};
+      throw new ResponseError(-32601, `Unexpected operation RPC ${method}`);
+    });
+    connection.listen();
+    socket.on("close", () => connection.dispose());
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const client = new CopilotClient({ connection: RuntimeConnection.forUri(`127.0.0.1:${address.port}`) });
+  await client.start();
+  return {
+    client, methods,
+    hold(method: string, error = "") {
+      held = method; failure = error; entered = barrier(); release = barrier();
+      return entered.promise;
+    },
+    release() { release.resolve(); },
+    async close() {
+      release.resolve();
+      await client.stop();
+      const closed = once(server, "close"); server.close(); await closed;
+    },
+  };
+}
+
+test("round seven: configuration drains the store gate and received public tools RPC", { timeout: 10000 }, async t => {
+  for (const stage of ["store", "rpc", "error"] as const) await t.test(stage, async () => {
+    const directory = mkdtempSync(join(tmpdir(), "durable-ts-config-drain-"));
+    const options = Object.assign(new DurableStoreOptions(), { path: join(directory, "store.jsonl") });
+    const store = DurableStore.create(options), peer = await operationPeer();
+    const harness = new DurableHarness(peer.client, store, new ExtensionRegistry());
+    const chat = await harness.rootAsync();
+    const received = peer.hold("session.tools.set", stage === "error" ? "late tools failure" : "");
+    const release = barrier(), entered = barrier();
+    let holding: Promise<unknown> | undefined, closing: Promise<void> | undefined;
+    let stopped = false;
+    const stop = peer.client.stop.bind(peer.client);
+    peer.client.stop = async () => { stopped = true; return stop(); };
+    if (stage === "store") {
+      const held = barrier();
+      holding = store.commitAsync(async () => { held.resolve(); await release.promise; });
+      await held.promise;
+      const commit = store.commitAsync.bind(store);
+      store.commitAsync = body => { entered.resolve(); return commit(body); };
+    }
+    const pending = chat.configureAsync(new AgentChoices({ instructions: "accepted" }));
+    const result = pending.then(() => null, error => error);
+    try {
+      await (stage === "store" ? entered.promise : received);
+      closing = harness.disposeAsync();
+      await new Promise<void>(resolve => setImmediate(resolve));
+      assert.equal(stopped, false, "configuration must retain the SDK through persistence and ACK");
+      assert.throws(() => DurableStore.create(options), /already locked/);
+      const sequence = store.sequence;
+      await assert.rejects(chat.configureAsync(new AgentChoices({ instructions: "rejected" })), /closing/);
+      assert.equal(store.sequence, sequence, "rejected configuration cannot persist choices");
+      release.resolve();
+      await holding;
+      await received;
+      assert.equal(stopped, false, "actual received setTools RPC must settle before stop");
+      peer.release();
+      const error = await result;
+      if (stage === "error") assert.match(String(error), /late tools failure/);
+      else assert.equal(error, null);
+      await closing;
+      assert.equal(chat.choices().instructions, "accepted");
+      assert.equal(peer.methods.filter(method => method === "session.tools.set").length, 1);
+      const finalSequence = store.sequence, bytes = readFileSync(options.path!);
+      await assert.rejects(chat.configureAsync(new AgentChoices({ instructions: "after-close" })), /closing/);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      assert.equal(store.sequence, finalSequence);
+      assert.deepEqual(readFileSync(options.path!), bytes, "no durable writes after disposal");
+    } finally {
+      release.resolve(); peer.release();
+      await Promise.allSettled([pending, holding, closing]);
+      await harness.disposeAsync(); store.dispose(); await peer.close();
+      rmSync(directory, { recursive: true });
+    }
+  });
+});
+
+test("round seven: concurrent first roots share creation attachment choices and retry", { timeout: 10000 }, async t => {
+  for (const failure of [false, true]) await t.test(failure ? "failure-retry" : "store-and-attachment", async () => {
+    const store = DurableStore.createEphemeral(), peer = await operationPeer();
+    const harness = new DurableHarness(peer.client, store, new ExtensionRegistry());
+    const entered = barrier(), release = barrier();
+    const holding = store.commitAsync(async () => { entered.resolve(); await release.promise; });
+    await entered.promise;
+    const received = peer.hold("session.create", failure ? "first root failure" : "");
+    const first = harness.rootAsync(new AgentChoices({ instructions: "first" }));
+    const second = harness.rootAsync(new AgentChoices({ instructions: "second" }));
+    const results = Promise.allSettled([first, second]);
+    let closing: Promise<void> | undefined;
+    try {
+      release.resolve(); await holding; await received;
+      assert.equal(store.conversations.length, 1, "both first callers must share the root record");
+      const third = harness.rootAsync(new AgentChoices({ instructions: "third" }));
+      const thirdResult = third.then(value => ({ value, error: null }), error => ({ value: null, error }));
+      await new Promise<void>(resolve => setImmediate(resolve));
+      assert.equal(peer.methods.filter(method => method === "session.create").length, 1,
+        "root attachment must also be shared while the first SDK RPC is pending");
+      if (!failure) {
+        closing = harness.disposeAsync();
+        await assert.rejects(harness.rootAsync(), /closing/);
+      }
+      peer.release();
+      const outcomes = await results, thirdOutcome = await thirdResult;
+      if (failure) {
+        assert(outcomes.every(outcome => outcome.status === "rejected" && /first root failure/.test(String(outcome.reason))));
+        assert.match(String(thirdOutcome.error), /first root failure/);
+        peer.hold("");
+        const retry = await harness.rootAsync(new AgentChoices({ instructions: "replacement" }));
+        assert.equal(retry.id, store.conversations[0]!.id);
+        assert.equal(retry.choices().instructions, "first", "retry preserves the persisted first choice");
+        assert.equal(await harness.rootAsync(), retry);
+        assert.equal(peer.methods.filter(method => method === "session.create").length, 2);
+      } else {
+        assert.equal(outcomes[0]!.status, "fulfilled");
+        assert.equal(outcomes[1]!.status, "fulfilled");
+        if (outcomes[0]!.status !== "fulfilled" || outcomes[1]!.status !== "fulfilled") throw new Error("roots failed");
+        assert.equal(outcomes[0]!.value, outcomes[1]!.value);
+        assert.equal(thirdOutcome.value, outcomes[0]!.value);
+        assert.equal(outcomes[0]!.value.choices().instructions, "first");
+        await closing;
+      }
+      assert.equal(store.conversations.length, 1);
+    } finally {
+      release.resolve(); peer.release(); await results;
+      await harness.disposeAsync(); store.dispose(); await peer.close();
+    }
+  });
+});
+
+test("round seven: admitted task can configure during shutdown without admitting external calls", { timeout: 5000 }, async () => {
+  const store = DurableStore.createEphemeral(), peer = await operationPeer();
+  const registry = new ExtensionRegistry(), harness = new DurableHarness(peer.client, store, registry);
+  const chat = await harness.rootAsync(), entered = barrier(), release = barrier();
+  const definition = DurableTask.define("internal-configuration", () => ({}), async (_input, _checkpoint, runtime) => {
+    entered.resolve(); await release.promise;
+    await chat.configureAsync(new AgentChoices({ instructions: "internal" }));
+    return runtime.commitAsync(() => TaskCommit.completed(null));
+  });
+  registry.install(new Extension("internal-configuration", [], [], [definition]));
+  const record = await store.commitAsync(tx => tx.createTask(definition, null));
+  const running = harness.runTaskAsync(record.id);
+  await entered.promise;
+  const closing = harness.disposeAsync();
+  try {
+    await assert.rejects(chat.configureAsync(new AgentChoices({ instructions: "external" })), /closing/);
+    release.resolve();
+    await running; await closing;
+    assert.equal(chat.choices().instructions, "internal");
+    assert.equal(peer.methods.filter(method => method === "session.tools.set").length, 1);
+    assert.equal(record.status, TaskStatus.Terminal);
+  } finally {
+    release.resolve(); await Promise.allSettled([running, closing]);
+    store.dispose(); await peer.close();
+  }
+});
+
 test("review: conversation lifecycle retains SDK and writer through persistence and attachment", { timeout: 30000 }, async t => {
   for (const operation of ["create", "root", "resume-unbound", "resume-existing", "resume-missing", "fork"] as const) {
     for (const stage of ["store", "sdk", "history"] as const) {

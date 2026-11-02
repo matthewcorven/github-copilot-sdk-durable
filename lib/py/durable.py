@@ -3314,6 +3314,12 @@ class DurableConversation:
                 self._model_waiters.remove(future)
 
     async def configure_async(self, choices: AgentChoices) -> None:
+        if self._harness is None:
+            await self._configure_core_async(choices)
+        else:
+            await self._harness._conversation_operation(lambda: self._configure_core_async(choices))
+
+    async def _configure_core_async(self, choices: AgentChoices) -> None:
         self._hooks = choices.hooks
         async def body(tx: Transaction) -> None:
             draft = tx.doc(AGENT_DOCUMENT, self.id)
@@ -3321,7 +3327,12 @@ class DurableConversation:
             draft.save(tx.append_entry(self.id, "agent"))
         await self.commit_async(body)
         if self._session is not None:
-            await self._session.set_tools(list(self.agent().tools))
+            session = self._session
+            tools = list(self.agent().tools)
+            if self._harness is None:
+                await session.set_tools(tools)
+            else:
+                await self._harness._sdk_operation(lambda: session.set_tools(tools))
 
     async def context_async(self) -> list[Any]:
         if self._session is None:
@@ -3570,6 +3581,7 @@ class DurableHarness:
         self._in_flight: dict[str, asyncio.Task[TaskOutcome]] = {}
         self._task_creations: set[asyncio.Future[None]] = set()
         self._conversation_operations: set[asyncio.Future[None]] = set()
+        self._abort_owners: set[asyncio.Task[Any]] = set()
         self._sdk_operations: dict[asyncio.Future[None], asyncio.Task[Any]] = {}
         self._sdk_failures: list[BaseException] = []
         self._submissions: set[asyncio.Task[Any]] = set()
@@ -3663,9 +3675,9 @@ class DurableHarness:
             raise
 
     async def _conversation_operation(
-        self, operation: Callable[[], Awaitable[DurableConversation]],
-    ) -> DurableConversation:
-        if self._closed and not self._is_active_task():
+        self, operation: Callable[[], Awaitable[T]],
+    ) -> T:
+        if self._closed and not self._is_active_task() and asyncio.current_task() not in self._abort_owners:
             raise RuntimeError("The durable harness is closing.")
         pending = asyncio.get_running_loop().create_future()
         self._conversation_operations.add(pending)
@@ -4345,6 +4357,24 @@ class DurableHarness:
         cancellation: asyncio.Event | None = None,
     ) -> None:
         """Aborts a task, running its abort handler."""
+        owner = asyncio.current_task()
+        assert owner is not None
+        if owner in self._abort_owners:
+            await self._abort_task_core_async(task_id, cancellation)
+            return
+
+        async def abort() -> None:
+            self._abort_owners.add(owner)
+            try:
+                await self._abort_task_core_async(task_id, cancellation)
+            finally:
+                self._abort_owners.remove(owner)
+
+        await self._conversation_operation(abort)
+
+    async def _abort_task_core_async(
+        self, task_id: str, cancellation: asyncio.Event | None,
+    ) -> None:
         record = self._store.task(task_id)
         if record is None or record.status is TaskStatus.TERMINAL:
             return
