@@ -115,8 +115,8 @@ try
         await run;
         throw new InvalidOperationException("The run ended before the live subscription was installed.");
     }
-    release.TrySetResult();
     Console.WriteLine("live subscription installed; synchronization tool released");
+    release.TrySetResult();
 
     var answer = await run;
     Console.WriteLine($"answer: {answer?.Data.Content}");

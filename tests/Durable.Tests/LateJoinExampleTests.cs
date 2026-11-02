@@ -27,16 +27,40 @@ public class LateJoinExampleTests
                 OperatingSystem.IsWindows() ? "Program.exe" : "Program");
 
             var original = await File.ReadAllTextAsync(Path.Combine(repository, "examples", "20-late-join.cs"));
-            // Only the budgets are shortened; all synchronization and assertions are real source.
+            // Only budgets and transport-readiness instrumentation differ from the real source.
             var source = string.Join("\n", original.Split('\n').Where(line => !line.StartsWith("#:")))
                 .Replace("TimeSpan.FromSeconds(90)", "TimeSpan.FromSeconds(5)", StringComparison.Ordinal)
                 .Replace("TimeSpan.FromSeconds(15)", "TimeSpan.FromSeconds(0.5)", StringComparison.Ordinal);
+            const string modelWait = "// The model the runtime reported for this session, not the one the host asked for.";
+            Assert.Contains(modelWait, source);
+            source = source.Replace(modelWait, """
+                // RootAsync has returned: the real DurableConversation.Attach observer is installed.
+                using (var observerReady = new System.IO.Pipes.NamedPipeClientStream(
+                    ".", Environment.GetEnvironmentVariable("LATE_JOIN_READY_PIPE")!,
+                    System.IO.Pipes.PipeDirection.InOut, System.IO.Pipes.PipeOptions.Asynchronous))
+                {
+                    await observerReady.ConnectAsync(deadline.Token);
+                    var probe = new byte[1];
+                    await observerReady.ReadExactlyAsync(probe, deadline.Token);
+                    if (probe[0] != 1)
+                        throw new InvalidOperationException("Invalid model readiness probe.");
+                    // The peer probes us before we release readiness, so this is a deliberately
+                    // delayed signal, not elapsed-time evidence that attachment has finished.
+                    var wire = File.ReadAllText("wire-" + Environment.GetEnvironmentVariable("LATE_JOIN_MOCK_SCENARIO"));
+                    if (wire.Contains("\"type\":\"session.start\"", StringComparison.Ordinal))
+                        throw new InvalidOperationException("Model report preceded observer readiness.");
+                    await observerReady.WriteAsync(new byte[] { 1 }, deadline.Token);
+                    await observerReady.FlushAsync(deadline.Token);
+                }
+
+                """ + modelWait, StringComparison.Ordinal);
             var example = Path.Combine(directory.FullName, "example");
             Directory.CreateDirectory(example);
             await WriteProjectAsync(example, Path.Combine(repository, "lib", "Copilot.Durable.csproj"));
             await BuildExampleAsync(example, source);
 
             var success = await RunExampleAsync(example, executable, "delayed-user");
+            AssertSucceeded(success);
             var startEvent = (await File.ReadAllLinesAsync(Path.Combine(example, "wire-delayed-user")))
                 .Select(line => JsonNode.Parse(line)!)
                 .Single(message => message["params"]?["event"]?["type"]?.GetValue<string>() == "session.start");
@@ -49,11 +73,9 @@ public class LateJoinExampleTests
             Assert.Contains("event text delta: One. Two. Three. Four. Five. DONE", success.Output);
             Assert.Contains("answer: One. Two. Three. Four. Five. DONE", success.Output);
             Assert.Contains("deltas received after joining: 1", success.Output);
-            Assert.True(success.Output.IndexOf("snapshot events:", StringComparison.Ordinal) <
-                success.Output.IndexOf("live subscription installed", StringComparison.Ordinal));
-            Assert.True(success.Output.IndexOf("live subscription installed", StringComparison.Ordinal) <
-                success.Output.IndexOf("event text delta:", StringComparison.Ordinal));
+            AssertJoinOutputOrder(success);
             var trace = await File.ReadAllTextAsync(Path.Combine(example, "trace-delayed-user"));
+            Assert.Contains("model-observer-ready", trace);
             Assert.Contains("getMessages:3", trace);
             Assert.Contains("tool-result-after-snapshot:True", trace);
             Assert.Contains("The client has joined.", trace);
@@ -65,6 +87,62 @@ public class LateJoinExampleTests
             Assert.Contains("Permissions = [\"custom-tool:wait_for_join\"]", original);
             Assert.DoesNotContain("EnableFileHooks", original);
             Assert.DoesNotContain("\n    Model =", original);
+
+            // Force the released tool to deliver a delta before the releasing continuation
+            // proceeds. The old release-before-log ordering deterministically fails the same
+            // output assertion used above, even though all five example assertions pass.
+            var adversarial = source.Replace(
+                "var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);",
+                """
+                var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var firstDelta = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                """, StringComparison.Ordinal).Replace(
+                "Console.WriteLine($\"event text delta: {delta.Data.DeltaContent}\");",
+                """
+                Console.WriteLine($"event text delta: {delta.Data.DeltaContent}");
+                firstDelta.TrySetResult();
+                """, StringComparison.Ordinal);
+            var releaseIndex = adversarial.IndexOf("    release.TrySetResult();", StringComparison.Ordinal);
+            Assert.True(releaseIndex >= 0);
+            adversarial = adversarial.Insert(releaseIndex + "    release.TrySetResult();".Length,
+                "\n    await firstDelta.Task.WaitAsync(deadline.Token);");
+            await BuildExampleAsync(example, adversarial);
+            var concurrentRelease = await RunExampleAsync(example, executable, "concurrent-release");
+            AssertSucceeded(concurrentRelease);
+            AssertJoinOutputOrder(concurrentRelease);
+            var oldLogOrder = adversarial.Replace(
+                """
+                    Console.WriteLine("live subscription installed; synchronization tool released");
+                    release.TrySetResult();
+                    await firstDelta.Task.WaitAsync(deadline.Token);
+                """,
+                """
+                    release.TrySetResult();
+                    await firstDelta.Task.WaitAsync(deadline.Token);
+                    Console.WriteLine("live subscription installed; synchronization tool released");
+                """, StringComparison.Ordinal);
+            Assert.NotEqual(adversarial, oldLogOrder);
+            await BuildExampleAsync(example, oldLogOrder);
+            var logMutation = await RunExampleAsync(example, executable, "old-log-order");
+            AssertSucceeded(logMutation);
+            Assert.False(HasJoinOutputOrder(logMutation), logMutation.Output);
+
+            // Restore the old time-based model report while deliberately withholding the
+            // generated example's ready signal until the peer probes it. The wire artifact
+            // must reject that premature one-shot event, independent of thread scheduling.
+            const string readinessProbe = "await observerReady.WriteAsync(new byte[] { 1 });";
+            var oldModelTiming = MockRuntimeSource.Replace(readinessProbe, """
+                await Task.Delay(100);
+                await ReportModelAsync();
+                """ + "\n" + readinessProbe, StringComparison.Ordinal);
+            Assert.NotEqual(MockRuntimeSource, oldModelTiming);
+            await File.WriteAllTextAsync(Path.Combine(runtime, "Program.cs"), oldModelTiming);
+            AssertSucceeded(await ExecuteAsync("dotnet", ["build", "--nologo", "-v:q"], runtime));
+            await BuildExampleAsync(example, source);
+            var readinessMutation = await RunExampleAsync(example, executable, "old-model-timing");
+            AssertFailed(readinessMutation, "Model report preceded observer readiness.");
+            await File.WriteAllTextAsync(Path.Combine(runtime, "Program.cs"), MockRuntimeSource);
+            AssertSucceeded(await ExecuteAsync("dotnet", ["build", "--nologo", "-v:q"], runtime));
 
             var noTool = await RunExampleAsync(example, executable, "no-tool");
             AssertFailed(noTool, "Late join timed out while waiting for wait_for_join");
@@ -189,6 +267,7 @@ public class LateJoinExampleTests
         {
             start.Environment["DURABLE_RUNTIME_PATH"] = runtime;
             start.Environment["LATE_JOIN_MOCK_SCENARIO"] = scenario!;
+            start.Environment["LATE_JOIN_READY_PIPE"] = "lj-" + Guid.NewGuid().ToString("N");
         }
 
         using var process = Process.Start(start)!;
@@ -211,6 +290,17 @@ public class LateJoinExampleTests
 
     private static void AssertSucceeded(ProcessResult result) =>
         Assert.True(result.ExitCode == 0, result.Output);
+
+    private static bool HasJoinOutputOrder(ProcessResult result)
+    {
+        var snapshot = result.Output.IndexOf("snapshot events:", StringComparison.Ordinal);
+        var installed = result.Output.IndexOf("live subscription installed", StringComparison.Ordinal);
+        var delta = result.Output.IndexOf("event text delta:", StringComparison.Ordinal);
+        return snapshot >= 0 && installed > snapshot && delta > installed;
+    }
+
+    private static void AssertJoinOutputOrder(ProcessResult result) =>
+        Assert.True(HasJoinOutputOrder(result), result.Output);
 
     private static void AssertFailed(ProcessResult result, string diagnostic)
     {
@@ -242,6 +332,11 @@ public class LateJoinExampleTests
         var input = Console.OpenStandardInput();
         var output = Console.OpenStandardOutput();
         var scenario = Environment.GetEnvironmentVariable("LATE_JOIN_MOCK_SCENARIO")!;
+        File.WriteAllText("wire-" + scenario, "");
+        using var observerReady = new System.IO.Pipes.NamedPipeServerStream(
+            Environment.GetEnvironmentVariable("LATE_JOIN_READY_PIPE")!,
+            System.IO.Pipes.PipeDirection.InOut, 1, System.IO.Pipes.PipeTransmissionMode.Byte,
+            System.IO.Pipes.PipeOptions.Asynchronous);
         var history = new JsonArray();
         var session = "";
         var reads = 0;
@@ -320,14 +415,17 @@ public class LateJoinExampleTests
             await ReplyAsync(id, result);
             if (method == "session.create")
             {
-                // Model reporting is asynchronous, after SDK session registration.
-                await Task.Delay(100);
-                await EventAsync("session.start", new JsonObject
-                {
-                    ["sessionId"] = session, ["selectedModel"] = "mock-reported-model",
-                    ["copilotVersion"] = "mock", ["producer"] = "test",
-                    ["startTime"] = DateTimeOffset.UtcNow.ToString("O"), ["version"] = 1,
-                });
+                // Only the generated example can signal that RootAsync (including Attach)
+                // returned. SDK registration or an elapsed delay cannot prove that.
+                using var readyDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                await observerReady.WaitForConnectionAsync(readyDeadline.Token);
+                await observerReady.WriteAsync(new byte[] { 1 });
+                await observerReady.FlushAsync(readyDeadline.Token);
+                var ready = new byte[1];
+                await observerReady.ReadExactlyAsync(ready, readyDeadline.Token);
+                if (ready[0] != 1) throw new InvalidOperationException("Invalid observer readiness signal.");
+                File.AppendAllText("trace-" + scenario, "model-observer-ready\n");
+                await ReportModelAsync();
             }
             if (method == "session.send")
             {
@@ -348,6 +446,13 @@ public class LateJoinExampleTests
                     await ReplyAsync(gapRead, new JsonObject { ["events"] = history.DeepClone() });
             }
         }
+
+        Task ReportModelAsync() => EventAsync("session.start", new JsonObject
+        {
+            ["sessionId"] = session, ["selectedModel"] = "mock-reported-model",
+            ["copilotVersion"] = "mock", ["producer"] = "test",
+            ["startTime"] = DateTimeOffset.UtcNow.ToString("O"), ["version"] = 1,
+        });
 
         async Task AddUserAsync()
         {
