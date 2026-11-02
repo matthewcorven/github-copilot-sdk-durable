@@ -11,8 +11,10 @@ namespace Durable.Tests;
 /// </summary>
 public class LateJoinExampleTests
 {
-    [Fact]
-    public async Task ActualExample_BarrierReadinessFailuresCleanupAndSourceMutations()
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    public async Task ActualExample_BarrierReadinessFailuresCleanupAndSourceMutations(string sourceLineEnding)
     {
         var repository = FindRepository();
         var directory = Directory.CreateTempSubdirectory("durable-late-join-test-");
@@ -26,7 +28,8 @@ public class LateJoinExampleTests
             var executable = Path.Combine(runtime, "bin", "Debug", "net10.0",
                 OperatingSystem.IsWindows() ? "Program.exe" : "Program");
 
-            var original = await File.ReadAllTextAsync(Path.Combine(repository, "examples", "20-late-join.cs"));
+            var original = (await File.ReadAllTextAsync(Path.Combine(repository, "examples", "20-late-join.cs")))
+                .ReplaceLineEndings(sourceLineEnding);
             // Only budgets and transport-readiness instrumentation differ from the real source.
             var source = string.Join("\n", original.Split('\n').Where(line => !line.StartsWith("#:")))
                 .Replace("TimeSpan.FromSeconds(90)", "TimeSpan.FromSeconds(5)", StringComparison.Ordinal)
@@ -105,7 +108,7 @@ public class LateJoinExampleTests
             var releaseIndex = adversarial.IndexOf("    release.TrySetResult();", StringComparison.Ordinal);
             Assert.True(releaseIndex >= 0);
             adversarial = adversarial.Insert(releaseIndex + "    release.TrySetResult();".Length,
-                "\n    await firstDelta.Task.WaitAsync(deadline.Token);");
+                "\n    await firstDelta.Task.WaitAsync(deadline.Token);").ReplaceLineEndings("\n");
             await BuildExampleAsync(example, adversarial);
             var concurrentRelease = await RunExampleAsync(example, executable, "concurrent-release");
             AssertSucceeded(concurrentRelease);
@@ -115,12 +118,12 @@ public class LateJoinExampleTests
                     Console.WriteLine("live subscription installed; synchronization tool released");
                     release.TrySetResult();
                     await firstDelta.Task.WaitAsync(deadline.Token);
-                """,
+                """.ReplaceLineEndings("\n"),
                 """
                     release.TrySetResult();
                     await firstDelta.Task.WaitAsync(deadline.Token);
                     Console.WriteLine("live subscription installed; synchronization tool released");
-                """, StringComparison.Ordinal);
+                """.ReplaceLineEndings("\n"), StringComparison.Ordinal);
             Assert.NotEqual(adversarial, oldLogOrder);
             await BuildExampleAsync(example, oldLogOrder);
             var logMutation = await RunExampleAsync(example, executable, "old-log-order");
