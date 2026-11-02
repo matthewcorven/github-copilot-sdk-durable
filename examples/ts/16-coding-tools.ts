@@ -1,7 +1,7 @@
 // 16 - Coding tools (LIVE). Actual file effects, tool events and SDK hook timing.
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import { AgentChoices, Check, DurableHarness, DurableStore, Extension, ExtensionRegistry } from "../../lib/ts/durable.ts";
 
@@ -16,9 +16,9 @@ const stringArg = (args: unknown, name: string): string => {
   return value;
 };
 const fileFor = (name: string): string => {
-  const path = resolve(workspace, name);
-  const local = relative(workspace, path);
-  if (local.startsWith("..") || isAbsolute(local)) throw new Error("File is outside the example workspace");
+  const path = realpathSync(resolve(workspace, name));
+  const local = relative(realpathSync(workspace), path);
+  if (local === ".." || local.startsWith(`..${sep}`) || isAbsolute(local)) throw new Error("File is outside the example workspace");
   return path;
 };
 const properties = (names: string[]): Record<string, unknown> => ({
