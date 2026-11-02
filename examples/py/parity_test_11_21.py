@@ -6,6 +6,7 @@ import json
 import os
 import ast
 import textwrap
+import uuid
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -242,18 +243,56 @@ class LateJoinParityTests(unittest.TestCase):
         reference = (ROOT / "tests/Durable.Tests/LateJoinExampleTests.cs").read_text()
         peer = reference.split('private const string MockRuntimeSource = """"', 1)[1].split('"""";', 1)[0]
         peer = textwrap.dedent(peer).lstrip()
+
+        def adapt(old, new):
+            nonlocal peer
+            if old not in peer:
+                raise AssertionError(f"extracted C# mock transport no longer contains {old!r}")
+            peer = peer.replace(old, new)
+
+        # Root restoration reads native history before the port can signal observer readiness.
+        # Keep servicing RPC while the same named-pipe handshake awaits that signal. Serialize
+        # whole frames because the model report now runs alongside the request loop.
+        start = peer.index('    if (method == "session.create")\n')
+        end = peer.index('    if (method == "session.send")\n', start)
+        handshake = textwrap.dedent(peer[start:end])
+        handshake = handshake[handshake.index("{") + 1:handshake.rindex("}")].strip()
+        peer = (peer[:start] + '    if (method == "session.create") modelReport = ReportWhenReadyAsync();\n'
+                + peer[end:])
+        adapt('var output = Console.OpenStandardOutput();',
+              'var output = Console.OpenStandardOutput();\n'
+              'var wireGate = new SemaphoreSlim(1, 1);\n'
+              'var traceGate = new object();\n'
+              'Task? modelReport = null;')
+        adapt('    if (method == "session.send")\n    {',
+              '    if (method == "session.send")\n    {\n        await modelReport!;')
+        adapt('Task ReportModelAsync() =>',
+              'async Task ReportWhenReadyAsync()\n{\n' + textwrap.indent(handshake, "    ")
+              + '\n}\n\nTask ReportModelAsync() =>')
+        adapt('    await observerReady.WriteAsync(new byte[] { 1 });',
+              '    if (scenario == "old-model-timing") await ReportModelAsync();\n'
+              '    await observerReady.WriteAsync(new byte[] { 1 });')
+        adapt('File.AppendAllText("wire-" + scenario, message.ToJsonString() + "\\n");',
+              'lock (traceGate) File.AppendAllText("wire-" + scenario, message.ToJsonString() + "\\n");')
+        adapt('    var body = Encoding.UTF8.GetBytes(message.ToJsonString());',
+              '    await wireGate.WaitAsync();\n    try\n    {\n'
+              '    var body = Encoding.UTF8.GetBytes(message.ToJsonString());')
+        adapt('    await output.FlushAsync();',
+              '    await output.FlushAsync();\n    }\n    finally { wireGate.Release(); }')
+        adapt('\nasync Task ReportWhenReadyAsync()',
+              '\nif (modelReport is not null) await modelReport;\n\nasync Task ReportWhenReadyAsync()')
         # These facades also read history during root restoration, before session.send.
         # Apply turn scenarios only to reads after submission, as in the C# demonstration.
-        peer = peer.replace("var reads = 0;", "var reads = 0;\nvar submitted = false;")
-        peer = peer.replace('case "session.send":', 'case "session.send":\n            submitted = true;\n            reads = 0;')
-        peer = peer.replace('if (scenario == "stalled-read")', 'if (submitted && scenario == "stalled-read")')
-        peer = peer.replace('if (scenario == "delayed-user" && reads >= 3)',
-                            'if (submitted && scenario == "delayed-user" && reads >= 3)')
-        peer = peer.replace('if (scenario == "mid-join-error")', 'if (submitted && scenario == "mid-join-error")')
-        peer = peer.replace('if (scenario == "gap" && !resultReceived)',
-                            'if (submitted && scenario == "gap" && !resultReceived)')
-        peer = peer.replace('await EventAsync("assistant.message", new JsonObject',
-                            'if (scenario != "no-answer") await EventAsync("assistant.message", new JsonObject')
+        adapt("var reads = 0;", "var reads = 0;\nvar submitted = false;")
+        adapt('case "session.send":', 'case "session.send":\n            submitted = true;\n            reads = 0;')
+        adapt('if (scenario == "stalled-read")', 'if (submitted && scenario == "stalled-read")')
+        adapt('if (scenario == "delayed-user" && reads >= 3)',
+              'if (submitted && scenario == "delayed-user" && reads >= 3)')
+        adapt('if (scenario == "mid-join-error")', 'if (submitted && scenario == "mid-join-error")')
+        adapt('if (scenario == "gap" && !resultReceived)',
+              'if (submitted && scenario == "gap" && !resultReceived)')
+        adapt('await EventAsync("assistant.message", new JsonObject',
+              'if (scenario != "no-answer") await EventAsync("assistant.message", new JsonObject')
         (runtime / "Program.cs").write_text(peer)
         (runtime / "Program.csproj").write_text(
             '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>'
@@ -265,6 +304,75 @@ class LateJoinParityTests(unittest.TestCase):
         if build.returncode:
             raise RuntimeError(build.stdout + build.stderr)
         cls.runtime = runtime / "bin/Debug/net10.0" / ("Program.exe" if os.name == "nt" else "Program")
+
+    @staticmethod
+    def instrument_readiness(source, language):
+        if language == "ts":
+            target = "  const report = await until(root.waitForEffectiveModelAsync(), deadline.signal);"
+            instrumentation = r'''
+  // Mock transport only: RootAsync returned and the actual facade observer is attached.
+  const { createConnection } = await import("node:net");
+  const { readFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const pipe = process.platform === "win32"
+    ? "\\\\.\\pipe\\" + process.env.LATE_JOIN_READY_PIPE
+    : join(tmpdir(), "CoreFxPipe_" + process.env.LATE_JOIN_READY_PIPE);
+  await until(new Promise<void>((resolve, reject) => {
+    const socket = createConnection(pipe);
+    let acknowledged = false;
+    const abort = () => socket.destroy(new Error("Observer readiness cancelled."));
+    deadline.signal.addEventListener("abort", abort, { once: true });
+    socket.once("error", reject);
+    socket.once("close", () => {
+      deadline.signal.removeEventListener("abort", abort);
+      if (!acknowledged) reject(new Error("Observer readiness closed before acknowledgement."));
+    });
+    socket.once("data", (probe: Buffer) => {
+      if (probe.length !== 1 || probe[0] !== 1) {
+        socket.destroy(new Error("Invalid model readiness probe."));
+        return;
+      }
+      const wire = readFileSync("wire-" + process.env.LATE_JOIN_MOCK_SCENARIO, "utf8");
+      if (wire.includes('"type":"session.start"')) {
+        socket.destroy(new Error("Model report preceded observer readiness."));
+        return;
+      }
+      socket.end(Buffer.from([1]), () => { acknowledged = true; resolve(); });
+    });
+  }), deadline.signal);
+'''
+        else:
+            target = "            report = await root.wait_for_effective_model_async()"
+            instrumentation = r'''
+            # Mock transport only: root_async returned with the actual observer attached.
+            import os
+            from tempfile import gettempdir
+            pipe = os.environ["LATE_JOIN_READY_PIPE"]
+            if sys.platform == "win32":
+                reader = asyncio.StreamReader()
+                protocol = asyncio.StreamReaderProtocol(reader)
+                transport, _ = await loop.create_pipe_connection(
+                    lambda: protocol, "\\\\.\\pipe\\" + pipe)
+                writer = asyncio.StreamWriter(transport, protocol, reader, loop)
+            else:
+                reader, writer = await asyncio.open_unix_connection(
+                    str(Path(gettempdir()) / ("CoreFxPipe_" + pipe)))
+            try:
+                if await reader.readexactly(1) != b"\x01":
+                    raise RuntimeError("Invalid model readiness probe.")
+                wire = Path("wire-" + os.environ["LATE_JOIN_MOCK_SCENARIO"]).read_text()
+                if '"type":"session.start"' in wire:
+                    raise RuntimeError("Model report preceded observer readiness.")
+                writer.write(b"\x01")
+                await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+'''
+        if source.count(target) != 1:
+            raise AssertionError(f"expected exactly one actual {language} model wait")
+        return source.replace(target, instrumentation.rstrip() + "\n" + target)
 
     def run_port(self, language, scenario, mutation=None):
         path = ROOT / "examples" / language / f"20-late-join.{language}"
@@ -278,9 +386,11 @@ class LateJoinParityTests(unittest.TestCase):
             old, new = mutation
             self.assertIn(old, source, f"mutation must target real {language}20 source")
             source = source.replace(old, new, 1)
+        source = self.instrument_readiness(source, language)
         with TemporaryDirectory(prefix="durable-port-case-", dir=self.directory.name) as directory:
             env = dict(os.environ, DURABLE_RUNTIME_PATH=str(self.runtime),
-                       LATE_JOIN_MOCK_SCENARIO=scenario)
+                       LATE_JOIN_MOCK_SCENARIO=scenario,
+                       LATE_JOIN_READY_PIPE="lj-" + uuid.uuid4().hex)
             env.pop("DURABLE_EXAMPLE_FIXTURE", None)
             result = DeterministicParityTests.run_example(
                 self, path, (original, source), env, Path(directory))
@@ -301,6 +411,22 @@ class LateJoinParityTests(unittest.TestCase):
                 self.assertLess(result.stdout.index("live subscription installed"),
                                 result.stdout.index("event text delta:"))
                 trace = artifacts["trace-delayed-user"]
+                self.assertIn("model-observer-ready", trace)
+                wire = [json.loads(line) for line in artifacts["wire-delayed-user"].splitlines()]
+                model_indices = [i for i, message in enumerate(wire)
+                                 if message.get("params", {}).get("event", {}).get("type") == "session.start"]
+                self.assertEqual(1, len(model_indices), "the model report must remain a one-shot event")
+                model_index = model_indices[0]
+                restoration = [message for message in wire[:model_index]
+                               if message.get("method") == "session.getMessages"]
+                self.assertTrue(restoration,
+                                "root restoration must finish its native history reads before readiness")
+                for request in restoration:
+                    self.assertTrue(any(message.get("id") == request["id"] and "result" in message
+                                        for message in wire[:model_index]),
+                                    "pre-submission history replies must precede the model report")
+                self.assertFalse(any(message.get("method") == "session.send"
+                                     for message in wire[:model_index]))
                 self.assertIn("getMessages:3", trace)
                 self.assertIn("tool-result-after-snapshot:True", trace)
                 self.assertIn("The client has joined.", trace)
@@ -316,6 +442,14 @@ class LateJoinParityTests(unittest.TestCase):
                 self.assertNotIn("model=", source)
                 self.assertNotIn('model: "', source)
                 self.assertNotIn("model: '", source)
+
+    def test_premature_model_report_is_rejected_by_both_actual_clients(self):
+        for language in ("ts", "py"):
+            with self.subTest(language=language):
+                result, _ = self.run_port(language, "old-model-timing")
+                self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertIn("Model report preceded observer readiness.", result.stdout + result.stderr)
+                self.assertNotIn("live subscription installed", result.stdout)
 
     def test_actual_sdk_failure_races_and_original_assertions(self):
         failures = {
