@@ -23,6 +23,7 @@ class ShellParams(BaseModel):
 
 async def main() -> None:
     with TemporaryDirectory(prefix="durable-agent-") as workspace:
+        workspace = str(Path(workspace).resolve())
         app = str(Path(workspace) / "app")
         Path(app).mkdir()
         current_directory = workspace

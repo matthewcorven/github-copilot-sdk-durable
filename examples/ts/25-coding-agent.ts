@@ -1,7 +1,7 @@
 // A coding tool follows the conversation's reconfigured working directory.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -11,7 +11,7 @@ import {
 } from "../../lib/ts/durable.ts";
 
 async function main() {
-  const workspace = mkdtempSync(join(tmpdir(), "durable-agent-"));
+  const workspace = realpathSync(mkdtempSync(join(tmpdir(), "durable-agent-")));
   const app = join(workspace, "app");
   mkdirSync(app);
   let currentDirectory = workspace;
