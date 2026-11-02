@@ -62,6 +62,270 @@ test("JSONL native lock refuses another process and releases after a crash", { t
   }
 });
 
+test("JSONL locks a fresh nested path before replay and retains both writers' identities", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "durable-ts-fresh-"));
+  const options = Object.assign(new DurableStoreOptions(), { path: join(dir, "nested", "store.jsonl") });
+  let first: DurableStore | undefined;
+  let competing: DurableStore | undefined;
+  try {
+    first = DurableStore.create(options);
+    assert.throws(() => { competing = DurableStore.create(options); }, /locked/i);
+    const one = await first.commitAsync(tx => tx.createConversation());
+    first.dispose();
+    competing = DurableStore.create(options);
+    const two = await competing.commitAsync(tx => tx.createConversation());
+    assert.notEqual(one.id, two.id);
+    competing.dispose();
+    first = DurableStore.create(options);
+    assert.deepEqual(first.conversations.map(c => c.id), [one.id, two.id]);
+  } finally { competing?.dispose(); first?.dispose(); rmSync(dir, { recursive: true }); }
+});
+
+test("Auto rejects compact and formatted legacy snapshots without changing any bytes", () => {
+  const dir = mkdtempSync(join(tmpdir(), "durable-ts-legacy-"));
+  const file = join(dir, "store.json");
+  const snapshot = { sequence: 4, conversations: [{ id: "c1" }], documents: [], tasks: [], entries: {}, entryRecords: [] };
+  try {
+    for (const text of [JSON.stringify(snapshot), JSON.stringify(snapshot, null, 2), JSON.stringify(snapshot) + "\n"]) {
+      writeFileSync(file, text);
+      let unexpected: DurableStore | undefined;
+      try {
+        assert.throws(() => { unexpected = DurableStore.create(Object.assign(new DurableStoreOptions(), { path: file })); },
+          /legacy.*unsupported|unsupported.*legacy/i);
+      } finally { unexpected?.dispose(); }
+      assert.deepEqual(readFileSync(file), Buffer.from(text));
+      // A failed open must release its lifetime lock as well as preserve the data.
+      assert.throws(() => DurableStore.create(Object.assign(new DurableStoreOptions(), { path: file })), /legacy/i);
+    }
+  } finally { rmSync(dir, { recursive: true }); }
+});
+
+test("MCP grants match server/tool scopes without cross-server collisions", async () => {
+  const invoke = (grants: string[], serverName: string, toolName: string) => PermissionPolicy.handler(grants)({
+    kind: "mcp", serverName, toolName, toolTitle: toolName, readOnly: true,
+  }, { sessionId: "test" });
+  assert.equal((await invoke(["mcp:trusted/read"], "trusted", "read")).kind, "approve-once");
+  assert.equal((await invoke(["mcp:trusted/read"], "other", "read")).kind, "reject");
+  assert.equal((await invoke(["mcp:trusted"], "other", "trusted")).kind, "reject");
+  assert.equal((await invoke(["mcp:trusted"], "trusted", "write")).kind, "approve-once");
+  assert.equal((await invoke(["mcp:*"], "other", "read")).kind, "approve-once");
+});
+
+function sdkSession(id: string, history: SessionEvent[] = []) {
+  const session = new CopilotClient().createSession;
+  type Session = Awaited<ReturnType<typeof session>>;
+  const listeners = new Set<(event: SessionEvent) => void>();
+  const stub: Partial<Session> = {
+    sessionId: id,
+    on(handler: (event: SessionEvent) => void) { listeners.add(handler); return () => { listeners.delete(handler); }; },
+    getEvents: async () => history,
+    send: async () => "sent",
+    setTools: async () => {},
+  };
+  const sdk = stub as Session;
+  return { sdk, listeners, emit(event: SessionEvent) { for (const listener of [...listeners]) listener(event); } };
+}
+function sdkEvent(type: string, id: string, data: object): SessionEvent {
+  return { type, id, timestamp: new Date().toISOString(), parentId: null, data } as SessionEvent;
+}
+
+test("timed-out submissions reject queued and later sends without overwriting the admission", async () => {
+  const store = DurableStore.createEphemeral();
+  const client = new CopilotClient();
+  const session = sdkSession("native");
+  client.createSession = async () => session.sdk;
+  client.stop = async () => [];
+  const harness = new DurableHarness(client, store, new ExtensionRegistry());
+  try {
+    const chat = await harness.rootAsync();
+    let sends = 0;
+    session.sdk.send = async () => { sends++; return "sent"; };
+    const first = assert.rejects(chat.submitAsync("first", 10), /timed out/);
+    const next = chat.submitAsync("second", 100);
+    const blocked = assert.rejects(next, /unsettled admission/);
+    const lateEvents = new Promise<void>(resolve => setTimeout(() => {
+      session.emit(sdkEvent("assistant.message", "old-answer", { content: "first answer" }));
+      session.emit(sdkEvent("session.idle", "old-idle", {}));
+      resolve();
+    }, 30));
+    await Promise.all([first, blocked]);
+    await lateEvents;
+    const admission = chat.admission();
+    assert.equal(admission?.["prompt"], "first");
+    assert.equal(admission?.["state"], "uncertain");
+    assert.equal(sends, 1);
+    await assert.rejects(chat.submitAsync("third"), /unsettled admission/);
+    assert.deepEqual(chat.admission(), admission);
+    assert.equal(chat.checkpoint(), null);
+    assert.equal(session.listeners.size, 1);
+  } finally { await harness.disposeAsync(); store.dispose(); }
+});
+
+test("send failure preserves its original error and leaves recovery blocking later sends", async () => {
+  const store = DurableStore.createEphemeral();
+  const client = new CopilotClient();
+  const session = sdkSession("native");
+  client.createSession = async () => session.sdk;
+  client.stop = async () => [];
+  const harness = new DurableHarness(client, store, new ExtensionRegistry());
+  try {
+    const chat = await harness.rootAsync();
+    const original = new Error("send failed");
+    const send = mock.method(session.sdk, "send", async () => { throw original; });
+    await assert.rejects(chat.submitAsync("first"), error => error === original);
+    await assert.rejects(chat.submitAsync("next"), /unsettled admission/);
+    assert.equal(send.mock.callCount(), 1);
+    assert.equal(chat.admission()?.["state"], "uncertain");
+    assert.equal(chat.admission()?.["prompt"], "first");
+    assert.equal(session.listeners.size, 1);
+  } finally { await harness.disposeAsync(); store.dispose(); }
+});
+
+test("pending, abandoned, unbound and mismatched native forks never get an empty replacement", async () => {
+  for (const [state, bound, intentSession] of [
+    ["pending", false, null], ["pending", true, "native"], ["abandoned", true, "native"],
+    ["completed", false, "native"], ["completed", true, "wrong-native"],
+  ] as const) {
+    const store = DurableStore.createEphemeral();
+    const client = new CopilotClient();
+    client.stop = async () => [];
+    const create = mock.method(client, "createSession", async () => sdkSession("empty").sdk);
+    const resume = mock.method(client, "resumeSession", async () => sdkSession("bound").sdk);
+    const harness = new DurableHarness(client, store, new ExtensionRegistry());
+    try {
+      const child = await store.commitAsync(tx => {
+        const parent = tx.createConversation();
+        const boundary = tx.appendEntry(parent.id, "boundary");
+        const fork = tx.createConversation({ parentConversationId: parent.id, forkEntryId: boundary });
+        const intent = tx.doc(new DocumentDefinition("durable.fork"), fork.id);
+        intent.value = { state, sessionId: intentSession };
+        intent.save(tx.appendEntry(fork.id, "fork"));
+        if (bound) {
+          const binding = tx.doc(new DocumentDefinition("durable.session-binding"), fork.id);
+          binding.value = { sessionId: "native" };
+          binding.save(tx.appendEntry(fork.id, "session-binding"));
+        }
+        return fork;
+      });
+      await assert.rejects(harness.resumeConversationAsync(child.id), /fork.*recovery/i);
+      assert.equal(create.mock.callCount(), 0);
+      assert.equal(resume.mock.callCount(), 0);
+    } finally { await harness.disposeAsync(); store.dispose(); }
+  }
+});
+
+test("history hydration is read-only and deduplicated across create, resume and real store reopen", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "durable-ts-hydration-"));
+  const file = join(dir, "store.jsonl");
+  const options = Object.assign(new DurableStoreOptions(), { path: file });
+  const history = [
+    sdkEvent("session.start", "start", { selectedModel: "reported-model" }),
+    sdkEvent("tool.execution_start", "tool-start", { toolCallId: "call", toolName: "read", arguments: { path: "notes" } }),
+    sdkEvent("tool.execution_complete", "tool-end", { toolCallId: "call", success: true, result: { content: "notes" } }),
+    sdkEvent("assistant.message", "answer", { content: "final answer" }),
+  ];
+  let store = DurableStore.create(options);
+  const client = new CopilotClient();
+  const session = sdkSession("native");
+  client.createSession = async () => session.sdk;
+  client.resumeSession = async () => session.sdk;
+  client.stop = async () => [];
+  let harness = new DurableHarness(client, store, new ExtensionRegistry());
+  try {
+    let chat = await harness.rootAsync();
+    session.sdk.send = async () => {
+      for (const event of history) session.emit(event);
+      session.emit(sdkEvent("session.idle", "idle", {}));
+      return "sent";
+    };
+    await chat.submitAsync("read");
+    const id = chat.id;
+    const checkpoint = chat.checkpoint();
+    const bytes = readFileSync(file);
+    const resumed = sdkSession("native", history);
+    client.resumeSession = async () => resumed.sdk;
+    for (let i = 0; i < 2; i++) {
+      await harness.disposeAsync(); store.dispose();
+      store = DurableStore.create(options);
+      harness = new DurableHarness(client, store, new ExtensionRegistry());
+      chat = await harness.resumeConversationAsync(id);
+      await chat.checkpointBarrierAsync();
+      assert.deepEqual(chat.checkpoint(), checkpoint);
+      assert.deepEqual(readFileSync(file), bytes);
+      assert.deepEqual(chat.answers, ["final answer"]);
+      assert.equal((await chat.waitForEffectiveModelAsync(10)).model, "reported-model");
+      chat.detach();
+      await harness.resumeConversationAsync(id);
+      assert.deepEqual(chat.answers, ["final answer"]);
+      // Re-delivery of an earlier completion cannot regress the final checkpoint.
+      resumed.emit({ ...history[2]!, id: "redelivered-tool" });
+      await chat.checkpointBarrierAsync();
+      assert.deepEqual(readFileSync(file), bytes);
+    }
+    const creating = sdkSession("created-with-history", history);
+    client.createSession = async () => creating.sdk;
+    const created = await harness.createConversationAsync();
+    await created.checkpointBarrierAsync();
+    assert.equal(created.checkpoint(), null);
+    assert.deepEqual(created.answers, ["final answer"]);
+  } finally { await harness.disposeAsync(); store.dispose(); rmSync(dir, { recursive: true }); }
+});
+
+test("forks inherit historical admissions, but child-owned uncertainty and incomplete native forks require recovery", async () => {
+  const store = DurableStore.createEphemeral();
+  const client = new CopilotClient();
+  const parentSession = sdkSession("parent");
+  const inherited = [sdkEvent("session.start", "start", { selectedModel: "fork-model" }),
+    sdkEvent("assistant.message", "parent-answer", { content: "inherited answer" })];
+  const childSession = sdkSession("child", inherited);
+  client.createSession = async () => parentSession.sdk;
+  client.resumeSession = async () => childSession.sdk;
+  let failFork = false;
+  mock.getter(client, "rpc", () => ({ sessions: { fork: async () => {
+    if (failFork) throw new Error("fork failed");
+    return { sessionId: "child" };
+  } } }));
+  client.stop = async () => [];
+  const harness = new DurableHarness(client, store, new ExtensionRegistry());
+  try {
+    const parent = await harness.rootAsync();
+    let boundary = "";
+    parentSession.sdk.send = async () => {
+      boundary = await parent.appendEntryAsync("tool-created");
+      parentSession.emit(sdkEvent("assistant.message", "done", { content: "parent done" }));
+      parentSession.emit(sdkEvent("session.idle", "idle", {}));
+      return "sent";
+    };
+    await parent.submitAsync("first");
+    const child = await parent.forkAsync(boundary);
+    assert.equal(child.admission()?.["state"], "admitted");
+    assert.deepEqual(child.answers, ["inherited answer"]);
+    assert.equal((await child.waitForEffectiveModelAsync(10)).model, "fork-model");
+    child.detach();
+    assert.equal(await harness.resumeConversationAsync(child.id), child);
+    await assert.rejects(child.submitAsync("child work", 5), /timed out/);
+    await assert.rejects(child.submitAsync("child retry"), /unsettled admission/);
+    child.detach();
+    await assert.rejects(harness.resumeConversationAsync(child.id), /unsettled admission/);
+    failFork = true;
+    await assert.rejects(parent.forkAsync(boundary), /fork failed/);
+    const pending = store.conversations.at(-1)!;
+    const creates = mock.method(client, "createSession");
+    await assert.rejects(harness.resumeConversationAsync(pending.id), /fork.*recovery/i);
+    assert.equal(creates.mock.callCount(), 0);
+    const intent = new DocumentDefinition<Record<string, string>>("durable.fork");
+    for (const state of ["abandoned", "completed"]) {
+      await store.commitAsync(tx => {
+        const draft = tx.doc(intent, pending.id);
+        draft.value = { state };
+        draft.save(tx.appendEntry(pending.id, "fork"));
+      });
+      await assert.rejects(harness.resumeConversationAsync(pending.id), /fork.*recovery/i);
+      assert.equal(creates.mock.callCount(), 0);
+    }
+  } finally { await harness.disposeAsync(); store.dispose(); }
+});
+
 test("JSONL retains exact CRLF/mixed UTF8 boundaries and discards all unterminated tails", async () => {
   for (const endings of [["\r\n", "\r\n"], ["\n", "\r\n"]]) {
     for (const tail of ["", '{"v":1', JSON.stringify({
@@ -189,32 +453,31 @@ test("real SDK recorded-runtime lifecycle and honest model report", { skip: !pro
     }), chat);
     assert.equal(rawConfig.reasoningEffort, "minimal");
     assert(answer);
-    let observer: ((event: SessionEvent) => void) | undefined;
-    const subscription = mock.method(chat.session, "on", (handler: (event: SessionEvent) => void) => {
-      observer = handler;
-      return () => { observer = undefined; };
-    });
-    let errorMessage = "postToolUse hook: Operation not permitted";
-    let emitAnswer = true;
-    const send = mock.method(chat.session, "send", async () => {
-      if (emitAnswer) observer?.(answer);
-      observer?.({
-        type: "session.error", id: "host-error", timestamp: new Date().toISOString(), parentId: null,
-        data: { errorType: "hook", message: errorMessage },
+    for (const [tolerant, errorMessage, succeeds, emitAnswer] of [
+      [false, "postToolUse hook: Operation not permitted", false, true],
+      [true, "postToolUse hook: Operation not permitted", true, true],
+      [true, "hook timed out", false, true],
+      [true, "postToolUse hook: Operation not permitted", true, false],
+    ] as const) {
+      const errorChat = await harness.createConversationAsync();
+      harness.options.tolerateHostHookFailures = tolerant;
+      let observer: ((event: SessionEvent) => void) | undefined;
+      const subscription = mock.method(errorChat.session, "on", (handler: (event: SessionEvent) => void) => {
+        observer = handler;
+        return () => { observer = undefined; };
       });
-      return "native-message";
-    });
-    try {
-      await assert.rejects(chat.submitAsync("denial"), /Operation not permitted/);
-      harness.options.tolerateHostHookFailures = true;
-      assert.equal(await chat.submitAsync("tolerated denial"), answer);
-      errorMessage = "hook timed out";
-      await assert.rejects(chat.submitAsync("other failure"), /hook timed out/);
-      errorMessage = "postToolUse hook: Operation not permitted";
-      emitAnswer = false;
-      assert.equal(await chat.submitAsync("denial without an answer"), undefined);
-    } finally {
-      send.mock.restore(); subscription.mock.restore();
+      const send = mock.method(errorChat.session, "send", async () => {
+        if (emitAnswer) observer?.(answer);
+        observer?.({
+          type: "session.error", id: "host-error", timestamp: new Date().toISOString(), parentId: null,
+          data: { errorType: "hook", message: errorMessage },
+        });
+        return "native-message";
+      });
+      try {
+        if (succeeds) assert.equal(await errorChat.submitAsync("denial"), emitAnswer ? answer : undefined);
+        else await assert.rejects(errorChat.submitAsync("denial"), new RegExp(errorMessage));
+      } finally { send.mock.restore(); subscription.mock.restore(); }
     }
     assert.equal(chat.effectiveModel.model, "replay-model");
     assert.equal(chat.turnModels[0]?.model, null);

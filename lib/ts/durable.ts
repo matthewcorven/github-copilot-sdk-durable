@@ -1170,11 +1170,18 @@ export class InMemoryStoreProvider implements IDurableStoreProvider {
       override open(options: DurableStoreOptions): void {
         if (!options.path) throw new Error("A JSONL store requires a path.");
         this.file = path.resolve(options.path);
-        if (!fs.existsSync(path.dirname(this.file))) return;
+        fs.mkdirSync(path.dirname(this.file), { recursive: true });
         this.acquireLock();
         try {
           if (!fs.existsSync(this.file)) return;
           const bytes = fs.readFileSync(this.file);
+          let whole: unknown;
+          try { whole = JSON.parse(bytes.toString("utf8")); }
+          catch (error) { if (!(error instanceof SyntaxError)) throw error; }
+          if (whole !== null && typeof whole === "object" && !Array.isArray(whole) &&
+              ("conversations" in whole || "documents" in whole)) {
+            throw new Error("Legacy JSON snapshots are unsupported by the TypeScript JSONL provider.");
+          }
           let offset = 0;
           const snapshot = {
             sequence: 0, conversations: [] as ConversationRecord[], tasks: [] as DurableTaskRecord[],
@@ -2609,8 +2616,10 @@ export const PermissionPolicy = {
     const captured = grants?.slice() ?? null;
     return request => {
       const fields = request as unknown as Record<string, unknown>;
-      const scope = ["toolName", "resolvedPath", "path", "fileName", "fullCommandText", "url", "name", "extensionName"]
-        .map(key => fields[key]).find(value => typeof value === "string");
+      const scope = request.kind === "mcp"
+        ? `${request.serverName}/${request.toolName}`
+        : ["toolName", "resolvedPath", "path", "fileName", "fullCommandText", "url", "name", "extensionName"]
+          .map(key => fields[key]).find(value => typeof value === "string");
       return PermissionPolicy.isGranted(captured, request.kind, typeof scope === "string" ? scope : null)
         ? { kind: "approve-once" } : { kind: "reject", feedback: `denied by durable policy: no grant for ${request.kind}` };
     };
@@ -2627,6 +2636,15 @@ function wireChoices(choices: AgentChoices): JsonObject {
   const { hooks: _hooks, ...data } = choices;
   return JSON.parse(JSON.stringify(data));
 }
+function hasUnsettledAdmission(store: DurableStore, record: ConversationRecord): boolean {
+  const document = store.document(admissionDocument.kind, record.id);
+  const version = document?.versions.at(-1);
+  const admission = document?.latest;
+  // Copied document snapshots are anchored at the fork boundary, not a child submission.
+  return !!admission && typeof admission === "object" && !Array.isArray(admission) &&
+    admission["state"] !== "completed" &&
+    (!record.parentConversationId || version?.entryId !== record.forkEntryId);
+}
 
 export class DurableConversation {
   static isHostHookFailure(message: string | null | undefined): boolean {
@@ -2642,6 +2660,7 @@ export class DurableConversation {
   private checkpointTail: Promise<void> = Promise.resolve();
   private checkpointFailure: unknown = null;
   private readonly toolCalls = new Map<string, Record<string, unknown>>();
+  private readonly observedEvents = new Set<string>();
   readonly answers: string[] = [];
   readonly turnModels: DurableModelReport[] = [];
   readonly sandboxDecisions: SessionEvent[] = [];
@@ -2660,7 +2679,12 @@ export class DurableConversation {
     this.unsubscribe = session.on(event => this.observe(event));
   }
   detach(): void { this.unsubscribe?.(); this.attached = null; }
-  observe(event: SessionEvent): void {
+  /** Hydrate history with `live = false` to update observations without writing checkpoints. */
+  observe(event: SessionEvent, live = true): void {
+    if (event.id) {
+      if (this.observedEvents.has(event.id)) return;
+      this.observedEvents.add(event.id);
+    }
     if (event.type === "assistant.message" && event.data.content) this.answers.push(event.data.content);
     const data = event.data as unknown as Record<string, unknown>;
     if (event.type === "tool.execution_start") this.toolCalls.set(event.data.toolCallId, data);
@@ -2677,11 +2701,15 @@ export class DurableConversation {
         error: typeof error?.["message"] === "string" ? error["message"] : null,
         recordedAt: new Date().toISOString(),
       };
-      this.checkpointTail = this.checkpointTail.then(() => this.commitAsync(tx => {
-        const draft = tx.doc(checkpointDocument, this.id);
-        if (draft.value?.["eventId"] === checkpoint["eventId"]) return;
-        draft.value = checkpoint; draft.save(tx.appendEntry(this.id, "checkpoint"));
-      })).catch(error => { this.checkpointFailure ??= error; });
+      if (live) {
+        this.checkpointTail = this.checkpointTail.then(() => this.commitAsync(tx => {
+          const versions = this.harness.store.document(checkpointDocument.kind, this.id)?.versions ?? [];
+          if (versions.some(version => version.value !== null && typeof version.value === "object" &&
+              !Array.isArray(version.value) && version.value["eventId"] === checkpoint["eventId"])) return;
+          const draft = tx.doc(checkpointDocument, this.id);
+          draft.value = checkpoint; draft.save(tx.appendEntry(this.id, "checkpoint"));
+        })).catch(error => { this.checkpointFailure ??= error; });
+      }
     }
     const model = event.type === "session.start" ? data["selectedModel"] :
       event.type === "session.model_change" ? data["newModel"] :
@@ -2758,6 +2786,8 @@ export class DurableConversation {
     this.pending++;
     // Serialize legacy runtimes too: their idle event is session-wide, not input-correlated.
     const run = this.tail.then(async () => {
+      if (hasUnsettledAdmission(this.harness.store, this.record))
+        throw new Error(`Conversation '${this.id}' has an unsettled admission; explicit recovery is required before submitting.`);
       const admissionId = randomUUID();
       await this.commitAsync(tx => {
         const draft = tx.doc(admissionDocument, this.id);
@@ -2796,11 +2826,15 @@ export class DurableConversation {
         });
         return answer;
       } catch (error) {
-        await this.commitAsync(tx => {
-          const admission = tx.doc(admissionDocument, this.id);
-          admission.value = { ...admission.value, state: "uncertain" };
-          admission.save(tx.appendEntry(this.id, "admission"));
-        });
+        try {
+          await this.commitAsync(tx => {
+            const admission = tx.doc(admissionDocument, this.id);
+            admission.value = { ...admission.value, state: "uncertain" };
+            admission.save(tx.appendEntry(this.id, "admission"));
+          });
+        } catch (settlementError) {
+          throw new AggregateError([error, settlementError], "Submission failed and its admission could not be marked uncertain.", { cause: error });
+        }
         throw error;
       }
     });
@@ -2981,21 +3015,26 @@ export class DurableHarness {
     const config = await this.buildSessionConfig(conversation.choices(), conversation);
     config.sessionId = String(binding!["sessionId"]);
     conversation.attach(await this.client.createSession(config));
-    for (const event of await conversation.contextAsync()) conversation.observe(event);
+    for (const event of await conversation.contextAsync()) conversation.observe(event, false);
   }
   async resumeConversationAsync(id: string): Promise<DurableConversation> {
     const conversation = this.findConversation(id);
     if (!conversation) throw new Error(`Unknown conversation '${id}'.`);
     if (conversation.sessionId) return conversation;
-    const admission = conversation.snapshot(admissionDocument);
-    if (admission && admission["state"] !== "completed") throw new Error(`Conversation '${id}' has an unsettled admission; automatic replay is unsafe.`);
     const binding = conversation.snapshot(bindingDocument);
+    const intent = conversation.snapshot(forkDocument);
+    if ((conversation.record.parentConversationId || intent) &&
+        (intent?.["state"] !== "completed" || !binding?.["sessionId"] || intent["sessionId"] !== binding["sessionId"])) {
+      throw new Error(`Conversation '${id}' has an incomplete or abandoned native fork; explicit recovery is required.`);
+    }
+    if (hasUnsettledAdmission(this.store, conversation.record))
+      throw new Error(`Conversation '${id}' has an unsettled admission; automatic replay is unsafe.`);
     if (!binding?.["sessionId"]) { await this.createSession(conversation); return conversation; }
     const { sessionId: _id, trustWorkingDirectory: _trust, ...config } = await this.buildSessionConfig(conversation.choices(), conversation);
     conversation.attach(await this.client.resumeSession(String(binding["sessionId"]), {
       ...config, suppressResumeEvent: true, continuePendingWork: false,
     }));
-    for (const event of await conversation.contextAsync()) conversation.observe(event);
+    for (const event of await conversation.contextAsync()) conversation.observe(event, false);
     return conversation;
   }
   async rootAsync(choices = new AgentChoices()): Promise<DurableConversation> {
