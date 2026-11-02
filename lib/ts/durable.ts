@@ -2157,6 +2157,7 @@ export class DurableTaskRunner {
   private readonly completions = new Map<string, Deferred<TaskOutcome>>();
   private readonly running = new Set<string>();
   private readonly inFlight = new Map<string, Promise<TaskOutcome>>();
+  private readonly creations = new Set<Promise<void>>();
   private disposed = false;
   private disposal: Promise<void> | undefined;
   private readonly failures: unknown[] = [];
@@ -2171,7 +2172,7 @@ export class DurableTaskRunner {
     });
   }
 
-  /** Creates a durable task and schedules it. */
+  /** Creates and schedules a task; shutdown joins creations accepted before it starts. */
   async createTaskAsync(
     definition: DurableTaskDefinition,
     input: JsonValue,
@@ -2184,21 +2185,32 @@ export class DurableTaskRunner {
   ): Promise<DurableTaskRecord> {
     if (this.disposed && !(isActiveTask(this.store) && options.ownerTaskId === activeTask.getStore()?.taskId))
       throw new Error("The durable task runner is closing.");
-    const record = await this.store.commitAsync((tx) =>
-      tx.createTask(definition, input, {
-        ownerConversationId: options.ownerConversationId ?? null,
-        ownerTaskId: options.ownerTaskId ?? null,
-        background: options.background ?? false,
-      }),
-    );
+    const creation = new Deferred<void>();
+    this.creations.add(creation.promise);
+    try {
+      const record = await this.store.commitAsync((tx) =>
+        tx.createTask(definition, input, {
+          ownerConversationId: options.ownerConversationId ?? null,
+          ownerTaskId: options.ownerTaskId ?? null,
+          background: options.background ?? false,
+        }),
+      );
 
-    this.startTask(record.id, options.cancellationToken);
-    return record;
+      this.startTask(record.id, options.cancellationToken, true);
+      return record;
+    } finally {
+      this.creations.delete(creation.promise);
+      creation.resolve();
+    }
   }
 
   /** Runs a task to completion, resuming from its last checkpoint. */
   async runTaskAsync(taskId: string, cancellationToken: AbortSignal = new AbortController().signal): Promise<TaskOutcome> {
     this.assertRunAllowed(taskId);
+    return this.runAdmittedTaskAsync(taskId, cancellationToken);
+  }
+
+  private async runAdmittedTaskAsync(taskId: string, cancellationToken: AbortSignal = new AbortController().signal): Promise<TaskOutcome> {
     const completion = this.completionFor(taskId);
 
     const record = this.store.task(taskId);
@@ -2253,8 +2265,9 @@ export class DurableTaskRunner {
     throw new Error("The durable task runner is closing.");
   }
 
-  private startTask(taskId: string, cancellationToken?: AbortSignal): void {
-    void this.runTaskAsync(taskId, cancellationToken).catch(error => { this.failures.push(error); });
+  private startTask(taskId: string, cancellationToken?: AbortSignal, admitted = false): void {
+    const run = admitted ? this.runAdmittedTaskAsync(taskId, cancellationToken) : this.runTaskAsync(taskId, cancellationToken);
+    void run.catch(error => { this.failures.push(error); });
   }
 
   /**
@@ -2310,8 +2323,8 @@ export class DurableTaskRunner {
   private async drainAsync(finalize?: () => Promise<void>): Promise<void> {
     const failures: unknown[] = [];
     try {
-      while (this.inFlight.size) {
-        const results = await Promise.allSettled([...this.inFlight.values()]);
+      while (this.creations.size || this.inFlight.size) {
+        const results = await Promise.allSettled([...this.creations, ...this.inFlight.values()]);
         for (const result of results)
           if (result.status === "rejected" && !failures.includes(result.reason)) failures.push(result.reason);
       }

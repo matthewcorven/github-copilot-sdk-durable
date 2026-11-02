@@ -50,6 +50,195 @@ def sdk_client(session):
 
 
 class RecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_review_accepted_task_creation_behind_store_gate_belongs_to_shutdown(self):
+        for facade, owned in ((False, False), (True, False), (True, True)):
+            with self.subTest(facade=facade, owned=owned), tempfile.TemporaryDirectory() as directory:
+                options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
+                client = sdk_client(sdk_session())
+                registry = ExtensionRegistry()
+                host = None
+                if facade:
+                    builder = DurableClientBuilder().use_client(client).use_registry(registry)
+                    if owned:
+                        builder.use_store_options(options)
+                    else:
+                        builder.use_store(DurableStore.create(options))
+                    host = builder.configure(lambda o: setattr(o, "owns_client", True)).build()
+                    await host.initialize_async()
+                    store, harness = host.store, host._harness
+                else:
+                    store = DurableStore.create(options)
+                    harness = DurableHarness(client, store, registry)
+                assert store is not None and harness is not None
+                held, release, enrolled = asyncio.Event(), asyncio.Event(), asyncio.Event()
+                phase_entered, phase_release = asyncio.Event(), asyncio.Event()
+                released = False
+                async def phase(_input, _checkpoint, runtime):
+                    phase_entered.set()
+                    await phase_release.wait()
+                    self.assertFalse(released, "accepted checkpoint must precede resource release")
+                    return await runtime.commit_async(lambda: TaskCommit.completed("saved"))
+                definition = DurableTask.define("accepted", lambda: {}, phase)
+                registry.install(Extension("accepted", tasks=[definition]))
+                async def hold(tx):
+                    held.set()
+                    await release.wait()
+                holding = asyncio.create_task(store.commit_async(hold))
+                await held.wait()
+                commit = store.commit_async
+                async def observe_commit(body):
+                    enrolled.set()
+                    return await commit(body)
+                store.commit_async = observe_commit
+                creating = asyncio.create_task(harness.create_task_async(definition))
+                await enrolled.wait()
+                with self.assertRaisesRegex(RuntimeError, "pending work"):
+                    harness.close()
+                async def stop():
+                    nonlocal released
+                    assert store is not None
+                    released = True
+                    self.assertEqual(len(store.tasks), 1, "resource release must include accepted creation")
+                    self.assertIs(store.tasks[0].status, TaskStatus.TERMINAL,
+                                  "resource release must follow the final checkpoint")
+                    outcome = store.tasks[0].outcome
+                    assert outcome is not None
+                    self.assertEqual(outcome.result, "saved")
+                client.stop.side_effect = stop
+                closing = asyncio.create_task(host.close_async() if host else harness.close_async())
+                drain = await self._start_close_gate(harness, closing)
+                try:
+                    self.assertFalse(released, "close must retain resources while creation awaits the store gate")
+                    self.assertEqual(len(store.tasks), 0, "creation is held at the real transaction gate")
+                    with self.assertRaisesRegex(RuntimeError, "writer|already open"):
+                        DurableStore.create(options)
+                    with self.assertRaisesRegex(RuntimeError, "scheduler|runner"):
+                        DurableHarness(client, store, registry)
+                    with self.assertRaisesRegex(RuntimeError, "closing"):
+                        await harness.create_task_async(definition)
+                    release.set()
+                    await holding
+                    result = (await asyncio.gather(creating, return_exceptions=True))[0]
+                    self.assertNotIsInstance(result, BaseException,
+                                             "accepted creation must not fail scheduling after its commit")
+                    assert not isinstance(result, BaseException)
+                    await asyncio.wait_for(phase_entered.wait(), 1)
+                    self.assertFalse(released, "close must drain the newly scheduled phase")
+                    phase_release.set()
+                    record = result
+                    await closing
+                    terminal = store.task(record.id)
+                    assert terminal is not None
+                    self.assertIs(terminal.status, TaskStatus.TERMINAL)
+                    assert options.path is not None
+                    path = Path(options.path)
+                    before = path.read_bytes()
+                    sequence = store.provider.sequence
+                    with self.assertRaisesRegex(RuntimeError, "closing"):
+                        await harness.create_task_async(definition)
+                    self.assertEqual(path.read_bytes(), before, "post-close creation must not write")
+                    self.assertEqual(store.provider.sequence, sequence)
+                    if owned:
+                        reopened = DurableStore.create(options)
+                        recovered = reopened.task(record.id)
+                        assert recovered is not None
+                        self.assertIs(recovered.status, TaskStatus.TERMINAL)
+                        reopened.close()
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "writer|already open"):
+                            DurableStore.create(options)
+                        replacement = DurableHarness(client, store, registry)
+                        replacement.close()
+                finally:
+                    release.set()
+                    phase_release.set()
+                    await asyncio.gather(holding, creating, closing, drain, return_exceptions=True)
+                    print(json.dumps({"facade": facade, "owned": owned, "released": released,
+                                      "creation": str(creating.exception()) if creating.done() and not creating.cancelled()
+                                      and creating.exception() else "success",
+                                      "tasks": [(task.id, task.status.value, task.outcome.result if task.outcome else None)
+                                                for task in store.tasks]}))
+                    store.close()
+
+    async def test_review_failed_or_cancelled_accepted_creation_releases_its_drain(self):
+        for cancel in (False, True):
+            with self.subTest(cancel=cancel):
+                store = DurableStore.create_ephemeral()
+                client = sdk_client(sdk_session())
+                harness = DurableHarness(client, store, ExtensionRegistry())
+                held, release, enrolled = asyncio.Event(), asyncio.Event(), asyncio.Event()
+                original = ValueError("initial checkpoint failed")
+                def initial():
+                    raise original
+                definition = DurableTask.define("fails-before-task", initial, AsyncMock())
+                async def hold(tx):
+                    held.set()
+                    await release.wait()
+                holding = asyncio.create_task(store.commit_async(hold))
+                await held.wait()
+                commit = store.commit_async
+                async def observe_commit(body):
+                    enrolled.set()
+                    return await commit(body)
+                store.commit_async = observe_commit
+                creating = asyncio.create_task(harness.create_task_async(definition))
+                await enrolled.wait()
+                closing = asyncio.create_task(harness.close_async())
+                drain = await self._start_close_gate(harness, closing)
+                try:
+                    self.assertFalse(closing.done(), "close must enroll failed/cancelled creations too")
+                    if cancel:
+                        creating.cancel("cancel accepted creation")
+                    release.set()
+                    await holding
+                    with self.assertRaises(asyncio.CancelledError if cancel else ValueError) as caught:
+                        await creating
+                    if not cancel:
+                        self.assertIs(caught.exception, original)
+                    await asyncio.wait_for(asyncio.shield(closing), 1)
+                    self.assertEqual(list(store.tasks), [], "failed/cancelled creation must not persist a task")
+                    self.assertEqual(store.provider.sequence, 0, "creation rollback must preserve the write sequence")
+                    self.assertEqual(list(store.documents), [])
+                    client.stop.assert_awaited_once()
+                finally:
+                    release.set()
+                    await asyncio.gather(holding, creating, closing, drain, return_exceptions=True)
+                    store.close()
+
+    async def test_review_draining_parent_public_creation_retains_ownership(self):
+        store = DurableStore.create_ephemeral()
+        registry = ExtensionRegistry()
+        harness = DurableHarness(sdk_client(sdk_session()), store, registry)
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def child_phase(_input, _checkpoint, runtime):
+            return await runtime.commit_async(lambda: TaskCommit.completed("child"))
+        child = DurableTask.define("public-child", lambda: {}, child_phase)
+        async def parent_phase(_input, _checkpoint, runtime):
+            entered.set()
+            await release.wait()
+            record = await harness.create_task_async(child, owner_task_id=runtime.task.id)
+            outcome = await harness.wait_for_task_async(record.id)
+            self.assertEqual(outcome.result, "child")
+            return await runtime.commit_async(lambda: TaskCommit.completed("parent"))
+        parent = DurableTask.define("public-parent", lambda: {}, parent_phase)
+        registry.install(Extension("public", tasks=[parent, child]))
+        record = await harness.create_task_async(parent)
+        await entered.wait()
+        closing = asyncio.create_task(harness.close_async())
+        drain = await self._start_close_gate(harness, closing)
+        try:
+            with self.assertRaisesRegex(RuntimeError, "closing"):
+                await harness.create_task_async(child, owner_task_id=record.id)
+            release.set()
+            await asyncio.wait_for(asyncio.shield(closing), 1)
+            self.assertEqual(len(store.tasks), 2)
+            self.assertTrue(all(task.status is TaskStatus.TERMINAL for task in store.tasks))
+            self.assertEqual([task.outcome.result for task in store.tasks if task.outcome], ["parent", "child"])
+        finally:
+            release.set()
+            await asyncio.gather(closing, drain, return_exceptions=True)
+            store.close()
+
     async def test_review_invalid_sandbox_leaves_no_poisoned_root(self):
         store = DurableStore.create_ephemeral()
         harness = DurableHarness(sdk_client(sdk_session()), store, ExtensionRegistry())
