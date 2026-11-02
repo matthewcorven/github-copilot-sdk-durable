@@ -3569,6 +3569,7 @@ class DurableHarness:
         self._task_completions: dict[str, asyncio.Future[TaskOutcome]] = {}
         self._in_flight: dict[str, asyncio.Task[TaskOutcome]] = {}
         self._task_creations: set[asyncio.Future[None]] = set()
+        self._conversation_operations: set[asyncio.Future[None]] = set()
         self._submissions: set[asyncio.Task[Any]] = set()
         self._task_failures: list[BaseException] = []
         self._closed = False
@@ -3659,6 +3660,19 @@ class DurableHarness:
             await client.stop()
             raise
 
+    async def _conversation_operation(
+        self, operation: Callable[[], Awaitable[DurableConversation]], *, admitted: bool = False,
+    ) -> DurableConversation:
+        if self._closed and not admitted and not self._is_active_task():
+            raise RuntimeError("The durable harness is closing.")
+        pending = asyncio.get_running_loop().create_future()
+        self._conversation_operations.add(pending)
+        try:
+            return await operation()
+        finally:
+            self._conversation_operations.discard(pending)
+            pending.set_result(None)
+
     async def create_conversation_async(
         self,
         choices: AgentChoices | None = None,
@@ -3666,8 +3680,13 @@ class DurableHarness:
         owner_conversation_id: str | None = None,
     ) -> DurableConversation:
         """Creates a conversation and its session."""
-        if self._closed:
-            raise RuntimeError("The durable harness is closing.")
+        return await self._conversation_operation(lambda: self._create_conversation_core(
+            choices, owner_task_id, owner_conversation_id))
+
+    async def _create_conversation_core(
+        self, choices: AgentChoices | None, owner_task_id: str | None,
+        owner_conversation_id: str | None,
+    ) -> DurableConversation:
         selected = choices if choices is not None else AgentChoices()
         if selected.sandbox is not None:
             validate_sandbox_policy(selected.sandbox)
@@ -3694,18 +3713,22 @@ class DurableHarness:
 
     async def root_async(self, choices: AgentChoices | None = None) -> DurableConversation:
         """Returns the root conversation, creating it on first use."""
+        return await self._conversation_operation(lambda: self._root_core(choices))
+
+    async def _root_core(self, choices: AgentChoices | None) -> DurableConversation:
         for record in self._store.conversations:
             if (record.parent_conversation_id is None and record.owner_task_id is None
                     and record.owner_conversation_id is None):
                 existing = self.find_conversation(record.id)
                 if existing is not None:
-                    return await self.resume_conversation_async(existing.id)
+                    return await self._resume_conversation_core(existing.id)
 
-        return await self.create_conversation_async(choices)
+        return await self._create_conversation_core(choices, None, None)
 
     async def resume_conversation_async(self, conversation_id: str) -> DurableConversation:
-        if self._drained:
-            raise RuntimeError("The durable harness is closed.")
+        return await self._conversation_operation(lambda: self._resume_conversation_core(conversation_id))
+
+    async def _resume_conversation_core(self, conversation_id: str) -> DurableConversation:
         conversation = self.find_conversation(conversation_id)
         if conversation is None:
             raise ValueError(f"Unknown conversation '{conversation_id}'.")
@@ -3882,6 +3905,14 @@ class DurableHarness:
         parent: DurableConversation,
         entry_id: str,
     ) -> DurableConversation:
+        """Forks a conversation at an entry."""
+        return await self._conversation_operation(lambda: self._fork_core(parent, entry_id))
+
+    async def _fork_core(
+        self,
+        parent: DurableConversation,
+        entry_id: str,
+    ) -> DurableConversation:
         """Forks a conversation at an entry.
 
         The durable half of the fork -- the conversation record, the inherited entries,
@@ -3923,6 +3954,7 @@ class DurableHarness:
 
         conversation = DurableConversation(self._store, record, self._registry)
         conversation._harness = self
+        self._conversations[record.id] = conversation
         session = await self._fork_session_async(parent, conversation, choices)
         conversation.attach(session)
         # A fork names its own session: the binding document is ForkPolicy.INITIAL, so a
@@ -3933,7 +3965,6 @@ class DurableHarness:
             getattr(session, "session_id", None),
             model if model is not None else self.DEFAULT_MODEL,
         )
-        self._conversations[record.id] = conversation
         for event in await conversation.context_async():
             conversation.observe(event, live=False)
         return conversation
@@ -4248,7 +4279,7 @@ class DurableHarness:
 
     def close(self) -> None:
         """Detaches every conversation handle. The store stays the caller's."""
-        if (self._closing is not None and not self._closing.done()) or self._task_creations or self._in_flight or self._submissions or any(
+        if (self._closing is not None and not self._closing.done()) or self._conversation_operations or self._task_creations or self._in_flight or self._submissions or any(
             conversation._checkpoint_chain is not None and not conversation._checkpoint_chain.done()
             for conversation in self._conversations.values()
         ):
@@ -4283,8 +4314,8 @@ class DurableHarness:
 
         try:
             await drain(conversation.checkpoint_barrier_async() for conversation in self._conversations.values())
-            while self._task_creations or self._in_flight:
-                await drain([*self._task_creations, *self._in_flight.values()])
+            while self._task_creations or self._in_flight or self._conversation_operations:
+                await drain([*self._task_creations, *self._in_flight.values(), *self._conversation_operations])
             while self._submissions:
                 # The initiating caller receives submission errors; shutdown joins cleanup.
                 await asyncio.gather(*list(self._submissions), return_exceptions=True)
@@ -4524,6 +4555,7 @@ class DurableCopilotClient:
         self._harness: DurableHarness | None = None
         self._closed = False
         self._closing: asyncio.Task[None] | None = None
+        self._conversation_operations: set[asyncio.Future[None]] = set()
 
     @property
     def options(self) -> DurableClientOptions:
@@ -4559,11 +4591,14 @@ class DurableCopilotClient:
         """
         if self._closed:
             raise RuntimeError("The durable client is closing.")
+        await self._initialize_shared_async()
+        if self._closed:
+            raise RuntimeError("The durable client is closing.")
+
+    async def _initialize_shared_async(self) -> None:
         if self._initialization is None:
             self._initialization = asyncio.ensure_future(self._initialize_core_async())
         await asyncio.shield(self._initialization)
-        if self._closed:
-            raise RuntimeError("The durable client is closing.")
 
     async def _initialize_core_async(self) -> None:
         created_store: DurableStore | None = None
@@ -4584,6 +4619,9 @@ class DurableCopilotClient:
             else:
                 self._owns_client = bool(self._options.owns_client)
             self._harness = DurableHarness(self._client, self._store, self.registry, self._options.harness)
+            # Include facade admissions made before initialization in direct harness close.
+            self._harness._conversation_operations = self._conversation_operations
+            self._harness._closed = self._closed
         except BaseException:
             # A half-initialized client would hold a store lock with nothing driving it, so
             # whatever was created is released before the failure propagates.
@@ -4635,11 +4673,24 @@ class DurableCopilotClient:
         owner_conversation_id: str | None = None,
     ) -> DurableConversation:
         """Creates a conversation and its session."""
-        await self.initialize_async()
-        assert self._harness is not None
-        return await self._harness.create_conversation_async(
-            choices, owner_task_id, owner_conversation_id
-        )
+        return await self._conversation_operation(lambda harness: harness._create_conversation_core(
+            choices, owner_task_id, owner_conversation_id))
+
+    async def _conversation_operation(
+        self, operation: Callable[[DurableHarness], Awaitable[DurableConversation]],
+    ) -> DurableConversation:
+        if self._closed and not (self._harness is not None and self._harness._is_active_task()):
+            raise RuntimeError("The durable client is closing.")
+        pending = asyncio.get_running_loop().create_future()
+        self._conversation_operations.add(pending)
+        try:
+            await self._initialize_shared_async()
+            assert self._harness is not None
+            harness = self._harness
+            return await harness._conversation_operation(lambda: operation(harness), admitted=True)
+        finally:
+            self._conversation_operations.discard(pending)
+            pending.set_result(None)
 
     def find_conversation(self, conversation_id: str) -> DurableConversation | None:
         """Finds a conversation by id, restoring it from the store if not yet opened."""
@@ -4648,19 +4699,13 @@ class DurableCopilotClient:
         return self._harness.find_conversation(conversation_id)
 
     async def root_async(self, choices: AgentChoices | None = None) -> DurableConversation:
-        await self.initialize_async()
-        assert self._harness is not None
-        return await self._harness.root_async(choices)
+        return await self._conversation_operation(lambda harness: harness._root_core(choices))
 
     async def resume_conversation_async(self, conversation_id: str) -> DurableConversation:
-        await self.initialize_async()
-        assert self._harness is not None
-        return await self._harness.resume_conversation_async(conversation_id)
+        return await self._conversation_operation(lambda harness: harness._resume_conversation_core(conversation_id))
 
     async def fork_async(self, parent: DurableConversation, entry_id: str) -> DurableConversation:
-        await self.initialize_async()
-        assert self._harness is not None
-        return await self._harness.fork_async(parent, entry_id)
+        return await self._conversation_operation(lambda harness: harness._fork_core(parent, entry_id))
 
     async def resume_tasks_async(self, cancellation: asyncio.Event | None = None) -> list[TaskOutcome]:
         await self.initialize_async()
@@ -4686,11 +4731,15 @@ class DurableCopilotClient:
             return
         if self._closing is None:
             self._closed = True
+            if self._harness is not None:
+                self._harness._closed = True
             self._closing = asyncio.create_task(self._close_core_async())
         await DurableHarness._await_close_async(self._closing)
 
     async def _close_core_async(self) -> None:
         failures: list[BaseException] = []
+        while self._conversation_operations:
+            await asyncio.gather(*list(self._conversation_operations))
         if self._initialization is not None:
             try:
                 await asyncio.shield(self._initialization)

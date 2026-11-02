@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Union
+from collections.abc import Awaitable
 
 from durable import (
     AgentChoices, DurableHarness, DurableStore, DurableStoreOptions, ExtensionRegistry,
@@ -50,6 +51,464 @@ def sdk_client(session):
 
 
 class RecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def _settle_lifecycle_tasks(self, *tasks: Awaitable[object] | None):
+        await asyncio.gather(*(task for task in tasks if task is not None), return_exceptions=True)
+
+    async def test_review_conversation_lifecycle_retains_resources(self):
+        from copilot._jsonrpc import JsonRpcClient
+        for facade, owned in ((False, False), (True, False), (True, True)):
+            for operation in ("create", "root", "resume-unbound", "resume-existing", "resume-missing", "fork"):
+                for stage in ("store", "sdk", "history"):
+                    if stage == "store" and operation in ("resume-existing", "resume-missing"):
+                        continue
+                    with self.subTest(facade=facade, owned=owned, operation=operation, stage=stage), tempfile.TemporaryDirectory() as directory:
+                        path = Path(directory) / "store.jsonl"
+                        options = DurableStoreOptions(path=str(path))
+                        host = None
+                        if facade:
+                            builder = DurableClientBuilder()
+                            builder.use_store_options(options) if owned else builder.use_store(DurableStore.create(options))
+                            host = builder.build()
+                            await host.initialize_async()
+                            harness, store = host._harness, host.store
+                        else:
+                            store = DurableStore.create(options)
+                            harness = await DurableHarness.open_async(store, ExtensionRegistry())
+                        assert harness is not None and store is not None
+                        entered, release = asyncio.Event(), asyncio.Event()
+                        stopped = False
+                        boundary = None
+                        stop = harness.client.stop
+                        async def stop_client():
+                            nonlocal stopped, boundary
+                            stopped = True
+                            assert store is not None
+                            boundary = (store.provider.sequence, path.read_bytes() if path.exists() else b"")
+                            return await stop()
+                        harness.client.stop = stop_client
+                        create_session = harness.client.create_session
+                        resume_session = harness.client.resume_session
+                        async def guarded_create(**kwargs):
+                            self.assertFalse(stopped, "session create must not run after SDK stop")
+                            return await create_session(**kwargs)
+                        async def guarded_resume(session_id, **kwargs):
+                            self.assertFalse(stopped, "session resume must not run after SDK stop")
+                            return await resume_session(session_id, **kwargs)
+                        harness.client.create_session = guarded_create
+                        harness.client.resume_session = guarded_resume
+                        holding = pending = closing = drain = None
+                        result = None
+                        try:
+                            parent = None
+                            fork_session_id = None
+                            if operation == "fork":
+                                # The replay fixture has no native fork response. Adapt
+                                # that RPC alone; resume/history use the installed SDK.
+                                fork_session_id = (await harness.client.create_session()).session_id
+                            identifier = ""
+                            if operation in ("fork", "resume-existing", "resume-missing"):
+                                parent = await harness.create_conversation_async()
+                                identifier = parent.id
+                                if operation != "fork":
+                                    parent.detach()
+                                if operation == "resume-missing":
+                                    harness.client.get_session_metadata = AsyncMock(return_value=None)
+                            elif operation == "resume-unbound":
+                                async def seed(tx):
+                                    return tx.create_conversation().id
+                                identifier = await store.commit_async(seed)
+                            if stage == "store":
+                                held = asyncio.Event()
+                                async def hold(tx):
+                                    held.set()
+                                    await release.wait()
+                                holding = asyncio.create_task(store.commit_async(hold))
+                                await held.wait()
+                                commit = store.commit_async
+                                async def observe_commit(body):
+                                    entered.set()
+                                    return await commit(body)
+                                store.commit_async = observe_commit
+                            original = JsonRpcClient.request
+                            async def request(client, method, params=None, **kwargs):
+                                targeted = (stage == "sdk" and method in ("session.create", "session.resume", "sessions.fork")
+                                            or stage == "history" and method == "session.getMessages")
+                                if targeted:
+                                    entered.set()
+                                    await release.wait()
+                                if method in ("session.create", "session.resume", "sessions.fork", "session.getMessages"):
+                                    self.assertFalse(stopped, f"{method} must settle before SDK stop")
+                                if method == "sessions.fork":
+                                    return {"sessionId": fork_session_id}
+                                return await original(client, method, params, **kwargs)
+                            with patch.object(JsonRpcClient, "request", request):
+                                target = host if host else harness
+                                if operation == "create":
+                                    action = target.create_conversation_async()
+                                elif operation == "root":
+                                    action = target.root_async()
+                                elif operation == "fork":
+                                    assert parent is not None
+                                    action = target.fork_async(parent, store.entries(parent.id)[-1])
+                                else:
+                                    action = target.resume_conversation_async(identifier)
+                                pending = asyncio.create_task(action)
+                                await asyncio.wait_for(entered.wait(), 2)
+                                closing = asyncio.create_task(target.close_async())
+                                if not facade:
+                                    drain = await self._start_close_gate(harness, closing)
+                                marker = asyncio.Event()
+                                asyncio.get_running_loop().call_soon(marker.set)
+                                await marker.wait()
+                                self.assertTrue(harness._closed, "facade close must also reject direct harness admission")
+                                self.assertFalse(stopped, "accepted lifecycle must retain SDK while held")
+                                with self.assertRaisesRegex(RuntimeError, "pending work"):
+                                    harness.close()
+                                with self.assertRaisesRegex(RuntimeError, "writer|already open"):
+                                    DurableStore.create(options)
+                                with self.assertRaisesRegex(RuntimeError, "closing"):
+                                    await harness.resume_conversation_async(identifier)
+                                with self.assertRaisesRegex(RuntimeError, "closing"):
+                                    await harness.create_conversation_async()
+                                if parent:
+                                    with self.assertRaisesRegex(RuntimeError, "closing"):
+                                        await harness.fork_async(parent, store.entries(parent.id)[-1])
+                                release.set()
+                                if holding:
+                                    await holding
+                                result = await pending
+                                binding = result.binding()
+                                assert binding is not None
+                                self.assertIsNotNone(binding.session_id,
+                                                     "successful lifecycle must persist its SDK binding")
+                                await closing
+                                self.assertIsNone(result._unsubscribe, "shutdown must detach every accepted session")
+                                self.assertIsNone(result.session)
+                                self.assertFalse(harness._conversation_operations)
+                            self.assertEqual((store.provider.sequence, path.read_bytes()), boundary,
+                                             "all lifecycle writes must precede resource release")
+                            if owned:
+                                reopened = DurableStore.create(options)
+                                self.assertIsNotNone(reopened.conversation(result.id))
+                                reopened.close()
+                            else:
+                                with self.assertRaisesRegex(RuntimeError, "writer|already open"):
+                                    DurableStore.create(options)
+                        finally:
+                            release.set()
+                            await self._settle_lifecycle_tasks(holding, pending, closing, drain)
+                            await (host.close_async() if host else harness.close_async())
+                            print(json.dumps({"facade": facade, "owned": owned, "operation": operation,
+                                              "stage": stage, "stopped": stopped,
+                                              "releaseSequence": boundary[0] if boundary else None,
+                                              "sequence": store.provider.sequence,
+                                              "result": result.id if result else None}))
+                            store.close()
+
+    async def test_review_closing_rejects_external_attached_conversation_admission(self):
+        store = DurableStore.create_ephemeral()
+        harness = await DurableHarness.open_async(store, ExtensionRegistry())
+        chat = await harness.root_async()
+        entered, release = asyncio.Event(), asyncio.Event()
+        create = harness.client.create_session
+        async def creating(**kwargs):
+            entered.set()
+            await release.wait()
+            return await create(**kwargs)
+        harness.client.create_session = creating
+        pending = asyncio.create_task(harness.create_conversation_async())
+        closing = None
+        try:
+            await entered.wait()
+            closing = asyncio.create_task(harness.close_async())
+            drain = await self._start_close_gate(harness, closing)
+            before = store.provider.sequence
+            with self.assertRaisesRegex(RuntimeError, "closing",
+                                        msg="external resume must reject an already attached SDK session"):
+                await harness.resume_conversation_async(chat.id)
+            with self.assertRaisesRegex(RuntimeError, "closing"):
+                await harness.root_async()
+            self.assertEqual(store.provider.sequence, before)
+            release.set()
+            await asyncio.gather(pending, closing, drain)
+        finally:
+            release.set()
+            await self._settle_lifecycle_tasks(pending, closing)
+            await harness.close_async()
+            store.close()
+
+    async def test_review_lifecycle_failure_and_cancellation_drain_cleanup(self):
+        from copilot._jsonrpc import JsonRpcClient
+        for operation in ("create", "resume", "fork"):
+            for stage in ("store", "sdk"):
+                for cancel in (False, True):
+                    with self.subTest(operation=operation, stage=stage, cancel=cancel), tempfile.TemporaryDirectory() as directory:
+                        path = Path(directory) / "store.jsonl"
+                        options = DurableStoreOptions(path=str(path))
+                        store = DurableStore.create(options)
+                        harness = await DurableHarness.open_async(store, ExtensionRegistry())
+                        parent = await harness.create_conversation_async()
+                        async def seed(tx):
+                            return tx.create_conversation().id
+                        identifier = await store.commit_async(seed)
+                        before, count = store.provider.sequence, len(store.conversations)
+                        entered, release, cleanup_entered, cleanup_release = (asyncio.Event() for _ in range(4))
+                        original = ValueError(f"{operation}/{stage} failed")
+                        stopped = False
+                        stop = harness.client.stop
+                        async def stop_client():
+                            nonlocal stopped
+                            stopped = True
+                            return await stop()
+                        harness.client.stop = stop_client
+                        holding = pending = closing = second = None
+                        request = JsonRpcClient.request
+                        async def fail_request(client, method, params=None, **kwargs):
+                            if method in ("session.create", "sessions.fork"):
+                                entered.set()
+                                try:
+                                    await release.wait()
+                                    raise original
+                                finally:
+                                    cleanup_entered.set()
+                                    await cleanup_release.wait()
+                                    self.assertFalse(stopped, "SDK failure/cancellation cleanup precedes stop")
+                            return await request(client, method, params, **kwargs)
+                        try:
+                            if stage == "store":
+                                commit = store.commit_async
+                                async def failing_commit(body):
+                                    async def fail(tx):
+                                        await body(tx)
+                                        entered.set()
+                                        await release.wait()
+                                        raise original
+                                    return await commit(fail)
+                                store.commit_async = failing_commit
+                            with patch.object(JsonRpcClient, "request", fail_request):
+                                action = (harness.create_conversation_async() if operation == "create"
+                                          else harness.resume_conversation_async(identifier) if operation == "resume"
+                                          else harness.fork_async(parent, store.entries(parent.id)[-1]))
+                                pending = asyncio.create_task(action)
+                                await entered.wait()
+                                closing = asyncio.create_task(harness.close_async())
+                                second = asyncio.create_task(harness.close_async())
+                                drain = await self._start_close_gate(harness, closing)
+                                closing.cancel("closer cancelled")
+                                if cancel:
+                                    pending.cancel("lifecycle cancelled")
+                                else:
+                                    release.set()
+                                if stage == "sdk":
+                                    await cleanup_entered.wait()
+                                    self.assertFalse(stopped)
+                                cleanup_release.set()
+                                with self.assertRaises(asyncio.CancelledError if cancel else ValueError) as caught:
+                                    await pending
+                                if not cancel:
+                                    self.assertIs(caught.exception, original)
+                                with self.assertRaisesRegex(asyncio.CancelledError, "closer cancelled"):
+                                    await closing
+                                await asyncio.gather(second, drain)
+                            self.assertTrue(stopped)
+                            if stage == "store":
+                                self.assertEqual((store.provider.sequence, len(store.conversations)), (before, count))
+                            elif operation == "fork":
+                                intent = harness.fork_intent_of(store.conversations[-1].id)
+                                assert intent is not None
+                                self.assertIs(intent.state, ForkIntentState.PENDING,
+                                              "failed SDK fork must not be falsely marked completed")
+                            self.assertTrue(all(chat._unsubscribe is None for chat in (parent, *harness.conversations)))
+                            bytes_after = path.read_bytes()
+                            with self.assertRaisesRegex(RuntimeError, "closing"):
+                                await harness.resume_conversation_async(identifier)
+                            self.assertEqual(path.read_bytes(), bytes_after)
+                        finally:
+                            release.set()
+                            cleanup_release.set()
+                            await self._settle_lifecycle_tasks(holding, pending, closing, second)
+                            await harness.close_async()
+                            store.close()
+
+    async def test_review_accepted_facade_lifecycle_owns_shared_initialization(self):
+        from copilot import CopilotClient
+        with tempfile.TemporaryDirectory() as directory:
+            options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
+            host = DurableClientBuilder().use_store_options(options).build()
+            entered, release = asyncio.Event(), asyncio.Event()
+            start = CopilotClient.start
+            create = CopilotClient.create_session
+            starts = creates = 0
+            async def starting(client):
+                nonlocal starts
+                starts += 1
+                entered.set()
+                await release.wait()
+                return await start(client)
+            async def creating(client, **kwargs):
+                nonlocal creates
+                creates += 1
+                return await create(client, **kwargs)
+            pending = closing = second = initializer = None
+            try:
+                with patch.object(CopilotClient, "start", starting), patch.object(CopilotClient, "create_session", creating):
+                    pending = asyncio.create_task(host.root_async())
+                    await entered.wait()
+                    initializer = asyncio.create_task(host.initialize_async())
+                    closing = asyncio.create_task(host.close_async())
+                    second = asyncio.create_task(host.close_async())
+                    marker = asyncio.Event()
+                    asyncio.get_running_loop().call_soon(marker.set)
+                    await marker.wait()
+                    closing.cancel("initializing closer cancelled")
+                    assert host.store is not None
+                    self.assertFalse(host.store._closed)
+                    with self.assertRaisesRegex(RuntimeError, "writer|already open"):
+                        DurableStore.create(options)
+                    release.set()
+                    result = await pending
+                    binding = result.binding()
+                    assert binding is not None
+                    self.assertIsNotNone(binding.session_id)
+                    with self.assertRaisesRegex(RuntimeError, "closing"):
+                        await initializer
+                    with self.assertRaisesRegex(asyncio.CancelledError, "initializing closer cancelled"):
+                        await closing
+                    await second
+                self.assertEqual((starts, creates), (1, 1))
+                assert host.store is not None
+                self.assertTrue(host.store._closed)
+                reopened = DurableStore.create(options)
+                self.assertEqual(len(reopened.conversations), 1)
+                reopened.close()
+            finally:
+                release.set()
+                await self._settle_lifecycle_tasks(pending, closing, second, initializer)
+                await host.close_async()
+
+    async def test_review_cancelled_queued_conversation_does_not_abandon_other_admission(self):
+        with tempfile.TemporaryDirectory() as directory:
+            options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
+            store = DurableStore.create(options)
+            harness = await DurableHarness.open_async(store, ExtensionRegistry())
+            held, release, enrolled = asyncio.Event(), asyncio.Event(), asyncio.Queue()
+            async def hold(tx):
+                held.set()
+                await release.wait()
+            holding = asyncio.create_task(store.commit_async(hold))
+            await held.wait()
+            commit = store.commit_async
+            async def queued(body):
+                enrolled.put_nowait(True)
+                return await commit(body)
+            store.commit_async = queued
+            first = asyncio.create_task(harness.create_conversation_async())
+            second = asyncio.create_task(harness.create_conversation_async())
+            await enrolled.get()
+            await enrolled.get()
+            closing = asyncio.create_task(harness.close_async())
+            drain = await self._start_close_gate(harness, closing)
+            try:
+                first.cancel("queued lifecycle cancelled")
+                with self.assertRaisesRegex(asyncio.CancelledError, "queued lifecycle cancelled"):
+                    await first
+                self.assertFalse(closing.done())
+                with self.assertRaisesRegex(RuntimeError, "pending work"):
+                    harness.close()
+                release.set()
+                result = await second
+                await asyncio.gather(holding, closing, drain)
+                self.assertEqual([chat.id for chat in store.conversations], [result.id])
+                binding = result.binding()
+                assert binding is not None
+                self.assertIsNotNone(binding.session_id)
+            finally:
+                release.set()
+                await asyncio.gather(first, second, holding, closing, drain, return_exceptions=True)
+                await harness.close_async()
+                store.close()
+
+    async def test_review_published_harness_retains_facade_admission_before_attachment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            host = DurableClientBuilder().use_store_options(
+                DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))).build()
+            initialize = host._initialize_core_async
+            published, release = asyncio.Event(), asyncio.Event()
+            async def initializing():
+                await initialize()
+                published.set()
+                await release.wait()
+            host._initialize_core_async = initializing
+            pending = asyncio.create_task(host.root_async())
+            closing = None
+            try:
+                await published.wait()
+                harness = host._harness
+                assert harness is not None
+                with self.assertRaisesRegex(RuntimeError, "pending work"):
+                    harness.close()
+                closing = asyncio.create_task(host.close_async())
+                marker = asyncio.Event()
+                asyncio.get_running_loop().call_soon(marker.set)
+                await marker.wait()
+                self.assertFalse(closing.done())
+                with self.assertRaisesRegex(RuntimeError, "closing"):
+                    await harness.create_conversation_async()
+                release.set()
+                result = await pending
+                await closing
+                binding = result.binding()
+                assert binding is not None
+                self.assertIsNotNone(binding.session_id)
+                assert host.store is not None
+                self.assertTrue(host.store._closed)
+            finally:
+                release.set()
+                await self._settle_lifecycle_tasks(pending, closing)
+                await host.close_async()
+
+    async def test_review_draining_parent_finishes_dependent_conversation_lifecycle(self):
+        store, registry = DurableStore.create_ephemeral(), ExtensionRegistry()
+        harness = await DurableHarness.open_async(store, registry)
+        entered, release = asyncio.Event(), asyncio.Event()
+        completed = False
+        stop = harness.client.stop
+        async def stopping():
+            self.assertTrue(completed, "parent's dependent conversation must precede SDK release")
+            return await stop()
+        harness.client.stop = stopping
+        async def phase(_input, _checkpoint, runtime):
+            nonlocal completed
+            entered.set()
+            await release.wait()
+            child = await harness.create_conversation_async(owner_task_id=runtime.task.id)
+            self.assertIsNotNone(child.session_id)
+            self.assertIs(await harness.resume_conversation_async(child.id), child)
+            completed = True
+            return await runtime.commit_async(lambda: TaskCommit.completed(child.id))
+        definition = DurableTask.define("conversation-parent", lambda: {}, phase)
+        registry.install(Extension("conversation-parent", tasks=[definition]))
+        closing = None
+        try:
+            record = await harness.create_task_async(definition)
+            await entered.wait()
+            closing = asyncio.create_task(harness.close_async())
+            drain = await self._start_close_gate(harness, closing)
+            with self.assertRaisesRegex(RuntimeError, "closing"):
+                await harness.create_conversation_async()
+            release.set()
+            await asyncio.gather(closing, drain)
+            saved = store.task(record.id)
+            assert saved is not None
+            self.assertIs(saved.status, TaskStatus.TERMINAL)
+            self.assertEqual([chat.owner_task_id for chat in store.conversations], [record.id])
+        finally:
+            release.set()
+            if closing:
+                await asyncio.gather(closing, return_exceptions=True)
+            await harness.close_async()
+            store.close()
+
     async def test_review_accepted_task_creation_behind_store_gate_belongs_to_shutdown(self):
         for facade, owned in ((False, False), (True, False), (True, True)):
             with self.subTest(facade=facade, owned=owned), tempfile.TemporaryDirectory() as directory:
@@ -550,12 +1009,15 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
                         self.assertIs(results[0], original)
                         self.assertIs(results[2], original, "close must preserve startup failure")
                     else:
-                        self.assertIsInstance(results[0], RuntimeError)
-                        self.assertIn("closing", str(results[0]))
+                        self.assertIsInstance(results[0], DurableConversation)
+                        assert isinstance(results[0], DurableConversation)
+                        binding = results[0].binding()
+                        assert binding is not None
+                        self.assertIsNotNone(binding.session_id)
                         self.assertIsNone(results[2])
                     self.assertIsInstance(results[1], asyncio.CancelledError)
                     client.stop.assert_awaited_once()
-                    client.create_session.assert_not_awaited()
+                    self.assertEqual(client.create_session.await_count, 0 if fail else 1)
                     self.assertTrue(host.store is None or host.store._closed)
                     reopened = DurableStore.create(options)
                     reopened.close()
