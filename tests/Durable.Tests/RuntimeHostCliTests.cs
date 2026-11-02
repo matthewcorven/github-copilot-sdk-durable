@@ -54,6 +54,7 @@ public sealed class RuntimeHostCliTests
             "--http",
             "--rpc",
             "--port",
+            "--dev-tunnel",
             "--runtime-arg",
             "--every",
             "--missed-run",
@@ -101,6 +102,18 @@ public sealed class RuntimeHostCliTests
 
         Assert.Contains("effective model: replay-model", stderr, StringComparison.Ordinal);
         Assert.Contains("answer: Hello from the recorded transcript.", stderr, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("run")]
+    [InlineData("schedule")]
+    [InlineData("serve")]
+    public async Task DevTunnel_RequiresHttpServe(string command)
+    {
+        var (exitCode, _, stderr) = await RunHostAsync(
+            command, "--agent", "reviewer", "--dev-tunnel", "--rpc");
+        Assert.Equal(2, exitCode);
+        Assert.Contains("--dev-tunnel requires serve --http.", stderr, StringComparison.Ordinal);
     }
 
     [Fact]

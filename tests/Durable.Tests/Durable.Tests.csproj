@@ -12,6 +12,7 @@
     <ProjectReference Include="..\..\lib\Copilot.Durable.csproj" />
     <ProjectReference Include="..\..\tools\ReplayRuntime\ReplayRuntime.csproj" />
     <ProjectReference Include="..\..\src\Durable.Runtime\Durable.Runtime.csproj" />
+    <ProjectReference Include="..\DevTunnelFixture\DevTunnelFixture.csproj" ReferenceOutputAssembly="false" Private="false" />
   </ItemGroup>
 
   <ItemGroup>
@@ -24,6 +25,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="..\..\src\Durable.Runtime\*.cs" Link="runtime-source\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\tools\ReplayRuntime\fixtures\tool-round-trip.json" Link="fixtures\tool-round-trip.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\tools\ReplayRuntime\fixtures\missing-tool-call.json" Link="fixtures\missing-tool-call.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\tools\ReplayRuntime\fixtures\basic.json" Link="fixtures\basic.json" CopyToOutputDirectory="PreserveNewest" />
@@ -36,4 +38,10 @@
     <Using Include="Durable" />
   </ItemGroup>
 
+  <Target Name="CopyTunnelFixture" AfterTargets="Build">
+    <ItemGroup>
+      <TunnelFixtureFiles Include="$(MSBuildProjectDirectory)/../DevTunnelFixture/bin/$(Configuration)/$(TargetFramework)/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(TunnelFixtureFiles)" DestinationFolder="$(OutDir)tunnel-fixture" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

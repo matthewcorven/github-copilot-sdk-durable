@@ -260,6 +260,26 @@ forks, and the full boundary.
 | `DurableTask` / `TaskRuntime` / `TaskCommit` | Durable tasks: a checkpointed state machine with idempotent memos and durable timers. |
 | `ToolWrapper` | Wraps a tool *by name*, so it decorates whichever implementation wins. |
 
+### Runtime host and optional Dev Tunnels
+
+Build the C# host with `dotnet build src/Durable.Runtime`. To serve an imported agent over
+loopback HTTP:
+
+```sh
+dotnet run --project src/Durable.Runtime -- serve --http --agent reviewer --definition reviewer.json --port 0
+```
+
+Add **`--dev-tunnel`** to opt in to `devtunnel host --port <bound-port>` using the `devtunnel`
+CLI on `PATH`. The host prints the actual tunnel URL to stderr when the CLI reports it.
+Tunnels are off by default; a missing tool, execution refusal, or failing CLI only produces a
+warning, and local HTTP continues serving. The host does not install or configure the CLI.
+Public exposure does not add authentication or relax the agent's containment checks: only opt in
+when you trust the callers and understand the agent's grants.
+
+Linux and Windows CI smoke jobs exercise the CLI, HTTP, RPC and optional-tool fallback contracts
+against the recorded runtime, with a controlled tunnel executable (no public exposure).
+See [the Dev Tunnels design](docs/DESIGN.md#314-dev-tunnels-and-host-portability).
+
 ### Documents
 
 A document is versioned JSON attached to a conversation. Two policies decide what a fork

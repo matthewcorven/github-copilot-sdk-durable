@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
@@ -63,6 +62,7 @@ internal static class Program
         new("http", false, "Serve over HTTP. One of --http or --rpc is required by serve."),
         new("rpc", false, "Serve JSON lines over standard input and output. One of --http or --rpc is required by serve."),
         new("port", true, "The port to listen on. Defaults to 0, which asks the operating system."),
+        new("dev-tunnel", false, "Expose serve --http through the optional devtunnel CLI. Off by default."),
         new("runtime-arg", true, "Pass an argument to the runtime process. Repeatable."),
         new("every", true, "The schedule interval, e.g. 30s, 5m, or 1h. Required by schedule."),
         new("missed-run", true, "skip, coalesce, or run-once. Defaults to skip."),
@@ -517,8 +517,7 @@ internal static class Program
         using var turnGate = new SemaphoreSlim(1, 1);
         using var stopping = new CancellationTokenSource();
 
-        using var sigterm = RegisterShutdown(PosixSignal.SIGTERM, stopping);
-        using var sigint = RegisterShutdown(PosixSignal.SIGINT, stopping);
+        using var shutdown = new HostShutdown(stopping);
 
         if (options.Rpc)
         {
@@ -528,6 +527,7 @@ internal static class Program
         await using var transport = HttpTransport.Start(options.Port);
 
         Console.Error.WriteLine($"listening on http://127.0.0.1:{transport.Port}");
+        await using var tunnel = options.DevTunnel ? DevTunnel.Start(transport.Port, Console.Error) : null;
 
         await transport.RunAsync(
             (request, response) => HandleAsync(
@@ -715,19 +715,6 @@ internal static class Program
     }
 
     /// <summary>
-    /// Turns a signal into a request to stop accepting connections. The signal is cancelled so the
-    /// process is not torn down underneath a turn that is still reaching its checkpoint.
-    /// </summary>
-    private static PosixSignalRegistration RegisterShutdown(PosixSignal signal, CancellationTokenSource stopping) =>
-        PosixSignalRegistration.Create(signal, context =>
-        {
-            context.Cancel = true;
-            Console.Error.WriteLine(
-                $"received {context.Signal}: finishing the turn in flight, then exiting.");
-            stopping.Cancel();
-        });
-
-    /// <summary>
     /// Serves one request: validate it, run one turn, and stream the turn's events ahead of its
     /// result.
     /// </summary>
@@ -912,6 +899,11 @@ internal static class Program
             throw new UsageException($"unexpected argument '{positionals[0]}'");
         }
 
+        if (parsed.Has("dev-tunnel") && (args[0] != "serve" || !parsed.Has("http") || parsed.Has("rpc")))
+        {
+            throw new UsageException("--dev-tunnel requires serve --http.");
+        }
+
         var format = ParseFormat(parsed.Last("format"));
         var storePath = parsed.Last("store");
         if (format == DurableStoreFormat.InMemory)
@@ -936,6 +928,7 @@ internal static class Program
             Http: parsed.Has("http"),
             Rpc: parsed.Has("rpc"),
             Port: ParsePort(parsed.Last("port")),
+            DevTunnel: parsed.Has("dev-tunnel"),
             RuntimeArguments: parsed.All("runtime-arg").ToList(),
             Every: parsed.Last("every") is { } every ? ParseInterval(every) : null,
             MissedRun: MissedRunPolicies.Parse(parsed.Last("missed-run")),
@@ -1309,6 +1302,8 @@ internal static class Program
                                       --http or --rpc is required by serve.
           --port <port>               The port to listen on. Defaults to 0, which asks the operating
                                       system for an ephemeral port.
+          --dev-tunnel                Expose serve --http through devtunnel host --port <port>.
+                                      Off by default; missing or failing tools only warn.
           --runtime-arg <arg>         Pass an argument to the runtime process. Repeatable.
           --every <interval>          Register a schedule at this interval: 30s, 5m, or 1h.
                                       A bare number is seconds. Required to register.
@@ -1344,6 +1339,7 @@ internal static class Program
         bool Http,
         bool Rpc,
         int Port,
+        bool DevTunnel,
         IReadOnlyList<string> RuntimeArguments,
         TimeSpan? Every,
         MissedRunPolicy MissedRun,
