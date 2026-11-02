@@ -72,19 +72,55 @@ public sealed class JsonRpcFramingTests
             }
 
             offset += length;
+            Assert.Equal(offset, output.FlushOffsets[seen.Count - 1]);
         }
 
         Assert.Equal(expected.Length, seen.Count);
         Assert.Equal(expected.Length / 2, responses);
         Assert.Equal(expected.Length / 2, notifications);
-        Assert.Equal(expected.Length, output.FlushCount);
+        Assert.Equal(expected.Length, output.FlushOffsets.Count);
     }
 
-    private sealed class FragmentYieldingWriter(TextWriter inner) : TextWriter
+    [Fact]
+    public async Task WriteFrame_FlushFailure_PropagatesAndReleasesWriterGate()
+    {
+        using var output = new FailingFlushWriter();
+        var error = Assert.Throws<IOException>(() => JsonRpcFraming.WriteFrame(output, """{"id":1}"""));
+        Assert.Same(output.Failure, error);
+
+        await Task.Run(() => JsonRpcFraming.WriteFrame(output, """{"id":2}"""))
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        using var reader = new StringReader(output.ToString());
+        Assert.Equal("""{"id":1}""", JsonRpcFraming.ReadFrame(reader));
+        Assert.Equal("""{"id":2}""", JsonRpcFraming.ReadFrame(reader));
+        Assert.Null(JsonRpcFraming.ReadFrame(reader));
+    }
+
+    [Fact]
+    public async Task WriteFrame_BlockedOutput_DoesNotBlockAnotherWriter()
+    {
+        using var output = new BlockingFlushWriter();
+        using var independent = new StringWriter();
+        var blocked = Task.Run(() => JsonRpcFraming.WriteFrame(output, """{"id":1}"""));
+        try
+        {
+            await output.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await Task.Run(() => JsonRpcFraming.WriteFrame(independent, """{"id":2}"""))
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal("""{"id":2}""", JsonRpcFraming.ReadFrame(new StringReader(independent.ToString())));
+        }
+        finally
+        {
+            output.Release.Set();
+            await blocked.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    private sealed class FragmentYieldingWriter(StreamWriter inner) : TextWriter
     {
         private readonly object _gate = new();
         public override Encoding Encoding => inner.Encoding;
-        public int FlushCount { get; private set; }
+        public List<long> FlushOffsets { get; } = [];
 
         public override void Write(string? value)
         {
@@ -100,13 +136,58 @@ public sealed class JsonRpcFramingTests
 
         public override void Flush()
         {
+            Thread.Sleep(1);
             lock (_gate)
             {
                 inner.Flush();
-                FlushCount++;
+                FlushOffsets.Add(inner.BaseStream.Position);
             }
 
             Thread.Yield();
+        }
+    }
+
+    private sealed class FailingFlushWriter : StringWriter
+    {
+        public IOException Failure { get; } = new("flush failed");
+        private bool _fail = true;
+
+        public override void Flush()
+        {
+            if (_fail)
+            {
+                _fail = false;
+                throw Failure;
+            }
+
+            base.Flush();
+        }
+    }
+
+    private sealed class BlockingFlushWriter : StringWriter
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public ManualResetEventSlim Release { get; } = new();
+
+        public override void Flush()
+        {
+            Entered.SetResult();
+            if (!Release.Wait(TimeSpan.FromSeconds(10)))
+            {
+                throw new TimeoutException("test did not release the blocked output");
+            }
+
+            base.Flush();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                Release.Dispose();
+            }
+
+            base.Dispose(disposing);
         }
     }
 
