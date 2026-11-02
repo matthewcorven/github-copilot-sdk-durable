@@ -22,6 +22,11 @@ EXCLUSIONS = {
     "10": "asserts a tool wrote into the document; the recording has no tool call",
 }
 TODO_FIXTURE = ROOT / "examples" / "ts" / "fixtures" / "10-extension-state.json"
+GENERIC_ASSERTIONS = (
+    ("00-conversation", "a standalone conversation has no parent"),
+    ("00-conversation", "a standalone conversation has no owner task"),
+    ("03-owned-conversations", "the child has no owning conversation"),
+)
 
 
 def run_native_todo(language, fixture):
@@ -49,7 +54,7 @@ def assertion_messages(path):
             and node.args and isinstance(node.args[-1], ast.Constant)
             and isinstance(node.args[-1].value, str)
         ]
-    return re.findall(r'Check\.\w+\([^\n]*,\s*"([^"]+)"\)', text)
+    return re.findall(r'Check\.\w+(?:<[^>\n]+>)?\([^\n]*,\s*"([^"]+)"\)', text)
 
 
 def verify_assertion_coverage(test, language, suffix):
@@ -63,6 +68,11 @@ def verify_assertion_coverage(test, language, suffix):
 
 
 class RangeParityTests(unittest.TestCase):
+    def test_generic_original_assertions_are_in_inventory(self):
+        for name, message in GENERIC_ASSERTIONS:
+            with self.subTest(example=name, message=message):
+                self.assertIn(message, assertion_messages(ROOT / "examples" / f"{name}.cs"))
+
     def test_all_original_assertions_are_present(self):
         for language, suffix in (("ts", "ts"), ("py", "py")):
             with self.subTest(language=language):
@@ -113,6 +123,24 @@ class RangeParityTests(unittest.TestCase):
                     verify_assertion_coverage(self, language, suffix)
             finally:
                 path.write_text(source)
+
+    def test_inventory_gate_rejects_removed_generic_reference_assertions(self):
+        for name, message in GENERIC_ASSERTIONS:
+            for language, suffix in (("ts", "ts"), ("py", "py")):
+                with self.subTest(example=name, language=language, message=message):
+                    path = ROOT / "examples" / language / f"{name}.{suffix}"
+                    source = path.read_text()
+                    self.assertEqual(1, source.count(message))
+                    mutated = "".join(
+                        line for line in source.splitlines(keepends=True) if message not in line
+                    )
+                    self.assertNotEqual(source, mutated)
+                    try:
+                        path.write_text(mutated)
+                        with self.assertRaisesRegex(AssertionError, re.escape(message)):
+                            verify_assertion_coverage(self, language, suffix)
+                    finally:
+                        path.write_text(source)
 
     def test_typescript_assertion_failures_exit_nonzero(self):
         result = subprocess.run(
