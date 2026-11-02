@@ -14,13 +14,394 @@ from durable import (
     DurableTask, TaskCommit, TaskStatus, Extension, ToolWrapper, DurableHarnessOptions,
     DurableClientBuilder,
     DurableConversation,
+    DocumentDefinition, DocumentHistory, ForkPolicy, PromptSection, ForkIntent, ForkIntentState, FORK_DOCUMENT,
+    DurableRecoveryRequiredException,
 )
 from copilot.tools import Tool, ToolResult
 
 REPLAY_FIXTURES = Path(__file__).resolve().parents[2] / "tools" / "ReplayRuntime" / "fixtures"
 
+def sdk_session(session_id="native", history=None):
+    listeners = []
+    def subscribe(handler):
+        listeners.append(handler)
+        return lambda: listeners.remove(handler)
+    def emit(event):
+        for listener in list(listeners):
+            listener(event)
+    return SimpleNamespace(
+        session_id=session_id, on=subscribe, emit=emit, listeners=listeners,
+        get_events=AsyncMock(return_value=history or []), send=AsyncMock(return_value="sent"),
+        set_tools=AsyncMock(),
+    )
+
+
+def sdk_client(session):
+    return SimpleNamespace(
+        stop=AsyncMock(), create_session=AsyncMock(return_value=session),
+        resume_session=AsyncMock(return_value=session),
+        rpc=SimpleNamespace(sessions=SimpleNamespace(fork=AsyncMock(
+            return_value=SimpleNamespace(session_id="child")))),
+    )
+
+
+class RecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_jsonl_noop_commit_after_reopen_preserves_document_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "store.jsonl"
+            options = DurableStoreOptions(path=str(path))
+            store = DurableStore.create(options)
+            try:
+                notes: DocumentDefinition[dict[str, str]] = DocumentDefinition(
+                    "notes", DocumentHistory.REWINDABLE, ForkPolicy.AS_OF)
+                async def create(tx):
+                    conversation = tx.create_conversation()
+                    draft = tx.doc(notes, conversation.id)
+                    draft.value = {"text": "saved"}
+                    draft.save(tx.append_entry(conversation.id, "note"))
+                    return conversation.id
+                identifier = await store.commit_async(create)
+                store.close()
+                store = DurableStore.create(options)
+                saved = path.read_bytes()
+                async def noop(_tx):
+                    return None
+                await store.commit_async(noop)
+                self.assertEqual(path.read_bytes(), saved)
+                document = store.document(notes.kind, identifier)
+                assert document is not None
+                self.assertEqual(document.latest, {"text": "saved"})
+            finally:
+                store.close()
+
+    async def test_completion_timeout_blocks_next_prompt_from_consuming_delayed_native_answer(self):
+        store = DurableStore.create_ephemeral()
+        session = sdk_session()
+        harness = DurableHarness(sdk_client(session), store, ExtensionRegistry())
+        try:
+            chat = await harness.root_async()
+            first = asyncio.create_task(chat.submit_async("first", timeout=0.01))
+            second = asyncio.create_task(chat.submit_async("second", timeout=0.1))
+            with self.assertRaises(TimeoutError):
+                await first
+            async def late_events():
+                await asyncio.sleep(0.02)
+                session.emit({"type": "assistant.message", "id": "late-answer", "data": {"content": "first answer"}})
+                session.emit({"type": "session.idle", "data": {}})
+            late = asyncio.create_task(late_events())
+            try:
+                with self.assertRaises(DurableRecoveryRequiredException):
+                    await second
+            finally:
+                await late
+            admission = chat.admission()
+            assert admission is not None
+            self.assertEqual((admission.prompt, admission.state), ("first", "uncertain"))
+            self.assertEqual(session.send.await_count, 1)
+            self.assertIsNone(chat.checkpoint())
+        finally:
+            await harness.close_async()
+            store.close()
+
+    async def test_send_failure_preserves_original_exception_and_recovery_gate(self):
+        store = DurableStore.create_ephemeral()
+        session = sdk_session()
+        harness = DurableHarness(sdk_client(session), store, ExtensionRegistry())
+        original = RuntimeError("native send failed")
+        session.send.side_effect = original
+        try:
+            chat = await harness.root_async()
+            with self.assertRaises(RuntimeError) as raised:
+                await chat.submit_async("first")
+            self.assertIs(raised.exception, original)
+            with self.assertRaises(DurableRecoveryRequiredException):
+                await chat.submit_async("second")
+            admission = chat.admission()
+            assert admission is not None
+            self.assertEqual((admission.prompt, admission.state), ("first", "uncertain"))
+            self.assertEqual(session.send.await_count, 1)
+            self.assertEqual(len(session.listeners), 1)
+        finally:
+            await harness.close_async()
+            store.close()
+
+    async def test_timeout_bounds_send_and_blocks_queued_and_late_submissions(self):
+        store = DurableStore.create_ephemeral()
+        session = sdk_session()
+        harness = DurableHarness(sdk_client(session), store, ExtensionRegistry())
+        entered, cancelled = asyncio.Event(), asyncio.Event()
+        async def send(_prompt):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+        session.send = AsyncMock(side_effect=send)
+        try:
+            chat = await harness.root_async()
+            start = asyncio.get_running_loop().time()
+            first = asyncio.create_task(chat.submit_async("first", timeout=0.02))
+            await entered.wait()
+            second = asyncio.create_task(chat.submit_async("second", timeout=0.1))
+            with self.assertRaises(TimeoutError):
+                await asyncio.wait_for(first, 0.3)
+            self.assertLess(asyncio.get_running_loop().time() - start, 0.2)
+            self.assertTrue(cancelled.is_set())
+            with self.assertRaises(DurableRecoveryRequiredException):
+                await second
+            admission = chat.admission()
+            assert admission is not None
+            self.assertEqual((admission.prompt, admission.state), ("first", "uncertain"))
+            session.emit({"type": "assistant.message", "id": "old-answer", "data": {"content": "first answer"}})
+            session.emit({"type": "session.idle", "data": {}})
+            with self.assertRaises(DurableRecoveryRequiredException):
+                await asyncio.wait_for(chat.submit_async("third"), 0.1)
+            self.assertEqual(chat.admission(), admission)
+            self.assertIsNone(chat.checkpoint())
+            self.assertEqual(session.send.await_count, 1)
+            self.assertEqual(len(session.listeners), 1)
+            self.assertFalse(chat.busy)
+        finally:
+            await harness.close_async()
+            store.close()
+
+    async def test_cancellation_keeps_original_error_and_blocks_followup_without_orphan_send(self):
+        store = DurableStore.create_ephemeral()
+        session = sdk_session()
+        harness = DurableHarness(sdk_client(session), store, ExtensionRegistry())
+        entered, cancelled = asyncio.Event(), asyncio.Event()
+        async def send(_prompt):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+        session.send = AsyncMock(side_effect=send)
+        try:
+            chat = await harness.root_async()
+            task = asyncio.create_task(chat.submit_async("cancel me"))
+            await entered.wait()
+            task.cancel("caller cancellation")
+            with self.assertRaisesRegex(asyncio.CancelledError, "caller cancellation"):
+                await task
+            self.assertTrue(cancelled.is_set())
+            admission = chat.admission()
+            assert admission is not None
+            self.assertEqual(admission.state, "uncertain")
+            with self.assertRaises(DurableRecoveryRequiredException):
+                await asyncio.wait_for(chat.submit_async("must not send"), 0.1)
+            self.assertEqual(session.send.await_count, 1)
+            self.assertEqual(len(session.listeners), 1)
+        finally:
+            await harness.close_async()
+            store.close()
+
+    async def test_history_hydration_is_readonly_and_idempotent_after_actual_store_reopen(self):
+        history = [
+            {"type": "session.start", "id": "start", "data": {"selectedModel": "reported-model"}},
+            {"type": "tool.execution_start", "id": "tool-start", "data": {
+                "toolCallId": "call", "toolName": "read", "arguments": {"path": "notes"}}},
+            {"type": "tool.execution_complete", "id": "tool-end", "data": {
+                "toolCallId": "call", "success": True, "result": {"content": "notes"}}},
+            {"type": "assistant.message", "id": "answer", "data": {"content": "final answer"}},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "store.jsonl"
+            options = DurableStoreOptions(path=str(path))
+            store = DurableStore.create(options)
+            session = sdk_session()
+            client = sdk_client(session)
+            harness = DurableHarness(client, store, ExtensionRegistry())
+            try:
+                chat = await harness.root_async()
+                async def send(_prompt):
+                    for event in history:
+                        session.emit(event)
+                    session.emit({"type": "session.idle", "data": {}})
+                    return "sent"
+                session.send.side_effect = send
+                await chat.submit_async("read")
+                identifier, checkpoint, saved = chat.id, chat.checkpoint(), path.read_bytes()
+                resumed = sdk_session(history=history)
+                client.resume_session.return_value = resumed
+                for _ in range(2):
+                    await harness.close_async()
+                    store.close()
+                    store = DurableStore.create(options)
+                    harness = DurableHarness(client, store, ExtensionRegistry())
+                    chat = await harness.resume_conversation_async(identifier)
+                    await chat.checkpoint_barrier_async()
+                    self.assertEqual(chat.checkpoint(), checkpoint)
+                    self.assertEqual(path.read_bytes(), saved)
+                    self.assertEqual(chat.answers, ["final answer"])
+                    self.assertEqual((await chat.wait_for_effective_model_async(0.01)).model, "reported-model")
+                    chat.detach()
+                    await harness.resume_conversation_async(identifier)
+                    self.assertEqual(chat.answers, ["final answer"])
+                    resumed.emit({**history[2], "id": "redelivered-tool"})
+                    await chat.checkpoint_barrier_async()
+                    self.assertEqual(path.read_bytes(), saved)
+                client.create_session.return_value = sdk_session("created", history)
+                created = await harness.create_conversation_async()
+                await created.checkpoint_barrier_async()
+                self.assertIsNone(created.checkpoint())
+                self.assertEqual(created.answers, ["final answer"])
+            finally:
+                await harness.close_async()
+                store.close()
+
+    async def test_pending_abandoned_and_completed_unbound_native_forks_never_create_empty_sessions(self):
+        for state in ForkIntentState:
+            with self.subTest(state=state):
+                store = DurableStore.create_ephemeral()
+                session = sdk_session()
+                client = sdk_client(session)
+                harness = DurableHarness(client, store, ExtensionRegistry())
+                try:
+                    async def create(tx):
+                        parent = tx.create_conversation()
+                        boundary = tx.append_entry(parent.id, "boundary")
+                        child = tx.create_conversation(parent_conversation_id=parent.id, fork_entry_id=boundary)
+                        intent = tx.doc(FORK_DOCUMENT, child.id)
+                        intent.value = ForkIntent(parent.id, boundary, None, state)
+                        intent.save(tx.append_entry(child.id, "fork"))
+                        return child
+                    child = await store.commit_async(create)
+                    with self.assertRaises(DurableRecoveryRequiredException):
+                        await harness.resume_conversation_async(child.id)
+                    client.create_session.assert_not_awaited()
+                    client.resume_session.assert_not_awaited()
+                    restored = harness.find_conversation(child.id)
+                    assert restored is not None
+                    self.assertIsNone(restored.binding())
+                finally:
+                    await harness.close_async()
+                    store.close()
+
+    async def _fork_at_admission(self, harness, session):
+        parent = await harness.root_async()
+        boundary = ""
+        async def send(_prompt):
+            nonlocal boundary
+            boundary = await parent.append_entry_async("tool-created")
+            session.emit({"type": "assistant.message", "id": "parent-answer", "data": {"content": "parent done"}})
+            session.emit({"type": "session.idle", "data": {}})
+            return "sent"
+        session.send.side_effect = send
+        await parent.submit_async("parent")
+        return await parent.fork_async(boundary)
+
+    async def test_fork_hydrates_inherited_model_and_answer_without_tool_checkpoint_writes(self):
+        store = DurableStore.create_ephemeral()
+        session = sdk_session()
+        client = sdk_client(session)
+        child_session = sdk_session("child", [
+            {"type": "session.start", "id": "start", "data": {"selectedModel": "fork-model"}},
+            {"type": "tool.execution_complete", "id": "tool", "data": {"toolCallId": "call", "success": True}},
+            {"type": "assistant.message", "id": "answer", "data": {"content": "inherited answer"}},
+        ])
+        client.resume_session.return_value = child_session
+        harness = DurableHarness(client, store, ExtensionRegistry())
+        try:
+            child = await self._fork_at_admission(harness, session)
+            self.assertEqual(child.answers, ["inherited answer"])
+            self.assertEqual((await child.wait_for_effective_model_async(0.01)).model, "fork-model")
+            await child.checkpoint_barrier_async()
+            self.assertIsNone(child.checkpoint())
+        finally:
+            await harness.close_async()
+            store.close()
+
+    async def test_inherited_admission_does_not_block_child_resume_but_own_uncertainty_does(self):
+        store = DurableStore.create_ephemeral()
+        session = sdk_session()
+        client = sdk_client(session)
+        child_session = sdk_session("child")
+        client.resume_session.return_value = child_session
+        harness = DurableHarness(client, store, ExtensionRegistry())
+        try:
+            child = await self._fork_at_admission(harness, session)
+            self.assertEqual(child.admission().state, "admitted")
+            child.detach()
+            self.assertIs(await harness.resume_conversation_async(child.id), child)
+            with self.assertRaises(TimeoutError):
+                await child.submit_async("child work", timeout=0.01)
+            with self.assertRaises(DurableRecoveryRequiredException):
+                await asyncio.wait_for(child.submit_async("retry"), 0.1)
+            child.detach()
+            with self.assertRaises(DurableRecoveryRequiredException):
+                await harness.resume_conversation_async(child.id)
+        finally:
+            await harness.close_async()
+            store.close()
+
+    async def test_prompt_sections_preserve_sync_and_async_hook_outputs(self):
+        async def async_dict(_input, _invocation):
+            return {"additionalContext": "hook context", "modifiedPrompt": "modified"}
+        async def async_none(_input, _invocation):
+            return None
+        for hook in [lambda _i, _v: {"additionalContext": "hook context", "modifiedPrompt": "modified"},
+                     lambda _i, _v: None, async_dict, async_none]:
+            with self.subTest(hook=hook):
+                store = DurableStore.create_ephemeral()
+                registry = ExtensionRegistry()
+                registry.install(Extension("sections", sections=[
+                    PromptSection("notes", AsyncMock(return_value="section content"))]))
+                harness = DurableHarness(sdk_client(sdk_session()), store, registry)
+                try:
+                    choices = AgentChoices(hooks={"on_user_prompt_submitted": hook})
+                    chat = await harness.root_async(choices)
+                    config = await harness.build_session_config(choices, chat)
+                    output = await config["hooks"]["on_user_prompt_submitted"]({"prompt": "original"}, {})
+                    expected = await hook({}, {}) if asyncio.iscoroutinefunction(hook) else hook({}, {})
+                    self.assertEqual(output, {
+                        **(expected or {}),
+                        "additionalContext": ((expected or {}).get("additionalContext", "") + "\n\n"
+                                              if expected else "") + "<notes>\nsection content\n</notes>",
+                    })
+                finally:
+                    await harness.close_async()
+                    store.close()
+
 
 class SdkTests(unittest.IsolatedAsyncioTestCase):
+    @unittest.skipUnless(os.getenv("DURABLE_RUNTIME_PATH"), "Requires actual recorded runtime")
+    async def test_official_sdk_models_envelope_support_and_raw_shape_limit(self):
+        # PR123 PRRT_kwDOVUQtAs6yggpP: intercept only the test RPC boundary, not SDK fields.
+        from copilot._jsonrpc import JsonRpcClient
+        model = {
+            "id": "replay-model", "name": "Replay model",
+            "capabilities": {"supports": {}, "limits": {"max_context_window_tokens": 8192}},
+            "supportedReasoningEfforts": ["low"],
+        }
+        for shape in ["models", "list", "array"]:
+            with self.subTest(shape=shape):
+                store = DurableStore.create_ephemeral()
+                harness = await DurableHarness.open_async(store, ExtensionRegistry())
+                original = JsonRpcClient.request
+                async def request(client, method, params=None, **kwargs):
+                    if method == "models.list":
+                        return [model] if shape == "array" else {shape: [model]}
+                    return await original(client, method, params, **kwargs)
+                try:
+                    with patch.object(JsonRpcClient, "request", request):
+                        choices = AgentChoices(model="replay-model", reasoning_effort="minimal")
+                        if shape == "array":
+                            with self.assertRaisesRegex(AttributeError, "get"):
+                                await harness.build_session_config(choices)
+                        else:
+                            config = await harness.build_session_config(choices)
+                            if shape == "models":
+                                self.assertEqual(config["reasoning_effort"], "minimal")
+                                models = await harness.client.list_models()
+                                self.assertEqual(models[0].supported_reasoning_efforts, ["low"])
+                            else:
+                                self.assertNotIn("reasoning_effort", config)
+                                self.assertEqual(await harness.client.list_models(), [])
+                finally:
+                    await harness.close_async()
+                    store.close()
+
     async def test_host_hook_tolerance_is_opt_in_and_preserves_error_and_answer(self):
         from unittest.mock import Mock
         for tolerant, message, succeeds, emit_answer in [
