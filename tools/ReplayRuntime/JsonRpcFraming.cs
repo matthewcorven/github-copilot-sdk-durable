@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace ReplayRuntime;
@@ -9,6 +10,7 @@ namespace ReplayRuntime;
 public static class JsonRpcFraming
 {
     private const string ContentLengthHeader = "Content-Length:";
+    private static readonly ConditionalWeakTable<TextWriter, object> WriteGates = new();
 
     /// <summary>
     /// Reads one frame. Returns <see langword="null"/> at end of stream.
@@ -70,16 +72,20 @@ public static class JsonRpcFraming
 
     /// <summary>
     /// Writes one frame. The byte count is computed from UTF-8 so the header always
-    /// matches the payload the client decodes.
+    /// matches the payload the client decodes. Concurrent writes to the same writer
+    /// serialize the complete header, body, and flush.
     /// </summary>
     public static void WriteFrame(TextWriter writer, string json)
     {
         var byteCount = Encoding.UTF8.GetByteCount(json);
-        writer.Write(ContentLengthHeader);
-        writer.Write(' ');
-        writer.Write(byteCount);
-        writer.Write("\r\n\r\n");
-        writer.Write(json);
-        writer.Flush();
+        lock (WriteGates.GetValue(writer, static _ => new object()))
+        {
+            writer.Write(ContentLengthHeader);
+            writer.Write(' ');
+            writer.Write(byteCount);
+            writer.Write("\r\n\r\n");
+            writer.Write(json);
+            writer.Flush();
+        }
     }
 }

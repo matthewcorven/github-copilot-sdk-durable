@@ -1,10 +1,196 @@
+using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace ReplayRuntime.Tests;
 
 public sealed class JsonRpcFramingTests
 {
+    [Fact]
+    public async Task WriteFrame_ConcurrentResponsesAndNotifications_PreserveEveryUtf8Frame()
+    {
+        const int writers = 8;
+        const int framesPerWriter = 32;
+        using var buffer = new MemoryStream();
+        using var streamWriter = new StreamWriter(buffer, new UTF8Encoding(false), leaveOpen: true);
+        using var output = new FragmentYieldingWriter(streamWriter);
+        using var start = new ManualResetEventSlim();
+        var expected = Enumerable.Range(0, writers * framesPerWriter).Select(sequence =>
+            sequence % 2 == 0
+                ? $$$"""{"jsonrpc":"2.0","id":{{{sequence}}},"result":{"text":"héllo→😀","sequence":{{{sequence}}}}}"""
+                : $$$"""{"jsonrpc":"2.0","method":"session.event","params":{"text":"héllo→😀","sequence":{{{sequence}}}}}"""
+        ).ToArray();
+
+        var tasks = Enumerable.Range(0, writers).Select(worker =>
+            Task.Factory.StartNew(() =>
+            {
+                start.Wait();
+                for (var i = 0; i < framesPerWriter; i++)
+                {
+                    JsonRpcFraming.WriteFrame(output, expected[worker * framesPerWriter + i]);
+                }
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)
+        ).ToArray();
+
+        start.Set();
+        await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(30));
+
+        var bytes = buffer.ToArray();
+        var offset = 0;
+        var seen = new HashSet<int>();
+        var responses = 0;
+        var notifications = 0;
+        while (offset < bytes.Length)
+        {
+            var end = bytes.AsSpan(offset).IndexOf("\r\n\r\n"u8);
+            Assert.True(end >= 0, $"Missing header terminator at byte {offset}");
+            var header = Encoding.ASCII.GetString(bytes, offset, end);
+            Assert.StartsWith("Content-Length: ", header);
+            Assert.True(int.TryParse(header["Content-Length: ".Length..],
+                NumberStyles.None, CultureInfo.InvariantCulture, out var length),
+                $"Invalid frame header at byte {offset}: {header}");
+            offset += end + 4;
+            Assert.InRange(length, 1, bytes.Length - offset);
+            using var payload = JsonDocument.Parse(bytes.AsMemory(offset, length));
+            var root = payload.RootElement;
+            Assert.Equal("2.0", root.GetProperty("jsonrpc").GetString());
+            var isResponse = root.TryGetProperty("id", out var id);
+            var data = root.GetProperty(isResponse ? "result" : "params");
+            var sequence = data.GetProperty("sequence").GetInt32();
+            Assert.True(seen.Add(sequence), $"Duplicate frame {sequence}");
+            Assert.Equal(expected[sequence], Encoding.UTF8.GetString(bytes, offset, length));
+            if (isResponse)
+            {
+                Assert.Equal(sequence, id.GetInt32());
+                responses++;
+            }
+            else
+            {
+                Assert.Equal("session.event", root.GetProperty("method").GetString());
+                notifications++;
+            }
+
+            offset += length;
+            Assert.Equal(offset, output.FlushOffsets[seen.Count - 1]);
+        }
+
+        Assert.Equal(expected.Length, seen.Count);
+        Assert.Equal(expected.Length / 2, responses);
+        Assert.Equal(expected.Length / 2, notifications);
+        Assert.Equal(expected.Length, output.FlushOffsets.Count);
+    }
+
+    [Fact]
+    public async Task WriteFrame_FlushFailure_PropagatesAndReleasesWriterGate()
+    {
+        using var output = new FailingFlushWriter();
+        var error = Assert.Throws<IOException>(() => JsonRpcFraming.WriteFrame(output, """{"id":1}"""));
+        Assert.Same(output.Failure, error);
+
+        await Task.Run(() => JsonRpcFraming.WriteFrame(output, """{"id":2}"""))
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        using var reader = new StringReader(output.ToString());
+        Assert.Equal("""{"id":1}""", JsonRpcFraming.ReadFrame(reader));
+        Assert.Equal("""{"id":2}""", JsonRpcFraming.ReadFrame(reader));
+        Assert.Null(JsonRpcFraming.ReadFrame(reader));
+    }
+
+    [Fact]
+    public async Task WriteFrame_BlockedOutput_DoesNotBlockAnotherWriter()
+    {
+        using var output = new BlockingFlushWriter();
+        using var independent = new StringWriter();
+        var blocked = Task.Run(() => JsonRpcFraming.WriteFrame(output, """{"id":1}"""));
+        try
+        {
+            await output.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await Task.Run(() => JsonRpcFraming.WriteFrame(independent, """{"id":2}"""))
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal("""{"id":2}""", JsonRpcFraming.ReadFrame(new StringReader(independent.ToString())));
+        }
+        finally
+        {
+            output.Release.Set();
+            await blocked.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    private sealed class FragmentYieldingWriter(StreamWriter inner) : TextWriter
+    {
+        private readonly object _gate = new();
+        public override Encoding Encoding => inner.Encoding;
+        public List<long> FlushOffsets { get; } = [];
+
+        public override void Write(string? value)
+        {
+            lock (_gate)
+            {
+                inner.Write(value);
+            }
+
+            Thread.Sleep(1);
+        }
+
+        public override void Write(char value) => Write(value.ToString());
+
+        public override void Flush()
+        {
+            Thread.Sleep(1);
+            lock (_gate)
+            {
+                inner.Flush();
+                FlushOffsets.Add(inner.BaseStream.Position);
+            }
+
+            Thread.Yield();
+        }
+    }
+
+    private sealed class FailingFlushWriter : StringWriter
+    {
+        public IOException Failure { get; } = new("flush failed");
+        private bool _fail = true;
+
+        public override void Flush()
+        {
+            if (_fail)
+            {
+                _fail = false;
+                throw Failure;
+            }
+
+            base.Flush();
+        }
+    }
+
+    private sealed class BlockingFlushWriter : StringWriter
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public ManualResetEventSlim Release { get; } = new();
+
+        public override void Flush()
+        {
+            Entered.SetResult();
+            if (!Release.Wait(TimeSpan.FromSeconds(10)))
+            {
+                throw new TimeoutException("test did not release the blocked output");
+            }
+
+            base.Flush();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                Release.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
+    }
+
     [Fact]
     public void WriteFrame_ThenReadFrame_RoundTrips()
     {
