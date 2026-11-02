@@ -38,6 +38,249 @@ function knownNativeSessions(client: CopilotClient): void {
   });
 }
 
+test("review: conversation lifecycle retains SDK and writer through persistence and attachment", { timeout: 30000 }, async t => {
+  for (const operation of ["create", "root", "resume-unbound", "resume-existing", "resume-missing", "fork"] as const) {
+    for (const stage of ["store", "sdk", "history"] as const) {
+      if (stage === "store" && (operation === "resume-existing" || operation === "resume-missing")) continue;
+      await t.test(`${operation}/${stage}`, async () => {
+        const directory = mkdtempSync(join(tmpdir(), "durable-ts-lifecycle-"));
+        const options = Object.assign(new DurableStoreOptions(), { path: join(directory, "store.jsonl") });
+        const store = DurableStore.create(options);
+        const harness = await DurableHarness.openAsync(store, new ExtensionRegistry());
+        const client = harness.client, entered = barrier(), release = barrier();
+        let stopped = false, releaseSequence = -1, releaseBytes: Buffer | undefined;
+        const stop = client.stop.bind(client);
+        client.stop = async () => {
+          stopped = true;
+          releaseSequence = store.sequence;
+          releaseBytes = fs.existsSync(options.path!) ? readFileSync(options.path!) : Buffer.alloc(0);
+          return stop();
+        };
+        let holding: Promise<unknown> | undefined, pending: Promise<DurableConversation> | undefined;
+        let closing: Promise<void> | undefined;
+        let result: DurableConversation | undefined, failure: unknown;
+        try {
+          let parent: DurableConversation | undefined, id = "";
+          if (operation === "fork") {
+            // ReplayRuntime has no native fork fixture. Only the fork RPC response is
+            // adapted; attachment and history still use real public SDK sessions.
+            const child = await client.createSession({});
+            client.rpc.sessions.fork = async () => ({ sessionId: child.sessionId });
+          }
+          if (operation === "fork" || operation === "resume-existing" || operation === "resume-missing") {
+            parent = await harness.createConversationAsync();
+            id = parent.id;
+            if (operation !== "fork") parent.detach();
+            if (operation === "resume-missing") client.getSessionMetadata = async () => undefined;
+          } else if (operation === "resume-unbound") {
+            id = await store.commitAsync(tx => tx.createConversation().id);
+          }
+          if (stage === "store") {
+            const held = barrier();
+            holding = store.commitAsync(async () => { held.resolve(); await release.promise; });
+            await held.promise;
+            const commit = store.commitAsync.bind(store);
+            store.commitAsync = body => { entered.resolve(); return commit(body); };
+          }
+          {
+            const create = client.createSession.bind(client), resume = client.resumeSession.bind(client);
+            const intercept = async (session: Awaited<ReturnType<typeof create>>) => {
+              const history = session.getEvents.bind(session);
+              session.getEvents = async () => {
+                if (stage === "history") { entered.resolve(); await release.promise; }
+                assert.equal(stopped, false, "session history must finish before SDK stop");
+                return history();
+              };
+              return session;
+            };
+            client.createSession = async config => {
+              if (stage === "sdk") { entered.resolve(); await release.promise; }
+              assert.equal(stopped, false, "session create must not run after SDK stop");
+              return intercept(await create(config));
+            };
+            client.resumeSession = async (sessionId, config) => {
+              if (stage === "sdk") { entered.resolve(); await release.promise; }
+              assert.equal(stopped, false, "session resume must not run after SDK stop");
+              return intercept(await resume(sessionId, config));
+            };
+            if (operation === "fork" && stage === "sdk") {
+              const fork = client.rpc.sessions.fork.bind(client.rpc.sessions);
+              client.rpc.sessions.fork = async params => {
+                entered.resolve(); await release.promise;
+                assert.equal(stopped, false, "native fork must not run after SDK stop");
+                return fork(params);
+              };
+            }
+          }
+          pending = operation === "create" ? harness.createConversationAsync() :
+            operation === "root" ? harness.rootAsync() :
+            operation === "fork" ? harness.forkAsync(parent!, store.entries(parent!.id).at(-1)!) :
+            harness.resumeConversationAsync(id);
+          const settled = pending.then(value => { result = value; }, error => { failure = error; });
+          await entered.promise;
+          closing = harness.disposeAsync();
+          await new Promise<void>(resolve => setImmediate(resolve));
+          assert.equal(stopped, false, "accepted lifecycle must retain SDK while held");
+          assert.throws(() => DurableStore.create(options), /writer|already open|locked/i);
+          await assert.rejects(harness.resumeConversationAsync(id), /closing/);
+          await assert.rejects(harness.createConversationAsync(), /closing/);
+          if (parent) await assert.rejects(harness.forkAsync(parent, store.entries(parent.id).at(-1)!), /closing/);
+          release.resolve();
+          await holding;
+          await settled;
+          assert.equal(failure, undefined, "accepted lifecycle must settle successfully, not reject after writing");
+          assert.ok(result);
+          assert.ok(result.snapshot(new DocumentDefinition<import("./durable.js").JsonObject>("durable.session-binding"))?.["sessionId"],
+            "successful lifecycle must have a persisted SDK binding even after shutdown detaches handles");
+          await closing;
+          assert.equal(result.sessionId, null, "shutdown must detach every accepted session");
+          assert.equal(store.sequence, releaseSequence, "all lifecycle writes must precede SDK release");
+          assert.deepEqual(readFileSync(options.path!), releaseBytes, "no post-close durable bytes");
+          assert.throws(() => DurableStore.create(options), /writer|already open|locked/i);
+        } finally {
+          release.resolve();
+          await Promise.allSettled([holding, pending, closing].filter(p => p !== undefined));
+          await harness.disposeAsync();
+          t.diagnostic(JSON.stringify({ operation, stage, stopped, releaseSequence, sequence: store.sequence,
+            failure: failure ? String(failure) : null }));
+          store.dispose();
+          rmSync(directory, { recursive: true });
+        }
+      });
+    }
+  }
+});
+
+test("review: closing rejects external attached conversation admission", async () => {
+  const store = DurableStore.createEphemeral(), harness = await DurableHarness.openAsync(store, new ExtensionRegistry());
+  const chat = await harness.rootAsync(), entered = barrier(), release = barrier();
+  const create = harness.client.createSession.bind(harness.client);
+  harness.client.createSession = async config => { entered.resolve(); await release.promise; return create(config); };
+  const pending = harness.createConversationAsync();
+  let closing: Promise<void> | undefined;
+  try {
+    await entered.promise;
+    closing = harness.disposeAsync();
+    const sequence = store.sequence;
+    await assert.rejects(harness.resumeConversationAsync(chat.id), /closing/,
+      "external resume must reject even when an SDK session is already attached");
+    await assert.rejects(harness.rootAsync(), /closing/);
+    assert.equal(store.sequence, sequence, "rejected admission must not write");
+  } finally {
+    release.resolve();
+    await Promise.allSettled([pending, closing].filter(p => p !== undefined));
+    await harness.disposeAsync();
+    store.dispose();
+  }
+});
+
+test("review: lifecycle rollback and SDK errors retain identity and drain cleanup", async () => {
+  for (const operation of ["create", "resume", "fork"] as const) {
+    for (const stage of ["store", "sdk"] as const) {
+      const directory = mkdtempSync(join(tmpdir(), "durable-ts-lifecycle-error-"));
+      const options = Object.assign(new DurableStoreOptions(), { path: join(directory, "store.jsonl") });
+      const store = DurableStore.create(options), harness = await DurableHarness.openAsync(store, new ExtensionRegistry());
+      const entered = barrier(), release = barrier(), cleanup = barrier();
+      const original = new Error(`${operation}/${stage} failed`);
+      let stopped = false, cleaned = false;
+      const stop = harness.client.stop.bind(harness.client);
+      harness.client.stop = async () => { stopped = true; return stop(); };
+      let pending: Promise<unknown> | undefined, closing: Promise<void> | undefined;
+      try {
+        const parent = await harness.createConversationAsync();
+        const id = await store.commitAsync(tx => tx.createConversation().id);
+        const before = store.sequence, count = store.conversations.length;
+        if (stage === "store") {
+          const commit = store.commitAsync.bind(store);
+          store.commitAsync = body => commit(async tx => {
+            await body(tx);
+            entered.resolve(); await release.promise;
+            throw original;
+          });
+        } else {
+          const fail = async () => {
+            entered.resolve();
+            try { await release.promise; throw original; }
+            finally { await cleanup.promise; cleaned = true; }
+          };
+          harness.client.createSession = fail;
+          harness.client.rpc.sessions.fork = fail;
+        }
+        pending = assert.rejects(operation === "create" ? harness.createConversationAsync() :
+          operation === "resume" ? harness.resumeConversationAsync(id) :
+          harness.forkAsync(parent, store.entries(parent.id).at(-1)!), error => error === original);
+        await entered.promise;
+        closing = harness.disposeAsync();
+        assert.strictEqual(harness.disposeAsync(), closing, "concurrent closers must share lifecycle drain");
+        await new Promise<void>(resolve => setImmediate(resolve));
+        assert.equal(stopped, false);
+        release.resolve();
+        if (stage === "sdk") {
+          await new Promise<void>(resolve => setImmediate(resolve));
+          assert.equal(stopped, false, "operation exception cleanup remains shutdown-owned");
+        }
+        cleanup.resolve();
+        await Promise.all([pending, closing]);
+        if (stage === "store") {
+          assert.equal(store.sequence, before, "failed lifecycle transaction must roll back sequence");
+          assert.equal(store.conversations.length, count, "failed lifecycle must not leave a partial conversation");
+        } else {
+          assert.equal(cleaned, true);
+          if (operation === "fork") {
+            const child = store.conversations.at(-1)!;
+            assert.equal(harness.findConversation(child.id)!.snapshot(
+              new DocumentDefinition<import("./durable.js").JsonObject>("durable.fork"))?.["state"], 0,
+            "failed SDK fork must remain explicitly recoverable, not falsely completed");
+          }
+        }
+        const bytes = readFileSync(options.path!);
+        await assert.rejects(harness.resumeConversationAsync(id), /closing/);
+        assert.deepEqual(readFileSync(options.path!), bytes);
+      } finally {
+        release.resolve(); cleanup.resolve();
+        await Promise.allSettled([pending, closing].filter(p => p !== undefined));
+        await harness.disposeAsync();
+        store.dispose(); rmSync(directory, { recursive: true });
+      }
+    }
+  }
+});
+
+test("review: draining task may finish dependent conversation lifecycle without external admission", async () => {
+  const store = DurableStore.createEphemeral(), registry = new ExtensionRegistry();
+  const harness = await DurableHarness.openAsync(store, registry);
+  const entered = barrier(), release = barrier();
+  let stopped = false, completed = false;
+  const stop = harness.client.stop.bind(harness.client);
+  harness.client.stop = async () => {
+    assert.equal(completed, true, "parent's dependent conversation must settle before SDK release");
+    stopped = true;
+    return stop();
+  };
+  const definition = DurableTask.define("conversation-parent", () => ({}), async (_input, _checkpoint, runtime) => {
+    entered.resolve(); await release.promise;
+    const child = await harness.createConversationAsync(new AgentChoices(), runtime.task.id);
+    assert.ok(child.sessionId);
+    assert.strictEqual(await harness.resumeConversationAsync(child.id), child);
+    assert.equal(stopped, false);
+    completed = true;
+    return runtime.commitAsync(() => TaskCommit.completed(child.id));
+  });
+  registry.install(new Extension("conversation-parent", [], [], [definition]));
+  let closing: Promise<void> | undefined;
+  try {
+    const task = await harness.createTaskAsync(definition, null);
+    await entered.promise;
+    closing = harness.disposeAsync();
+    await assert.rejects(harness.createConversationAsync(), /closing/);
+    release.resolve();
+    await closing;
+    assert.equal(store.task(task.id)?.status, TaskStatus.Terminal);
+    assert.equal(store.conversations.length, 1);
+    assert.equal(store.conversations[0]!.ownerTaskId, task.id);
+  } finally { release.resolve(); await closing; await harness.disposeAsync(); store.dispose(); }
+});
+
 test("own reserved JSON keys survive cloning, document save and persistent recovery", async () => {
   const dir = mkdtempSync(join(tmpdir(), "durable-ts-own-json-"));
   const options = Object.assign(new DurableStoreOptions(), { path: join(dir, "store.jsonl") });
