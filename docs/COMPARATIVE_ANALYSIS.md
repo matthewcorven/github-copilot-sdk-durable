@@ -145,11 +145,6 @@ wire shapes and rejects malformed replies.
 Both SDKs expose sandbox configuration. The ports map filesystem/network/auth/credential
 fields, bypass flags, and `userPolicy.seatbelt.keychainAccess` without using deprecated
 `experimental.seatbelt`. Wire configuration tests do not prove OS enforcement. TypeScript
-`tolerateHostHookFailures` and Python `tolerate_host_hook_failures` default to false.
-When explicitly enabled, they match C#'s narrow host-hook sandbox/operation-denied/code126
-classifier and return the last actual assistant event (possibly absent), not a fabricated
-success. Other session errors still fail; sandbox decisions remain observable and no
-permission, user hook or sandbox policy is widened. TypeScript
 observes raw `sandbox.decision` events when delivered, but SDK 1.0.28's generated session
 event union does not declare that event. Native context fork uses the SDK's `sessions.fork`
 RPC with a null native event boundary, like C#; only durable documents/entries are bounded
