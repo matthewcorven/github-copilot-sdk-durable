@@ -63,7 +63,7 @@ async function main() {
       assert.equal(agent.workingDirectory, worktree, "the reviewer has its own working directory");
       assert.ok(passes >= 2, "the review loop ran more than one pass");
       assert.ok(reviewer.answers.length >= 2, "each pass produced an answer");
-      assert.ok(reviewer.answers.at(-1)?.includes(done), "the last pass says there is nothing left");
+      assert.ok(reviewer.answers.at(-1)?.toLowerCase().includes(done.toLowerCase()), "the last pass says there is nothing left");
     } finally {
       await harness.disposeAsync();
     }

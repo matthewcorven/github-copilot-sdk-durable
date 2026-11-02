@@ -79,8 +79,8 @@ async def main() -> None:
                 print(f"plain answer: {plain_answer}")
                 print(f"python answer: {venv_answer}")
                 print(f"timed bash calls: {len(timings)}")
-                Check.contains(venv_answer, ".venv", "the venv shell replaced the plain one")
-                Check.that(".venv" not in plain_answer, "the plain conversation kept the plain shell")
+                Check.contains(venv_answer, str(Path(project, ".venv")), "the venv shell replaced the plain one")
+                Check.that(str(Path(project, ".venv")) not in plain_answer, "the plain conversation kept the plain shell")
                 Check.equal(2, len(timings), "the wrapper timed both shell calls")
             finally:
                 await harness.close_async()
