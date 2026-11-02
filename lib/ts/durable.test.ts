@@ -886,6 +886,125 @@ test("review: official public SDK send keeps idle and RPC success under one admi
   }
 });
 
+test("review: accepted task creation behind the store gate belongs to shutdown", { timeout: 5000 }, async t => {
+  for (const direct of [true, false]) await t.test(direct ? "runner" : "harness", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "durable-ts-create-close-"));
+    const options = Object.assign(new DurableStoreOptions(), { path: join(dir, "store.jsonl") });
+    const store = DurableStore.create(options), registry = new ExtensionRegistry();
+    const client = new CopilotClient();
+    const harness = direct ? undefined : new DurableHarness(client, store, registry);
+    const runner = harness?.runner ?? new DurableTaskRunner(store, registry);
+    const held = barrier(), release = barrier(), phaseEntered = barrier(), phaseRelease = barrier();
+    let released = false, phaseStarted = false;
+    const definition = DurableTask.define("accepted", () => ({}), async (_input, _checkpoint, runtime) => {
+      phaseStarted = true;
+      phaseEntered.resolve();
+      await phaseRelease.promise;
+      assert.equal(released, false, "accepted task checkpoint must precede resource release");
+      return runtime.commitAsync(() => TaskCommit.completed("saved"));
+    });
+    registry.install(new Extension("accepted", [], [], [definition]));
+    const holding = store.commitAsync(async () => { held.resolve(); await release.promise; });
+    await held.promise;
+    const creating = (harness ?? runner).createTaskAsync(definition, null);
+    const creationResult = creating.then(record => ({ record }), error => ({ error }));
+    const finalize = async () => {
+      released = true;
+      assert.equal(store.tasks.length, 1, "resource release must include the accepted creation");
+      assert.equal(store.tasks[0]!.status, TaskStatus.Terminal, "resource release must follow the final checkpoint");
+      assert.deepEqual(store.tasks[0]!.outcome, { status: "completed", result: "saved" });
+    };
+    client.stop = async () => { await finalize(); return []; };
+    const closing = harness ? harness.disposeAsync() : runner.disposeAsync(finalize);
+    const closeResult = closing.then(() => null, error => error);
+    try {
+      await new Promise<void>(resolve => setImmediate(resolve));
+      assert.equal(released, false, "close must retain resources while accepted creation awaits the store gate");
+      assert.equal(store.tasks.length, 0, "creation is held at the real transaction gate");
+      assert.throws(() => DurableStore.create(options), /already locked/);
+      assert.throws(() => new DurableTaskRunner(store, registry), /already driven/);
+      await assert.rejects((harness ?? runner).createTaskAsync(definition, null), /closing/);
+      release.resolve();
+      await holding;
+      const result = await creationResult;
+      assert.ok("record" in result, "accepted creation must not fail scheduling after its commit");
+      await Promise.race([phaseEntered.promise, closeResult]);
+      assert.equal(phaseStarted, true, "accepted creation must be scheduled even after close starts");
+      assert.equal(released, false, "close must also drain the newly scheduled phase");
+      phaseRelease.resolve();
+      const record = result.record;
+      await closing;
+      assert.equal(store.task(record.id)!.status, TaskStatus.Terminal);
+      const bytes = readFileSync(options.path!);
+      const sequence = store.sequence;
+      await assert.rejects(runner.createTaskAsync(definition, null), /closing/);
+      assert.deepEqual(readFileSync(options.path!), bytes, "rejected post-close creation must not write");
+      assert.equal(store.sequence, sequence);
+      assert.throws(() => DurableStore.create(options), /already locked/);
+      const replacement = new DurableTaskRunner(store, registry);
+      await replacement.disposeAsync();
+    } finally {
+      release.resolve(); phaseRelease.resolve();
+      await holding;
+      const result = await creationResult;
+      await closeResult;
+      t.diagnostic(JSON.stringify({ direct, released, creation: "record" in result ? "success" : String(result.error),
+        tasks: store.tasks.map(task => ({ id: task.id, status: task.status, outcome: task.outcome })) }));
+      store.dispose();
+      rmSync(dir, { recursive: true });
+    }
+  });
+});
+
+test("review: failed accepted creation releases its shutdown drain without durable state", async () => {
+  const store = DurableStore.createEphemeral(), runner = new DurableTaskRunner(store, new ExtensionRegistry());
+  const held = barrier(), release = barrier();
+  const original = new Error("initial checkpoint failed");
+  const definition = DurableTask.define("fails-before-task", () => { throw original; }, async () => TaskCommit.completed(null));
+  const holding = store.commitAsync(async () => { held.resolve(); await release.promise; });
+  await held.promise;
+  const creating = assert.rejects(runner.createTaskAsync(definition, null), error => error === original);
+  let released = false;
+  const closing = runner.disposeAsync(async () => { released = true; });
+  try {
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(released, false, "close must enroll failed creations too");
+    release.resolve();
+    await Promise.all([holding, creating, closing]);
+    assert.deepEqual(store.tasks, [], "failed creation must not persist a task");
+    assert.equal(store.sequence, 0, "creation rollback must preserve the write sequence");
+    assert.deepEqual(store.documents, []);
+  } finally { release.resolve(); await Promise.allSettled([holding, creating, closing]); store.dispose(); }
+});
+
+test("review: draining parent's public creation retains ownership without admitting external owners", { timeout: 2000 }, async () => {
+  const store = DurableStore.createEphemeral(), registry = new ExtensionRegistry();
+  const runner = new DurableTaskRunner(store, registry), entered = barrier(), release = barrier();
+  const child = DurableTask.define("public-child", () => ({}), async (_input, _checkpoint, runtime) =>
+    runtime.commitAsync(() => TaskCommit.completed("child")));
+  const parent = DurableTask.define("public-parent", () => ({}), async (_input, _checkpoint, runtime) => {
+    entered.resolve();
+    await release.promise;
+    const record = await runner.createTaskAsync(child, null, { ownerTaskId: runtime.task.id });
+    assert.equal((await runner.waitForTaskAsync(record.id)).result, "child");
+    return runtime.commitAsync(() => TaskCommit.completed("parent"));
+  });
+  registry.install(new Extension("public", [], [], [parent, child]));
+  const record = await runner.createTaskAsync(parent, null);
+  await entered.promise;
+  const closing = runner.disposeAsync();
+  try {
+    await assert.rejects(runner.createTaskAsync(child, null, { ownerTaskId: record.id }), /closing/);
+    release.resolve();
+    await closing;
+    assert.equal(store.tasks.length, 2);
+    assert.ok(store.tasks.every(task => task.status === TaskStatus.Terminal));
+    assert.deepEqual(store.tasks.map(task => task.outcome), [
+      { status: "completed", result: "parent" }, { status: "completed", result: "child" },
+    ]);
+  } finally { release.resolve(); await closing; store.dispose(); }
+});
+
 test("review: draining parent can commit and schedule a dependent child but external work is rejected", { timeout: 2000 }, async () => {
   const store = DurableStore.createEphemeral();
   const registry = new ExtensionRegistry();
