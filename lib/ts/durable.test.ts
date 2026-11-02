@@ -1438,6 +1438,377 @@ test("review: invalid sandbox cannot poison root", async () => {
   } finally { await harness.disposeAsync(); store.dispose(); }
 });
 
+async function sharedInitializationPeer() {
+  const calls: Array<{ method: string; sessionId: string }> = [];
+  const attached = new Set<string>();
+  const holds = new Map<string, { entered: ReturnType<typeof barrier>; release: ReturnType<typeof barrier>; error: string }>();
+  let connection: ReturnType<typeof createMessageConnection>;
+  let cleanupError = false, forks = 0, connected = true;
+  const server = createServer(socket => {
+    connection = createMessageConnection(new SocketMessageReader(socket), new SocketMessageWriter(socket));
+    connection.onRequest(async (method, raw) => {
+      const params: Record<string, unknown> = { ...raw }, sessionId = String(params["sessionId"]);
+      calls.push({ method, sessionId });
+      const held = holds.get(method);
+      if (held) {
+        holds.delete(method);
+        held.entered.resolve();
+        await held.release.promise;
+        if (held.error) throw new ResponseError(-32000, held.error);
+      }
+      if (method === "connect") return { protocolVersion: 3 };
+      if (method === "session.create" || method === "session.resume") {
+        attached.add(sessionId);
+        return { sessionId, capabilities: {} };
+      }
+      if (method === "sessions.fork") return { sessionId: `fork-${++forks}` };
+      if (method === "session.getMetadata") return { session: {
+        sessionId, startTime: "2026-01-01T00:00:00Z", modifiedTime: "2026-01-01T00:00:00Z", isRemote: false,
+      } };
+      if (method === "session.detach") {
+        if (cleanupError) throw new ResponseError(-32000, "retained cleanup failed");
+        attached.delete(sessionId);
+        return { success: true };
+      }
+      if (method === "session.getMessages" || method === "session.tools.set") {
+        if (!attached.has(sessionId))
+          throw new ResponseError(-32000, "session is no longer attached after retained cleanup");
+        if (method === "session.tools.set") return {};
+        return { events: [
+          { id: "shared-start", type: "session.start", data: { selectedModel: "shared-model" } },
+          { id: "shared-answer", type: "assistant.message", data: { messageId: "shared-message", content: "shared history" } },
+        ] };
+      }
+      throw new ResponseError(-32601, `Unexpected shared initialization RPC ${method}`);
+    });
+    connection.listen();
+    socket.on("close", () => { connected = false; connection.dispose(); });
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const client = new CopilotClient({ connection: RuntimeConnection.forUri(`127.0.0.1:${address.port}`) });
+  await client.start();
+  const outstanding: ReturnType<typeof barrier>[] = [];
+  return {
+    client, calls,
+    get connected() { return connected; },
+    count(method: string, sessionId?: string) {
+      return calls.filter(call => call.method === method && (sessionId === undefined || call.sessionId === sessionId)).length;
+    },
+    hold(method: string, error = "") {
+      const entered = barrier(), release = barrier();
+      outstanding.push(release);
+      holds.set(method, { entered, release, error });
+      return { entered: entered.promise, release: release.resolve };
+    },
+    failCleanup(value: boolean) { cleanupError = value; },
+    async fence(sessionId: string) {
+      // Round trips also drive the entire metadata/resume/history request chain on a broken implementation.
+      for (let i = 0; i < 8; i++) await client.getSessionMetadata(sessionId);
+    },
+    async notify(sessionId: string, id: string) {
+      await connection!.sendNotification("session.event", { sessionId, event: { id, type: "session.idle", data: {} } });
+      await client.getSessionMetadata(sessionId);
+    },
+    async close() {
+      for (const release of outstanding) release.resolve();
+      cleanupError = false;
+      await client.stop();
+      const closed = once(server, "close"); server.close(); await closed;
+    },
+  };
+}
+
+test("shared initialization: retained cleanup owns replacement and every root/resume joiner", { timeout: 15000 }, async t => {
+  for (const persistent of [false, true]) for (const failRetry of [false, true])
+    await t.test(`${persistent ? "borrowed-jsonl" : "memory"}/${failRetry ? "cleanup-error" : "ready"}`, async () => {
+      const directory = mkdtempSync(join(tmpdir(), "durable-ts-shared-"));
+      const options = Object.assign(new DurableStoreOptions(), { path: join(directory, "store.jsonl") });
+      const store = persistent ? DurableStore.create(options) : DurableStore.createEphemeral();
+      const peer = await sharedInitializationPeer(), harness = new DurableHarness(peer.client, store, new ExtensionRegistry());
+      const history = peer.hold("session.getMessages", "initial history failed");
+      peer.failCleanup(true);
+      const initial = harness.rootAsync(new AgentChoices({ instructions: "first" }));
+      const initialResult = initial.catch(error => error);
+      let cleanup: ReturnType<typeof peer.hold> | undefined;
+      let results: Promise<PromiseSettledResult<DurableConversation>[]> | undefined;
+      try {
+        await history.entered;
+        const handle = harness.conversations[0]!, original = handle.session, sessionId = original.sessionId;
+        history.release();
+        const error = await initialResult;
+        assert(error instanceof AggregateError);
+        assert.equal(error.errors.length, 2);
+        assert.match(String(error.errors[0]), /initial history failed/);
+        assert.match(String(error.errors[1]), /retained cleanup failed/);
+        peer.failCleanup(false);
+        cleanup = peer.hold("session.detach", failRetry ? "joined cleanup failed" : "");
+        const root = harness.rootAsync(new AgentChoices({ instructions: "ignored" }));
+        await cleanup.entered;
+        const returned: DurableConversation[] = [];
+        const joiners = [
+          root, harness.resumeConversationAsync(handle.id), harness.resumeConversationAsync(handle.id),
+          harness.rootAsync(), harness.resumeConversationAsync(handle.id),
+        ].map(pending => pending.then(value => { returned.push(value); return value; }));
+        results = Promise.allSettled(joiners);
+        await peer.fence(sessionId);
+        const prematureReturns = returned.length, prematureResumes = peer.count("session.resume", sessionId);
+        const prematureHistory = peer.count("session.getMessages", sessionId) - 1;
+        let prematureNotifications = 0;
+        if (returned[0]) {
+          returned[0].session.on(() => { prematureNotifications++; });
+          await peer.notify(sessionId, "premature-replacement");
+        }
+        const unrelated = await harness.createConversationAsync(new AgentChoices(), null, handle.id);
+        assert.notEqual(unrelated.id, handle.id, "unrelated conversations must not share the initialization gate");
+        cleanup.release();
+        const settled = await results;
+        const ready = settled.find((result): result is PromiseFulfilledResult<DurableConversation> => result.status === "fulfilled");
+        const usability = ready ? await Promise.allSettled([ready.value.contextAsync(), ready.value.session.setTools([])]) : [];
+        t.diagnostic(JSON.stringify({ persistent, failRetry, prematureReturns, prematureResumes, prematureHistory,
+          prematureNotifications, statuses: settled.map(result => result.status),
+          publicRpcUsability: usability.map(result => result.status === "fulfilled" ? "fulfilled" : String(result.reason)) }));
+        assert(usability.every(result => result.status === "fulfilled"),
+          "replacement history AND tool-update public RPCs must remain usable after late cleanup");
+        assert.equal(prematureReturns, 0, "no root or public resume may return before retained cleanup completes");
+        assert.equal(prematureResumes, 0, "no replacement resume RPC may bypass retained cleanup");
+        assert.equal(prematureHistory, 0, "no replacement hydration may precede retained cleanup completion");
+        if (failRetry) {
+          assert(settled.every(result => result.status === "rejected"), "all cleanup joiners must fail, not create replacements");
+          const failure = (settled[0] as PromiseRejectedResult).reason;
+          assert.match(String(failure), /joined cleanup failed/);
+          for (const result of settled) {
+            assert.equal(result.status, "rejected");
+            if (result.status === "rejected") assert.equal(result.reason, failure, "joiners must observe the identical failure");
+          }
+          assert.equal(peer.count("session.resume", sessionId), 0);
+          assert.equal(peer.count("session.getMessages", sessionId), 1);
+        } else {
+          assert(settled.every(result => result.status === "fulfilled"));
+          for (const result of settled) if (result.status === "fulfilled") assert.equal(result.value, handle);
+          assert.equal(peer.count("session.resume", sessionId), 1);
+          assert.equal(peer.count("session.getMessages", sessionId), 3, "one hydration plus the explicit public usability request");
+        }
+        const final = await harness.rootAsync();
+        assert.equal(final, handle);
+        assert.equal(final.effectiveModel.model, "shared-model");
+        assert.deepEqual(final.answers, ["shared history"]);
+        assert.equal(final.choices().instructions, "first");
+        assert.equal(final.sessionId, sessionId);
+        assert.equal(store.conversations.filter(record => !record.ownerTaskId && !record.ownerConversationId &&
+          !record.parentConversationId).length, 1, "all joiners must retain exactly one root record");
+        assert.equal(peer.count("session.resume", sessionId), 1);
+        assert.equal(peer.count("session.detach", sessionId), failRetry ? 3 : 2);
+        assert.throws(() => original.on(() => {}), /disconnected/);
+        let events = 0;
+        final.session.on(() => { events++; });
+        await peer.notify(sessionId, "ready-replacement");
+        assert.equal(events, 1, "replacement must receive a real SDK notification after metadata delivery fence");
+        await final.contextAsync();
+        await final.session.setTools([]);
+      } finally {
+        history.release(); cleanup?.release(); peer.failCleanup(false);
+        await initialResult; await results; await harness.disposeAsync(); store.dispose(); await peer.close();
+        rmSync(directory, { recursive: true });
+      }
+    });
+});
+
+test("shared initialization: create resume and fork cannot expose attached but unhydrated handles", { timeout: 15000 }, async t => {
+  for (const operation of ["root", "create", "resume-unbound", "resume-bound", "fork"] as const)
+    for (const failHistory of [false, true]) await t.test(`${operation}/${failHistory ? "history-error" : "ready"}`, async () => {
+      const store = DurableStore.createEphemeral(), peer = await sharedInitializationPeer();
+      const harness = new DurableHarness(peer.client, store, new ExtensionRegistry());
+      let pending: Promise<DurableConversation> | undefined, results: Promise<PromiseSettledResult<DurableConversation>[]> | undefined;
+      let history: ReturnType<typeof peer.hold> | undefined;
+      try {
+        const parent = operation === "fork" || operation === "resume-bound" ? await harness.createConversationAsync() : undefined;
+        if (operation === "resume-bound") parent!.detach();
+        const id = operation === "resume-unbound" ? await store.commitAsync(tx => tx.createConversation().id) : parent?.id;
+        history = peer.hold("session.getMessages", failHistory ? "shared history failed" : "");
+        pending = operation === "root" ? harness.rootAsync() :
+          operation === "create" ? harness.createConversationAsync() :
+          operation === "fork" ? harness.forkAsync(parent!, store.entries(parent!.id).at(-1)!) :
+          harness.resumeConversationAsync(id!);
+        await history.entered;
+        const handle = harness.conversations.at(-1)!, sessionId = handle.sessionId!;
+        let returned = 0;
+        const joiners = [pending, harness.resumeConversationAsync(handle.id), harness.resumeConversationAsync(handle.id)]
+          .map(p => p.then(value => { returned++; return value; }));
+        results = Promise.allSettled(joiners);
+        const calls = peer.calls.length;
+        await peer.fence(sessionId);
+        const premature = returned, extraInitialization = peer.calls.slice(calls).filter(call =>
+          ["session.create", "session.resume", "session.getMessages"].includes(call.method)).length;
+        history.release();
+        const settled = await results;
+        t.diagnostic(JSON.stringify({ operation, failHistory, premature, extraInitialization, statuses: settled.map(r => r.status) }));
+        assert.equal(premature, 0, "attached shortcut must join pending history initialization");
+        assert.equal(extraInitialization, 0, "joiners cannot issue duplicate initialization or history RPCs");
+        if (failHistory) {
+          assert(settled.every(result => result.status === "rejected"));
+          const failure = (settled[0] as PromiseRejectedResult).reason;
+          for (const result of settled) if (result.status === "rejected") assert.equal(result.reason, failure);
+          assert.match(String(failure), /shared history failed/);
+          assert.equal(handle.sessionId, null);
+          const retry = await harness.resumeConversationAsync(handle.id);
+          assert.equal(retry, handle);
+        } else {
+          for (const result of settled) {
+            assert.equal(result.status, "fulfilled");
+            if (result.status === "fulfilled") assert.equal(result.value, handle);
+          }
+        }
+        assert.equal(handle.effectiveModel.model, "shared-model");
+        assert.deepEqual(handle.answers, ["shared history"]);
+        await handle.contextAsync(); await handle.session.setTools([]);
+      } finally {
+        history?.release(); await Promise.allSettled([pending, results]);
+        await harness.disposeAsync(); store.dispose(); await peer.close();
+      }
+    });
+});
+
+test("shared initialization: publication and SDK requests retain a single initialization owner", { timeout: 15000 }, async t => {
+  for (const operation of ["root", "create", "resume-unbound", "resume-bound", "fork"] as const)
+    await t.test(operation, async () => {
+      const store = DurableStore.createEphemeral(), peer = await sharedInitializationPeer();
+      const harness = new DurableHarness(peer.client, store, new ExtensionRegistry());
+      let sdk: ReturnType<typeof peer.hold> | undefined, history: ReturnType<typeof peer.hold> | undefined;
+      const outcomes: Array<Promise<{ value: DurableConversation } | { error: unknown }>> = [];
+      let settled = 0, unwatch = () => {};
+      const observe = (pending: Promise<DurableConversation>) => {
+        outcomes.push(pending.then(value => { settled++; return { value }; }, error => { settled++; return { error }; }));
+      };
+      try {
+        const parent = operation === "fork" || operation === "resume-bound" ? await harness.createConversationAsync() : undefined;
+        if (operation === "resume-bound") parent!.detach();
+        const id = operation === "resume-unbound" ? await store.commitAsync(tx => tx.createConversation().id) : parent?.id;
+        if (operation === "root" || operation === "create" || operation === "fork") {
+          const count = store.conversations.length;
+          unwatch = store.subscribe(() => {
+            if (store.conversations.length > count && outcomes.length === 1)
+              observe(harness.resumeConversationAsync(store.conversations.at(-1)!.id));
+          });
+        }
+        sdk = peer.hold(operation === "fork" ? "sessions.fork" : operation === "resume-bound" ? "session.resume" : "session.create");
+        history = peer.hold("session.getMessages");
+        observe(operation === "root" ? harness.rootAsync() :
+          operation === "create" ? harness.createConversationAsync() :
+          operation === "fork" ? harness.forkAsync(parent!, store.entries(parent!.id).at(-1)!) :
+          harness.resumeConversationAsync(id!));
+        await sdk.entered;
+        const record = store.conversations.at(-1)!;
+        observe(harness.resumeConversationAsync(record.id));
+        observe(harness.resumeConversationAsync(record.id));
+        await peer.fence(parent?.sessionId ?? "metadata-fence");
+        const prematureSdk = settled;
+        const initializationRpcs = peer.calls.filter(call => ["session.create", "session.resume", "sessions.fork"].includes(call.method)).length;
+        sdk.release();
+        await history.entered;
+        observe(harness.resumeConversationAsync(record.id));
+        await peer.fence(harness.findConversation(record.id)!.sessionId!);
+        const prematureHydration = settled;
+        history.release();
+        const results = await Promise.all(outcomes);
+        t.diagnostic(JSON.stringify({ operation, prematureSdk, prematureHydration, initializationRpcs, joiners: results.length }));
+        assert.equal(prematureSdk, 0, "even commit-listener resumes must join before create/resume/fork RPC completion");
+        assert.equal(prematureHydration, 0, "the same owner must retain all joiners through hydration");
+        assert.equal(initializationRpcs, parent ? 2 : 1, "exactly one SDK initialization is permitted for the new conversation");
+        const handle = harness.findConversation(record.id)!;
+        for (const result of results) {
+          assert("value" in result, "accepted publication and SDK joiners must not fail spuriously");
+          assert.equal(result.value, handle);
+        }
+        assert.deepEqual(handle.answers, ["shared history"]);
+        assert.equal(handle.effectiveModel.model, "shared-model");
+        await handle.contextAsync(); await handle.session.setTools([]);
+      } finally {
+        unwatch(); sdk?.release(); history?.release(); await Promise.all(outcomes);
+        await harness.disposeAsync(); store.dispose(); await peer.close();
+      }
+    });
+});
+
+test("shared initialization: shutdown drains shared cleanup through hydration and rejects late admissions", { timeout: 15000 }, async t => {
+  for (const persistent of [false, true]) for (const failHistory of [false, true])
+    await t.test(`${persistent ? "borrowed-jsonl" : "memory"}/${failHistory ? "history-error" : "ready"}`, async () => {
+      const directory = mkdtempSync(join(tmpdir(), "durable-ts-shared-close-"));
+      const options = Object.assign(new DurableStoreOptions(), { path: join(directory, "store.jsonl") });
+      const store = persistent ? DurableStore.create(options) : DurableStore.createEphemeral();
+      const peer = await sharedInitializationPeer(), harness = new DurableHarness(peer.client, store, new ExtensionRegistry());
+      const initialHistory = peer.hold("session.getMessages", "initial history failed");
+      peer.failCleanup(true);
+      const first = harness.rootAsync(new AgentChoices({ instructions: "first" })).catch(error => error);
+      let cleanup: ReturnType<typeof peer.hold> | undefined, history: ReturnType<typeof peer.hold> | undefined;
+      let results: Promise<PromiseSettledResult<DurableConversation>[]> | undefined, closing: Promise<void> | undefined;
+      try {
+        await initialHistory.entered; initialHistory.release();
+        assert(await first instanceof AggregateError);
+        peer.failCleanup(false);
+        const handle = harness.conversations[0]!, sessionId = handle.binding()!["sessionId"] as string;
+        cleanup = peer.hold("session.detach");
+        const root = harness.rootAsync();
+        await cleanup.entered;
+        let returned = 0, closed = false;
+        results = Promise.allSettled([root, harness.resumeConversationAsync(handle.id), harness.rootAsync(),
+          harness.resumeConversationAsync(handle.id)].map(pending => pending.then(value => { returned++; return value; })));
+        history = peer.hold("session.getMessages", failHistory ? "shutdown shared history failed" : "");
+        closing = harness.disposeAsync().then(() => { closed = true; });
+        const sequence = store.sequence, bytes = persistent ? readFileSync(options.path!) : null;
+        await peer.fence(sessionId);
+        assert.equal(peer.connected, true);
+        assert.equal(closed, false, "shutdown must retain shared cleanup completion ownership");
+        assert.equal(returned, 0);
+        assert.equal(peer.count("session.resume", sessionId), 0);
+        if (persistent) assert.throws(() => DurableStore.create(options), /already locked/);
+        await assert.rejects(harness.rootAsync(), /closing/);
+        await assert.rejects(harness.resumeConversationAsync(handle.id), /closing/);
+        await assert.rejects(harness.createConversationAsync(), /closing/);
+        cleanup.release();
+        await history.entered;
+        await peer.fence(sessionId);
+        assert.equal(closed, false, "shutdown must retain ownership after cleanup, through replacement hydration");
+        assert.equal(peer.connected, true);
+        assert.equal(returned, 0, "no joined caller is ready while replacement hydration is held");
+        assert.equal(peer.count("session.resume", sessionId), 1);
+        history.release();
+        const settled = await results;
+        if (failHistory) {
+          assert(settled.every(result => result.status === "rejected"));
+          const failure = (settled[0] as PromiseRejectedResult).reason;
+          assert.match(String(failure), /shutdown shared history failed/);
+          for (const result of settled) if (result.status === "rejected") assert.equal(result.reason, failure);
+        } else {
+          for (const result of settled) {
+            assert.equal(result.status, "fulfilled");
+            if (result.status === "fulfilled") assert.equal(result.value, handle);
+          }
+          assert.deepEqual(handle.answers, ["shared history"]);
+          assert.equal(handle.effectiveModel.model, "shared-model");
+        }
+        await closing;
+        assert.equal(closed, true);
+        assert.equal(handle.sessionId, null);
+        assert.equal(store.sequence, sequence);
+        if (persistent) {
+          assert.deepEqual(readFileSync(options.path!), bytes);
+          assert.throws(() => DurableStore.create(options), /already locked/, "borrowed JSONL remains caller-owned after harness close");
+          store.dispose();
+          const reopened = DurableStore.create(options);
+          assert.equal(reopened.conversations.length, 1);
+          reopened.dispose();
+        }
+      } finally {
+        initialHistory.release(); cleanup?.release(); history?.release(); peer.failCleanup(false);
+        await Promise.allSettled([first, results, closing]); await harness.disposeAsync(); store.dispose(); await peer.close();
+        rmSync(directory, { recursive: true });
+      }
+    });
+});
+
 test("review: initial choices commit atomically before a later binding failure", async () => {
   const dir = mkdtempSync(join(tmpdir(), "durable-ts-initial-"));
   const options = Object.assign(new DurableStoreOptions(), { path: join(dir, "store.jsonl") });
