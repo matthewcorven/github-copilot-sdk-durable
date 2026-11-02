@@ -13,6 +13,308 @@ import {
   type SessionEvent,
 } from "./durable.js";
 import { CopilotClient } from "@github/copilot-sdk";
+import fs from "node:fs";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { syncBuiltinESMExports } from "node:module";
+
+function canonicalFixture(mode: string, file: string): { ownerId: string; forkIds: string[] } {
+  return JSON.parse(execFileSync("dotnet", ["run", "--file",
+    fileURLToPath(new URL("./canonical-fixture.cs", import.meta.url)), "--", mode, file],
+    { encoding: "utf8" }).trim().split("\n").at(-1)!);
+}
+
+function barrier() {
+  let release!: () => void;
+  const promise = new Promise<void>(resolve => { release = resolve; });
+  return { promise, resolve: release };
+}
+
+test("canonical repeated definitions retain every version across reopen", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "durable-ts-canonical-"));
+  const file = join(dir, "store.jsonl");
+  let store: DurableStore | undefined;
+  try {
+    const fixture = canonicalFixture("create", file);
+    store = DurableStore.create(Object.assign(new DurableStoreOptions(), { path: file }));
+    const notes = store.document("interop.notes", fixture.ownerId)!;
+    assert.deepEqual(notes.versions.map(v => v.value), [["first"], ["second"]]);
+    assert.deepEqual(notes.asOfOrBefore(notes.versions[0]!.entryId, id => store!.sequenceOf(id)), ["first"]);
+    assert.deepEqual(notes.latest, ["second"]);
+    const client = new CopilotClient();
+    client.stop = async () => [];
+    client.resumeSession = async id => sdkSession(id).sdk;
+    const harness = new DurableHarness(client, store, new ExtensionRegistry());
+    try {
+      const child = await harness.resumeConversationAsync(fixture.forkIds[0]!);
+      assert.equal(child.sessionId, "canonical-child");
+    } finally { await harness.disposeAsync(); }
+    store.dispose();
+    store = undefined;
+    canonicalFixture("verify", file);
+  } finally { store?.dispose(); rmSync(dir, { recursive: true }); }
+});
+
+test("task runner retains exclusive scheduler ownership until its active phase drains", async () => {
+  const store = DurableStore.createEphemeral();
+  const registry = new ExtensionRegistry();
+  const entered = barrier(), release = barrier();
+  const definition = DurableTask.define("exclusive", () => ({ phase: "run" }), async (_input, _checkpoint, runtime) => {
+    entered.resolve();
+    await release.promise;
+    return runtime.commitAsync(() => TaskCommit.completed(null));
+  });
+  registry.install(new Extension("exclusive", [], [], [definition]));
+  const runner = new DurableTaskRunner(store, registry);
+  let running: Promise<unknown> | undefined, closing: Promise<unknown> | undefined;
+  try {
+    const task = await store.commitAsync(tx => tx.createTask(definition, null));
+    running = runner.runTaskAsync(task.id);
+    await entered.promise;
+    closing = runner.disposeAsync();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.throws(() => new DurableTaskRunner(store, registry), /runner|runtime/);
+    release.resolve();
+    await Promise.all([closing, running]);
+    const replacement = new DurableTaskRunner(store, registry);
+    await replacement.disposeAsync();
+  } finally {
+    release.resolve();
+    await Promise.allSettled([closing, running]);
+    await runner.disposeAsync();
+    store.dispose();
+  }
+});
+
+test("a failing recovered task cannot release SDK or scheduler before another run drains", async () => {
+  const store = DurableStore.createEphemeral();
+  const registry = new ExtensionRegistry();
+  const badEntered = barrier(), goodEntered = barrier(), badRelease = barrier(), goodRelease = barrier();
+  const definition = DurableTask.define("task-errors", () => ({ phase: "run" }), async (input, _checkpoint, runtime) => {
+    const bad = input === "bad";
+    (bad ? badEntered : goodEntered).resolve();
+    await (bad ? badRelease : goodRelease).promise;
+    return runtime.commitAsync(() => TaskCommit.completed(input));
+  });
+  registry.install(new Extension("task-errors", [], [], [definition]));
+  const client = new CopilotClient();
+  let stops = 0;
+  client.stop = async () => { stops++; return []; };
+  const harness = new DurableHarness(client, store, registry);
+  const original = new Error("task checkpoint storage failed");
+  let recovery: Promise<unknown> | undefined, closing: Promise<unknown> | undefined;
+  try {
+    const [bad, good] = await store.commitAsync(tx =>
+      [tx.createTask(definition, "bad"), tx.createTask(definition, "good")]);
+    const commit = store.commitTaskCheckpointAsync.bind(store);
+    mock.method(store, "commitTaskCheckpointAsync", (...[id, body]: Parameters<DurableStore["commitTaskCheckpointAsync"]>) => {
+      if (id === bad!.id) return Promise.reject(original);
+      return commit(id, body);
+    });
+    recovery = assert.rejects(harness.resumeAsync(), error => error === original);
+    await Promise.all([badEntered.promise, goodEntered.promise]);
+    closing = assert.rejects(harness.disposeAsync(), error => error === original);
+    badRelease.resolve();
+    await recovery;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(stops, 0);
+    assert.throws(() => new DurableTaskRunner(store, registry), /runner|runtime/);
+    goodRelease.resolve();
+    await closing;
+    assert.equal(stops, 1);
+    assert.equal(store.task(good!.id)!.status, TaskStatus.Terminal);
+    assert.equal(store.task(bad!.id)!.status, TaskStatus.Pending);
+  } finally {
+    badRelease.resolve(); goodRelease.resolve();
+    await Promise.allSettled([closing, recovery]);
+    await harness.disposeAsync().catch(error => { assert.equal(error, original); });
+    store.dispose();
+  }
+});
+
+test("canonical numeric fork states resume and TS forks persist numeric pending and completed states", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "durable-ts-fork-wire-"));
+  const file = join(dir, "store.jsonl");
+  let store: DurableStore | undefined;
+  try {
+    const fixture = canonicalFixture("create", file);
+    store = DurableStore.create(Object.assign(new DurableStoreOptions(), { path: file }));
+    const client = new CopilotClient();
+    client.stop = async () => [];
+    client.resumeSession = async id => sdkSession(id).sdk;
+    mock.getter(client, "rpc", () => ({ sessions: { fork: async () => ({ sessionId: "ts-child" }) } }));
+    const harness = new DurableHarness(client, store, new ExtensionRegistry());
+    try {
+      const parent = await harness.resumeConversationAsync(fixture.forkIds[0]!);
+      assert.equal(parent.sessionId, "canonical-child");
+      const entry = await store.commitAsync(tx => tx.appendEntry(parent.id, "boundary"));
+      const child = await parent.forkAsync(entry);
+      const versions = store.document("durable.fork", child.id)!.versions;
+      assert.deepEqual(versions.slice(-2).map(v => (v.value as { state: number }).state), [0, 1]);
+    } finally { await harness.disposeAsync(); }
+    store.dispose();
+    store = undefined;
+    assert.equal(canonicalFixture("verify", file).forkIds.length, 2);
+  } finally { store?.dispose(); rmSync(dir, { recursive: true }); }
+});
+
+test("failed checkpoint and memo append/fsync restore memory, bytes and retry after reopen", async t => {
+  for (const operation of ["terminal", "checkpoint", "memo"] as const) {
+    for (const fault of ["writeFileSync", "fsyncSync"] as const) {
+      await t.test(`${operation}/${fault}`, async () => {
+        const dir = mkdtempSync(join(tmpdir(), "durable-ts-failure-"));
+        const file = join(dir, "store.jsonl");
+        const options = Object.assign(new DurableStoreOptions(), { path: file });
+        let store = DurableStore.create(options);
+        try {
+          const definition = DurableTask.define("failure", () => ({ phase: "run" }),
+            async () => TaskCommit.completed(null));
+          const task = await store.commitAsync(tx => tx.createTask(definition, null));
+          const before = readFileSync(file);
+          const checkpoint = structuredClone(task.checkpoint);
+          const original = new Error(`injected ${fault}`);
+          const real = fs[fault];
+          let fail = true;
+          const injection = mock.method(fs, fault, (...args: unknown[]) => {
+            if (fail) {
+              fail = false;
+              if (fault === "writeFileSync") Reflect.apply(real, fs, [args[0], '{"partial":']);
+              throw original;
+            }
+            return Reflect.apply(real, fs, args);
+          });
+          syncBuiltinESMExports();
+          const write = () => operation === "memo"
+            ? store.memoAsync(task.id, "once", { saved: true })
+            : store.commitTaskCheckpointAsync(task.id, () => operation === "terminal"
+              ? TaskCommit.completed({ saved: true }) : TaskCommit.running({ phase: "next" }));
+          try {
+            await assert.rejects(write(), error => error === original);
+            assert.equal(task.status, TaskStatus.Pending);
+            assert.deepEqual(task.checkpoint, checkpoint);
+            assert.equal(task.outcome, null);
+            assert.deepEqual(task.memos, {});
+            assert.deepEqual(readFileSync(file), before);
+            // A second rollback must not resurrect the failed first update.
+            fail = true;
+            await assert.rejects(write(), error => error === original);
+            assert.equal(task.status, TaskStatus.Pending);
+            assert.deepEqual(task.memos, {});
+            assert.deepEqual(readFileSync(file), before);
+          } finally { injection.mock.restore(); syncBuiltinESMExports(); }
+          store.dispose();
+          store = DurableStore.create(options);
+          assert.equal(store.task(task.id)!.status, TaskStatus.Pending);
+          assert.deepEqual(store.task(task.id)!.memos, {});
+          await write();
+          store.dispose();
+          store = DurableStore.create(options);
+          if (operation === "memo") assert.deepEqual(await store.memoAsync(task.id, "once"), { saved: true });
+          else if (operation === "terminal") {
+            assert.equal(store.task(task.id)!.status, TaskStatus.Terminal);
+            assert.notEqual(store.task(task.id)!.outcome, null);
+          } else {
+            assert.equal(store.task(task.id)!.status, TaskStatus.Running);
+            assert.deepEqual(store.task(task.id)!.checkpoint, { phase: "next" });
+          }
+        } finally { store.dispose(); rmSync(dir, { recursive: true }); }
+      });
+    }
+  }
+});
+
+test("recovery runs committed Pending work after actual close and reopen", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "durable-ts-pending-"));
+  const options = Object.assign(new DurableStoreOptions(), { path: join(dir, "store.jsonl") });
+  let store = DurableStore.create(options);
+  let calls = 0;
+  const definition = DurableTask.define("pending", () => ({ phase: "run" }),
+    async (_input, _checkpoint, runtime) => {
+      calls++;
+      return runtime.commitAsync(() => TaskCommit.completed({ recovered: true }));
+    });
+  const registry = new ExtensionRegistry();
+  registry.install(new Extension("recovery", [], [], [definition]));
+  const client = new CopilotClient();
+  client.stop = async () => [];
+  let harness: DurableHarness | undefined;
+  try {
+    const record = await store.commitAsync(tx => tx.createTask(definition, null));
+    assert.equal(record.status, TaskStatus.Pending);
+    assert.equal(calls, 0);
+    store.dispose();
+    store = DurableStore.create(options);
+    harness = new DurableHarness(client, store, registry);
+    const outcomes = await harness.resumeAsync();
+    assert.equal(outcomes.length, 1);
+    assert.equal(calls, 1);
+    assert.equal(store.task(record.id)!.status, TaskStatus.Terminal);
+    store.dispose();
+    store = DurableStore.create(options);
+    assert.equal(store.task(record.id)!.status, TaskStatus.Terminal);
+  } finally { await harness?.disposeAsync(); store.dispose(); rmSync(dir, { recursive: true }); }
+});
+
+test("shutdown drains every checkpoint and recovered phase before stopping SDK and releasing writer", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "durable-ts-drain-"));
+  const options = Object.assign(new DurableStoreOptions(), { path: join(dir, "store.jsonl") });
+  const store = DurableStore.create(options);
+  const client = new CopilotClient();
+  const order: string[] = [];
+  client.stop = async () => { order.push("stop"); return []; };
+  const registry = new ExtensionRegistry();
+  const entered = barrier(), releaseRun = barrier();
+  const releaseBarrier = barrier(), barrierEntered = barrier();
+  const definition = DurableTask.define("drain", () => ({ phase: "run" }), async (_input, _checkpoint, runtime) => {
+    entered.resolve();
+    await releaseRun.promise;
+    const result = await runtime.commitAsync(() => TaskCommit.completed(null));
+    order.push("run");
+    return result;
+  });
+  registry.install(new Extension("drain", [], [], [definition]));
+  const harness = new DurableHarness(client, store, registry);
+  const original = new Error("first checkpoint");
+  let recovery: Promise<unknown> | undefined, closing: Promise<unknown> | undefined;
+  try {
+    const records = await store.commitAsync(tx => {
+      const task = tx.createTask(definition, null);
+      task.status = TaskStatus.Running;
+      return [tx.createConversation(), tx.createConversation()];
+    });
+    harness.findConversation(records[0]!.id)!.checkpointBarrierAsync = async () => { throw original; };
+    harness.findConversation(records[1]!.id)!.checkpointBarrierAsync = async () => {
+      barrierEntered.resolve();
+      await releaseBarrier.promise;
+      await store.commitAsync(tx => tx.appendEntry(records[1]!.id, "last-checkpoint"));
+      order.push("barrier");
+    };
+    recovery = harness.resumeAsync();
+    await entered.promise;
+    closing = assert.rejects(harness.disposeAsync(), error => error === original);
+    await barrierEntered.promise;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.deepEqual(order, []);
+    assert.throws(() => DurableStore.create(options), /locked/);
+    releaseRun.resolve();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.deepEqual(order, ["run"]);
+    releaseBarrier.resolve();
+    await Promise.all([closing, recovery]);
+    assert.deepEqual(order, ["run", "barrier", "stop"]);
+    store.dispose();
+    const reopened = DurableStore.create(options);
+    try {
+      assert.equal(reopened.tasks[0]!.status, TaskStatus.Terminal);
+      assert.equal(reopened.entries(records[1]!.id).length, 1);
+    } finally { reopened.dispose(); }
+  } finally {
+    releaseBarrier.resolve(); releaseRun.resolve();
+    await Promise.allSettled([closing, recovery]);
+    await harness.disposeAsync().catch(error => { assert.equal(error, original); });
+    store.dispose(); rmSync(dir, { recursive: true });
+  }
+});
 
 test("harness disposal is idempotent and stops SDK after checkpoint failure", async () => {
   const store = DurableStore.createEphemeral();
@@ -26,6 +328,24 @@ test("harness disposal is idempotent and stops SDK after checkpoint failure", as
     await assert.rejects(harness.disposeAsync(), /checkpoint failed/);
     await assert.rejects(harness.disposeAsync(), /checkpoint failed/);
     assert.equal(stops, 1);
+  } finally { store.dispose(); }
+});
+
+test("shutdown preserves checkpoint failures alongside later SDK stop failures", async () => {
+  const store = DurableStore.createEphemeral();
+  const client = new CopilotClient();
+  const checkpoint = new Error("checkpoint"), stop = new Error("stop");
+  client.stop = async () => [stop];
+  const harness = new DurableHarness(client, store, new ExtensionRegistry());
+  try {
+    const record = await store.commitAsync(tx => tx.createConversation());
+    harness.findConversation(record.id)!.checkpointBarrierAsync = async () => { throw checkpoint; };
+    await assert.rejects(harness.disposeAsync(), error => {
+      assert(error instanceof AggregateError);
+      assert.equal(error.cause, checkpoint);
+      assert.deepEqual(error.errors, [checkpoint, stop]);
+      return true;
+    });
   } finally { store.dispose(); }
 });
 
@@ -185,6 +505,8 @@ test("pending, abandoned, unbound and mismatched native forks never get an empty
   for (const [state, bound, intentSession] of [
     ["pending", false, null], ["pending", true, "native"], ["abandoned", true, "native"],
     ["completed", false, "native"], ["completed", true, "wrong-native"],
+    [0, false, null], [0, true, "native"], [2, true, "native"],
+    [1, false, "native"], [1, true, "wrong-native"],
   ] as const) {
     const store = DurableStore.createEphemeral();
     const client = new CopilotClient();
@@ -212,6 +534,30 @@ test("pending, abandoned, unbound and mismatched native forks never get an empty
       assert.equal(resume.mock.callCount(), 0);
     } finally { await harness.disposeAsync(); store.dispose(); }
   }
+});
+
+test("completed legacy string fork intents remain resumable with an exact native binding", async () => {
+  const store = DurableStore.createEphemeral();
+  const client = new CopilotClient();
+  client.stop = async () => [];
+  client.resumeSession = async id => sdkSession(id).sdk;
+  const harness = new DurableHarness(client, store, new ExtensionRegistry());
+  try {
+    const child = await store.commitAsync(tx => {
+      const parent = tx.createConversation();
+      const fork = tx.createConversation({ parentConversationId: parent.id, forkEntryId: "boundary" });
+      for (const [kind, value] of [
+        ["durable.fork", { state: "completed", sessionId: "legacy" }],
+        ["durable.session-binding", { sessionId: "legacy" }],
+      ] as const) {
+        const draft = tx.doc(new DocumentDefinition(kind), fork.id);
+        draft.value = value;
+        draft.save(tx.appendEntry(fork.id, "binding"));
+      }
+      return fork;
+    });
+    assert.equal((await harness.resumeConversationAsync(child.id)).sessionId, "legacy");
+  } finally { await harness.disposeAsync(); store.dispose(); }
 });
 
 test("history hydration is read-only and deduplicated across create, resume and real store reopen", async () => {
