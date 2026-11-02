@@ -50,6 +50,328 @@ def sdk_client(session):
 
 
 class RecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_review_invalid_sandbox_leaves_no_poisoned_root(self):
+        store = DurableStore.create_ephemeral()
+        harness = DurableHarness(sdk_client(sdk_session()), store, ExtensionRegistry())
+        try:
+            with self.assertRaisesRegex(RuntimeError, "disables the sandbox"):
+                await harness.root_async(AgentChoices(sandbox=DurableSandboxPolicy(
+                    enabled=False, filesystem=DurableSandboxFilesystem(denied_paths=["/private"]))))
+            self.assertEqual(len(store.conversations), 0, "invalid sandbox must not persist a root")
+            chat = await harness.root_async(AgentChoices(model="corrected"))
+            choices = chat.choices()
+            assert choices is not None
+            self.assertEqual(choices.model, "corrected")
+        finally:
+            await harness.close_async()
+            store.close()
+
+    async def test_review_draining_parent_can_schedule_dependency_not_external_work(self):
+        store = DurableStore.create_ephemeral()
+        registry = ExtensionRegistry()
+        harness = DurableHarness(sdk_client(sdk_session()), store, registry)
+        entered, release = asyncio.Event(), asyncio.Event()
+        child_id = None
+        async def child_phase(_input, _checkpoint, runtime):
+            return await runtime.commit_async(lambda: TaskCommit.completed("child saved"))
+        child = DurableTask.define("drain-child", lambda: {}, child_phase)
+        async def parent_phase(_input, _checkpoint, runtime):
+            nonlocal child_id
+            entered.set()
+            await release.wait()
+            async def commit(tx):
+                nonlocal child_id
+                child_id = runtime.create_child_task(tx, child).id
+                return TaskCommit.waiting({"phase": "done"}, [child_id])
+            result = await runtime.commit_async(commit)
+            runtime.schedule_task(child_id)
+            return result
+        async def done(_input, _checkpoint, runtime):
+            return await runtime.commit_async(lambda: TaskCommit.completed("parent saved"))
+        parent = DurableTask.define_phases("drain-parent", lambda: {"phase": "run"},
+                                          {"run": parent_phase, "done": done})
+        registry.install(Extension("drain", tasks=[parent, child]))
+        record = await harness.create_task_async(parent)
+        await entered.wait()
+        closing = asyncio.create_task(harness.close_async())
+        # Entering the first checkpoint drain proves close has closed admission.
+        drain = await self._start_close_gate(harness, closing)
+        try:
+            with self.assertRaisesRegex(RuntimeError, "closing"):
+                await harness.create_task_async(child)
+            release.set()
+            await asyncio.wait_for(asyncio.shield(closing), 1)
+            parent_record = store.task(record.id)
+            assert parent_record is not None and parent_record.outcome is not None
+            self.assertEqual(parent_record.outcome.result, "parent saved",
+                             "drain must not falsely fail the committed parent")
+            self.assertIsNotNone(child_id)
+            assert child_id is not None
+            child_record = store.task(child_id)
+            assert child_record is not None
+            self.assertIs(child_record.status, TaskStatus.TERMINAL)
+        finally:
+            release.set()
+            await asyncio.gather(closing, drain, return_exceptions=True)
+            store.close()
+
+    async def _start_close_gate(self, harness, closing):
+        # Starting the shared drain is synchronous up to creating its dedicated core.
+        drain = asyncio.create_task(harness._drain_async())
+        entered = asyncio.Event()
+        asyncio.get_running_loop().call_soon(entered.set)
+        await entered.wait()
+        self.assertTrue(harness._closed)
+        return drain
+
+    async def test_review_close_drains_direct_and_queued_submissions_through_both_hosts(self):
+        for facade in (False, True):
+            with self.subTest(facade=facade), tempfile.TemporaryDirectory() as directory:
+                options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
+                session = sdk_session()
+                client = sdk_client(session)
+                host = None
+                if facade:
+                    host = (DurableClientBuilder().use_store_options(options).use_client(client)
+                            .configure(lambda o: setattr(o, "owns_client", True)).build())
+                    await host.initialize_async()
+                    store, harness = host.store, host._harness
+                else:
+                    store = DurableStore.create(options)
+                    harness = DurableHarness(client, store, ExtensionRegistry())
+                assert store is not None and harness is not None
+                chat = await harness.root_async()
+                async def stop_after_submissions():
+                    admission = chat.admission()
+                    assert admission is not None
+                    self.assertEqual((admission.prompt, admission.state), ("second", "completed"),
+                                     "SDK stop must await settled active and queued admissions")
+                    self.assertEqual(session.listeners, [])
+                client.stop.side_effect = stop_after_submissions
+                sent = asyncio.Queue()
+                async def send(prompt):
+                    sent.put_nowait(prompt)
+                    return "sent"
+                session.send.side_effect = send
+                a = asyncio.create_task(chat.submit_async("first"))
+                b = asyncio.create_task(chat.submit_async("second"))
+                self.assertEqual(await sent.get(), "first")
+                enrolled = asyncio.Event()
+                gather = asyncio.gather
+                submission_cores = getattr(harness, "_submissions", set())
+                def trace_drain(*awaitables, **kwargs):
+                    if any(isinstance(item, asyncio.Task) and item in submission_cores for item in awaitables):
+                        enrolled.set()
+                    return gather(*awaitables, **kwargs)
+                tracing = patch("durable.asyncio.gather", side_effect=trace_drain)
+                tracing.start()
+                close = host.close_async if host else harness.close_async
+                closing = asyncio.create_task(close())
+                drain = await self._start_close_gate(harness, closing)
+                enrollment = asyncio.create_task(enrolled.wait())
+                try:
+                    await asyncio.wait((enrollment, closing), return_when=asyncio.FIRST_COMPLETED, timeout=1)
+                    self.assertTrue(enrolled.is_set(), "shutdown must enroll direct and queued submission cores before cleanup")
+                    async with asyncio.timeout(0.1):
+                        with self.assertRaisesRegex(RuntimeError, "closing"):
+                            await chat.submit_async("external")
+                    self.assertFalse(closing.done(), "close must await active admission")
+                    session.emit({"type": "session.idle", "data": {}})
+                    self.assertEqual(await asyncio.wait_for(sent.get(), 1), "second")
+                    self.assertFalse(closing.done(), "close must await queued admission")
+                    session.emit({"type": "session.idle", "data": {}})
+                    await asyncio.gather(a, b, closing, drain)
+                    admission = chat.admission()
+                    assert admission is not None
+                    self.assertEqual(admission.state, "completed")
+                    self.assertEqual(admission.prompt, "second")
+                    self.assertEqual(session.listeners, [])
+                    client.stop.assert_awaited_once()
+                    sequence = store.provider.sequence
+                    session.emit({"type": "session.idle", "data": {}})
+                    self.assertEqual(store.provider.sequence, sequence)
+                    if facade:
+                        reopened = DurableStore.create(options)
+                        reopened.close()
+                finally:
+                    enrollment.cancel()
+                    for task in (a, b):
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(a, b, closing, drain, enrollment, return_exceptions=True)
+                    tracing.stop()
+                    store.close()
+
+    async def test_review_idle_before_send_rpc_waits_for_success_or_late_error(self):
+        for fail in (False, True):
+            with self.subTest(fail=fail):
+                store = DurableStore.create_ephemeral()
+                session = sdk_session()
+                harness = DurableHarness(sdk_client(session), store, ExtensionRegistry())
+                chat = await harness.root_async()
+                entered, release = asyncio.Event(), asyncio.Event()
+                original = RuntimeError("late public send rejection")
+                async def send(prompt):
+                    session.emit({"type": "assistant.message", "id": "answer", "data": {"content": "received"}})
+                    session.emit({"type": "session.idle", "data": {}})
+                    entered.set()
+                    await release.wait()
+                    if fail:
+                        raise original
+                session.send.side_effect = send
+                run = asyncio.create_task(chat.submit_async("prompt"))
+                await entered.wait()
+                admission = chat.admission()
+                assert admission is not None
+                self.assertEqual(admission.state, "admitted")
+                release.set()
+                try:
+                    if fail:
+                        with self.assertRaises(RuntimeError) as raised:
+                            await run
+                        self.assertIs(raised.exception, original)
+                    else:
+                        self.assertEqual((await run)["data"]["content"], "received")
+                    admission = chat.admission()
+                    assert admission is not None
+                    self.assertEqual(admission.state, "uncertain" if fail else "completed")
+                    self.assertEqual(len(session.listeners), 1)
+                finally:
+                    release.set()
+                    await harness.close_async()
+                    store.close()
+
+    async def test_review_cancelled_direct_submission_and_queued_rejection_drain_before_store_release(self):
+        for facade in (False, True):
+            with self.subTest(facade=facade), tempfile.TemporaryDirectory() as directory:
+                options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
+                session = sdk_session()
+                client = sdk_client(session)
+                host = None
+                if facade:
+                    host = DurableClientBuilder().use_store_options(options).use_client(client).build()
+                    await host.initialize_async()
+                    store, harness = host.store, host._harness
+                else:
+                    store = DurableStore.create(options)
+                    harness = DurableHarness(client, store, ExtensionRegistry())
+                assert store is not None and harness is not None
+                chat = await harness.root_async()
+                entered, settled, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+                async def send(prompt):
+                    entered.set()
+                    try:
+                        await asyncio.Event().wait()
+                    finally:
+                        await release.wait()
+                        settled.set()
+                session.send.side_effect = send
+                first = asyncio.create_task(chat.submit_async("cancelled"))
+                second = asyncio.create_task(chat.submit_async("queued"))
+                await entered.wait()
+                if not facade:
+                    with self.assertRaisesRegex(RuntimeError, "pending work"):
+                        harness.close()
+                closing = asyncio.create_task(host.close_async() if host else harness.close_async())
+                drain = await self._start_close_gate(harness, closing)
+                first.cancel("submission owner interrupted")
+                self.assertFalse(closing.done())
+                self.assertFalse(settled.is_set())
+                release.set()
+                results = await asyncio.gather(first, second, closing, drain, return_exceptions=True)
+                self.assertIsInstance(results[0], asyncio.CancelledError)
+                self.assertIsInstance(results[1], DurableRecoveryRequiredException)
+                self.assertTrue(settled.is_set(), "send cancellation cleanup must settle before shutdown")
+                admission = chat.admission()
+                assert admission is not None
+                self.assertEqual((admission.prompt, admission.state), ("cancelled", "uncertain"))
+                self.assertEqual(session.listeners, [])
+                if facade:
+                    client.stop.assert_not_awaited()
+                    reopened = DurableStore.create(options)
+                    reopened.close()
+                else:
+                    client.stop.assert_awaited_once()
+                store.close()
+
+    async def test_review_startup_failure_and_cancelled_initializer_preserve_borrowed_store(self):
+        for fail in (False, True):
+            with self.subTest(fail=fail):
+                store = DurableStore.create_ephemeral()
+                entered, release = asyncio.Event(), asyncio.Event()
+                client = sdk_client(sdk_session())
+                original = RuntimeError("startup failure on borrowed store")
+                async def start():
+                    entered.set()
+                    await release.wait()
+                    if fail:
+                        raise original
+                client.start = AsyncMock(side_effect=start)
+                host = DurableClientBuilder().use_store(store).build()
+                with patch("durable.CopilotClient", return_value=client):
+                    initializer = asyncio.create_task(host.initialize_async())
+                    await entered.wait()
+                    initializer.cancel("initialization waiter interrupted")
+                    with self.assertRaisesRegex(asyncio.CancelledError, "initialization waiter interrupted"):
+                        await initializer
+                    closing = asyncio.create_task(host.close_async())
+                    release.set()
+                    if fail:
+                        with self.assertRaises(RuntimeError) as raised:
+                            await closing
+                        self.assertIs(raised.exception, original)
+                    else:
+                        await closing
+                    self.assertFalse(store._closed, "borrowed store must not be closed on startup success or failure")
+                    client.stop.assert_awaited_once()
+                    replacement = DurableHarness(sdk_client(sdk_session()), store, ExtensionRegistry())
+                    await replacement.close_async()
+                    store.close()
+
+    async def test_review_facade_close_joins_startup_success_failure_and_cancellation(self):
+        for fail in (False, True):
+            with self.subTest(fail=fail), tempfile.TemporaryDirectory() as directory:
+                entered, release = asyncio.Event(), asyncio.Event()
+                session = sdk_session()
+                client = sdk_client(session)
+                original = RuntimeError("public SDK startup failed")
+                async def start():
+                    entered.set()
+                    await release.wait()
+                    if fail:
+                        raise original
+                client.start = AsyncMock(side_effect=start)
+                options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
+                host = DurableClientBuilder().use_store_options(options).build()
+                with patch("durable.CopilotClient", return_value=client):
+                    init = asyncio.create_task(host.root_async())
+                    await entered.wait()
+                    first = asyncio.create_task(host.close_async())
+                    entered_close = asyncio.Event()
+                    asyncio.get_running_loop().call_soon(entered_close.set)
+                    await entered_close.wait()
+                    second = asyncio.create_task(host.close_async())
+                    first.cancel("closer interrupted")
+                    self.assertFalse(first.done(), "cancelled close must still join startup")
+                    assert host.store is not None
+                    self.assertFalse(host.store._closed, "owned store must remain locked until startup settles")
+                    release.set()
+                    results = await asyncio.gather(init, first, second, return_exceptions=True)
+                    if fail:
+                        self.assertIs(results[0], original)
+                        self.assertIs(results[2], original, "close must preserve startup failure")
+                    else:
+                        self.assertIsInstance(results[0], RuntimeError)
+                        self.assertIn("closing", str(results[0]))
+                        self.assertIsNone(results[2])
+                    self.assertIsInstance(results[1], asyncio.CancelledError)
+                    client.stop.assert_awaited_once()
+                    client.create_session.assert_not_awaited()
+                    self.assertTrue(host.store is None or host.store._closed)
+                    reopened = DurableStore.create(options)
+                    reopened.close()
+                    await host.close_async()
+
     async def test_initiating_run_cancellation_settles_and_reopens_checkpoint_and_memo(self):
         with tempfile.TemporaryDirectory() as directory:
             options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
