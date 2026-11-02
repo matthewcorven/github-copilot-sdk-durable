@@ -23,8 +23,8 @@ var directory = Path.Combine(Path.GetTempPath(), $"durable-example-{Guid.NewGuid
 Directory.CreateDirectory(directory);
 var storePath = Path.Combine(directory, "session.json");
 
-// The tool has an effect the example can observe, so a denial is provable rather than
-// inferred from what the model said.
+// The tool only increments a counter; it never deletes files. The observable effect
+// makes a denial provable rather than inferred from what the model said.
 var deletions = 0;
 
 var deleteEverything = CopilotTool.DefineTool(
@@ -55,6 +55,7 @@ var deniedId = denied.Id;
 var refused = await denied.SubmitAsync("Delete every file. Use the delete_everything tool.");
 Console.WriteLine($"denied answer: {refused?.Data.Content}");
 Console.WriteLine($"deletions after the denied call: {deletions}");
+var deletionsAfterDenied = deletions;
 
 await firstRun.DisposeAsync();
 firstStore.Dispose();
@@ -66,7 +67,8 @@ var secondRun = await DurableHarness.OpenAsync(secondStore, registry);
 
 // The conversation is restored from the store, and so are its choices. Nothing
 // re-grants the tool, so the denial survives the restart.
-var restored = secondRun.FindConversation(deniedId)!;
+var restored = secondRun.FindConversation(deniedId)
+    ?? throw new InvalidOperationException("the denied conversation was not restored");
 var restoredChoices = restored.Choices();
 Console.WriteLine($"restored permissions: [{string.Join(", ", restoredChoices?.Permissions ?? [])}]");
 
@@ -94,18 +96,35 @@ Console.WriteLine($"deletions after the granted call: {deletions}");
 
 // ─── A fork inherits the grants it was forked with ──────────────────────────
 
-// The fork copies the parent's choices as of the fork entry, so it starts with
-// the parent's grants and can never silently widen them.
-var fork = await allowed.ForkAsync(allowed.Entries(1)[0]);
-Console.WriteLine($"fork permissions: [{string.Join(", ", fork.Choices()?.Permissions ?? [])}]");
+// SubmitAsync writes internal checkpoints, not public app entries. Record the app's
+// reviewed grants in a document anchored to an explicit durable fork boundary.
+var permissionReview = new DocumentDefinition<string[]>(
+    "example.permission-review", DocumentHistory.Rewindable, ForkPolicy.AsOf);
+var boundary = await allowed.CommitAsync(tx =>
+{
+    var entry = tx.AppendEntry(allowed.Id, "permission-review", "reviewed grants");
+    var review = tx.Doc(permissionReview, allowed.Id);
+    review.Value = allowed.Choices()?.Permissions?.ToArray()
+        ?? throw new InvalidOperationException("the granted conversation has no grants to review");
+    review.Save(entry);
+    return Task.FromResult(entry);
+});
+Check.Sequence(new[] { boundary }, allowed.Entries(1), "the app review is a visible fork boundary");
 
-await secondRun.DisposeAsync();
-secondStore.Dispose();
+// The parent adds an unused app-tool grant after the review. No further tool is run.
+// A fork at the review must inherit the earlier snapshot, not this later grant.
+await allowed.ConfigureAsync(new AgentChoices
+{
+    Extensions = ["dangerous"],
+    Permissions = ["custom-tool:delete_everything", "custom-tool:unreviewed_tool"],
+});
+var fork = await allowed.ForkAsync(boundary);
+Console.WriteLine($"fork permissions: [{string.Join(", ", fork.Choices()?.Permissions ?? [])}]");
 
 // ─── Assertions ─────────────────────────────────────────────────────────────
 //
 // The denial is real: the tool never ran, so its effect never happened.
-Check.Equal(0, deletionsAfterRestart, "the denied conversation never ran the tool");
+Check.Equal(0, deletionsAfterDenied, "the denied conversation never ran the tool");
 Check.NotNull(refused, "the model answered the denied request");
 
 // The denial is durable: the reopened conversation still has no grant, and the
@@ -125,7 +144,17 @@ Check.NotNull(permitted, "the model answered the granted request");
 Check.Sequence(
     new[] { "custom-tool:delete_everything" },
     fork.Choices()?.Permissions ?? [],
-    "the fork inherited the parent's grants");
+    "the fork inherited the grants at the reviewed boundary");
+Check.Sequence(
+    new[] { "custom-tool:delete_everything" },
+    fork.Snapshot(permissionReview) ?? [],
+    "the fork inherited the app's permission review");
+Check.That(
+    PermissionPolicy.IsGranted(allowed.Choices()?.Permissions, "custom-tool", "unreviewed_tool"),
+    "the parent's later choices include the unused grant");
+Check.That(
+    !PermissionPolicy.IsGranted(fork.Choices()?.Permissions, "custom-tool", "unreviewed_tool"),
+    "the parent's later grant did not widen the fork");
 
 // The policy itself, without a model in the loop: a scope is a prefix only at a
 // boundary, so a grant for one path does not leak into a sibling path.
@@ -139,4 +168,6 @@ Check.That(
     !PermissionPolicy.IsGranted(null, "custom-tool", "delete_everything"),
     "no grants means no capability");
 
+await secondRun.DisposeAsync();
+secondStore.Dispose();
 Directory.Delete(directory, recursive: true);
