@@ -7,6 +7,8 @@ import subprocess
 from unittest.mock import patch, AsyncMock
 from types import SimpleNamespace
 from pathlib import Path
+from dataclasses import dataclass, field
+from typing import Union
 
 from durable import (
     AgentChoices, DurableHarness, DurableStore, DurableStoreOptions, ExtensionRegistry,
@@ -41,12 +43,436 @@ def sdk_client(session):
     return SimpleNamespace(
         stop=AsyncMock(), create_session=AsyncMock(return_value=session),
         resume_session=AsyncMock(return_value=session),
+        get_session_metadata=AsyncMock(return_value=SimpleNamespace(session_id=session.session_id)),
         rpc=SimpleNamespace(sessions=SimpleNamespace(fork=AsyncMock(
             return_value=SimpleNamespace(session_id="child")))),
     )
 
 
 class RecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_direct_awaited_run_does_not_make_shutdown_wait_for_host_task(self):
+        store = DurableStore.create_ephemeral()
+        client = sdk_client(sdk_session())
+        harness = DurableHarness(client, store, ExtensionRegistry())
+        entered, release, host_release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        async def phase(_input, _checkpoint, runtime):
+            entered.set()
+            await release.wait()
+            return await runtime.commit_async(lambda: TaskCommit.completed("saved"))
+        definition = DurableTask.define("direct-host", lambda: {"phase": "run"}, phase)
+        harness.registry.install(Extension("direct-host", tasks=[definition]))
+        async def create(tx):
+            return tx.create_task(definition)
+        record = await store.commit_async(create)
+        closing = None
+        async def host():
+            outcome = await harness.run_task_async(record.id)
+            await host_release.wait()
+            return outcome
+        running = asyncio.create_task(host())
+        try:
+            await entered.wait()
+            self.assertIsNot(harness._in_flight[record.id], running, "only the dedicated core run may be drained")
+            closing = asyncio.create_task(harness.close_async())
+            release.set()
+            await asyncio.wait_for(asyncio.shield(closing), 1)
+            host_release.set()
+            outcome = await asyncio.wait_for(asyncio.shield(running), 1)
+            self.assertEqual(outcome.result, "saved")
+            client.stop.assert_awaited_once()
+        finally:
+            release.set()
+            host_release.set()
+            await asyncio.gather(running, *([closing] if closing else []), return_exceptions=True)
+            store.close()
+
+    async def test_facade_stored_choices_override_argument_and_defaults(self):
+        store = DurableStore.create_ephemeral()
+        registry = ExtensionRegistry()
+        registry.install(Extension("tools", tools=[Tool(
+            name="danger", description="danger", handler=AsyncMock(),
+            parameters={"type": "object"},
+        )]))
+        host = DurableClientBuilder().use_store(store).use_client(sdk_client(sdk_session())).use_registry(registry).build()
+        try:
+            chat = await host.create_conversation_async(AgentChoices(
+                model="stored-model", tools=[], permissions=[],
+                sandbox=DurableSandboxPolicy(enabled=True, allow_bypass=False)))
+            for fallback in (None, AgentChoices(model="host-model", permissions=["read:*"],
+                                               sandbox=DurableSandboxPolicy(enabled=False))):
+                config = await host.get_session_config_async(fallback, chat)
+                self.assertEqual(config["model"], "stored-model")
+                self.assertEqual(config["tools"], [])
+                self.assertIs(config["sandbox_config"].to_dict()["enabled"], True)
+                self.assertIs(config["sandbox_config"].to_dict()["allowBypass"], False)
+                decision = await config["on_permission_request"](SimpleNamespace(kind="read", path="/private"), {})
+                self.assertEqual(decision.kind, "reject")
+            async def create(tx):
+                return tx.create_conversation()
+            empty = host.find_conversation((await store.commit_async(create)).id)
+            fallback = await host.get_session_config_async(AgentChoices(model="fallback", tools=[]), empty)
+            self.assertEqual(fallback["model"], "fallback")
+        finally:
+            await host.close_async()
+            store.close()
+
+    async def test_dataclass_containers_are_not_treated_as_union_alternatives(self):
+        @dataclass
+        class Child:
+            name: str = "default"
+        @dataclass
+        class Container:
+            children: dict[str, Child] = field(default_factory=dict)
+            optional: Child | None = None
+        definition = DocumentDefinition("typed-container", DocumentHistory.REWINDABLE, ForkPolicy.AS_OF, type=Container)
+        store = DurableStore.create_ephemeral()
+        harness = DurableHarness(sdk_client(sdk_session()), store, ExtensionRegistry())
+        try:
+            async def create(tx):
+                record = tx.create_conversation()
+                draft = tx.doc(definition, record.id)
+                draft.value = Container({"kept": Child("named")}, Child("optional"))
+                draft.save(tx.append_entry(record.id, "typed"))
+                return record
+            record = await store.commit_async(create)
+            chat = harness.find_conversation(record.id)
+            assert chat is not None
+            value = chat.snapshot(definition)
+            assert value is not None
+            self.assertEqual(value.children, {"kept": {"name": "named"}})
+            self.assertEqual(value.optional, Child("optional"))
+            # The definition's deserializer is also used directly by callers.
+            direct = definition.deserialize({"children": {"other": {"name": "second"}}})
+            assert direct is not None
+            self.assertEqual(direct.children, {"other": {"name": "second"}})
+            @dataclass
+            class RequiredChild:
+                name: str
+            @dataclass
+            class RequiredContainer:
+                children: dict[str, RequiredChild]
+                optional: Union[RequiredChild, None] = None
+            required = DocumentDefinition("required-container", DocumentHistory.REWINDABLE, ForkPolicy.AS_OF,
+                                          type=RequiredContainer).deserialize({
+                                              "children": {"kept": {"name": "required"}},
+                                              "optional": {"name": "union"},
+                                          })
+            assert required is not None
+            self.assertEqual(required.children, {"kept": {"name": "required"}})
+            self.assertEqual(required.optional, RequiredChild("union"))
+        finally:
+            await harness.close_async()
+            store.close()
+
+    async def test_submit_cancellation_does_not_cancel_received_tool_checkpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
+            store = DurableStore.create(options)
+            session = sdk_session()
+            harness = DurableHarness(sdk_client(session), store, ExtensionRegistry())
+            chat = await harness.create_conversation_async()
+            barrier_entered = asyncio.Event()
+            original_barrier = chat.checkpoint_barrier_async
+            async def checkpoint_barrier():
+                barrier_entered.set()
+                await original_barrier()
+            chat.checkpoint_barrier_async = checkpoint_barrier
+            async def send(_prompt):
+                await store._gate.acquire()
+                session.emit({"type": "tool.execution_start", "id": "start",
+                              "data": {"toolCallId": "held", "toolName": "read", "arguments": {}}})
+                session.emit({"type": "tool.execution_complete", "id": "complete",
+                              "data": {"toolCallId": "held", "success": True, "result": {"content": "received"}}})
+                session.emit({"type": "session.idle", "id": "idle", "data": {}})
+            session.send.side_effect = send
+            submitting = asyncio.create_task(chat.submit_async("read"))
+            try:
+                await barrier_entered.wait()
+                submitting.cancel("caller cancelled")
+                # The uncertain-admission settlement now waits behind the held store gate.
+                turn = asyncio.get_running_loop().create_future()
+                asyncio.get_running_loop().call_soon(turn.set_result, None)
+                await turn
+                store._gate.release()
+                with self.assertRaisesRegex(asyncio.CancelledError, "caller cancelled"):
+                    await submitting
+                await original_barrier()
+                checkpoint = chat.checkpoint()
+                assert checkpoint is not None
+                self.assertEqual((checkpoint.event_id, checkpoint.content), ("tool:held", "received"))
+                identifier = chat.id
+                await harness.close_async()
+                store.close()
+                reopened = DurableStore.create(options)
+                try:
+                    record = reopened.conversation(identifier)
+                    assert record is not None
+                    check = DurableConversation(reopened, record).checkpoint()
+                    assert check is not None
+                    self.assertEqual(check.content, "received")
+                finally:
+                    reopened.close()
+            finally:
+                if store._gate.locked():
+                    store._gate.release()
+                await asyncio.gather(submitting, return_exceptions=True)
+                await harness.close_async()
+                store.close()
+
+    async def test_active_phase_keeps_session_until_final_checkpoint_and_all_closers_finish(self):
+        for facade in (False, True):
+            with self.subTest(facade=facade), tempfile.TemporaryDirectory() as directory:
+                options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
+                session = sdk_session()
+                client = sdk_client(session)
+                registry = ExtensionRegistry()
+                entered, release, checkpoint_entered, checkpoint_release = (asyncio.Event() for _ in range(4))
+                gate_entered, stopped = asyncio.Event(), asyncio.Event()
+                held = None
+                async def stop():
+                    stopped.set()
+                client.stop.side_effect = stop
+                host = None
+                if facade:
+                    host = (DurableClientBuilder().use_store_options(options).use_client(client).use_registry(registry)
+                            .configure(lambda o: setattr(o, "owns_client", True)).build())
+                    await host.initialize_async()
+                    store, harness = host.store, host._harness
+                    assert store is not None and harness is not None
+                else:
+                    store = DurableStore.create(options)
+                    harness = DurableHarness(client, store, registry)
+                chat = await harness.create_conversation_async()
+                async def send(_prompt):
+                    session.emit({"type": "tool.execution_complete", "id": "phase-tool",
+                                  "data": {"toolCallId": "phase", "success": True, "result": {"content": "submitted"}}})
+                    session.emit({"type": "session.idle", "id": "idle", "data": {}})
+                session.send.side_effect = send
+                async def phase(_input, _checkpoint, runtime):
+                    nonlocal held
+                    entered.set()
+                    await release.wait()
+                    await chat.context_async()
+                    await chat.submit_async("during shutdown")
+                    commit = await runtime.commit_async(lambda: TaskCommit.completed("phase saved"))
+                    async def hold(tx):
+                        gate_entered.set()
+                        await checkpoint_release.wait()
+                    assert store is not None
+                    held = asyncio.create_task(store.commit_async(hold))
+                    await gate_entered.wait()
+                    session.emit({"type": "tool.execution_complete", "id": "late-tool",
+                                  "data": {"toolCallId": "late", "success": True, "result": {"content": "final"}}})
+                    return commit
+                definition = DurableTask.define("active-session", lambda: {"phase": "run"}, phase)
+                registry.install(Extension("active-session", tasks=[definition]))
+                async def create(tx):
+                    return tx.create_task(definition)
+                task = await store.commit_async(create)
+                running = asyncio.create_task(harness.run_task_async(task.id))
+                await entered.wait()
+                barrier = chat.checkpoint_barrier_async
+                async def final_barrier():
+                    if chat.session is None:
+                        checkpoint_entered.set()
+                    await barrier()
+                chat.checkpoint_barrier_async = final_barrier
+                close = host.close_async if host else harness.close_async
+                first = asyncio.create_task(close())
+                second = asyncio.create_task(close())
+                try:
+                    release.set()
+                    result = await running
+                    self.assertEqual(result.status, "completed")
+                    reached = asyncio.create_task(checkpoint_entered.wait())
+                    stopped_wait = asyncio.create_task(stopped.wait())
+                    try:
+                        await asyncio.wait((reached, stopped_wait), return_when=asyncio.FIRST_COMPLETED, timeout=1)
+                        self.assertTrue(checkpoint_entered.is_set())
+                        self.assertFalse(stopped.is_set())
+                    finally:
+                        reached.cancel()
+                        stopped_wait.cancel()
+                        await asyncio.gather(reached, stopped_wait, return_exceptions=True)
+                    checkpoint = chat.checkpoint()
+                    assert checkpoint is not None
+                    self.assertEqual(checkpoint.content, "submitted")
+                    self.assertFalse(first.done())
+                    self.assertFalse(second.done())
+                    client.stop.assert_not_awaited()
+                    with self.assertRaises((OSError, RuntimeError)):
+                        DurableStore.create(options)
+                    with self.assertRaisesRegex(RuntimeError, "scheduler|runner"):
+                        DurableHarness(client, store, registry)
+                    with self.assertRaisesRegex(RuntimeError, "closing"):
+                        await harness.create_task_async(definition)
+                    with self.assertRaisesRegex(RuntimeError, "closing"):
+                        await harness.create_conversation_async()
+                    checkpoint_release.set()
+                    await asyncio.gather(first, second, *([held] if held else []))
+                    client.stop.assert_awaited_once()
+                    if not facade:
+                        store.close()
+                    reopened = DurableStore.create(options)
+                    try:
+                        value = reopened.document("durable.checkpoint", chat.id)
+                        assert value is not None
+                        self.assertEqual(value.latest["content"], "final")
+                    finally:
+                        reopened.close()
+                finally:
+                    release.set()
+                    checkpoint_release.set()
+                    await asyncio.gather(running, first, second, *([held] if held else []), return_exceptions=True)
+                    store.close()
+
+    async def test_every_concurrent_close_waits_for_checkpoint_and_stop(self):
+        for facade in (False, True):
+            with self.subTest(facade=facade):
+                store = DurableStore.create_ephemeral()
+                client = sdk_client(sdk_session())
+                host = None
+                if facade:
+                    host = (DurableClientBuilder().use_store(store).use_client(client)
+                            .configure(lambda o: setattr(o, "owns_client", True)).build())
+                    await host.initialize_async()
+                    harness = host._harness
+                    assert harness is not None
+                else:
+                    harness = DurableHarness(client, store, ExtensionRegistry())
+                chat = await harness.create_conversation_async()
+                entered, release = asyncio.Event(), asyncio.Event()
+                async def barrier():
+                    entered.set()
+                    await release.wait()
+                chat.checkpoint_barrier_async = barrier
+                close = host.close_async if host else harness.close_async
+                first = asyncio.create_task(close())
+                await entered.wait()
+                second = asyncio.create_task(close())
+                turn = asyncio.get_running_loop().create_future()
+                asyncio.get_running_loop().call_soon(turn.set_result, None)
+                await turn
+                try:
+                    self.assertFalse(second.done(), "a second closer must join the entire shutdown")
+                finally:
+                    release.set()
+                    await asyncio.gather(first, second)
+                    store.close()
+
+    async def test_repeated_checkpoint_drains_preserve_one_original_storage_failure(self):
+        store = DurableStore.create_ephemeral()
+        session = sdk_session()
+        harness = DurableHarness(sdk_client(session), store, ExtensionRegistry())
+        original = RuntimeError("checkpoint write failed")
+        try:
+            await harness.create_conversation_async()
+            with patch.object(store, "commit_async", side_effect=original):
+                session.emit({"type": "tool.execution_complete", "id": "failed-tool",
+                              "data": {"toolCallId": "failed", "success": True}})
+                with self.assertRaises(RuntimeError) as raised:
+                    await harness.close_async()
+                self.assertIs(raised.exception.__cause__, original)
+        finally:
+            store.close()
+
+    async def test_missing_pinned_session_recreates_same_id_after_actual_reopen(self):
+        with tempfile.TemporaryDirectory() as directory:
+            options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
+            store = DurableStore.create(options)
+            client = sdk_client(sdk_session())
+            client.create_session.side_effect = RuntimeError("native create interrupted")
+            harness = DurableHarness(client, store, ExtensionRegistry())
+            try:
+                with self.assertRaisesRegex(RuntimeError, "native create interrupted"):
+                    await harness.create_conversation_async()
+                identifier = store.conversations[0].id
+                chat = harness.find_conversation(identifier)
+                assert chat is not None
+                binding = chat.binding()
+                assert binding is not None
+                pinned = binding.session_id
+                assert pinned is not None
+            finally:
+                await harness.close_async()
+                store.close()
+            store = DurableStore.create(options)
+            client = sdk_client(sdk_session(pinned))
+            client.get_session_metadata.return_value = None
+            harness = DurableHarness(client, store, ExtensionRegistry())
+            try:
+                chat = await harness.resume_conversation_async(identifier)
+                self.assertEqual(chat.session_id, pinned)
+                client.get_session_metadata.assert_awaited_once_with(pinned)
+                self.assertEqual(client.create_session.call_args.kwargs["session_id"], pinned)
+                client.resume_session.assert_not_awaited()
+            finally:
+                await harness.close_async()
+                store.close()
+
+    async def test_official_sdk_transport_missing_session_guards_and_probe_errors(self):
+        from copilot._jsonrpc import JsonRpcClient
+        from durable import SESSION_BINDING_DOCUMENT, ADMISSION_DOCUMENT, SessionBinding, InputAdmission
+        store = DurableStore.create_ephemeral()
+        harness = await DurableHarness.open_async(store, ExtensionRegistry())
+        original = JsonRpcClient.request
+        calls = []
+        present, probe_error, wrong_id = False, False, False
+        async def request(client, method, params=None, **kwargs):
+            calls.append((method, params))
+            if method == "session.getMetadata":
+                if probe_error:
+                    raise RuntimeError("metadata unavailable")
+                if not present:
+                    return {"session": None}
+            result = await original(client, method, params, **kwargs)
+            if method == "session.create" and wrong_id:
+                return {**result, "sessionId": "unexpected-id"}
+            return result
+        try:
+            with patch.object(JsonRpcClient, "request", request):
+                for shape in ("pinned", "allocated", "fork", "unsettled", "probe-error", "wrong-id", "existing"):
+                    with self.subTest(shape=shape):
+                        async def create(tx):
+                            record = tx.create_conversation()
+                            draft = tx.doc(SESSION_BINDING_DOCUMENT, record.id)
+                            draft.value = SessionBinding(session_id=f"native-{shape}", pinned=shape != "allocated")
+                            draft.save(tx.append_entry(record.id, "session-binding"))
+                            if shape == "fork":
+                                intent = tx.doc(FORK_DOCUMENT, record.id)
+                                intent.value = ForkIntent(session_id=f"native-{shape}", state=ForkIntentState.COMPLETED)
+                                intent.save(tx.append_entry(record.id, "fork"))
+                            if shape == "unsettled":
+                                admission = tx.doc(ADMISSION_DOCUMENT, record.id)
+                                admission.value = InputAdmission(state="uncertain")
+                                admission.save(tx.append_entry(record.id, "admission"))
+                            return record.id
+                        identifier = await store.commit_async(create)
+                        present, probe_error, wrong_id = shape == "existing", shape == "probe-error", shape == "wrong-id"
+                        if present:
+                            await harness.client.create_session(session_id="native-existing")
+                        calls.clear()
+                        if shape in ("pinned", "existing"):
+                            chat = await harness.resume_conversation_async(identifier)
+                            self.assertEqual(chat.session_id, f"native-{shape}")
+                            self.assertEqual([method for method, _ in calls], [
+                                "session.getMetadata", "session.resume" if present else "session.create", "session.getMessages"])
+                            if not present:
+                                self.assertEqual(calls[1][1]["sessionId"], "native-pinned")
+                        else:
+                            expected = (self.assertRaisesRegex(RuntimeError, "metadata unavailable") if probe_error
+                                        else self.assertRaisesRegex(RuntimeError, "session.create returned sessionId unexpected-id but the caller requested native-wrong-id")
+                                        if shape == "wrong-id" else self.assertRaises(DurableRecoveryRequiredException))
+                            with expected:
+                                await harness.resume_conversation_async(identifier)
+                            if shape != "wrong-id":
+                                self.assertNotIn("session.create", [method for method, _ in calls])
+                            if shape == "unsettled":
+                                self.assertEqual(calls, [])
+        finally:
+            await harness.close_async()
+            store.close()
+
     async def test_failing_recovered_task_does_not_skip_other_run_drain(self):
         for facade in (False, True):
             with self.subTest(facade=facade), tempfile.TemporaryDirectory() as directory:
@@ -415,6 +841,8 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
                 assert one is not None and two is not None
                 one.checkpoint_barrier_async = AsyncMock(side_effect=original)
                 async def delayed():
+                    if barrier_done.is_set():
+                        return
                     barrier_entered.set()
                     await release_barrier.wait()
                     async def append(tx):
@@ -644,7 +1072,9 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
                 session.send.side_effect = send
                 await chat.submit_async("read")
                 identifier, checkpoint, saved = chat.id, chat.checkpoint(), path.read_bytes()
-                resumed = sdk_session(history=history)
+                binding = chat.binding()
+                assert binding is not None and binding.session_id is not None
+                resumed = sdk_session(binding.session_id, history=history)
                 client.resume_session.return_value = resumed
                 for _ in range(2):
                     await harness.close_async()
