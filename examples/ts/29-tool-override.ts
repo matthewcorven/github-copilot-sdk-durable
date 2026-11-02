@@ -66,8 +66,8 @@ async function main() {
       console.log(`plain answer: ${plainAnswer}`);
       console.log(`python answer: ${venvAnswer}`);
       console.log(`timed bash calls: ${timings.length}`);
-      assert.ok(venvAnswer.includes(".venv"), "the venv shell replaced the plain one");
-      assert.ok(!plainAnswer.includes(".venv"), "the plain conversation kept the plain shell");
+      assert.ok(venvAnswer.includes(join(project, ".venv")), "the venv shell replaced the plain one");
+      assert.ok(!plainAnswer.includes(join(project, ".venv")), "the plain conversation kept the plain shell");
       assert.equal(timings.length, 2, "the wrapper timed both shell calls");
     } finally { await harness.disposeAsync(); }
   } finally {
