@@ -65,6 +65,7 @@ class ControlledSdkPeer:
         self.methods = []
         self.notifications = []
         self.detached = []
+        self.detach_attempts = []
         self.requests = []
         self.peers = []
         self.writers = []
@@ -87,6 +88,13 @@ class ControlledSdkPeer:
         self.server.close()
         await self.server.wait_closed()
         await asyncio.gather(*self.peers)
+
+    async def send_event(self, session_id, event):
+        data = json.dumps({"jsonrpc": "2.0", "method": "session.event",
+                           "params": {"sessionId": session_id, "event": event}}).encode()
+        for writer in self.writers:
+            writer.write(f"Content-Length: {len(data)}\r\n\r\n".encode() + data)
+            await writer.drain()
 
     async def _peer(self, reader, writer):
         self.peers.append(asyncio.current_task())
@@ -125,6 +133,7 @@ class ControlledSdkPeer:
             result = {"session": {"sessionId": params["sessionId"], "startTime": "2026-11-02T00:00:00Z",
                                   "modifiedTime": "2026-11-02T00:00:00Z", "isRemote": False}}
         elif method == "session.detach":
+            self.detach_attempts.append(params["sessionId"])
             self.detach_received.set()
             await self.detach_release.wait()
             if self.detach_error is None:
@@ -146,6 +155,194 @@ class ControlledSdkPeer:
 class RecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def _settle_lifecycle_tasks(self, *tasks: Awaitable[object] | None):
         await asyncio.gather(*(task for task in tasks if task is not None), return_exceptions=True)
+
+    async def test_revision_cancelled_public_history_error_disconnects_known_session(self):
+        await self._check_public_history_error_cleanup(cancelled=True, detach_error=None)
+
+    async def test_revision_cancelled_public_history_and_disconnect_errors_both_reach_shutdown(self):
+        await self._check_public_history_error_cleanup(
+            cancelled=True, detach_error="late known-session disconnect failure")
+
+    async def test_revision_public_history_failure_preserves_caller_error_and_cleanup(self):
+        for detach_error in (None, "late known-session disconnect failure"):
+            await self._check_public_history_error_cleanup(cancelled=False, detach_error=detach_error)
+
+    async def _check_public_history_error_cleanup(self, *, cancelled, detach_error):
+        for facade, owned in ((False, False), (True, False), (True, True)):
+            for operation in ("create", "root-new", "root-existing", "resume-unbound",
+                              "resume-existing", "resume-missing", "fork"):
+                with self.subTest(facade=facade, owned=owned, operation=operation,
+                                  cancelled=cancelled, detach_error=detach_error):
+                    with tempfile.TemporaryDirectory() as directory:
+                        async with ControlledSdkPeer() as peer:
+                            options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
+                            store = DurableStore.create(options)
+                            client = CopilotClient(connection=RuntimeConnection.for_uri(f"127.0.0.1:{peer.port}"))
+                            await client.start()
+                            host = None
+                            if facade:
+                                host = (DurableClientBuilder().use_store(store).use_client(client)
+                                        .configure(lambda o: setattr(o, "owns_store", owned))
+                                        .configure(lambda o: setattr(o, "owns_client", owned)).build())
+                                await host.initialize_async()
+                                harness = host._harness
+                                assert harness is not None
+                            else:
+                                harness = DurableHarness(client, store, ExtensionRegistry())
+                            target = host if host else harness
+                            parent = None
+                            identifier = ""
+                            if operation in ("root-existing", "resume-existing", "resume-missing", "fork"):
+                                parent = await target.create_conversation_async()
+                                identifier = parent.id
+                                if operation != "fork":
+                                    await parent.session.disconnect()
+                                    parent.detach()
+                            elif operation == "resume-unbound":
+                                async def seed(tx):
+                                    return tx.create_conversation().id
+                                identifier = await store.commit_async(seed)
+                            peer.metadata_exists = operation in ("root-existing", "resume-existing")
+                            peer.held_method = "session.getMessages"
+                            peer.failure = "late known-session history RPC failure"
+                            peer.detach_error = detach_error
+                            peer.detach_received.clear()
+                            peer.detach_release.clear()
+                            detach_count = peer.methods.count("session.detach")
+                            action = (target.create_conversation_async() if operation == "create"
+                                      else target.root_async() if operation.startswith("root-")
+                                      else target.fork_async(parent, store.entries(parent.id)[-1])
+                                      if operation == "fork" and parent is not None
+                                      else target.resume_conversation_async(identifier))
+                            pending = asyncio.create_task(action)
+                            closing = detaching = drain = None
+                            try:
+                                await asyncio.wait_for(peer.received.wait(), 10)
+                                conversation = harness.conversations[-1]
+                                session = conversation.session
+                                self.assertIsNotNone(session, "history must already own a real public SDK session")
+                                session_id = session.session_id
+                                detached_count = peer.detached.count(session_id)
+                                detach_attempts = peer.detach_attempts.count(session_id)
+                                received_event = asyncio.Event()
+                                unsubscribe_probe = session.on(lambda _: received_event.set())
+                                sequence = store.provider.sequence
+                                if cancelled:
+                                    pending.cancel("owner cancelled after public history RPC receipt")
+                                    with self.assertRaises(asyncio.CancelledError) as cancellation:
+                                        await pending
+                                    self.assertEqual(str(cancellation.exception),
+                                                     "owner cancelled after public history RPC receipt")
+                                    self.assertIsNone(conversation.session)
+                                    self.assertIsNone(conversation._unsubscribe)
+                                closing = asyncio.create_task(target.close_async())
+                                drain = await self._start_close_gate(harness, closing)
+                                self.assertTrue(harness._sdk_operations)
+                                self.assertFalse(peer.finished.is_set())
+                                self.assertFalse(closing.done())
+                                self.assertFalse(store._closed)
+                                with self.assertRaisesRegex(RuntimeError, "writer|already open"):
+                                    DurableStore.create(options)
+                                with self.assertRaisesRegex(RuntimeError, "another durable runtime"):
+                                    DurableHarness(client, store, ExtensionRegistry())
+                                peer.release.set()
+                                if not cancelled:
+                                    with self.assertRaisesRegex(Exception, "late known-session history RPC failure"):
+                                        await pending
+                                detaching = asyncio.create_task(peer.detach_received.wait())
+                                await asyncio.wait((detaching, closing), return_when=asyncio.FIRST_COMPLETED)
+                                self.assertTrue(peer.detach_received.is_set(),
+                                                "late history RPC failure must still disconnect the known session")
+                                await detaching
+                                self.assertTrue(peer.finished.is_set())
+                                self.assertEqual(peer.methods.count("session.detach"), detach_count + 1)
+                                self.assertEqual(peer.detach_attempts.count(session_id), detach_attempts + 1)
+                                self.assertTrue(harness._sdk_operations,
+                                                "cleanup ownership must survive the history error until detach settles")
+                                self.assertFalse(closing.done(), "shutdown must retain the held disconnect response")
+                                self.assertFalse(drain.done(), "scheduler ownership must include disconnect cleanup")
+                                self.assertFalse(store._closed)
+                                with self.assertRaisesRegex(RuntimeError, "pending work"):
+                                    harness.close()
+                                with self.assertRaisesRegex(RuntimeError, "writer|already open"):
+                                    DurableStore.create(options)
+                                with self.assertRaisesRegex(RuntimeError, "another durable runtime"):
+                                    DurableHarness(client, store, ExtensionRegistry())
+                                event_id = "00000000-0000-0000-0000-000000000001"
+                                await peer.send_event(session_id, {
+                                    "type": "tool.execution_complete", "id": event_id,
+                                    "timestamp": "2026-11-02T00:40:27.912-05:00",
+                                    "data": {"toolCallId": "late-history-tool", "success": True,
+                                             "result": {"content": "must not persist after cancellation"}},
+                                })
+                                await asyncio.wait_for(received_event.wait(), 10)
+                                unsubscribe_probe()
+                                await conversation.checkpoint_barrier_async()
+                                self.assertNotIn(event_id, conversation._observed_events,
+                                                 "a cancelled/failed history attachment must remove its listener")
+                                self.assertIsNone(conversation.session)
+                                self.assertIsNone(conversation._unsubscribe)
+                                self.assertEqual(store.provider.sequence, sequence, "no late checkpoint or durable continuation")
+                                peer.detach_release.set()
+                                if cancelled or detach_error is not None:
+                                    with self.assertRaises(Exception) as failure:
+                                        await closing
+                                    if cancelled:
+                                        self.assertIn("late known-session history RPC failure", str(failure.exception))
+                                        self.assertIs(failure.exception, harness._sdk_failures[0])
+                                        if detach_error is not None:
+                                            self.assertEqual(len(harness._sdk_failures), 2,
+                                                             "shutdown must retain both history and disconnect failures")
+                                            additional = failure.exception.__cause__
+                                            self.assertIsInstance(additional, BaseExceptionGroup)
+                                            assert isinstance(additional, BaseExceptionGroup)
+                                            self.assertIs(additional.exceptions[0], harness._sdk_failures[1])
+                                            self.assertIn(detach_error, str(additional.exceptions[0]),
+                                                          "shutdown must preserve disconnect failure as well as history failure")
+                                    else:
+                                        self.assertIn(detach_error, str(failure.exception))
+                                else:
+                                    await closing
+                                await drain
+                                self.assertFalse(harness._sdk_operations)
+                                self.assertFalse(harness._conversation_operations)
+                                self.assertEqual(harness.conversations, [])
+                                # An owned client's public stop also attempts failed sessions.
+                                stop_attempt = int(detach_error is not None and (not facade or owned))
+                                self.assertEqual(peer.detach_attempts.count(session_id),
+                                                 detach_attempts + 1 + stop_attempt)
+                                self.assertEqual(peer.detached.count(session_id),
+                                                 detached_count + (0 if detach_error else 1))
+                                self.assertEqual(store.provider.sequence, sequence)
+                                if operation == "fork":
+                                    intent = harness.fork_intent_of(conversation.id)
+                                    assert intent is not None
+                                    self.assertIs(intent.state, ForkIntentState.COMPLETED)
+                                    self.assertEqual(intent.session_id, session_id)
+                                self.assertEqual(store._closed, owned)
+                                if owned:
+                                    reopened = DurableStore.create(options)
+                                    reopened.close()
+                                else:
+                                    with self.assertRaisesRegex(RuntimeError, "writer|already open"):
+                                        DurableStore.create(options)
+                                if facade and not owned:
+                                    metadata_calls = peer.methods.count("session.getMetadata")
+                                    await client.get_session_metadata("borrowed-client-still-open")
+                                    self.assertEqual(peer.methods.count("session.getMetadata"), metadata_calls + 1)
+                                    if detach_error is None:
+                                        with self.assertRaisesRegex(RuntimeError, "Session is disconnected"):
+                                            session.on(lambda _: None)
+                            finally:
+                                peer.release.set()
+                                peer.detach_release.set()
+                                peer.detach_error = None
+                                if detaching is not None and not detaching.done():
+                                    detaching.cancel()
+                                await self._settle_lifecycle_tasks(pending, closing, drain, detaching)
+                                await target.close_async()
+                                await client.stop()
+                                store.close()
 
     async def test_revision_published_closed_harness_rejects_new_facade_operations(self):
         for synchronous in (False, True):
