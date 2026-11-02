@@ -84,7 +84,7 @@ construct, the approximation is recorded here rather than left to differ silentl
 | `ConcurrentDictionary` provider registry | `dict` + `threading.Lock`, case-insensitive keys | The registry is process-wide and may be touched from any thread, so it keeps a real lock. |
 | `FileStream` + `FileShare` lock | `fcntl.flock` on POSIX, `msvcrt.locking` on Windows, over a `{path}.lock` sidecar | Same guarantee: one writer per store file, and a second opener is refused with the holder named. |
 | `Channel<T>` watch (example-level in C#) | `DurableWatch` / `DurableFrame` in the core | The C# core has no watch type; `examples/04-watches.cs` builds one over a `Channel<string>`. The Python port promotes it to a real type with a baseline frame, deltas, a 100-frame reset, and a single-consumer rule, and DESIGN §3.11 now specifies it. |
-| `CopilotClient` / `CopilotSession` | a `client_factory` seam on `DurableHarness.open_async`, and duck-typed `fork`/`resume`/`create` session calls | The Python SDK binding is out of scope for this port. The seam is explicit: a harness opened without a factory raises rather than degrading, and a client missing a session capability raises naming the capability. |
+| `CopilotClient` / `CopilotSession` | official `github-copilot-sdk==1.0.28`, with an optional `client_factory` test seam | `open_async` starts a real SDK client by default. Create/resume use the SDK's keyword configuration and native fork RPC; unsupported runtime methods fail explicitly. `close_async` stops the client; synchronous core/store operations do not start SDK sessions. |
 
 ## 8. TypeScript port (`lib/ts/durable.ts`)
 
@@ -124,5 +124,52 @@ here rather than left to differ silently.
 | **JSON boundary** | `JsonSerializer` with `JsonSerializerDefaults.Web` and `WhenWritingNull`. | `DurableJson` clones structurally and drops `undefined`/`null` members on write. | No serializer in the core. `TaskOutcome.toJson` / `fromJson` are the explicit boundary for the one type that is persisted as an object rather than as caller-supplied JSON. |
 | **`Transaction.AppendEntry`** | `kind` and `data` are accepted and unused; the entry record is `("entry", null)`. | Same, with `_kind` / `_data` and a comment. | Ported faithfully rather than "fixed", so the two implementations stay comparable. |
 | **Watch delivery** | Unbounded `Channel<T>` in the example; the design specifies a bounded 100-frame handle. | Bounded queue with a serialized drain loop; overflow becomes one `reset` frame carrying the dropped count. | The design's contract, implemented once in the library instead of per example. |
-| **File backends** | `JsonlStoreProvider`, `LegacyJsonStoreProvider`, `StoreFileLock`, `DetectFormat`. | Not ported. `DurableStore.selectProvider` refuses a file format with an error naming it. | The file backends are a separate piece of work. `InMemoryStoreProvider` keeps the `persist` / `createSnapshot` / `restoreSnapshot` / `endTransaction` seams so a file provider can subclass it. |
-| **Session-bound layer** | `DurableConversation`, `DurableHarness`, `AgentChoices`, `ForkAsync`, `BookkeepingEntries`, `PermissionGrant`. | Not ported. `conversationLineage` covers the `ParentConversationId` traversal. | These bind to the Copilot SDK session and to the sandbox policy, which are tracked separately. |
+| **File backends** | `JsonlStoreProvider`, `LegacyJsonStoreProvider`, `StoreFileLock`, `DetectFormat`. | Shared v1 JSONL envelopes, append/fsync with rollback, exact UTF-8 line offsets and torn-tail recovery. Legacy JSON is explicitly unsupported. | JSONL discards every unterminated final record, even valid JSON, while retaining CRLF/mixed line boundaries. New writes use LF. `Auto` selects JSONL, not legacy migration. File locking requires the optional native `fs-ext` addon and working `flock`; missing/unsupported locking fails explicitly. |
+| **Session-bound layer** | `DurableConversation`, `DurableHarness`, `AgentChoices`, `ForkAsync`, `BookkeepingEntries`, `PermissionGrant`. | Official `@github/copilot-sdk@1.0.28` binding, native create/resume/fork, admission and checkpoint documents, prompt sections, tool overrides/wrappers, permission callbacks and sandbox configuration. | SDK handler signatures and generated event shapes are preserved. Visible entries exclude internal document anchors across ancestry, not application entries with similar kinds. Root reuses its original choices; configure replaces the entire choices snapshot; fork copies choices/documents as of its durable boundary. |
+
+### 8.3 SDK compatibility and evidence boundaries (TypeScript and Python)
+
+Both ports serialize submission through the actual SDK `send` method, subscribe before
+sending, and wait for root assistant/idle events. The recorded host's legacy completion
+reply is incompatible with SDK 1.0.28's convenience `sendAndWait`/`send_and_wait`; the ports
+do not manufacture completion events. Tool checkpoints are drained before returning a
+successful submission. SDK effective-model events, not requested choices, populate model
+reports: missing reports stay null/`NotReported`, including turns without their own model.
+Reasoning options are sent only for an explicitly selected non-auto model advertising
+reasoning efforts. Durable strings such as the reference's `minimal` pass unchanged:
+the TypeScript SDK's narrower static union is not a native runtime capability check.
+ReplayRuntime model discovery returns a `list` envelope whereas the TypeScript convenience
+method expects `models` and generated RPC types declare an array; the adapter accepts these
+wire shapes and rejects malformed replies.
+
+Both SDKs expose sandbox configuration. The ports map filesystem/network/auth/credential
+fields, bypass flags, and `userPolicy.seatbelt.keychainAccess` without using deprecated
+`experimental.seatbelt`. Wire configuration tests do not prove OS enforcement. TypeScript
+`tolerateHostHookFailures` and Python `tolerate_host_hook_failures` default to false.
+When explicitly enabled, they match C#'s narrow host-hook sandbox/operation-denied/code126
+classifier and return the last actual assistant event (possibly absent), not a fabricated
+success. Other session errors still fail; sandbox decisions remain observable and no
+permission, user hook or sandbox policy is widened. TypeScript
+observes raw `sandbox.decision` events when delivered, but SDK 1.0.28's generated session
+event union does not declare that event. Native context fork uses the SDK's `sessions.fork`
+RPC with a null native event boundary, like C#; only durable documents/entries are bounded
+by the chosen durable entry. ReplayRuntime does not implement native fork and is not
+a substitute for native-context evidence.
+
+Focused tests under each library exercise the real SDK with ReplayRuntime fixtures,
+including lifecycle/reopen, model reporting, and tool override/wrapper invocation. The
+runtime explicitly marks new session IDs as **synthesised**: these are SDK interoperability
+and fixture lifecycle checks, not LIVE model results or independently recorded transcripts.
+Replay fixtures without permission requests, sandbox decisions or original system/user
+history cannot prove those native assertions. The example range owners validate originals
+separately; shared support does not imply that all examples pass.
+
+TypeScript JSONL locking is verified on macOS with `fs-ext@2.1.1`, including second-writer
+refusal and release after killing the lock holder. Its source uses POSIX `flock` on Linux/macOS
+and Windows `LockFileEx`/`UnlockFileEx`, but Linux/Windows installation and runner execution
+are not verified here. A compiled addon and supported local filesystem are required;
+unavailable native locking fails explicitly, not through an unlocked fallback. NFS is not
+supported by this locking contract. Python retains
+its POSIX `fcntl`/Windows `msvcrt` provider locks. Python SDK 1.0.28 currently emits unclosed
+subprocess-pipe `ResourceWarning`s on Python 3.15 after passing integration checks; the
+adapter calls the public SDK stop method, rather than modifying private SDK process state.
