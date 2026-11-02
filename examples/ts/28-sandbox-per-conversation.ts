@@ -1,9 +1,9 @@
 // Policy mode by default; --live also proves actual per-conversation tool writes.
 // The C# sandbox document provides custom-tool isolation, not OS enforcement.
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { lstatSync, mkdtempSync, mkdirSync, realpathSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   AgentChoices, DocumentDefinition, DocumentHistory, DurableHarness, DurableHarnessOptions,
   DurableSandboxPolicy, DurableStore, Extension, ExtensionRegistry, ForkPolicy,
@@ -28,9 +28,17 @@ async function main() {
       if (!conversation) return "(no conversation for this session)";
       const sandbox = conversation.snapshot(sandboxDoc);
       if (!sandbox?.path) return "(this conversation has no sandbox)";
-      const base = resolve(sandbox.path);
-      const full = resolve(base, args.path);
-      if (!full.startsWith(base + sep)) throw new Error("write_file path must remain inside this conversation's directory");
+      const base = realpathSync(sandbox.path);
+      let existing = resolve(sandbox.path, args.path);
+      const missing: string[] = [];
+      while (!lstatSync(existing, { throwIfNoEntry: false })) {
+        missing.unshift(basename(existing));
+        existing = dirname(existing);
+      }
+      const full = resolve(realpathSync(existing), ...missing);
+      const local = relative(base, full);
+      if (local === "" || local === ".." || local.startsWith(`..${sep}`) || isAbsolute(local))
+        throw new Error("write_file path must remain inside this conversation's directory");
       mkdirSync(resolve(full, ".."), { recursive: true });
       writeFileSync(full, args.content);
       return `wrote ${args.path} (${args.content.length} bytes)`;
