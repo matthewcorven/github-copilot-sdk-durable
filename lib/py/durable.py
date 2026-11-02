@@ -3570,6 +3570,8 @@ class DurableHarness:
         self._in_flight: dict[str, asyncio.Task[TaskOutcome]] = {}
         self._task_creations: set[asyncio.Future[None]] = set()
         self._conversation_operations: set[asyncio.Future[None]] = set()
+        self._sdk_operations: dict[asyncio.Future[None], asyncio.Task[Any]] = {}
+        self._sdk_failures: list[BaseException] = []
         self._submissions: set[asyncio.Task[Any]] = set()
         self._task_failures: list[BaseException] = []
         self._closed = False
@@ -3661,9 +3663,9 @@ class DurableHarness:
             raise
 
     async def _conversation_operation(
-        self, operation: Callable[[], Awaitable[DurableConversation]], *, admitted: bool = False,
+        self, operation: Callable[[], Awaitable[DurableConversation]],
     ) -> DurableConversation:
-        if self._closed and not admitted and not self._is_active_task():
+        if self._closed and not self._is_active_task():
             raise RuntimeError("The durable harness is closing.")
         pending = asyncio.get_running_loop().create_future()
         self._conversation_operations.add(pending)
@@ -3672,6 +3674,62 @@ class DurableHarness:
         finally:
             self._conversation_operations.discard(pending)
             pending.set_result(None)
+
+    async def _sdk_operation(
+        self, operation: Callable[[], Awaitable[Any]],
+        on_cancel: Callable[[Any], Awaitable[None]] | None = None,
+    ) -> Any:
+        # Cancelling the SDK's local waiter does not cancel an issued session RPC.
+        # Own just its completion/cleanup, never the surrounding durable continuation.
+        fence = asyncio.get_running_loop().create_future()
+        async def invoke() -> Any:
+            return await operation()
+        request = asyncio.create_task(invoke())
+        self._sdk_operations[fence] = request
+
+        async def cleanup() -> None:
+            result = await request
+            if on_cancel is not None:
+                await on_cancel(result)
+
+        try:
+            return await asyncio.shield(request)
+        except asyncio.CancelledError:
+            self._retain_sdk_cleanup(cleanup)
+            raise
+        finally:
+            self._sdk_operations.pop(fence)
+            fence.set_result(None)
+
+    def _retain_sdk_cleanup(self, operation: Callable[[], Awaitable[None]]) -> None:
+        fence = asyncio.get_running_loop().create_future()
+
+        async def cleanup() -> None:
+            try:
+                await operation()
+            except BaseException as error:
+                # The initiating caller has already returned; shutdown owns this error.
+                self._sdk_failures.append(error)
+            finally:
+                self._sdk_operations.pop(fence)
+                fence.set_result(None)
+
+        self._sdk_operations[fence] = asyncio.create_task(cleanup())
+
+    async def _attach_conversation_async(self, conversation: DurableConversation, session: Any) -> None:
+        if conversation.session is not session:
+            conversation.attach(session)
+        try:
+            events = await self._sdk_operation(conversation.context_async, lambda _: session.disconnect())
+            for event in events:
+                conversation.observe(event, live=False)
+        except asyncio.CancelledError:
+            conversation.detach()
+            raise
+        except BaseException:
+            conversation.detach()
+            self._retain_sdk_cleanup(session.disconnect)
+            raise
 
     async def create_conversation_async(
         self,
@@ -3706,9 +3764,8 @@ class DurableHarness:
         conversation._harness = self
         conversation._hooks = selected.hooks
         self._conversations[record.id] = conversation
-        conversation.attach(await self._create_pinned_session_async(conversation, selected))
-        for event in await conversation.context_async():
-            conversation.observe(event, live=False)
+        await self._attach_conversation_async(
+            conversation, await self._create_pinned_session_async(conversation, selected))
         return conversation
 
     async def root_async(self, choices: AgentChoices | None = None) -> DurableConversation:
@@ -3747,20 +3804,23 @@ class DurableHarness:
             session = await self._create_pinned_session_async(conversation, conversation.choices())
         else:
             config = await self.build_session_config(conversation.choices(), conversation)
-            metadata = await self._client.get_session_metadata(binding.session_id)
+            metadata = await self._sdk_operation(lambda: self._client.get_session_metadata(binding.session_id))
             if metadata is None:
                 if not binding.pinned or intent is not None or conversation.record.parent_conversation_id is not None:
                     raise DurableRecoveryRequiredException(conversation_id, binding.session_id)
-                session = await self._client.create_session(session_id=binding.session_id, **config)
+                session = await self._sdk_operation(
+                    lambda: self._client.create_session(session_id=binding.session_id, **config),
+                    lambda session: session.disconnect())
             else:
                 config.pop("trust_working_directory", None)
-                session = await self._client.resume_session(
-                    binding.session_id, **config, suppress_resume_event=True, continue_pending_work=False)
+                session = await self._sdk_operation(
+                    lambda: self._client.resume_session(
+                        binding.session_id, **config, suppress_resume_event=True, continue_pending_work=False),
+                    lambda session: session.disconnect())
             if session.session_id != binding.session_id:
+                self._retain_sdk_cleanup(session.disconnect)
                 raise DurableRecoveryRequiredException(conversation_id, binding.session_id)
-        conversation.attach(session)
-        for event in await conversation.context_async():
-            conversation.observe(event, live=False)
+        await self._attach_conversation_async(conversation, session)
         return conversation
 
     def resolve_extensions(self, names: Sequence[str] | None) -> list[Extension]:
@@ -3849,7 +3909,7 @@ class DurableHarness:
         if self._options.enable_file_hooks is not None:
             config["enable_file_hooks"] = self._options.enable_file_hooks
         if choices.reasoning_effort is not None and choices.model not in (None, "auto"):
-            models = await self._client.list_models()
+            models = await self._sdk_operation(self._client.list_models)
             model = next((m for m in models if m.id == config["model"]), None)
             if model is not None and model.supported_reasoning_efforts:
                 config["reasoning_effort"] = choices.reasoning_effort
@@ -3961,12 +4021,16 @@ class DurableHarness:
         # fork never inherits its parent's session id, and this write records the new one.
         parent_choices = parent.choices()
         model = parent_choices.model if parent_choices is not None else None
-        await conversation.bind_async(
-            getattr(session, "session_id", None),
-            model if model is not None else self.DEFAULT_MODEL,
-        )
-        for event in await conversation.context_async():
-            conversation.observe(event, live=False)
+        try:
+            await conversation.bind_async(
+                getattr(session, "session_id", None),
+                model if model is not None else self.DEFAULT_MODEL,
+            )
+        except BaseException:
+            conversation.detach()
+            self._retain_sdk_cleanup(session.disconnect)
+            raise
+        await self._attach_conversation_async(conversation, session)
         return conversation
 
     async def _fork_session_async(
@@ -3978,11 +4042,14 @@ class DurableHarness:
         """Forks native context, leaving a recoverable pending intent if the RPC fails."""
         if parent.session_id is None:
             raise DurableRecoveryRequiredException(parent.id, None)
-        forked = await self._client.rpc.sessions.fork(SessionsForkRequest(session_id=parent.session_id))
+        parent_session_id = parent.session_id
         config = await self.build_session_config(choices, conversation)
         config.pop("trust_working_directory", None)
-        session = await self._client.resume_session(
-            forked.session_id, **config, suppress_resume_event=True, continue_pending_work=False)
+        async def fork_session() -> Any:
+            forked = await self._client.rpc.sessions.fork(SessionsForkRequest(session_id=parent_session_id))
+            return await self._client.resume_session(
+                forked.session_id, **config, suppress_resume_event=True, continue_pending_work=False)
+        session = await self._sdk_operation(fork_session, lambda session: session.disconnect())
 
         async def body(tx: Transaction) -> None:
             intent = tx.doc(FORK_DOCUMENT, conversation.id)
@@ -3992,7 +4059,11 @@ class DurableHarness:
             intent.value = current
             intent.save(tx.append_entry(conversation.id, "fork"))
 
-        await self._store.commit_async(body)
+        try:
+            await self._store.commit_async(body)
+        except BaseException:
+            self._retain_sdk_cleanup(session.disconnect)
+            raise
         return session
 
     async def _create_pinned_session_async(
@@ -4014,7 +4085,9 @@ class DurableHarness:
         if binding is None or binding.session_id is None:
             raise DurableRecoveryRequiredException(conversation.id, None)
         config = await self.build_session_config(choices, conversation)
-        return await self._client.create_session(session_id=binding.session_id, **config)
+        return await self._sdk_operation(
+            lambda: self._client.create_session(session_id=binding.session_id, **config),
+            lambda session: session.disconnect())
 
     async def abandon_fork_async(self, conversation_id: str) -> None:
         """Marks a fork abandoned, so it is never given a session."""
@@ -4279,7 +4352,7 @@ class DurableHarness:
 
     def close(self) -> None:
         """Detaches every conversation handle. The store stays the caller's."""
-        if (self._closing is not None and not self._closing.done()) or self._conversation_operations or self._task_creations or self._in_flight or self._submissions or any(
+        if (self._closing is not None and not self._closing.done()) or self._conversation_operations or self._sdk_operations or self._task_creations or self._in_flight or self._submissions or any(
             conversation._checkpoint_chain is not None and not conversation._checkpoint_chain.done()
             for conversation in self._conversations.values()
         ):
@@ -4314,8 +4387,9 @@ class DurableHarness:
 
         try:
             await drain(conversation.checkpoint_barrier_async() for conversation in self._conversations.values())
-            while self._task_creations or self._in_flight or self._conversation_operations:
-                await drain([*self._task_creations, *self._in_flight.values(), *self._conversation_operations])
+            while self._task_creations or self._in_flight or self._conversation_operations or self._sdk_operations:
+                await drain([*self._task_creations, *self._in_flight.values(),
+                             *self._conversation_operations, *self._sdk_operations])
             while self._submissions:
                 # The initiating caller receives submission errors; shutdown joins cleanup.
                 await asyncio.gather(*list(self._submissions), return_exceptions=True)
@@ -4324,6 +4398,7 @@ class DurableHarness:
                 conversation.detach()
             await drain(conversation.checkpoint_barrier_async() for conversation in conversations)
             failures.extend(error for error in self._task_failures if error not in failures)
+            failures.extend(error for error in self._sdk_failures if error not in failures)
             self._conversations.clear()
         finally:
             self._drained = True
@@ -4681,13 +4756,16 @@ class DurableCopilotClient:
     ) -> DurableConversation:
         if self._closed and not (self._harness is not None and self._harness._is_active_task()):
             raise RuntimeError("The durable client is closing.")
+        if self._harness is not None and self._harness._closed and not self._harness._is_active_task():
+            raise RuntimeError("The durable harness is closing.")
         pending = asyncio.get_running_loop().create_future()
         self._conversation_operations.add(pending)
         try:
             await self._initialize_shared_async()
             assert self._harness is not None
             harness = self._harness
-            return await harness._conversation_operation(lambda: operation(harness), admitted=True)
+            # This fence was accepted before either shutdown, including publication.
+            return await operation(harness)
         finally:
             self._conversation_operations.discard(pending)
             pending.set_result(None)
