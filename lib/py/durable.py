@@ -3678,6 +3678,7 @@ class DurableHarness:
     async def _sdk_operation(
         self, operation: Callable[[], Awaitable[Any]],
         on_cancel: Callable[[Any], Awaitable[None]] | None = None,
+        *, on_cancel_settled: Callable[[], Awaitable[None]] | None = None,
     ) -> Any:
         # Cancelling the SDK's local waiter does not cancel an issued session RPC.
         # Own just its completion/cleanup, never the surrounding durable continuation.
@@ -3688,9 +3689,19 @@ class DurableHarness:
         self._sdk_operations[fence] = request
 
         async def cleanup() -> None:
-            result = await request
-            if on_cancel is not None:
-                await on_cancel(result)
+            failures: list[BaseException] = []
+            try:
+                result = await request
+                if on_cancel is not None:
+                    await on_cancel(result)
+            except BaseException as error:
+                failures.append(error)
+            try:
+                if on_cancel_settled is not None:
+                    await on_cancel_settled()
+            except BaseException as error:
+                failures.append(error)
+            self._sdk_failures.extend(failures)
 
         try:
             return await asyncio.shield(request)
@@ -3720,7 +3731,9 @@ class DurableHarness:
         if conversation.session is not session:
             conversation.attach(session)
         try:
-            events = await self._sdk_operation(conversation.context_async, lambda _: session.disconnect())
+            # History already has a session to release even if its late RPC fails.
+            events = await self._sdk_operation(
+                conversation.context_async, on_cancel_settled=session.disconnect)
             for event in events:
                 conversation.observe(event, live=False)
         except asyncio.CancelledError:
