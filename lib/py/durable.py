@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from contextvars import ContextVar
 import dataclasses
 import functools
 import inspect
@@ -38,6 +39,8 @@ from copilot import CopilotClient, RuntimeConnection
 from copilot.generated.rpc import (
     PermissionDecisionApproveOnce, PermissionDecisionReject, SandboxConfig, SessionsForkRequest,
 )
+
+_active_task: ContextVar[tuple["DurableHarness", str] | None] = ContextVar("durable_active_task", default=None)
 
 __all__ = [
     "AgentChoices",
@@ -3342,6 +3345,19 @@ class DurableConversation:
         return await self._harness.fork_async(self, entry_id)
 
     async def submit_async(self, prompt: str, timeout: float = 180.0) -> Any:
+        harness = self._harness
+        if harness is not None and harness._closed and not harness._is_active_task():
+            raise RuntimeError("The durable harness is closing.")
+        run = asyncio.create_task(self._submit_core_async(prompt, timeout))
+        if harness is not None:
+            harness._submissions.add(run)
+        try:
+            return await run
+        finally:
+            if harness is not None:
+                harness._submissions.discard(run)
+
+    async def _submit_core_async(self, prompt: str, timeout: float) -> Any:
         if self._session is None:
             raise RuntimeError(f"Conversation '{self.id}' has no attached SDK session.")
         self._pending_submissions += 1
@@ -3552,6 +3568,7 @@ class DurableHarness:
         self._running_tasks: set[str] = set()
         self._task_completions: dict[str, asyncio.Future[TaskOutcome]] = {}
         self._in_flight: dict[str, asyncio.Task[TaskOutcome]] = {}
+        self._submissions: set[asyncio.Task[Any]] = set()
         self._task_failures: list[BaseException] = []
         self._closed = False
         self._drained = False
@@ -3651,6 +3668,8 @@ class DurableHarness:
         if self._closed:
             raise RuntimeError("The durable harness is closing.")
         selected = choices if choices is not None else AgentChoices()
+        if selected.sandbox is not None:
+            validate_sandbox_policy(selected.sandbox)
 
         async def body(tx: Transaction) -> ConversationRecord:
             record = tx.create_conversation(
@@ -3989,7 +4008,8 @@ class DurableHarness:
         cancellation: asyncio.Event | None = None,
     ) -> DurableTaskRecord:
         """Creates a durable task and schedules it."""
-        if self._closed:
+        active = _active_task.get()
+        if self._closed and not (self._is_active_task() and active is not None and owner_task_id == active[1]):
             raise RuntimeError("The durable harness is closing.")
 
         async def body(tx: Transaction) -> DurableTaskRecord:
@@ -4028,15 +4048,18 @@ class DurableHarness:
         existing = self._in_flight.get(task_id)
         if existing is not None:
             return existing
-        if self._closed:
+        record = self._store.task(task_id)
+        active = _active_task.get()
+        if self._closed and not (self._is_active_task() and active is not None and record is not None
+                                 and record.owner_task_id == active[1]):
             raise RuntimeError("The durable harness is closing.")
         completion = self._task_completions.get(task_id)
         if completion is None:
             completion = asyncio.get_running_loop().create_future()
             self._task_completions[task_id] = completion
 
-        record = self._store.task(task_id)
         async def run_core() -> TaskOutcome:
+            token = _active_task.set((self, task_id))
             try:
                 if record is None:
                     missing = TaskOutcome.failed("unknown task")
@@ -4048,6 +4071,7 @@ class DurableHarness:
                 self._task_failures.append(error)
                 raise
             finally:
+                _active_task.reset(token)
                 self._running_tasks.discard(task_id)
                 self._in_flight.pop(task_id, None)
 
@@ -4055,6 +4079,11 @@ class DurableHarness:
         self._in_flight[task_id] = run
         self._running_tasks.add(task_id)
         return run
+
+    def _is_active_task(self) -> bool:
+        active = _active_task.get()
+        return (active is not None and active[0] is self
+                and self._in_flight.get(active[1]) is asyncio.current_task())
 
     async def _run_task_core_async(
         self,
@@ -4212,7 +4241,7 @@ class DurableHarness:
 
     def close(self) -> None:
         """Detaches every conversation handle. The store stays the caller's."""
-        if (self._closing is not None and not self._closing.done()) or self._in_flight or any(
+        if (self._closing is not None and not self._closing.done()) or self._in_flight or self._submissions or any(
             conversation._checkpoint_chain is not None and not conversation._checkpoint_chain.done()
             for conversation in self._conversations.values()
         ):
@@ -4249,6 +4278,9 @@ class DurableHarness:
             await drain(conversation.checkpoint_barrier_async() for conversation in self._conversations.values())
             while self._in_flight:
                 await drain(list(self._in_flight.values()))
+            while self._submissions:
+                # The initiating caller receives submission errors; shutdown joins cleanup.
+                await asyncio.gather(*list(self._submissions), return_exceptions=True)
             conversations = list(self._conversations.values())
             for conversation in conversations:
                 conversation.detach()
@@ -4522,7 +4554,9 @@ class DurableCopilotClient:
             raise RuntimeError("The durable client is closing.")
         if self._initialization is None:
             self._initialization = asyncio.ensure_future(self._initialize_core_async())
-        await self._initialization
+        await asyncio.shield(self._initialization)
+        if self._closed:
+            raise RuntimeError("The durable client is closing.")
 
     async def _initialize_core_async(self) -> None:
         created_store: DurableStore | None = None
@@ -4552,6 +4586,8 @@ class DurableCopilotClient:
                 created_store.close()
             self._store = self._options.store
             self._client = self._options.client
+            self._owns_store = bool(self._options.owns_store)
+            self._owns_client = bool(self._options.owns_client)
             raise
 
     async def _create_client_async(self) -> Any:
@@ -4565,7 +4601,11 @@ class DurableCopilotClient:
             kwargs.setdefault("connection", RuntimeConnection.for_stdio(
                 path=resolve_runtime_path(options), args=options.runtime_arguments))
             client = CopilotClient(**kwargs)
-            await client.start()
+            try:
+                await client.start()
+            except BaseException:
+                await self._close_client_async(client)
+                raise
         else:
             client = factory()
             if inspect.isawaitable(client):
@@ -4643,7 +4683,14 @@ class DurableCopilotClient:
         await DurableHarness._await_close_async(self._closing)
 
     async def _close_core_async(self) -> None:
-        failures = await self._harness._drain_async() if self._harness is not None else []
+        failures: list[BaseException] = []
+        if self._initialization is not None:
+            try:
+                await asyncio.shield(self._initialization)
+            except BaseException as error:
+                failures.append(error)
+        if self._harness is not None:
+            failures.extend(await self._harness._drain_async())
         try:
             if self._owns_client and self._client is not None:
                 await self._close_client_async(self._client)

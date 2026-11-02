@@ -10,6 +10,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { CopilotClient, RuntimeConnection } from "@github/copilot-sdk";
 import type { AssistantMessageEvent, CopilotSession, SessionConfig, SessionEvent, Tool, SandboxConfig } from "@github/copilot-sdk";
 export { defineTool } from "@github/copilot-sdk";
@@ -516,6 +517,12 @@ export class TaskRuntime {
 // ─────────────────────────────────────────────────────────────────────────────
 // Conversations
 // ─────────────────────────────────────────────────────────────────────────────
+
+const activeTask = new AsyncLocalStorage<{ store: DurableStore; taskId: string; active: boolean }>();
+function isActiveTask(store: DurableStore): boolean {
+  const task = activeTask.getStore();
+  return task?.store === store && task.active;
+}
 
 /** The record of one conversation. */
 export class ConversationRecord {
@@ -1168,7 +1175,14 @@ export class InMemoryStoreProvider implements IDurableStoreProvider {
       private file = "";
       private lock: number | null = null;
       private flock: typeof import("fs-ext") | null = null;
-      private committed = new Map<string, string>();
+      private readonly committedEntries = new Map<string, number>();
+      private readonly committedVersions = new Map<DocumentState, number>();
+      private readonly emittedRecords = new Set<string>();
+      private readonly emittedDocuments = new Set<DocumentState>();
+      private readonly pendingConversations = new Map<string, ConversationRecord>();
+      private readonly pendingEntries = new Set<string>();
+      private readonly pendingDocuments = new Set<DocumentState>();
+      private readonly pendingTasks = new Map<string, DurableTaskRecord>();
 
       override get isPersistent(): boolean { return true; }
 
@@ -1267,7 +1281,12 @@ export class InMemoryStoreProvider implements IDurableStoreProvider {
             offset = newline < 0 ? bytes.length : end + 1;
           }
           this.restoreSnapshot(snapshot);
-          this.committed = this.records();
+          for (const [id, entries] of this.entryLists) this.committedEntries.set(id, entries.length);
+          for (const id of this.entryRecords.keys()) this.emittedRecords.add(id);
+          for (const document of this.documents) {
+            this.emittedDocuments.add(document);
+            this.committedVersions.set(document, document.versions.length);
+          }
         } catch (error) {
           this.dispose();
           throw error;
@@ -1286,21 +1305,81 @@ export class InMemoryStoreProvider implements IDurableStoreProvider {
         catch (error) { fs.closeSync(fd); throw new Error(`JSONL store '${this.file}' is already locked.`, { cause: error }); }
       }
 
-      private records(): Map<string, string> {
-        const records = new Map<string, string>();
-        const add = (key: string, type: string, payload: unknown) =>
-          records.set(key, JSON.stringify({ v: 1, seq: this.sequence, type, payload }));
-        for (const c of this.conversations) add(`c:${c.id}`, "conversation", c);
-        for (const [id, entries] of this.entryLists) entries.forEach((entryId, i) =>
-          add(`e:${id}:${i}`, "entry", { conversationId: id, entryId }));
-        for (const e of this.entryRecords.values()) add(`r:${e.id}`, "entry-record", e);
-        for (const d of this.documents) {
-          const fork = [ForkPolicy.AsOf, ForkPolicy.Current, ForkPolicy.Initial].indexOf(d.fork);
-          add(`d:${d.kind}@${d.ownerId}`, "document", { kind: d.kind, ownerId: d.ownerId, fork, initial: d.initial });
-          d.versions.forEach((v, i) => add(`v:${d.kind}@${d.ownerId}:${i}`, "document-version",
-            { kind: d.kind, ownerId: d.ownerId, fork, ...v }));
+      override addConversation(record: ConversationRecord): void {
+        super.addConversation(record);
+        this.pendingConversations.set(record.id, record);
+      }
+
+      override addEntry(conversationId: string, entryId: string): void {
+        super.addEntry(conversationId, entryId);
+        this.pendingEntries.add(conversationId);
+      }
+
+      override copyEntries(from: string, to: string, entryId: string | null): void {
+        super.copyEntries(from, to, entryId);
+        this.pendingEntries.add(to);
+      }
+
+      override ensureDocument(kind: string, ownerId: string, fork: ForkPolicy, initial: JsonValue = null): DocumentState {
+        const document = super.ensureDocument(kind, ownerId, fork, initial);
+        this.pendingDocuments.add(document);
+        return document;
+      }
+
+      override recordDocumentVersion(document: DocumentState, entryId: string, value: JsonValue): void {
+        super.recordDocumentVersion(document, entryId, value);
+        this.pendingDocuments.add(document);
+      }
+
+      override addTask(record: DurableTaskRecord): DurableTaskRecord {
+        const task = super.addTask(record);
+        this.pendingTasks.set(record.id, record);
+        return task;
+      }
+
+      override updateTask(record: DurableTaskRecord): void {
+        super.updateTask(record);
+        this.pendingTasks.set(record.id, record);
+      }
+
+      override rollback(): void {
+        super.rollback();
+        this.clearPending();
+      }
+
+      private clearPending(): void {
+        this.pendingConversations.clear();
+        this.pendingEntries.clear();
+        this.pendingDocuments.clear();
+        this.pendingTasks.clear();
+      }
+
+      private records(): string[] {
+        const records: string[] = [];
+        const add = (type: string, payload: unknown) =>
+          records.push(JSON.stringify({ v: 1, seq: this.sequence, type, payload }));
+        for (const c of this.pendingConversations.values()) add("conversation", c);
+        const emitted = new Set<string>();
+        for (const id of this.pendingEntries) {
+          const entries = this.entryLists.get(id)!;
+          for (let i = this.committedEntries.get(id) ?? 0; i < entries.length; i++) {
+            const entryId = entries[i]!;
+            add("entry", { conversationId: id, entryId });
+            const record = this.entryRecords.get(entryId);
+            if (record && !this.emittedRecords.has(entryId) && !emitted.has(entryId)) {
+              add("entry-record", record);
+              emitted.add(entryId);
+            }
+          }
         }
-        for (const t of this.tasks) add(`t:${t.id}`, "task", {
+        for (const d of this.pendingDocuments) {
+          const fork = [ForkPolicy.AsOf, ForkPolicy.Current, ForkPolicy.Initial].indexOf(d.fork);
+          if (!this.emittedDocuments.has(d))
+            add("document", { kind: d.kind, ownerId: d.ownerId, fork, initial: d.initial });
+          for (let i = this.committedVersions.get(d) ?? 0; i < d.versions.length; i++)
+            add("document-version", { kind: d.kind, ownerId: d.ownerId, fork, ...d.versions[i]! });
+        }
+        for (const t of this.pendingTasks.values()) add("task", {
           ...t, status: Object.values(TaskStatus).indexOf(t.status),
         });
         return records;
@@ -1315,17 +1394,23 @@ export class InMemoryStoreProvider implements IDurableStoreProvider {
         fs.mkdirSync(path.dirname(this.file), { recursive: true });
         this.acquireLock();
         const records = this.records();
-        const changed = [...records].filter(([key, text]) => {
-          const previous = this.committed.get(key);
-          return !previous || JSON.stringify(JSON.parse(previous).payload) !== JSON.stringify(JSON.parse(text).payload);
-        }).map(([, text]) => text);
-        if (!changed.length) return;
+        if (!records.length) { this.clearPending(); return; }
         const fd = fs.openSync(this.file, "a+", 0o600);
         const size = fs.fstatSync(fd).size;
         try {
-          fs.writeFileSync(fd, `${changed.join("\n")}\n`);
+          fs.writeFileSync(fd, `${records.join("\n")}\n`);
           fs.fsyncSync(fd);
-          this.committed = records;
+          for (const id of this.pendingEntries) {
+            const entries = this.entryLists.get(id)!;
+            for (let i = this.committedEntries.get(id) ?? 0; i < entries.length; i++)
+              this.emittedRecords.add(entries[i]!);
+            this.committedEntries.set(id, entries.length);
+          }
+          for (const document of this.pendingDocuments) {
+            this.emittedDocuments.add(document);
+            this.committedVersions.set(document, document.versions.length);
+          }
+          this.clearPending();
         } catch (error) {
           fs.ftruncateSync(fd, size);
           fs.fsyncSync(fd);
@@ -2074,13 +2159,15 @@ export class DurableTaskRunner {
   private readonly inFlight = new Map<string, Promise<TaskOutcome>>();
   private disposed = false;
   private disposal: Promise<void> | undefined;
+  private readonly failures: unknown[] = [];
 
   constructor(
     private readonly store: DurableStore,
     private readonly registry: ExtensionRegistry,
   ) {
     this.store.claimTaskScheduler(this, (taskId, cancellationToken) => {
-      void this.runTaskAsync(taskId, cancellationToken);
+      this.assertRunAllowed(taskId);
+      this.startTask(taskId, cancellationToken);
     });
   }
 
@@ -2095,7 +2182,8 @@ export class DurableTaskRunner {
       cancellationToken?: AbortSignal;
     } = {},
   ): Promise<DurableTaskRecord> {
-    if (this.disposed) throw new Error("The durable task runner is closing.");
+    if (this.disposed && !(isActiveTask(this.store) && options.ownerTaskId === activeTask.getStore()?.taskId))
+      throw new Error("The durable task runner is closing.");
     const record = await this.store.commitAsync((tx) =>
       tx.createTask(definition, input, {
         ownerConversationId: options.ownerConversationId ?? null,
@@ -2104,13 +2192,13 @@ export class DurableTaskRunner {
       }),
     );
 
-    void this.runTaskAsync(record.id, options.cancellationToken);
+    this.startTask(record.id, options.cancellationToken);
     return record;
   }
 
   /** Runs a task to completion, resuming from its last checkpoint. */
   async runTaskAsync(taskId: string, cancellationToken: AbortSignal = new AbortController().signal): Promise<TaskOutcome> {
-    if (this.disposed && !this.running.has(taskId)) throw new Error("The durable task runner is closing.");
+    this.assertRunAllowed(taskId);
     const completion = this.completionFor(taskId);
 
     const record = this.store.task(taskId);
@@ -2126,12 +2214,14 @@ export class DurableTaskRunner {
     }
 
     this.running.add(taskId);
-    const run = this.runTaskCoreAsync(taskId, record, completion, cancellationToken);
+    const context = { store: this.store, taskId, active: true };
+    const run = activeTask.run(context, () => this.runTaskCoreAsync(taskId, record, completion, cancellationToken));
     // Recorded before the first await so disposal can drain a run that is mid-commit.
     this.inFlight.set(taskId, run);
     try {
       return await run;
     } finally {
+      context.active = false;
       this.inFlight.delete(taskId);
       this.running.delete(taskId);
     }
@@ -2153,9 +2243,18 @@ export class DurableTaskRunner {
         : (TaskOutcome.fromJson(record.outcome) ?? new TaskOutcome("completed"));
     }
 
-    const completion = this.completionFor(taskId);
-    void this.runTaskAsync(taskId, cancellationToken);
-    return completion.promise;
+    return this.runTaskAsync(taskId, cancellationToken);
+  }
+
+  private assertRunAllowed(taskId: string): void {
+    if (!this.disposed || this.running.has(taskId)) return;
+    const parent = this.store.task(taskId)?.ownerTaskId;
+    if (isActiveTask(this.store) && parent === activeTask.getStore()?.taskId && this.running.has(parent!)) return;
+    throw new Error("The durable task runner is closing.");
+  }
+
+  private startTask(taskId: string, cancellationToken?: AbortSignal): void {
+    void this.runTaskAsync(taskId, cancellationToken).catch(error => { this.failures.push(error); });
   }
 
   /**
@@ -2214,7 +2313,7 @@ export class DurableTaskRunner {
       while (this.inFlight.size) {
         const results = await Promise.allSettled([...this.inFlight.values()]);
         for (const result of results)
-          if (result.status === "rejected") failures.push(result.reason);
+          if (result.status === "rejected" && !failures.includes(result.reason)) failures.push(result.reason);
       }
       try {
         await finalize?.();
@@ -2224,6 +2323,7 @@ export class DurableTaskRunner {
     } finally {
       this.store.releaseTaskScheduler(this);
     }
+    for (const error of this.failures) if (!failures.includes(error)) failures.push(error);
     if (failures.length === 1) throw failures[0];
     if (failures.length > 1)
       throw new AggregateError(failures, "Task runs failed.", { cause: failures[0] });
@@ -2713,7 +2813,9 @@ export class DurableConversation {
   readonly turnModels: DurableModelReport[] = [];
   readonly sandboxDecisions: SessionEvent[] = [];
   effectiveModel = DurableModelReport.NotReported;
-  constructor(readonly harness: DurableHarness, readonly record: ConversationRecord) {}
+  constructor(readonly harness: DurableHarness, readonly record: ConversationRecord, hooks?: SessionConfig["hooks"]) {
+    this.hooks = hooks;
+  }
   get id(): string { return this.record.id; }
   get session(): CopilotSession {
     if (!this.attached) throw new Error(`Conversation '${this.id}' has no attached SDK session.`);
@@ -2833,9 +2935,13 @@ export class DurableConversation {
     if (this.attached) await this.session.setTools([...this.agent().tools]);
   }
   submitAsync(prompt: string, timeoutMs = 180000): Promise<AssistantMessageEvent | undefined> {
+    if (closingHarnesses.has(this.harness) && !isActiveTask(this.harness.store))
+      return Promise.reject(new Error("The durable harness is closing."));
     this.pending++;
+    const cancellation = new AbortController();
     // Serialize legacy runtimes too: their idle event is session-wide, not input-correlated.
     const run = this.tail.then(async () => {
+      cancellation.signal.throwIfAborted();
       if (hasUnsettledAdmission(this.harness.store, this.record))
         throw new Error(`Conversation '${this.id}' has an unsettled admission; explicit recovery is required before submitting.`);
       const admissionId = randomUUID();
@@ -2847,19 +2953,30 @@ export class DurableConversation {
       try {
         const answer = await new Promise<AssistantMessageEvent | undefined>((resolve, reject) => {
           let last: AssistantMessageEvent | undefined;
+          let sent = false, completed = false;
+          const finish = () => {
+            if (sent && completed) { cleanup(); resolve(last); }
+          };
           const stop = this.session.on(event => {
             if (event.agentId) return;
             if (event.type === "assistant.message") last = event;
-            if (event.type === "session.idle") { clearTimeout(timer); stop(); resolve(last); }
+            if (event.type === "session.idle") { completed = true; finish(); }
             if (event.type === "session.error") {
-              clearTimeout(timer); stop();
-              if (this.harness.options.tolerateHostHookFailures && DurableConversation.isHostHookFailure(event.data.message))
-                resolve(last);
-              else reject(new Error(event.data.message));
+              if (this.harness.options.tolerateHostHookFailures && DurableConversation.isHostHookFailure(event.data.message)) {
+                completed = true; finish();
+              } else { cleanup(); reject(new Error(event.data.message)); }
             }
           });
-          const timer = setTimeout(() => { stop(); reject(new Error(`Submission timed out after ${timeoutMs}ms.`)); }, timeoutMs);
-          void this.session.send({ prompt }).catch(error => { clearTimeout(timer); stop(); reject(error); });
+          const abort = () => { cleanup(); reject(cancellation.signal.reason); };
+          const timer = setTimeout(() => { cleanup(); reject(new Error(`Submission timed out after ${timeoutMs}ms.`)); }, timeoutMs);
+          const cleanup = () => {
+            clearTimeout(timer); stop();
+            cancellation.signal.removeEventListener("abort", abort);
+          };
+          cancellation.signal.addEventListener("abort", abort, { once: true });
+          if (cancellation.signal.aborted) { abort(); return; }
+          void this.session.send({ prompt }).then(() => { sent = true; finish(); },
+            error => { cleanup(); reject(error); });
         });
         await this.checkpointBarrierAsync();
         await this.commitAsync(tx => {
@@ -2889,7 +3006,10 @@ export class DurableConversation {
       }
     });
     this.tail = run.catch(() => {});
-    return run.finally(() => { this.pending--; });
+    const submission = run.finally(() => { this.pending--; submissions.get(this.harness)!.delete(submission); });
+    submissions.get(this.harness)!.add(submission);
+    submissionStops.set(submission, cancellation);
+    return submission;
   }
   contextAsync(): Promise<SessionEvent[]> { return this.session.getEvents(); }
   abortAsync(): Promise<void> { return this.session.abort(); }
@@ -2913,6 +3033,10 @@ export class DurableConversation {
   }
 }
 
+const closingHarnesses = new WeakSet<DurableHarness>();
+const submissions = new WeakMap<DurableHarness, Set<Promise<unknown>>>();
+const submissionStops = new WeakMap<Promise<unknown>, AbortController>();
+
 export class DurableHarness {
   static readonly DefaultModel = "gpt-6-luna";
   readonly agentDocument = agentDocument;
@@ -2924,6 +3048,7 @@ export class DurableHarness {
   constructor(readonly client: CopilotClient, readonly store: DurableStore,
     readonly registry: ExtensionRegistry, readonly options = new DurableHarnessOptions()) {
     this.runner = new DurableTaskRunner(store, registry);
+    submissions.set(this, new Set());
   }
   static async openAsync(store: DurableStore, registry: ExtensionRegistry,
     options = new DurableHarnessOptions()): Promise<DurableHarness> {
@@ -3048,9 +3173,16 @@ export class DurableHarness {
   async createConversationAsync(choices = new AgentChoices(), ownerTaskId: string | null = null,
     ownerConversationId: string | null = null): Promise<DurableConversation> {
     if (this.disposal) throw new Error("The durable harness is closing.");
-    const record = await this.store.commitAsync(tx => tx.createConversation({ ownerTaskId, ownerConversationId }));
-    const conversation = this.findConversation(record.id)!;
-    await conversation.configureAsync(choices);
+    if (choices.sandbox) DurableHarness.buildSandboxConfig(choices.sandbox, choices.workingDirectory);
+    const record = await this.store.commitAsync(tx => {
+      const record = tx.createConversation({ ownerTaskId, ownerConversationId });
+      const draft = tx.doc(agentDocument, record.id);
+      draft.value = wireChoices(choices);
+      draft.save(tx.appendEntry(record.id, "agent"));
+      return record;
+    });
+    const conversation = new DurableConversation(this, record, choices.hooks);
+    this.handles.set(record.id, conversation);
     await this.createSession(conversation);
     return conversation;
   }
@@ -3144,11 +3276,18 @@ export class DurableHarness {
     return this.store.tasks.map(task => ({ task, owner: task.ownerTaskId ?? task.ownerConversationId }));
   }
   disposeAsync(): Promise<void> {
+    closingHarnesses.add(this);
     return this.disposal ??= (async () => {
       const failures: unknown[] = [];
       const checkpoints = Promise.allSettled(this.conversations.map(conversation => conversation.checkpointBarrierAsync()));
       try {
         await this.runner.disposeAsync(async () => {
+          for (const submission of submissions.get(this)!)
+            submissionStops.get(submission)!.abort(new Error("The durable harness is closing."));
+          while (submissions.get(this)!.size) {
+            // Submission errors are returned to their callers; shutdown still awaits settlement.
+            await Promise.allSettled([...submissions.get(this)!]);
+          }
           for (const result of await checkpoints)
             if (result.status === "rejected") failures.push(result.reason);
           for (const conversation of this.handles.values()) conversation.detach();
