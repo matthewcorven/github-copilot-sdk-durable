@@ -20,6 +20,39 @@ from copilot.generated.session_events import (
 )
 
 
+class _Session:
+    """Only the public SDK session resources used by this example."""
+
+    def __init__(self, config):
+        self.session_id = config["session_id"]
+        self.config = config
+        self.listeners = set()
+        self.events = [{"type": "session.start", "data": {"selectedModel": "mock-reported-model"}}]
+        self.disconnected = False
+        self.disconnects = 0
+        self._disconnect_lock = asyncio.Lock()
+
+    def on(self, listener):
+        if self.disconnected:
+            raise RuntimeError("Session is disconnected")
+        self.listeners.add(listener)
+        return lambda: self.listeners.discard(listener)
+
+    async def get_events(self):
+        if self.disconnected:
+            raise RuntimeError("Session is disconnected")
+        return self.events
+
+    async def disconnect(self):
+        async with self._disconnect_lock:
+            if self.disconnected:
+                return
+            self.listeners.clear()
+            self.config.clear()
+            self.disconnected = True
+            self.disconnects += 1
+
+
 class CodingAgentTests(unittest.IsolatedAsyncioTestCase):
     async def run_example(self, aliased, mutation=None):
         path = ROOT / "examples/py/25-coding-agent.py"
@@ -30,17 +63,16 @@ class CodingAgentTests(unittest.IsolatedAsyncioTestCase):
         namespace = {"__name__": "coding_agent_regression", "__file__": str(path)}
         exec(compile(source, str(path), "exec"), namespace)
         calls = []
+        sessions = []
 
         class Client:
             async def create_session(client, **config):
-                listeners = []
-                events = [{"type": "session.start", "data": {"selectedModel": "mock-reported-model"}}]
-
-                def subscribe(listener):
-                    listeners.append(listener)
-                    return lambda: listeners.remove(listener)
+                session = _Session(config)
+                sessions.append(session)
 
                 async def send(prompt):
+                    if session.disconnected:
+                        raise RuntimeError("Session is disconnected")
                     tool = next(tool for tool in config["tools"] if tool.name == "run_shell")
                     result = await tool.handler(SimpleNamespace(
                         arguments={"command": "pwd"}, session_id=config["session_id"],
@@ -53,21 +85,22 @@ class CodingAgentTests(unittest.IsolatedAsyncioTestCase):
                         ("session.idle", SessionIdleData()),
                     ]:
                         event = SessionEvent(type=kind, data=data, id=uuid4(), timestamp=datetime.now(timezone.utc))
-                        events.append(event)
-                        for listener in list(listeners):
+                        session.events.append(event)
+                        for listener in list(session.listeners):
                             listener(event)
 
-                async def get_events():
-                    return events
-
                 async def set_tools(tools):
+                    if session.disconnected:
+                        raise RuntimeError("Session is disconnected")
                     config["tools"] = tools
 
-                return SimpleNamespace(session_id=config["session_id"], on=subscribe,
-                                       send=send, get_events=get_events, set_tools=set_tools)
+                session.send = send
+                session.set_tools = set_tools
+                return session
 
             async def stop(client):
-                pass
+                for session in sessions:
+                    await session.disconnect()
 
         async def open_harness(store, registry):
             return DurableHarness(Client(), store, registry)
@@ -88,6 +121,36 @@ class CodingAgentTests(unittest.IsolatedAsyncioTestCase):
                             "SDK cwd is physically canonical")
             self.assertEqual(calls[0][0], calls[0][1].split(" (exit")[0])
             self.assertEqual(str(Path(calls[0][0]) / "app"), calls[1][1].split(" (exit")[0])
+            self.assertEqual(1, len(sessions))
+            session = sessions[0]
+            self.assertTrue(session.disconnected, "example shutdown disconnects the SDK session")
+            self.assertEqual(1, session.disconnects)
+            self.assertEqual(set(), session.listeners, "example shutdown releases subscriptions")
+            self.assertEqual({}, session.config, "example shutdown releases tools and permission handlers")
+            self.assertEqual(5, len(session.events), "disconnect preserves the actual example history")
+
+    async def test_session_disconnect_releases_resources_but_preserves_history(self):
+        config = {"session_id": "fixture", "tools": [object()],
+                  "on_permission_request": lambda request: None}
+        session = _Session(config)
+        listener = lambda event: None
+        unsubscribe = session.on(listener)
+        history = list(await session.get_events())
+        self.assertEqual({listener}, session.listeners)
+        self.assertTrue(session.config["tools"])
+        self.assertIsNotNone(session.config["on_permission_request"])
+        await asyncio.gather(session.disconnect(), session.disconnect())
+        self.assertTrue(session.disconnected)
+        self.assertEqual(1, session.disconnects, "disconnect is idempotent")
+        self.assertEqual(set(), session.listeners, "disconnect releases existing subscriptions")
+        self.assertEqual({}, config, "disconnect releases tool and permission handlers")
+        self.assertEqual(history, session.events, "disconnect is not history deletion")
+        unsubscribe()
+        unsubscribe()
+        with self.assertRaisesRegex(RuntimeError, "Session is disconnected"):
+            session.on(listener)
+        with self.assertRaisesRegex(RuntimeError, "Session is disconnected"):
+            await session.get_events()
 
     async def test_actual_standalone_and_real_shell_with_physical_and_alias_tmpdir(self):
         for aliased in (False, True):
