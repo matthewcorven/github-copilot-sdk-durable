@@ -36,7 +36,9 @@ function cloneJson<T extends JsonValue>(value: T): T {
 
   const copy: JsonObject = {};
   for (const [key, item] of Object.entries(value as JsonObject)) {
-    copy[key] = cloneJson(item);
+    Object.defineProperty(copy, key, {
+      value: cloneJson(item), enumerable: true, writable: true, configurable: true,
+    });
   }
 
   return copy as T;
@@ -1185,6 +1187,19 @@ export class InMemoryStoreProvider implements IDurableStoreProvider {
               ("conversations" in whole || "documents" in whole)) {
             throw new Error("Legacy JSON snapshots are unsupported by the TypeScript JSONL provider.");
           }
+          if (options.format === DurableStoreFormat.Auto && bytes.toString("utf8").trim()) {
+            const first = bytes.toString("utf8").split("\n").find(line => line.trim())!;
+            let identifiable = false;
+            try {
+              const record: unknown = JSON.parse(first);
+              identifiable = record !== null && typeof record === "object" &&
+                "type" in record && typeof record.type === "string";
+            } catch (error) {
+              if (!(error instanceof SyntaxError)) throw error;
+              identifiable = !bytes.includes(10) && /^\s*\{\s*"v"\s*:\s*1(?:\s*[,}]|\s*$)/.test(first);
+            }
+            if (!identifiable) throw new Error("The file is neither identifiable JSONL nor a supported durable store.");
+          }
           let offset = 0;
           const snapshot = {
             sequence: 0, conversations: [] as ConversationRecord[], tasks: [] as DurableTaskRecord[],
@@ -1200,7 +1215,7 @@ export class InMemoryStoreProvider implements IDurableStoreProvider {
             const end = newline;
             let record: { v: number; seq: number; type: string; payload: Record<string, unknown> };
             try {
-              record = JSON.parse(bytes.subarray(offset, end).toString("utf8"));
+              record = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(offset, end)));
             } catch (error) {
               if (newline >= 0) throw new Error(`Invalid JSONL record at byte ${offset}.`, { cause: error });
               fs.truncateSync(this.file, offset);
@@ -2058,6 +2073,7 @@ export class DurableTaskRunner {
   private readonly running = new Set<string>();
   private readonly inFlight = new Map<string, Promise<TaskOutcome>>();
   private disposed = false;
+  private disposal: Promise<void> | undefined;
 
   constructor(
     private readonly store: DurableStore,
@@ -2079,6 +2095,7 @@ export class DurableTaskRunner {
       cancellationToken?: AbortSignal;
     } = {},
   ): Promise<DurableTaskRecord> {
+    if (this.disposed) throw new Error("The durable task runner is closing.");
     const record = await this.store.commitAsync((tx) =>
       tx.createTask(definition, input, {
         ownerConversationId: options.ownerConversationId ?? null,
@@ -2093,6 +2110,7 @@ export class DurableTaskRunner {
 
   /** Runs a task to completion, resuming from its last checkpoint. */
   async runTaskAsync(taskId: string, cancellationToken: AbortSignal = new AbortController().signal): Promise<TaskOutcome> {
+    if (this.disposed && !this.running.has(taskId)) throw new Error("The durable task runner is closing.");
     const completion = this.completionFor(taskId);
 
     const record = this.store.task(taskId);
@@ -2104,7 +2122,7 @@ export class DurableTaskRunner {
 
     // A task runs once at a time. A second caller joins the run in flight.
     if (this.running.has(taskId)) {
-      return completion.promise;
+      return this.inFlight.get(taskId) ?? completion.promise;
     }
 
     this.running.add(taskId);
@@ -2184,19 +2202,24 @@ export class DurableTaskRunner {
     return Promise.all(interrupted.map((task) => this.runTaskAsync(task.id, cancellationToken)));
   }
 
-  /** Releases the store's task-runner slot and drains the runs in flight. */
-  async disposeAsync(): Promise<void> {
-    if (this.disposed) {
-      return;
-    }
-
+  /** Drains active runs and final writes before releasing the store's task-runner slot. */
+  disposeAsync(finalize?: () => Promise<void>): Promise<void> {
     this.disposed = true;
+    return this.disposal ??= this.drainAsync(finalize);
+  }
+
+  private async drainAsync(finalize?: () => Promise<void>): Promise<void> {
     const failures: unknown[] = [];
     try {
       while (this.inFlight.size) {
         const results = await Promise.allSettled([...this.inFlight.values()]);
         for (const result of results)
           if (result.status === "rejected") failures.push(result.reason);
+      }
+      try {
+        await finalize?.();
+      } catch (error) {
+        failures.push(error);
       }
     } finally {
       this.store.releaseTaskScheduler(this);
@@ -2733,7 +2756,9 @@ export class DurableConversation {
               !Array.isArray(version.value) && version.value["eventId"] === checkpoint["eventId"])) return;
           const draft = tx.doc(checkpointDocument, this.id);
           draft.value = checkpoint; draft.save(tx.appendEntry(this.id, "checkpoint"));
-        })).catch(error => { this.checkpointFailure ??= error; });
+        })).catch(error => {
+          this.checkpointFailure ??= new Error(`Conversation '${this.id}' failed to persist a tool checkpoint.`, { cause: error });
+        });
       }
     }
     const model = event.type === "session.start" ? data["selectedModel"] :
@@ -2768,7 +2793,7 @@ export class DurableConversation {
   checkpoint(): JsonObject | null { return this.snapshot(checkpointDocument); }
   async checkpointBarrierAsync(): Promise<void> {
     await this.checkpointTail;
-    if (this.checkpointFailure) throw new Error(`Conversation '${this.id}' failed to persist a tool checkpoint.`, { cause: this.checkpointFailure });
+    if (this.checkpointFailure) throw this.checkpointFailure;
   }
   choices(): AgentChoices {
     return new AgentChoices({ ...this.snapshot(agentDocument), hooks: this.hooks });
@@ -2894,6 +2919,7 @@ export class DurableHarness {
   readonly runner: DurableTaskRunner;
   private readonly handles = new Map<string, DurableConversation>();
   private disposal: Promise<void> | undefined;
+  private closed = false;
   effectiveModel = DurableModelReport.NotReported;
   constructor(readonly client: CopilotClient, readonly store: DurableStore,
     readonly registry: ExtensionRegistry, readonly options = new DurableHarnessOptions()) {
@@ -3021,6 +3047,7 @@ export class DurableHarness {
   }
   async createConversationAsync(choices = new AgentChoices(), ownerTaskId: string | null = null,
     ownerConversationId: string | null = null): Promise<DurableConversation> {
+    if (this.disposal) throw new Error("The durable harness is closing.");
     const record = await this.store.commitAsync(tx => tx.createConversation({ ownerTaskId, ownerConversationId }));
     const conversation = this.findConversation(record.id)!;
     await conversation.configureAsync(choices);
@@ -3043,6 +3070,7 @@ export class DurableHarness {
     for (const event of await conversation.contextAsync()) conversation.observe(event, false);
   }
   async resumeConversationAsync(id: string): Promise<DurableConversation> {
+    if (this.closed) throw new Error("The durable harness is closed.");
     const conversation = this.findConversation(id);
     if (!conversation) throw new Error(`Unknown conversation '${id}'.`);
     if (conversation.sessionId) return conversation;
@@ -3056,10 +3084,23 @@ export class DurableHarness {
     if (hasUnsettledAdmission(this.store, conversation.record))
       throw new Error(`Conversation '${id}' has an unsettled admission; automatic replay is unsafe.`);
     if (!binding?.["sessionId"]) { await this.createSession(conversation); return conversation; }
-    const { sessionId: _id, trustWorkingDirectory: _trust, ...config } = await this.buildSessionConfig(conversation.choices(), conversation);
-    conversation.attach(await this.client.resumeSession(String(binding["sessionId"]), {
-      ...config, suppressResumeEvent: true, continuePendingWork: false,
-    }));
+    const config = await this.buildSessionConfig(conversation.choices(), conversation);
+    const sessionId = String(binding["sessionId"]);
+    const metadata = await this.client.getSessionMetadata(sessionId);
+    let session: CopilotSession;
+    if (!metadata) {
+      if (binding["pinned"] !== true || intent || conversation.record.parentConversationId)
+        throw new Error(`Conversation '${id}' lost its native transcript; explicit recovery is required.`);
+      session = await this.client.createSession({ ...config, sessionId });
+    } else {
+      const { sessionId: _id, trustWorkingDirectory: _trust, ...resumeConfig } = config;
+      session = await this.client.resumeSession(sessionId, {
+        ...resumeConfig, suppressResumeEvent: true, continuePendingWork: false,
+      });
+    }
+    if (session.sessionId !== sessionId)
+      throw new Error(`Conversation '${id}' received a mismatched native session; explicit recovery is required.`);
+    conversation.attach(session);
     for (const event of await conversation.contextAsync()) conversation.observe(event, false);
     return conversation;
   }
@@ -3068,6 +3109,7 @@ export class DurableHarness {
     return root ? this.resumeConversationAsync(root.id) : this.createConversationAsync(choices);
   }
   async forkAsync(parent: DurableConversation, entryId: string): Promise<DurableConversation> {
+    if (this.disposal) throw new Error("The durable harness is closing.");
     if (!this.store.entries(parent.id).includes(entryId)) throw new Error(`Unknown fork entry '${entryId}'.`);
     const record = await this.store.commitAsync(tx => {
       const fork = tx.createConversation({ parentConversationId: parent.id, forkEntryId: entryId });
@@ -3085,7 +3127,7 @@ export class DurableHarness {
     const forked = await this.client.rpc.sessions.fork({ sessionId: parent.session.sessionId });
     await this.store.commitAsync(tx => {
       const binding = tx.doc(bindingDocument, record.id);
-      binding.value = { sessionId: forked.sessionId, pinned: true };
+      binding.value = { sessionId: forked.sessionId, pinned: false };
       binding.save(tx.appendEntry(record.id, "session-binding"));
       const intent = tx.doc(forkDocument, record.id);
       intent.value = { ...intent.value, sessionId: forked.sessionId, state: 1 };
@@ -3103,13 +3145,17 @@ export class DurableHarness {
   }
   disposeAsync(): Promise<void> {
     return this.disposal ??= (async () => {
-      for (const conversation of this.handles.values()) conversation.detach();
       const failures: unknown[] = [];
-      const checkpoints = await Promise.allSettled(this.conversations.map(conversation => conversation.checkpointBarrierAsync()));
-      for (const result of checkpoints)
-        if (result.status === "rejected") failures.push(result.reason);
+      const checkpoints = Promise.allSettled(this.conversations.map(conversation => conversation.checkpointBarrierAsync()));
       try {
-        await this.runner.disposeAsync();
+        await this.runner.disposeAsync(async () => {
+          for (const result of await checkpoints)
+            if (result.status === "rejected") failures.push(result.reason);
+          for (const conversation of this.handles.values()) conversation.detach();
+          const finalCheckpoints = await Promise.allSettled(this.conversations.map(conversation => conversation.checkpointBarrierAsync()));
+          for (const result of finalCheckpoints)
+            if (result.status === "rejected" && !failures.includes(result.reason)) failures.push(result.reason);
+        });
       } catch (error) {
         failures.push(error);
       }
@@ -3117,6 +3163,8 @@ export class DurableHarness {
         failures.push(...await this.client.stop());
       } catch (error) {
         failures.push(error);
+      } finally {
+        this.closed = true;
       }
       if (failures.length === 1) throw failures[0];
       if (failures.length > 1)

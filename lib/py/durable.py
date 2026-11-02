@@ -30,7 +30,8 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 from pathlib import Path
-from typing import Any, ClassVar, Final, Generic, TypeVar, get_type_hints
+from typing import Any, ClassVar, Final, Generic, TypeVar, Union, get_args, get_origin, get_type_hints
+from types import UnionType
 from uuid import uuid4
 
 from copilot import CopilotClient, RuntimeConnection
@@ -2426,7 +2427,7 @@ def _from_wire(cls: type[T], value: Any) -> T | None:
                 item = annotation(item)
         if isinstance(item, Mapping):
             annotation = hints.get(field.name)
-            candidates = (annotation, *getattr(annotation, "__args__", ()))
+            candidates = get_args(annotation) if get_origin(annotation) in (Union, UnionType) else (annotation,)
             nested = next((candidate for candidate in candidates
                            if isinstance(candidate, type) and dataclasses.is_dataclass(candidate)), None)
             if nested is not None:
@@ -3127,7 +3128,10 @@ class DurableConversation:
                         draft.save(tx.append_entry(self.id, "checkpoint"))
                     await self.commit_async(body)
                 except BaseException as error:
-                    self._checkpoint_failure = self._checkpoint_failure or error
+                    if self._checkpoint_failure is None:
+                        failure = RuntimeError(f"Conversation '{self.id}' failed to persist a tool checkpoint.")
+                        failure.__cause__ = error
+                        self._checkpoint_failure = failure
             if live:
                 self._checkpoint_chain = asyncio.create_task(write())
 
@@ -3323,9 +3327,9 @@ class DurableConversation:
 
     async def checkpoint_barrier_async(self) -> None:
         if self._checkpoint_chain is not None:
-            await self._checkpoint_chain
+            await asyncio.shield(self._checkpoint_chain)
         if self._checkpoint_failure is not None:
-            raise RuntimeError(f"Conversation '{self.id}' failed to persist a tool checkpoint.") from self._checkpoint_failure
+            raise self._checkpoint_failure
 
     async def abort_async(self) -> None:
         if self._session is None:
@@ -3548,7 +3552,11 @@ class DurableHarness:
         self._running_tasks: set[str] = set()
         self._task_completions: dict[str, asyncio.Future[TaskOutcome]] = {}
         self._in_flight: dict[str, asyncio.Task[TaskOutcome]] = {}
+        self._task_failures: list[BaseException] = []
         self._closed = False
+        self._drained = False
+        self._draining: asyncio.Task[list[BaseException]] | None = None
+        self._closing: asyncio.Task[None] | None = None
         self._store.claim_task_scheduler(self, self._start_task)
 
     @property
@@ -3640,6 +3648,8 @@ class DurableHarness:
         owner_conversation_id: str | None = None,
     ) -> DurableConversation:
         """Creates a conversation and its session."""
+        if self._closed:
+            raise RuntimeError("The durable harness is closing.")
         selected = choices if choices is not None else AgentChoices()
 
         async def body(tx: Transaction) -> ConversationRecord:
@@ -3674,6 +3684,8 @@ class DurableHarness:
         return await self.create_conversation_async(choices)
 
     async def resume_conversation_async(self, conversation_id: str) -> DurableConversation:
+        if self._drained:
+            raise RuntimeError("The durable harness is closed.")
         conversation = self.find_conversation(conversation_id)
         if conversation is None:
             raise ValueError(f"Unknown conversation '{conversation_id}'.")
@@ -3692,9 +3704,17 @@ class DurableHarness:
             session = await self._create_pinned_session_async(conversation, conversation.choices())
         else:
             config = await self.build_session_config(conversation.choices(), conversation)
-            config.pop("trust_working_directory", None)
-            session = await self._client.resume_session(
-                binding.session_id, **config, suppress_resume_event=True, continue_pending_work=False)
+            metadata = await self._client.get_session_metadata(binding.session_id)
+            if metadata is None:
+                if not binding.pinned or intent is not None or conversation.record.parent_conversation_id is not None:
+                    raise DurableRecoveryRequiredException(conversation_id, binding.session_id)
+                session = await self._client.create_session(session_id=binding.session_id, **config)
+            else:
+                config.pop("trust_working_directory", None)
+                session = await self._client.resume_session(
+                    binding.session_id, **config, suppress_resume_event=True, continue_pending_work=False)
+            if session.session_id != binding.session_id:
+                raise DurableRecoveryRequiredException(conversation_id, binding.session_id)
         conversation.attach(session)
         for event in await conversation.context_async():
             conversation.observe(event, live=False)
@@ -3817,7 +3837,7 @@ class DurableHarness:
 
     async def resume_async(self, cancellation: asyncio.Event | None = None) -> list[TaskOutcome]:
         """Resumes committed pending work as well as interrupted running/waiting tasks."""
-        return await asyncio.gather(*(self.run_task_async(task.id, cancellation) for task in self._store.tasks
+        return await asyncio.gather(*(asyncio.shield(self._task_run(task.id, cancellation)) for task in self._store.tasks
             if task.status in (TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.WAITING)))
 
     # -- forks ---------------------------------------------------------------
@@ -3969,6 +3989,8 @@ class DurableHarness:
         cancellation: asyncio.Event | None = None,
     ) -> DurableTaskRecord:
         """Creates a durable task and schedules it."""
+        if self._closed:
+            raise RuntimeError("The durable harness is closing.")
 
         async def body(tx: Transaction) -> DurableTaskRecord:
             return tx.create_task(
@@ -3985,14 +4007,9 @@ class DurableHarness:
 
     def _start_task(self, task_id: str, cancellation: asyncio.Event | None) -> None:
         """Starts a task run without waiting for it, keeping a handle to drain on close."""
-        if task_id in self._in_flight:
-            return
-        run = asyncio.ensure_future(self.run_task_async(task_id, cancellation))
-        self._in_flight[task_id] = run
-        def finished(_: asyncio.Future[TaskOutcome]) -> None:
-            if self._in_flight.get(task_id) is run:
-                self._in_flight.pop(task_id, None)
-        run.add_done_callback(finished)
+        run = self._task_run(task_id, cancellation)
+        # Scheduled failures are retained for shutdown, including when no caller joins.
+        run.add_done_callback(lambda task: None if task.cancelled() else task.exception())
 
     async def run_task_async(
         self,
@@ -4000,31 +4017,39 @@ class DurableHarness:
         cancellation: asyncio.Event | None = None,
     ) -> TaskOutcome:
         """Runs a task to completion, resuming from its last checkpoint."""
+        return await asyncio.shield(self._task_run(task_id, cancellation))
+
+    def _task_run(self, task_id: str, cancellation: asyncio.Event | None) -> asyncio.Task[TaskOutcome]:
+        existing = self._in_flight.get(task_id)
+        if existing is not None:
+            return existing
+        if self._closed:
+            raise RuntimeError("The durable harness is closing.")
         completion = self._task_completions.get(task_id)
         if completion is None:
             completion = asyncio.get_running_loop().create_future()
             self._task_completions[task_id] = completion
 
         record = self._store.task(task_id)
-        if record is None:
-            missing = TaskOutcome.failed("unknown task")
-            if not completion.done():
-                completion.set_result(missing)
-            return missing
+        async def run_core() -> TaskOutcome:
+            try:
+                if record is None:
+                    missing = TaskOutcome.failed("unknown task")
+                    if not completion.done():
+                        completion.set_result(missing)
+                    return missing
+                return await self._run_task_core_async(task_id, record, completion, cancellation)
+            except BaseException as error:
+                self._task_failures.append(error)
+                raise
+            finally:
+                self._running_tasks.discard(task_id)
+                self._in_flight.pop(task_id, None)
 
-        # A task runs once at a time. A second caller joins the run in flight.
-        if task_id in self._running_tasks:
-            return await asyncio.shield(completion)
-
-        run = asyncio.current_task()
-        assert run is not None
+        run = asyncio.create_task(run_core())
         self._in_flight[task_id] = run
         self._running_tasks.add(task_id)
-        try:
-            return await self._run_task_core_async(task_id, record, completion, cancellation)
-        finally:
-            self._running_tasks.discard(task_id)
-            self._in_flight.pop(task_id, None)
+        return run
 
     async def _run_task_core_async(
         self,
@@ -4182,17 +4207,25 @@ class DurableHarness:
 
     def close(self) -> None:
         """Detaches every conversation handle. The store stays the caller's."""
+        if (self._closing is not None and not self._closing.done()) or self._in_flight or any(
+            conversation._checkpoint_chain is not None and not conversation._checkpoint_chain.done()
+            for conversation in self._conversations.values()
+        ):
+            raise RuntimeError("The durable harness has pending work; await close_async().")
+        self._closed = True
+        self._drained = True
         for conversation in self._conversations.values():
             conversation.detach()
         self._conversations.clear()
         self._store.release_task_scheduler(self)
 
     async def _drain_async(self) -> list[BaseException]:
-        self._closed = True
-        conversations = list(self._conversations.values())
-        for conversation in conversations:
-            conversation.detach()
-        self._conversations.clear()
+        if self._draining is None:
+            self._closed = True
+            self._draining = asyncio.create_task(self._drain_core_async())
+        return await asyncio.shield(self._draining)
+
+    async def _drain_core_async(self) -> list[BaseException]:
         failures: list[BaseException] = []
 
         async def drain(awaitables: Iterable[Awaitable[Any]]) -> None:
@@ -4204,13 +4237,21 @@ class DurableHarness:
                     # Cancellation belongs to the closer, not the writes/runs it must
                     # drain before releasing the SDK, scheduler, or writer lock.
                     failures.append(error)
-            failures.extend(result for result in pending.result() if isinstance(result, BaseException))
+            failures.extend(result for result in pending.result()
+                            if isinstance(result, BaseException) and result not in failures)
 
         try:
-            await drain(conversation.checkpoint_barrier_async() for conversation in conversations)
+            await drain(conversation.checkpoint_barrier_async() for conversation in self._conversations.values())
             while self._in_flight:
                 await drain(list(self._in_flight.values()))
+            conversations = list(self._conversations.values())
+            for conversation in conversations:
+                conversation.detach()
+            await drain(conversation.checkpoint_barrier_async() for conversation in conversations)
+            failures.extend(error for error in self._task_failures if error not in failures)
+            self._conversations.clear()
         finally:
+            self._drained = True
             self._store.release_task_scheduler(self)
         return failures
 
@@ -4222,8 +4263,30 @@ class DurableHarness:
             raise failures[0]
 
     async def close_async(self) -> None:
-        if self._closed:
+        if self._closing is not None and self._closing.done():
             return
+        if self._closing is None:
+            self._closed = True
+            self._closing = asyncio.create_task(self._close_core_async())
+        await self._await_close_async(self._closing)
+
+    @staticmethod
+    async def _await_close_async(closing: asyncio.Task[None]) -> None:
+        failures: list[BaseException] = []
+        while not closing.done():
+            try:
+                await asyncio.shield(closing)
+            except asyncio.CancelledError as error:
+                failures.append(error)
+            except BaseException:
+                break
+        try:
+            closing.result()
+        except BaseException as error:
+            failures.append(error)
+        DurableHarness._raise_close_errors(failures)
+
+    async def _close_core_async(self) -> None:
         failures = await self._drain_async()
         try:
             await self._client.stop()
@@ -4416,6 +4479,7 @@ class DurableCopilotClient:
         self._initialization: asyncio.Task[None] | None = None
         self._harness: DurableHarness | None = None
         self._closed = False
+        self._closing: asyncio.Task[None] | None = None
 
     @property
     def options(self) -> DurableClientOptions:
@@ -4449,6 +4513,8 @@ class DurableCopilotClient:
         Safe when several first operations race: the work happens once and every caller
         awaits the same result.
         """
+        if self._closed:
+            raise RuntimeError("The durable client is closing.")
         if self._initialization is None:
             self._initialization = asyncio.ensure_future(self._initialize_core_async())
         await self._initialization
@@ -4559,14 +4625,19 @@ class DurableCopilotClient:
     ) -> dict[str, Any]:
         await self.initialize_async()
         assert self._harness is not None
-        return await self._harness.build_session_config(choices, conversation)
+        stored = conversation.choices() if conversation is not None else None
+        return await self._harness.build_session_config(stored if stored is not None else choices, conversation)
 
     async def close_async(self) -> None:
         """Releases whatever the durable layer owns. Idempotent."""
-        if self._closed:
+        if self._closing is not None and self._closing.done():
             return
-        self._closed = True
+        if self._closing is None:
+            self._closed = True
+            self._closing = asyncio.create_task(self._close_core_async())
+        await DurableHarness._await_close_async(self._closing)
 
+    async def _close_core_async(self) -> None:
         failures = await self._harness._drain_async() if self._harness is not None else []
         try:
             if self._owns_client and self._client is not None:
