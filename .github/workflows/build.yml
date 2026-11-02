@@ -43,6 +43,19 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install cross-language test dependencies
+        run: |
+          python3 -m pip install -e lib/py
+          npm ci --prefix lib/ts
+
       - name: Restore
         run: dotnet restore lib/Copilot.Durable.csproj
 

@@ -507,6 +507,27 @@ Validation runs in two complementary layers:
 1. **Self-asserting examples:** Every single example includes explicit `Check.*` assertions testing the durable invariants it claims (no duplicate executions across crash restarts, transaction rollback on mid-commit failure, document fork isolation, child-task abort cascade, etc.). An unhandled exception or failed assertion causes `validate.sh` to fail immediately.
 2. **xUnit test suite (`tests/Durable.Tests`):** Focused unit and integration tests verifying `DurableStore` rollback semantics, fork entry filtering and state independence, store crash recovery with memo idempotency, and abort propagation.
 
+The xUnit suite also runs the real Python and TypeScript late-join clients, including
+physical LF and CRLF source files. Before running it (directly or through `validate.sh`),
+install Python 3.11+ and Node.js 22.18+, then bootstrap the declared dependencies from the
+repository root:
+
+```bash
+python3 -m venv lib/py/.venv
+source lib/py/.venv/bin/activate
+python3 -m pip install -e lib/py
+npm ci --prefix lib/ts
+```
+
+Keep that environment activated when running `dotnet test` or `validate.sh`: the test
+launches `python3` from `PATH` (`python` on Windows), and its subprocesses reuse that
+interpreter. On Windows, activate `lib\py\.venv\Scripts\Activate.ps1` in PowerShell instead.
+Use `python` instead of `python3` for the Windows environment creation and pip commands.
+An existing virtual environment works too if its interpreter is on `PATH` and has the
+declared Python project installed. The Python SDK is pinned in `lib/py/pyproject.toml`;
+Node dependencies are restored from `lib/ts/package-lock.json`. CI provisions both
+languages and installs these dependencies before the unconditional .NET `Test` step.
+
 ```bash
 # Every example: compile, run xUnit suite, and run all 38 examples.
 ./scripts/validate.sh
