@@ -2939,13 +2939,15 @@ export class DurableConversation {
   appendEntryAsync(kind: string, data: JsonValue | null = null): Promise<string> {
     return this.commitAsync(tx => tx.appendEntry(this.id, kind, data));
   }
-  async configureAsync(choices: AgentChoices): Promise<void> {
-    this.hooks = choices.hooks;
-    await this.commitAsync(tx => {
-      const draft = tx.doc(agentDocument, this.id); draft.value = wireChoices(choices);
-      draft.save(tx.appendEntry(this.id, "agent"));
+  configureAsync(choices: AgentChoices): Promise<void> {
+    return conversationOperation(this.harness, async () => {
+      this.hooks = choices.hooks;
+      await this.commitAsync(tx => {
+        const draft = tx.doc(agentDocument, this.id); draft.value = wireChoices(choices);
+        draft.save(tx.appendEntry(this.id, "agent"));
+      });
+      if (this.attached) await this.session.setTools([...this.agent().tools]);
     });
-    if (this.attached) await this.session.setTools([...this.agent().tools]);
   }
   submitAsync(prompt: string, timeoutMs = 180000): Promise<AssistantMessageEvent | undefined> {
     if (closingHarnesses.has(this.harness) && !isActiveTask(this.harness.store))
@@ -3047,8 +3049,20 @@ export class DurableConversation {
 }
 
 const closingHarnesses = new WeakSet<DurableHarness>();
+const conversationOperations = new WeakMap<DurableHarness, Set<Promise<void>>>();
 const submissions = new WeakMap<DurableHarness, Set<Promise<unknown>>>();
 const submissionStops = new WeakMap<Promise<unknown>, AbortController>();
+
+async function conversationOperation<T>(harness: DurableHarness, operation: () => Promise<T>): Promise<T> {
+  if (closingHarnesses.has(harness) && !isActiveTask(harness.store))
+    throw new Error("The durable harness is closing.");
+  let settle!: () => void;
+  const pending = new Promise<void>(resolve => { settle = resolve; });
+  const operations = conversationOperations.get(harness)!;
+  operations.add(pending);
+  try { return await operation(); }
+  finally { operations.delete(pending); settle(); }
+}
 
 export class DurableHarness {
   static readonly DefaultModel = "gpt-6-luna";
@@ -3056,12 +3070,14 @@ export class DurableHarness {
   readonly runner: DurableTaskRunner;
   private readonly handles = new Map<string, DurableConversation>();
   private readonly conversationOperations = new Set<Promise<void>>();
+  private rootCreation: Promise<DurableConversation> | undefined;
   private disposal: Promise<void> | undefined;
   private closed = false;
   effectiveModel = DurableModelReport.NotReported;
   constructor(readonly client: CopilotClient, readonly store: DurableStore,
     readonly registry: ExtensionRegistry, readonly options = new DurableHarnessOptions()) {
     this.runner = new DurableTaskRunner(store, registry);
+    conversationOperations.set(this, this.conversationOperations);
     submissions.set(this, new Set());
   }
   static async openAsync(store: DurableStore, registry: ExtensionRegistry,
@@ -3185,13 +3201,8 @@ export class DurableHarness {
     return config;
   }
   private async conversationOperation<T>(operation: () => Promise<T>): Promise<T> {
-    if (this.closed || (closingHarnesses.has(this) && !isActiveTask(this.store)))
-      throw new Error("The durable harness is closing.");
-    let settle!: () => void;
-    const pending = new Promise<void>(resolve => { settle = resolve; });
-    this.conversationOperations.add(pending);
-    try { return await operation(); }
-    finally { this.conversationOperations.delete(pending); settle(); }
+    if (this.closed) throw new Error("The durable harness is closing.");
+    return conversationOperation(this, operation);
   }
   createConversationAsync(choices = new AgentChoices(), ownerTaskId: string | null = null,
     ownerConversationId: string | null = null): Promise<DurableConversation> {
@@ -3265,9 +3276,16 @@ export class DurableHarness {
     return conversation;
   }
   rootAsync(choices = new AgentChoices()): Promise<DurableConversation> {
-    return this.conversationOperation(() => {
-      const root = this.store.conversations.find(c => !c.parentConversationId && !c.ownerTaskId && !c.ownerConversationId);
-      return root ? this.resumeConversationCore(root.id) : this.createConversationCore(choices, null, null);
+    return this.conversationOperation(async () => {
+      if (!this.rootCreation) {
+        const root = this.store.conversations.find(c => !c.parentConversationId && !c.ownerTaskId && !c.ownerConversationId);
+        this.rootCreation = root ? this.resumeConversationCore(root.id) : this.createConversationCore(choices, null, null);
+      }
+      const creation = this.rootCreation;
+      try { return await creation; }
+      finally {
+        if (this.rootCreation === creation) this.rootCreation = undefined;
+      }
     });
   }
   forkAsync(parent: DurableConversation, entryId: string): Promise<DurableConversation> {
