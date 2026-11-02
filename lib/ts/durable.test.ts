@@ -761,6 +761,339 @@ function sdkEvent(type: string, id: string, data: object): SessionEvent {
   return { type, id, timestamp: new Date().toISOString(), parentId: null, data } as SessionEvent;
 }
 
+test("review: invalid sandbox cannot poison root", async () => {
+  const store = DurableStore.createEphemeral(), client = new CopilotClient();
+  client.createSession = async config => sdkSession(config!.sessionId!).sdk;
+  client.stop = async () => [];
+  const harness = new DurableHarness(client, store, new ExtensionRegistry());
+  try {
+    await assert.rejects(harness.rootAsync(new AgentChoices({
+      sandbox: new DurableSandboxPolicy({ enabled: false, filesystem: { deniedPaths: ["/private"] } }),
+    })), /disabled sandbox/);
+    assert.equal(store.conversations.length, 0, "rejected sandbox must leave no durable root");
+    const root = await harness.rootAsync(new AgentChoices({ model: "corrected" }));
+    assert.equal(root.choices().model, "corrected");
+  } finally { await harness.disposeAsync(); store.dispose(); }
+});
+
+test("review: initial choices commit atomically before a later binding failure", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "durable-ts-initial-"));
+  const options = Object.assign(new DurableStoreOptions(), { path: join(dir, "store.jsonl") });
+  let store = DurableStore.create(options);
+  const client = new CopilotClient();
+  client.createSession = async config => sdkSession(config!.sessionId!).sdk;
+  client.stop = async () => [];
+  let harness = new DurableHarness(client, store, new ExtensionRegistry());
+  try {
+    const choices = new AgentChoices({ model: "original", extensions: [], sandbox: new DurableSandboxPolicy({ enabled: true }) });
+    const hook: NonNullable<SessionConfig["hooks"]> = { onUserPromptSubmitted: async () => ({ additionalContext: "local callback" }) };
+    choices.hooks = hook;
+    const original = fs.fsyncSync;
+    let first = true;
+    const firstFault = mock.method(fs, "fsyncSync", (fd: number) => {
+      if (first) { first = false; throw new Error("creation commit failed"); }
+      original(fd);
+    });
+    syncBuiltinESMExports();
+    try { await assert.rejects(harness.rootAsync(choices), /creation commit failed/); }
+    finally { firstFault.mock.restore(); syncBuiltinESMExports(); }
+    assert.equal(store.conversations.length, 0, "failed initial commit must roll back conversation and choices together");
+    assert.equal(store.documents.length, 0);
+    let commits = 0;
+    const fault = mock.method(fs, "fsyncSync", (fd: number) => {
+      if (++commits === 2) throw new Error("binding commit failed");
+      original(fd);
+    });
+    syncBuiltinESMExports();
+    try { await assert.rejects(harness.rootAsync(choices), /binding commit failed/); }
+    finally { fault.mock.restore(); syncBuiltinESMExports(); }
+    const id = store.conversations[0]!.id;
+    assert.equal(harness.findConversation(id)!.choices().model, "original", "first commit must contain original choices");
+    assert.equal(harness.findConversation(id)!.choices().hooks, hook);
+    assert.equal(readFileSync(options.path!, "utf8").includes("local callback"), false, "callbacks cannot be durable JSON");
+    await harness.disposeAsync(); store.dispose();
+    store = DurableStore.create(options);
+    harness = new DurableHarness(client, store, new ExtensionRegistry());
+    const root = await harness.rootAsync(new AgentChoices({ model: "replacement" }));
+    assert.equal(root.id, id);
+    assert.equal(root.choices().model, "original");
+    assert.deepEqual(root.choices().extensions, []);
+    assert.deepEqual(root.choices().sandbox, { enabled: true });
+  } finally { await harness.disposeAsync(); store.dispose(); rmSync(dir, { recursive: true }); }
+});
+
+test("review: official public SDK send keeps idle and RPC success under one admission", { timeout: 5000 }, async () => {
+  let release = barrier(), sent = barrier();
+  let rejectSend = false;
+  let notify: (sessionId: string, event: SessionEvent) => Promise<void> = async () => { throw new Error("not connected"); };
+  const server = createServer(socket => {
+    const connection = createMessageConnection(new SocketMessageReader(socket), new SocketMessageWriter(socket));
+    notify = (sessionId, event) => connection.sendNotification("session.event", { sessionId, event });
+    connection.onRequest(async (method, raw) => {
+      const params: Record<string, unknown> = { ...raw };
+      if (method === "connect") return { protocolVersion: 3 };
+      if (method === "session.create") return { sessionId: params["sessionId"], capabilities: {} };
+      if (method === "session.getMessages") return { events: [] };
+      if (method === "session.detach") return { success: true };
+      if (method === "session.send") {
+        sent.resolve();
+        await release.promise;
+        if (rejectSend) throw new ResponseError(-32000, "late public RPC failure");
+        return { messageId: "public-message" };
+      }
+      throw new ResponseError(-32601, `Unexpected review RPC ${method}`);
+    });
+    connection.listen();
+    socket.on("close", () => connection.dispose());
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const client = new CopilotClient({ connection: RuntimeConnection.forUri(`127.0.0.1:${address.port}`) });
+  const store = DurableStore.createEphemeral();
+  await client.start();
+  const harness = new DurableHarness(client, store, new ExtensionRegistry());
+  try {
+    for (const mode of ["idle-first", "send-first", "late-error", "deadline"] as const) {
+      release = barrier(); sent = barrier(); rejectSend = mode === "late-error";
+      const chat = await harness.createConversationAsync();
+      const idle = barrier();
+      const stop = chat.session.on(event => { if (event.type === "session.idle") idle.resolve(); });
+      const result = chat.submitAsync(mode, mode === "deadline" ? 100 : 1000)
+        .then(answer => ({ answer, error: null }), error => ({ answer: undefined, error }));
+      await sent.promise;
+      if (mode === "send-first") release.resolve();
+      await notify(chat.sessionId!, sdkEvent("assistant.message", `${mode}-answer`, { content: mode }));
+      await notify(chat.sessionId!, sdkEvent("session.idle", `${mode}-idle`, {}));
+      await idle.promise;
+      if (mode !== "send-first") assert.equal(chat.admission()?.["state"], "admitted");
+      if (mode !== "deadline") release.resolve();
+      const outcome = await result;
+      if (mode === "late-error") assert.match(String(outcome.error), /late public RPC failure/);
+      else if (mode === "deadline") assert.match(String(outcome.error), /timed out/);
+      else {
+        assert.equal(outcome.error, null);
+        assert.equal(outcome.answer?.data.content, mode);
+      }
+      assert.equal(chat.admission()?.["state"], ["late-error", "deadline"].includes(mode) ? "uncertain" : "completed");
+      release.resolve(); stop();
+    }
+  } finally {
+    release.resolve();
+    await harness.disposeAsync(); store.dispose();
+    const closed = once(server, "close"); server.close(); await closed;
+  }
+});
+
+test("review: draining parent can commit and schedule a dependent child but external work is rejected", { timeout: 2000 }, async () => {
+  const store = DurableStore.createEphemeral();
+  const registry = new ExtensionRegistry();
+  const runner = new DurableTaskRunner(store, registry);
+  const entered = barrier(), release = barrier();
+  const child = DurableTask.define("drain-child", () => ({}), async (_input, _checkpoint, runtime) =>
+    runtime.commitAsync(() => TaskCommit.completed("child saved")));
+  const parent = DurableTask.definePhases("drain-parent", () => ({ phase: "run" }), new Map<string,
+    import("./durable.js").PhaseHandler<import("./durable.js").JsonValue, { phase: string }>>([
+    ["run", async (_input, _checkpoint, runtime) => {
+    entered.resolve(); await release.promise;
+    let id = "";
+    const commit = await runtime.commitInTransactionAsync(tx => {
+      id = runtime.createChildTask(tx, child, null).id;
+      return TaskCommit.waiting({ phase: "done" }, [id]);
+    });
+    runtime.scheduleTask(id);
+    return commit;
+    }],
+    ["done", async (_input, _checkpoint, runtime) =>
+      runtime.commitAsync(() => TaskCommit.completed("parent saved"))],
+  ]));
+  registry.install(new Extension("drain", [], [], [parent, child]));
+  const record = await runner.createTaskAsync(parent, null);
+  await entered.promise;
+  const closing = runner.disposeAsync();
+  const external = await store.commitAsync(tx => tx.createTask(child, null));
+  await assert.rejects(runner.runTaskAsync(external.id), /closing/);
+  release.resolve();
+  try {
+    await closing;
+    assert.deepEqual(store.task(record.id)!.outcome, { status: "completed", result: "parent saved" },
+      "drain must not falsely fail the committed parent");
+    assert.equal(store.tasks.find(t => t.ownerTaskId === record.id)!.status, TaskStatus.Terminal);
+  } finally { release.resolve(); store.dispose(); }
+});
+
+test("review: waitForTask propagates scheduling rejection instead of an unresolved completion", { timeout: 1000 }, async () => {
+  const store = DurableStore.createEphemeral();
+  const runner = new DurableTaskRunner(store, new ExtensionRegistry());
+  const definition = DurableTask.define("not-started", () => ({}), async () => TaskCommit.completed(null));
+  const record = await store.commitAsync(tx => tx.createTask(definition, null));
+  await runner.disposeAsync();
+  try { await assert.rejects(runner.waitForTaskAsync(record.id), /closing/); }
+  finally { store.dispose(); }
+});
+
+test("review: close drains direct and queued submissions before detaching and forbids external admission", async () => {
+  const store = DurableStore.createEphemeral();
+  const client = new CopilotClient(), session = sdkSession("native");
+  client.createSession = async () => session.sdk;
+  const stopped = barrier(), first = barrier(), settling = barrier(), release = barrier(), held = barrier();
+  const harness = new DurableHarness(client, store, new ExtensionRegistry());
+  const chat = await harness.rootAsync();
+  const send = mock.method(session.sdk, "send", async () => { first.resolve(); return "sent"; });
+  const a = assert.rejects(chat.submitAsync("first"), /closing/);
+  const b = assert.rejects(chat.submitAsync("second"), /closing/);
+  await first.promise;
+  const holding = store.commitAsync(async () => { held.resolve(); await release.promise; });
+  await held.promise;
+  const commit = chat.commitAsync.bind(chat);
+  const settlement = mock.method(chat, "commitAsync", (body: Parameters<typeof chat.commitAsync>[0]) => {
+    settling.resolve(); return commit(body);
+  });
+  client.stop = async () => {
+    assert.equal(chat.admission()?.["state"], "uncertain", "SDK stop must follow durable admission settlement");
+    assert.equal(chat.busy, false);
+    assert.equal(session.listeners.size, 0);
+    stopped.resolve(); return [];
+  };
+  const close = harness.disposeAsync();
+  void close.catch(() => {});
+  try {
+    await assert.rejects(chat.submitAsync("external"), /closing/);
+    await settling.promise;
+    assert.equal(chat.admission()?.["state"], "admitted", "uncertain settlement is held behind the actual store gate");
+    assert.throws(() => new DurableTaskRunner(store, new ExtensionRegistry()), /already driven/);
+    release.resolve();
+    await Promise.all([a, b, close, stopped.promise, holding]);
+    assert.equal(chat.admission()?.["prompt"], "first", "cancelled queued input must never create an admission");
+    assert.equal(chat.admission()?.["state"], "uncertain");
+    assert.equal(send.mock.callCount(), 1);
+    const sequence = store.storeProvider.sequence;
+    session.emit(sdkEvent("session.idle", "late-idle", {}));
+    assert.equal(store.storeProvider.sequence, sequence, "no late settlement writes");
+  } finally { release.resolve(); settlement.mock.restore(); await holding; await close; store.dispose(); }
+});
+
+test("review: close cancels pending public send wait and queue before releasing observers and deadline", async () => {
+  const store = DurableStore.createEphemeral();
+  const client = new CopilotClient(), session = sdkSession("native");
+  client.createSession = async () => session.sdk; client.stop = async () => [];
+  const harness = new DurableHarness(client, store, new ExtensionRegistry());
+  const chat = await harness.rootAsync(), sent = barrier(), release = barrier(), rpcFinished = barrier();
+  session.sdk.send = async () => {
+    sent.resolve();
+    await release.promise;
+    rpcFinished.resolve();
+    throw new Error("late RPC rejection after close");
+  };
+  const first = assert.rejects(chat.submitAsync("deadline"), /closing/);
+  const second = assert.rejects(chat.submitAsync("queued"), /closing/);
+  await sent.promise;
+  const closing = harness.disposeAsync();
+  await Promise.all([closing, first, second]);
+  assert.equal(chat.admission()?.["state"], "uncertain");
+  assert.equal(chat.admission()?.["prompt"], "deadline");
+  assert.equal(session.listeners.size, 0);
+  assert.equal(chat.busy, false);
+  await assert.rejects(chat.submitAsync("closed"), /closing/);
+  const sequence = store.sequence;
+  release.resolve(); await rpcFinished.promise;
+  assert.equal(store.sequence, sequence, "late public RPC failure cannot write after shutdown");
+  store.dispose();
+});
+
+test("review: idle before send RPC does not complete admission or conceal late rejection", async () => {
+  for (const fail of [false, true]) {
+    const store = DurableStore.createEphemeral();
+    const client = new CopilotClient(), session = sdkSession("native");
+    client.createSession = async () => session.sdk; client.stop = async () => [];
+    const harness = new DurableHarness(client, store, new ExtensionRegistry());
+    const chat = await harness.rootAsync();
+    const entered = barrier(), release = barrier();
+    const original = new Error("late public send rejection");
+    session.sdk.send = async () => {
+      session.emit(sdkEvent("assistant.message", "answer", { content: "received" }));
+      session.emit(sdkEvent("session.idle", "idle", {}));
+      entered.resolve(); await release.promise;
+      if (fail) throw original;
+      return "sent";
+    };
+    const run = chat.submitAsync("prompt");
+    const result = run.then(value => ({ value, error: null }), error => ({ value: undefined, error }));
+    await entered.promise;
+    await chat.checkpointBarrierAsync();
+    assert.equal(chat.admission()?.["state"], "admitted", "idle alone must not settle the admission");
+    release.resolve();
+    const settled = await result;
+    assert.equal(settled.error, fail ? original : null);
+    assert.equal(chat.admission()?.["state"], fail ? "uncertain" : "completed");
+    await harness.disposeAsync(); store.dispose();
+  }
+});
+
+test("review: idle cannot clear the deadline while send RPC is pending", async () => {
+  const store = DurableStore.createEphemeral();
+  const client = new CopilotClient(), session = sdkSession("native");
+  client.createSession = async () => session.sdk; client.stop = async () => [];
+  const harness = new DurableHarness(client, store, new ExtensionRegistry());
+  const chat = await harness.rootAsync(), release = barrier();
+  session.sdk.send = async () => {
+    session.emit(sdkEvent("session.idle", "idle", {}));
+    await release.promise; return "sent";
+  };
+  try {
+    await assert.rejects(chat.submitAsync("prompt", 10), /timed out/);
+    assert.equal(chat.admission()?.["state"], "uncertain");
+    assert.equal(session.listeners.size, 1, "deadline removes the submission observer");
+  } finally { release.resolve(); await harness.disposeAsync(); store.dispose(); }
+});
+
+test("review: JSONL emits bounded immutable history and only dirty task records per commit", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "durable-ts-linear-"));
+  const options = Object.assign(new DurableStoreOptions(), { path: join(dir, "store.jsonl") });
+  let store = DurableStore.create(options);
+  const document = new DocumentDefinition<import("./durable.js").JsonObject>("bounded");
+  let immutable = 0, taskSerializations = 0;
+  const stringify = JSON.stringify;
+  const spy = mock.method(JSON, "stringify", (value: unknown, ...args: unknown[]) => {
+    if (value && typeof value === "object") {
+      const item = value as Record<string, unknown>;
+      if (item["type"] === "document-version") immutable++;
+      if (item["type"] === "task") taskSerializations++;
+    }
+    return Reflect.apply(stringify, JSON, [value, ...args]);
+  });
+  try {
+    const task = DurableTask.define("bounded", () => ({}), async (_input, _checkpoint, runtime) =>
+      runtime.commitAsync(() => TaskCommit.completed(null)));
+    const id = await store.commitAsync(tx => {
+      tx.createTask(task, null);
+      return tx.createConversation().id;
+    });
+    const initialTasks = taskSerializations;
+    for (let i = 0; i < 32; i++) {
+      const before = immutable;
+      await store.commitAsync(tx => {
+        const draft = tx.doc(document, id); draft.value = { value: i };
+        draft.save(tx.appendEntry(id, "bounded"));
+      });
+      assert.equal(immutable - before, 1, "each append must serialize exactly one new immutable version");
+    }
+    assert.equal(taskSerializations, initialTasks, "unchanged mutable tasks must not be reserialized");
+    const before = immutable;
+    await assert.rejects(store.commitAsync(tx => {
+      const draft = tx.doc(document, id); draft.value = { value: -1 };
+      draft.save(tx.appendEntry(id, "rollback")); throw new Error("rollback");
+    }), /rollback/);
+    await store.commitAsync(() => {});
+    assert.equal(immutable, before);
+    store.dispose(); store = DurableStore.create(options);
+    await store.commitAsync(() => {});
+    assert.equal(immutable, before, "reopen must remember committed history without serializing it");
+    assert.equal(store.document(document.kind, id)!.versions.length, 32);
+  } finally { spy.mock.restore(); store.dispose(); rmSync(dir, { recursive: true }); }
+});
+
 test("timed-out submissions reject queued and later sends without overwriting the admission", async () => {
   const store = DurableStore.createEphemeral();
   const client = new CopilotClient();
