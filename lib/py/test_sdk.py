@@ -50,6 +50,239 @@ def sdk_client(session):
 
 
 class RecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_initiating_run_cancellation_settles_and_reopens_checkpoint_and_memo(self):
+        with tempfile.TemporaryDirectory() as directory:
+            options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
+            store = DurableStore.create(options)
+            registry = ExtensionRegistry()
+            harness = DurableHarness(sdk_client(sdk_session()), store, registry)
+            entered, settling, settled, finish_settlement = (asyncio.Event() for _ in range(4))
+            interrupted_phase = asyncio.Event()
+            interrupt = True
+            attempts, effects = [], []
+
+            async def begin(_input, _checkpoint, runtime):
+                return await runtime.commit_async(lambda: TaskCommit.running({"phase": "effect", "n": 2}))
+
+            async def effect(_input, checkpoint, runtime):
+                attempts.append(checkpoint["n"])
+                if await runtime.memo_async("printed-2") is None:
+                    await runtime.memo_async("printed-2", True)
+                    effects.append(checkpoint["n"])
+                if interrupt:
+                    entered.set()
+                    try:
+                        await interrupted_phase.wait()
+                    finally:
+                        settling.set()
+                        await finish_settlement.wait()
+                        settled.set()
+                return await runtime.commit_async(lambda: TaskCommit.completed("resumed"))
+
+            definition = DurableTask.define_phases(
+                "owner-cancellation", lambda: {"phase": "begin"}, {"begin": begin, "effect": effect})
+            registry.install(Extension("owner-cancellation", tasks=[definition]))
+            async def create(tx):
+                return tx.create_task(definition)
+            record = await store.commit_async(create)
+            running = asyncio.create_task(harness.run_task_async(record.id))
+            try:
+                await asyncio.wait_for(entered.wait(), 1)
+                core = harness._in_flight[record.id]
+                running.cancel("initiating caller interrupted")
+                settlement = asyncio.create_task(settling.wait())
+                try:
+                    await asyncio.wait((running, settlement), return_when=asyncio.FIRST_COMPLETED, timeout=1)
+                    self.assertTrue(settling.is_set(), "owner cancellation must reach the active phase")
+                finally:
+                    settlement.cancel()
+                    await asyncio.gather(settlement, return_exceptions=True)
+                self.assertFalse(running.done(), "the owner must await phase settlement")
+                self.assertIs(harness._in_flight[record.id], core)
+                finish_settlement.set()
+                outcome = await asyncio.wait_for(asyncio.shield(running), 1)
+                self.assertEqual((outcome.status, outcome.error), ("failed", "task did not finish"))
+                self.assertTrue(settled.is_set())
+                self.assertTrue(core.done())
+                self.assertNotIn(record.id, harness._in_flight)
+                self.assertNotIn(record.id, harness._running_tasks)
+                self.assertFalse(interrupted_phase.is_set())
+                self.assertIsNone(record.outcome, "interruption must not commit a terminal outcome")
+                self.assertIs(record.status, TaskStatus.RUNNING)
+                self.assertEqual(record.checkpoint, {"phase": "effect", "n": 2})
+                self.assertEqual(record.memos, {"printed-2": True})
+                harness.close()
+            finally:
+                finish_settlement.set()
+                for task in list(harness._in_flight.values()):
+                    task.cancel()
+                await asyncio.gather(running, *list(harness._in_flight.values()), return_exceptions=True)
+                await harness.close_async()
+                store.close()
+
+            interrupt = False
+            store = DurableStore.create(options)
+            harness = DurableHarness(sdk_client(sdk_session()), store, registry)
+            try:
+                saved = store.task(record.id)
+                assert saved is not None
+                self.assertEqual(saved.checkpoint, {"phase": "effect", "n": 2})
+                self.assertEqual(saved.memos, {"printed-2": True})
+                self.assertIsNone(saved.outcome)
+                self.assertEqual(attempts, [2], "opening the store alone must not run a task")
+                outcome = await asyncio.wait_for(harness.run_task_async(record.id), 1)
+                self.assertEqual((outcome.status, outcome.result), ("completed", "resumed"))
+                self.assertEqual(attempts, [2, 2])
+                self.assertEqual(effects, [2], "the interrupted effect's memo must survive reopening")
+                self.assertIs(saved.status, TaskStatus.TERMINAL)
+                self.assertEqual(saved.restarts, 1)
+            finally:
+                await harness.close_async()
+                store.close()
+
+    async def test_duplicate_run_cancellation_does_not_cancel_initiating_or_scheduled_owner(self):
+        for scheduled in (False, True):
+            with self.subTest(scheduled=scheduled):
+                store = DurableStore.create_ephemeral()
+                registry = ExtensionRegistry()
+                harness = DurableHarness(sdk_client(sdk_session()), store, registry)
+                entered, release, joined = (asyncio.Event() for _ in range(3))
+                calls, cancellations = [], []
+                async def phase(_input, _checkpoint, runtime):
+                    calls.append("entered")
+                    entered.set()
+                    try:
+                        await release.wait()
+                    except asyncio.CancelledError:
+                        cancellations.append("cancelled")
+                        raise
+                    return await runtime.commit_async(lambda: TaskCommit.completed("owner completed"))
+                definition = DurableTask.define("duplicate-cancellation", lambda: {"phase": "run"}, phase)
+                registry.install(Extension("duplicate-cancellation", tasks=[definition]))
+                async def create(tx):
+                    return tx.create_task(definition)
+                if scheduled:
+                    record = await harness.create_task_async(definition)
+                    owner = harness._in_flight[record.id]
+                else:
+                    record = await store.commit_async(create)
+                    owner = asyncio.create_task(harness.run_task_async(record.id))
+                async def duplicate():
+                    joined.set()
+                    return await harness.run_task_async(record.id)
+                waiter = None
+                try:
+                    await asyncio.wait_for(entered.wait(), 1)
+                    core = harness._in_flight[record.id]
+                    waiter = asyncio.create_task(duplicate())
+                    await joined.wait()
+                    waiter.cancel("duplicate caller interrupted")
+                    with self.assertRaisesRegex(asyncio.CancelledError, "duplicate caller interrupted"):
+                        await waiter
+                    self.assertFalse(core.done())
+                    self.assertFalse(owner.done())
+                    self.assertEqual(cancellations, [])
+                    self.assertEqual(calls, ["entered"])
+                    release.set()
+                    outcome = await asyncio.wait_for(asyncio.shield(owner), 1)
+                    self.assertEqual(outcome.result, "owner completed")
+                    self.assertIs(record.status, TaskStatus.TERMINAL)
+                    self.assertNotIn(record.id, harness._in_flight)
+                finally:
+                    release.set()
+                    await asyncio.gather(owner, *([waiter] if waiter else []), return_exceptions=True)
+                    await harness.close_async()
+                    store.close()
+
+    async def test_owner_cancellation_preserves_tool_checkpoint_and_cancelled_shared_close(self):
+        with tempfile.TemporaryDirectory() as directory:
+            options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
+            store = DurableStore.create(options)
+            session = sdk_session()
+            client = sdk_client(session)
+            registry = ExtensionRegistry()
+            harness = DurableHarness(client, store, registry)
+            chat = await harness.create_conversation_async()
+            barriers = asyncio.Queue()
+            barrier_exited = asyncio.Event()
+            original_barrier = chat.checkpoint_barrier_async
+            async def barrier():
+                barriers.put_nowait("entered")
+                try:
+                    await original_barrier()
+                finally:
+                    barrier_exited.set()
+            chat.checkpoint_barrier_async = barrier
+            async def phase(_input, _checkpoint, runtime):
+                await chat.checkpoint_barrier_async()
+                return await runtime.commit_async(lambda: TaskCommit.completed("unexpected"))
+            definition = DurableTask.define("checkpoint-cancellation", lambda: {"phase": "run"}, phase)
+            registry.install(Extension("checkpoint-cancellation", tasks=[definition]))
+            async def create(tx):
+                return tx.create_task(definition)
+            record = await store.commit_async(create)
+            await store._gate.acquire()
+            session.emit({"type": "tool.execution_complete", "id": "shared-complete",
+                          "data": {"toolCallId": "shared", "success": True, "result": {"content": "received"}}})
+            running = asyncio.create_task(harness.run_task_async(record.id))
+            first = second = None
+            try:
+                await asyncio.wait_for(barriers.get(), 1)
+                chain = chat._checkpoint_chain
+                assert chain is not None
+                running.cancel("owner interrupted during checkpoint")
+                await asyncio.wait_for(barrier_exited.wait(), 1)
+                self.assertFalse(chain.done(), "owner cancellation must not cancel the shared checkpoint")
+                outcome = await asyncio.wait_for(asyncio.shield(running), 1)
+                self.assertEqual((outcome.status, outcome.error), ("failed", "task did not finish"))
+                self.assertIsNone(record.outcome)
+                self.assertNotIn(record.id, harness._in_flight)
+                self.assertFalse(chain.done(), "owner cancellation must not cancel the shared checkpoint")
+                first = asyncio.create_task(harness.close_async())
+                await asyncio.wait_for(barriers.get(), 1)
+                second_entered = asyncio.Event()
+                async def second_close():
+                    second_entered.set()
+                    await harness.close_async()
+                second = asyncio.create_task(second_close())
+                await second_entered.wait()
+                first.cancel("closer interrupted")
+                turn = asyncio.get_running_loop().create_future()
+                asyncio.get_running_loop().call_soon(turn.set_result, None)
+                await turn
+                self.assertFalse(first.done(), "cancelled close must still await checkpoint settlement")
+                self.assertFalse(second.done(), "every closer must share the drain")
+                self.assertFalse(chain.done())
+                client.stop.assert_not_awaited()
+                store._gate.release()
+                with self.assertRaisesRegex(asyncio.CancelledError, "closer interrupted"):
+                    await asyncio.wait_for(first, 1)
+                await asyncio.wait_for(asyncio.shield(second), 1)
+                self.assertFalse(chain.cancelled())
+                checkpoint = chat.checkpoint()
+                assert checkpoint is not None
+                self.assertEqual((checkpoint.event_id, checkpoint.content), ("tool:shared", "received"))
+                client.stop.assert_awaited_once()
+            finally:
+                if store._gate.locked():
+                    store._gate.release()
+                for task in list(harness._in_flight.values()):
+                    task.cancel()
+                await asyncio.gather(running, *list(harness._in_flight.values()),
+                                     *([first] if first else []), *([second] if second else []),
+                                     return_exceptions=True)
+                await asyncio.gather(harness.close_async(), return_exceptions=True)
+                store.close()
+            reopened = DurableStore.create(options)
+            try:
+                saved = reopened.conversation(chat.id)
+                assert saved is not None
+                checkpoint = DurableConversation(reopened, saved).checkpoint()
+                assert checkpoint is not None
+                self.assertEqual((checkpoint.event_id, checkpoint.content), ("tool:shared", "received"))
+            finally:
+                reopened.close()
+
     async def test_direct_awaited_run_does_not_make_shutdown_wait_for_host_task(self):
         store = DurableStore.create_ephemeral()
         client = sdk_client(sdk_session())
