@@ -4017,7 +4017,12 @@ class DurableHarness:
         cancellation: asyncio.Event | None = None,
     ) -> TaskOutcome:
         """Runs a task to completion, resuming from its last checkpoint."""
-        return await asyncio.shield(self._task_run(task_id, cancellation))
+        existing = self._in_flight.get(task_id)
+        if existing is not None:
+            return await asyncio.shield(existing)
+        # The initiating caller owns interruption and awaits phase settlement.
+        # Duplicate callers must not propagate cancellation into the shared run.
+        return await self._task_run(task_id, cancellation)
 
     def _task_run(self, task_id: str, cancellation: asyncio.Event | None) -> asyncio.Task[TaskOutcome]:
         existing = self._in_flight.get(task_id)
