@@ -200,5 +200,100 @@ class RunnerContractTests(unittest.TestCase):
                 self.assertIn("excluded from deterministic mode", result.stderr)
 
 
+class FixtureHelperTests(unittest.TestCase):
+    def test_actual_runners_select_source_fixture_with_stale_or_missing_deployment(self):
+        relative = Path("tools/ReplayRuntime/bin/Debug/net10.0")
+        for language in ("ts", "py"):
+            for deployed in ("stale", "missing"):
+                with self.subTest(language=language, deployed=deployed), isolated_contract() as root:
+                    # Replace only the isolated tree's link, never the owning runtime.
+                    (root / "tools/ReplayRuntime").unlink()
+                    source = root / "tools/ReplayRuntime/fixtures/basic.json"
+                    source.parent.mkdir(parents=True)
+                    shutil.copy2(ROOT / "tools/ReplayRuntime/fixtures/basic.json", source)
+                    shutil.copytree(ROOT / relative, root / relative)
+                    copy = root / relative / "fixtures/basic.json"
+                    if deployed == "missing":
+                        copy.unlink()
+                    else:
+                        fixture = json.loads(copy.read_text())
+                        fixture["sessions"][0]["model"] = "deployed-decoy-model"
+                        copy.write_text(json.dumps(fixture))
+                    result = execute(root, language, "--deterministic", "00")
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("PASS 00", result.stdout)
+                    self.assertIn("effective model: replay-model", result.stdout)
+                    self.assertNotIn("deployed-decoy-model", result.stdout)
+                    self.assertEqual(source.read_bytes(), (ROOT / "tools/ReplayRuntime/fixtures/basic.json").read_bytes())
+
+    def test_helper_aliases_and_precedence_reach_actual_runtime(self):
+        relative = Path("tools/ReplayRuntime/bin/Debug/net10.0")
+        with tempfile.TemporaryDirectory(prefix="helper-fixtures-") as directory:
+            root = Path(directory)
+            shutil.copytree(ROOT / relative, root / "runtime")
+            runtime = root / "runtime/ReplayRuntime"
+            fixtures = {}
+            for name in ("canonical", "legacy", "deployed"):
+                fixture = json.loads((ROOT / "tools/ReplayRuntime/fixtures/basic.json").read_text())
+                fixture["models"][0]["id"] = f"{name}-selected-model"
+                fixture["sessions"][0]["model"] = f"{name}-selected-model"
+                fixture["sessions"][0]["turns"][0]["content"] = f"{name}-selected-answer"
+                file = root / f"{name}.json"
+                file.write_text(json.dumps(fixture))
+                fixtures[name] = file
+            shutil.copy2(fixtures["deployed"], root / "runtime/fixtures/basic.json")
+            for language in ("ts", "py"):
+                for alias, canonical, expected in (
+                    (None, "canonical", "canonical"),
+                    ("legacy", None, "legacy"),
+                    ("legacy", "canonical", "legacy"),
+                    ("", "canonical", "deployed"),
+                    (None, None, "deployed"),
+                ):
+                    with self.subTest(language=language, alias=alias, canonical=canonical):
+                        env = dict(os.environ, DURABLE_RUNTIME_PATH=str(runtime))
+                        for key, name in (("DURABLE_EXAMPLE_REPLAY_FIXTURE", alias),
+                                          ("DURABLE_EXAMPLE_FIXTURE", canonical)):
+                            env.pop(key, None)
+                            if name is not None:
+                                env[key] = str(fixtures[name]) if name else ""
+                        if language == "ts":
+                            command = ["node", "--experimental-transform-types", "--input-type=module", "-e", """
+import {runExample} from './examples/ts/example.ts';
+await runExample(async harness => {
+  const chat = await harness.rootAsync();
+  const model = await chat.waitForEffectiveModelAsync();
+  const answer = await chat.submitAsync('prove selected source');
+  console.log(`FIXTURE ${model.model}|${answer?.data.content}`);
+});"""]
+                        else:
+                            command = [sys.executable, "-c", """
+import sys
+sys.path.insert(0, 'examples/py')
+from example import run_example
+async def main(harness, store, registry):
+    chat = await harness.root_async()
+    model = await chat.wait_for_effective_model_async()
+    answer = await chat.submit_async('prove selected source')
+    print(f'FIXTURE {model.model}|{answer.data.content}')
+run_example(main)
+"""]
+                        result = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True, timeout=30)
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                        self.assertIn(f"FIXTURE {expected}-selected-model|{expected}-selected-answer", result.stdout)
+                for missing in ("legacy", "canonical"):
+                    with self.subTest(language=language, missing=missing):
+                        bad = root / f"missing-{missing}.json"
+                        env = dict(os.environ, DURABLE_RUNTIME_PATH=str(runtime),
+                                   DURABLE_EXAMPLE_FIXTURE=str(fixtures["canonical"]))
+                        env.pop("DURABLE_EXAMPLE_REPLAY_FIXTURE", None)
+                        env["DURABLE_EXAMPLE_REPLAY_FIXTURE" if missing == "legacy"
+                            else "DURABLE_EXAMPLE_FIXTURE"] = str(bad)
+                        result = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True, timeout=30)
+                        self.assertNotEqual(result.returncode, 0, "an explicit missing fixture cannot silently fall back")
+                        self.assertIn(str(bad), result.stderr)
+                        self.assertNotIn("FIXTURE ", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

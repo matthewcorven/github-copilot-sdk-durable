@@ -14,7 +14,7 @@ def run_example(body):
         store = d.DurableStore.create_ephemeral()
         registry = d.ExtensionRegistry()
         try:
-            fixture = os.environ.get("DURABLE_EXAMPLE_REPLAY_FIXTURE")
+            fixture = os.environ.get("DURABLE_EXAMPLE_REPLAY_FIXTURE", os.environ.get("DURABLE_EXAMPLE_FIXTURE"))
             if fixture and not os.environ.get("DURABLE_RUNTIME_PATH"):
                 raise RuntimeError("A replay fixture requires an explicit DURABLE_RUNTIME_PATH")
             options = d.DurableHarnessOptions(runtime_arguments=["--fixture", fixture] if fixture else [])
