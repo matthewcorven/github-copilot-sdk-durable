@@ -3,7 +3,10 @@
   "language": "typescript",
   "range": [0, 10],
   "workingDirectory": "repository root",
-  "setupCommand": ["npm", "--prefix", "examples/ts", "ci"],
+  "setupCommands": [
+    ["npm", "--prefix", "lib/ts", "ci"],
+    ["npm", "--prefix", "examples/ts", "ci"]
+  ],
   "runtime": "Native Copilot SDK, or DURABLE_RUNTIME_PATH pointing to the real ReplayRuntime executable. Never imports harness.ts/runtime.ts.",
   "store": "in-memory; no per-user or on-disk default path",
   "validation": {
