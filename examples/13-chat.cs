@@ -56,16 +56,19 @@ foreach (var evt in context)
     }
 }
 
-// The durable store keeps the conversation's own entries alongside the session.
+// Entries() exposes app-written entries, not internal admission/checkpoint anchors
+// or SDK transcript events. This plain chat turn writes no app entries.
 Console.WriteLine($"stored entries: [{string.Join(", ", root.Entries(10))}]");
 
 // ─── Assertions ─────────────────────────────────────────────────────────────
 //
-// The turn is durable: the input was admitted, the answer came back, and the
-// transcript holds both.
+// The input was admitted and the answer came back. SDK transcript events are
+// separate from the app-written entries exposed by Entries().
 Check.Equal("Paris", answer?.Data.Content.Trim(), "the model answered the question");
-Check.That(root.Entries(10).Count >= 1, "the conversation stored its entries");
+Check.Equal(0, root.Entries(10).Count, "a plain chat turn has no app-written entries");
 
+// LIVE: ContextAsync() reads SDK history. Basic replay has only session.start,
+// assistant.message, and session.idle; user/system history needs a live runtime.
 var events = await root.ContextAsync();
 Check.That(events.Any(e => e is UserMessageEvent), "the transcript holds the user message");
 Check.That(events.Any(e => e is AssistantMessageEvent), "the transcript holds the assistant message");

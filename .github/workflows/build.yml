@@ -1,60 +1,78 @@
-name: Build and pack
+name: Round seven isolated candidate validation
 
 on:
-  push:
-    branches: [main, dev]
-  pull_request:
-    branches: [main, dev]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  build:
+  validate:
+    if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/validation-only/')
     runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - pr: 119
+            candidate: 3cd75c9e43f66e0ced61e1ab5c7d2d05893eeef2
+          - pr: 122
+            candidate: f67100358b3fab899799fad34b727c8b3ea26c08
+          - pr: 123
+            candidate: 0ed19931ba00d9fdb2f9b4608c9cf9a00778f350
+          - pr: 125
+            candidate: bb3d4ec6238193754fe50c97a9f1d4e8f156b5e5
+          - pr: 126
+            candidate: c4f63b22e9578ae88dd4a68a345e075c54b06dfd
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Retain control runner and initial receipt
+        env:
+          PR: ${{ matrix.pr }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/round7-evidence-pr$PR"
+          cp scripts/validation-only-round7.py "$RUNNER_TEMP/round7-control-runner.py"
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/round7-evidence-pr$PR/control-sha.txt"
 
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
 
-      - name: Restore
-        run: dotnet restore lib/Copilot.Durable.csproj
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
 
-      - name: Build
-        run: dotnet build lib/Copilot.Durable.csproj --no-restore -c Release
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
 
-      - name: Test
-        run: dotnet test tests/Durable.Tests --nologo -v q
+      - name: Execute full applicable candidate matrix
+        env:
+          PR: ${{ matrix.pr }}
+          CANDIDATE: ${{ matrix.candidate }}
+        run: |
+          python3 "$RUNNER_TEMP/round7-control-runner.py" \
+            --control "$GITHUB_WORKSPACE" --pr "$PR" --candidate "$CANDIDATE" \
+            --output "$RUNNER_TEMP/round7-evidence-pr$PR"
 
-      # Compiles all 38 examples and runs the 17 that need no Copilot sign-in. This is the
-      # plain path: it does not compare an example against itself, so it cannot catch an
-      # example whose output changes from run to run.
-      # SKIP_TESTS=1 because the Test step above already ran the xUnit suite;
-      # without it validate.sh would run the same tests a second time.
-      - name: Validate examples
-        run: SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh
-
-      # The deterministic pass (docs/DESIGN.md section 6.1): every example that needs no
-      # Copilot sign-in runs against the recorded runtime, asserts the effective model the
-      # recording names, and is then run a second time with its normalised output compared
-      # against the first. It is a separate step rather than a matrix leg so that a
-      # non-deterministic example fails one named step next to the plain pass it complements,
-      # and so the dotnet restore/build/test cache the step above populated is reused.
-      # The step above stays because it covers the live-gated examples this pass excludes.
-      # SKIP_TESTS=1 for the same reason as above; the deterministic suites the plain path
-      # never runs (ReplayRuntime.Tests, ReplayToolDispatchTests) are part of this step's
-      # value, so they are deliberately not skipped here.
-      - name: Validate examples (deterministic)
-        run: ./scripts/validate.sh --deterministic
-
-      - name: Pack
-        run: dotnet pack lib/Copilot.Durable.csproj --no-build -c Release -o artifacts
+      - name: Inventory evidence even after failure
+        if: always()
+        env:
+          PR: ${{ matrix.pr }}
+        run: |
+          python3 "$RUNNER_TEMP/round7-control-runner.py" \
+            --inventory-only --output "$RUNNER_TEMP/round7-evidence-pr$PR"
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: nupkg
-          path: artifacts/*.nupkg
+          name: round7-candidate-${{ matrix.pr }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/round7-evidence-pr${{ matrix.pr }}
           if-no-files-found: error
+          retention-days: 30

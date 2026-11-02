@@ -1,0 +1,10 @@
+{
+  "protocolVersion": 3,
+  "runtimeVersion": "0.0.0-replay",
+  "models": [],
+  "sessions": [
+    { "id": "root-config", "turns": [] },
+    { "id": "child-config", "turns": [] },
+    { "id": "root-reconfigured", "turns": [] }
+  ]
+}
