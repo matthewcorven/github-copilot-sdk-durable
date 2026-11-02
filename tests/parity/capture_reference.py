@@ -1,4 +1,8 @@
-"""Capture or recheck actual C# stdout, not hand-authored expected fixtures."""
+"""Capture or recheck actual C# stdout, not hand-authored expected fixtures.
+
+Build ReplayRuntime first: C# uses its deployed basic.json, which must match the
+source fixture byte-for-byte before any example runs or reference is written.
+"""
 
 import argparse
 import hashlib
@@ -18,11 +22,28 @@ def sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def reference_fixture_sha256(runtime):
+    if not runtime.is_file() or not os.access(runtime, os.X_OK):
+        raise RuntimeError(f"Build an executable ReplayRuntime first: {runtime}")
+    source = ROOT / "tools/ReplayRuntime/fixtures/basic.json"
+    deployed = runtime.parent / "fixtures/basic.json"
+    source_hash = sha256(source)
+    deployed_hash = sha256(deployed)
+    if deployed_hash != source_hash:
+        raise RuntimeError(
+            "Deployed ReplayRuntime fixture differs from source; rebuild ReplayRuntime before capture:\n"
+            f"source: {source} (sha256 {source_hash})\n"
+            f"deployed: {deployed} (sha256 {deployed_hash})"
+        )
+    return deployed_hash
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write", action="store_true", help="Capture checked-in output from actual C# execution")
     args = parser.parse_args()
-    runtime = ROOT / "tools/ReplayRuntime/bin/Debug/net10.0/ReplayRuntime"
+    runtime = (ROOT / "tools/ReplayRuntime/bin/Debug/net10.0/ReplayRuntime").resolve(strict=True)
+    fixture_hash = reference_fixture_sha256(runtime)
     env = {**os.environ, "DURABLE_RUNTIME_PATH": str(runtime)}
     expected_dir = ROOT / "examples/expected"
     provenance = {
@@ -30,7 +51,7 @@ def main():
         "scenario": "actual C# execution with ReplayRuntime basic.json; generated sessions are synthesised, not recorded transcripts",
         "normalizer": "examples/run_all.py:normalise_output (mirrors scripts/validate.sh plus generated c/e/t IDs and platform paths)",
         "fixture": "tools/ReplayRuntime/fixtures/basic.json",
-        "fixtureSha256": sha256(ROOT / "tools/ReplayRuntime/fixtures/basic.json"),
+        "fixtureSha256": fixture_hash,
         "outputs": {},
     }
     if args.write:
