@@ -10,9 +10,11 @@ import {
   DurableStoreOptions, DurableStoreFormat, ExtensionRegistry, PermissionPolicy, DurableTask,
   TaskCommit, DurableSandboxPolicy,
   Extension, ToolWrapper, DurableTaskRunner, TaskStatus, DurableConversation,
-  type SessionEvent,
+  DurableJson, type SessionEvent, type SessionConfig,
 } from "./durable.js";
-import { CopilotClient } from "@github/copilot-sdk";
+import { CopilotClient, RuntimeConnection } from "@github/copilot-sdk";
+import { createServer } from "node:net";
+import { createMessageConnection, SocketMessageReader, SocketMessageWriter, ResponseError } from "vscode-jsonrpc/node.js";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -30,6 +32,312 @@ function barrier() {
   return { promise, resolve: release };
 }
 
+function knownNativeSessions(client: CopilotClient): void {
+  client.getSessionMetadata = async sessionId => ({
+    sessionId, startTime: new Date(0), modifiedTime: new Date(0), isRemote: false,
+  });
+}
+
+test("own reserved JSON keys survive cloning, document save and persistent recovery", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "durable-ts-own-json-"));
+  const options = Object.assign(new DurableStoreOptions(), { path: join(dir, "store.jsonl") });
+  let store = DurableStore.create(options);
+  const definition = new DocumentDefinition<import("./durable.js").JsonObject>("reserved");
+  const value = { ["__proto__"]: { conversationId: "child", reported: "0" }, constructor: "ordinary" };
+  try {
+    for (const clone of [DurableJson.toElement(value), DurableJson.fromElement<typeof value>(value), DurableJson.clone(value)]) {
+      assert.deepEqual(clone, value);
+      assert.equal(Object.getPrototypeOf(clone), Object.prototype);
+      assert.equal(Object.hasOwn(clone!, "__proto__"), true);
+    }
+    const owner = await store.commitAsync(tx => {
+      const owner = tx.createConversation();
+      const draft = tx.doc(definition, owner.id);
+      draft.value = value;
+      draft.save(tx.appendEntry(owner.id, "reserved"));
+      return owner.id;
+    });
+    assert.deepEqual(store.document(definition.kind, owner)!.latest, value);
+    store.dispose();
+    store = DurableStore.create(options);
+    const recovered = DurableJson.fromElement<typeof value>(store.document(definition.kind, owner)!.latest);
+    assert.deepEqual(recovered, value);
+    assert.equal(Object.getPrototypeOf(recovered), Object.prototype);
+    assert.equal(recovered!["__proto__"].conversationId, "child");
+  } finally { store.dispose(); rmSync(dir, { recursive: true }); }
+});
+
+test("Auto preserves malformed legacy and unrelated JSON instead of truncating them", () => {
+  const dir = mkdtempSync(join(tmpdir(), "durable-ts-identify-"));
+  const file = join(dir, "store.jsonl");
+  try {
+    for (const bytes of [
+      Buffer.from('{"sequence":4,"conversations":[{"id":"important"}]'),
+      Buffer.from('{"unknown":'), Buffer.from('{"unrelated":"valid"}'),
+      Buffer.from("not a store"), Buffer.from('{"conversations":[]}', "utf16le"),
+      Buffer.from('{"v":1,"seq":1,"type":"conversation","payload":{"id":"bad"}}\nnot json\n'),
+      Buffer.concat([Buffer.from('{"v":1,"seq":1,"type":"conversation","payload":{"id":"'),
+        Buffer.from([0xff]), Buffer.from('"}}\n')]),
+    ]) {
+      writeFileSync(file, bytes);
+      assert.throws(() => DurableStore.create(Object.assign(new DurableStoreOptions(), { path: file })));
+      assert.deepEqual(readFileSync(file), bytes);
+    }
+    const tail = Buffer.concat([Buffer.from('{"v":1,"seq":2,"type":"conversation","payload":{"id":"'), Buffer.from([0xe9, 0x9b])]);
+    writeFileSync(file, tail);
+    const store = DurableStore.create(Object.assign(new DurableStoreOptions(), { path: file }));
+    try { assert.equal(readFileSync(file).length, 0); } finally { store.dispose(); }
+  } finally { rmSync(dir, { recursive: true }); }
+});
+
+test("missing pinned native session is recreated under its original durable id after reopen", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "durable-ts-pinned-"));
+  const options = Object.assign(new DurableStoreOptions(), { path: join(dir, "store.jsonl") });
+  let store = DurableStore.create(options);
+  const client = new CopilotClient();
+  client.stop = async () => [];
+  client.createSession = async () => { throw new Error("native create interrupted"); };
+  let harness = new DurableHarness(client, store, new ExtensionRegistry());
+  try {
+    await assert.rejects(harness.createConversationAsync(), /native create interrupted/);
+    const id = store.conversations[0]!.id;
+    const pinned = harness.findConversation(id)!.binding()!["sessionId"];
+    assert.equal(typeof pinned, "string");
+    await harness.disposeAsync();
+    store.dispose();
+    store = DurableStore.create(options);
+    const probe = mock.method(client, "getSessionMetadata", async () => undefined);
+    const create = mock.method(client, "createSession", async (config?: SessionConfig) => sdkSession(config!.sessionId!).sdk);
+    const resume = mock.method(client, "resumeSession", async () => { throw new Error("must not resume missing"); });
+    harness = new DurableHarness(client, store, new ExtensionRegistry());
+    const chat = await harness.resumeConversationAsync(id);
+    assert.equal(chat.sessionId, pinned);
+    assert.deepEqual(probe.mock.calls[0]!.arguments, [pinned]);
+    assert.equal(create.mock.calls[0]!.arguments[0]!.sessionId, pinned);
+    assert.equal(resume.mock.callCount(), 0);
+  } finally { await harness.disposeAsync(); store.dispose(); rmSync(dir, { recursive: true }); }
+});
+
+test("official SDK transport probes existence and preserves recovery guards and probe errors", async () => {
+  const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+  let present = false, probeError = false, wrongId = false;
+  const sessions = new Map<string, object[]>();
+  const server = createServer(socket => {
+    const connection = createMessageConnection(new SocketMessageReader(socket), new SocketMessageWriter(socket));
+    connection.onRequest((method, raw) => {
+      const params: Record<string, unknown> = { ...raw };
+      calls.push({ method, params });
+      if (method === "connect") return { protocolVersion: 3 };
+      if (method === "session.getMetadata") {
+        if (probeError) throw new ResponseError(-32000, "metadata unavailable");
+        return { session: present ? {
+          sessionId: params["sessionId"], startTime: "2026-01-01T00:00:00Z",
+          modifiedTime: "2026-01-01T00:00:00Z", isRemote: false,
+        } : null };
+      }
+      if (method === "session.create") {
+        sessions.set(String(params["sessionId"]), []);
+        return { sessionId: wrongId ? "unexpected-id" : params["sessionId"], capabilities: {} };
+      }
+      if (method === "session.resume") return { sessionId: params["sessionId"], capabilities: {} };
+      if (method === "session.getMessages") return { events: sessions.get(String(params["sessionId"])) ?? [] };
+      if (method === "session.detach") return { success: true };
+      throw new ResponseError(-32601, `Unexpected test RPC ${method}`);
+    });
+    connection.listen();
+    socket.on("close", () => connection.dispose());
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const client = new CopilotClient({ connection: RuntimeConnection.forUri(`127.0.0.1:${address.port}`) });
+  const store = DurableStore.createEphemeral();
+  let harness: DurableHarness | undefined;
+  try {
+    await client.start();
+    harness = new DurableHarness(client, store, new ExtensionRegistry());
+    const binding = new DocumentDefinition<import("./durable.js").JsonObject>("durable.session-binding");
+    const admission = new DocumentDefinition<import("./durable.js").JsonObject>("durable.admission");
+    const fork = new DocumentDefinition<import("./durable.js").JsonObject>("durable.fork");
+    for (const shape of ["pinned", "allocated", "fork", "unsettled", "probe-error", "wrong-id", "existing"] as const) {
+      const id = await store.commitAsync(tx => {
+        const record = tx.createConversation();
+        const draft = tx.doc(binding, record.id);
+        draft.value = { sessionId: `native-${shape}`, pinned: shape !== "allocated" };
+        draft.save(tx.appendEntry(record.id, "session-binding"));
+        if (shape === "fork") {
+          const intent = tx.doc(fork, record.id);
+          intent.value = { state: 1, sessionId: `native-${shape}` };
+          intent.save(tx.appendEntry(record.id, "fork"));
+        }
+        if (shape === "unsettled") {
+          const draft = tx.doc(admission, record.id);
+          draft.value = { state: "uncertain" };
+          draft.save(tx.appendEntry(record.id, "admission"));
+        }
+        return record.id;
+      });
+      present = shape === "existing";
+      probeError = shape === "probe-error";
+      wrongId = shape === "wrong-id";
+      calls.length = 0;
+      if (shape === "pinned" || shape === "existing") {
+        const chat = await harness.resumeConversationAsync(id);
+        assert.equal(chat.sessionId, `native-${shape}`);
+        assert.deepEqual(calls.map(c => c.method), [
+          "session.getMetadata", shape === "existing" ? "session.resume" : "session.create", "session.getMessages",
+        ]);
+        if (shape === "pinned") assert.equal(calls[1]!.params["sessionId"], "native-pinned");
+      } else {
+        await assert.rejects(harness.resumeConversationAsync(id),
+          shape === "probe-error" ? /metadata unavailable/ :
+            shape === "wrong-id" ? /session.create returned sessionId unexpected-id but the caller requested native-wrong-id/ :
+              /recovery|unsafe/);
+        if (shape !== "wrong-id") assert.equal(calls.some(c => c.method === "session.create"), false);
+        if (shape === "unsettled") assert.deepEqual(calls, []);
+      }
+    }
+  } finally {
+    try { if (harness) await harness.disposeAsync(); else await client.stop(); }
+    finally {
+      store.dispose();
+      const closed = once(server, "close");
+      server.close();
+      await closed;
+    }
+  }
+});
+
+test("active phases retain native sessions and final checkpoints until every closer drains", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "durable-ts-active-"));
+  const options = Object.assign(new DurableStoreOptions(), { path: join(dir, "store.jsonl") });
+  const store = DurableStore.create(options);
+  const client = new CopilotClient();
+  const session = sdkSession("active");
+  client.createSession = async () => session.sdk;
+  let stops = 0;
+  const stopped = barrier();
+  client.stop = async () => { stops++; stopped.resolve(); return []; };
+  const registry = new ExtensionRegistry();
+  const harness = new DurableHarness(client, store, registry);
+  const entered = barrier(), release = barrier(), finalEntered = barrier(), finalRelease = barrier(), gateEntered = barrier();
+  let running: Promise<unknown> | undefined, first: Promise<unknown> | undefined, second: Promise<unknown> | undefined, held: Promise<void> | undefined;
+  try {
+    const chat = await harness.createConversationAsync();
+    session.sdk.send = async () => {
+      session.emit(sdkEvent("tool.execution_complete", "phase-tool", {
+        toolCallId: "phase", success: true, result: { content: "submitted" },
+      }));
+      session.emit(sdkEvent("session.idle", "idle", {}));
+      return "sent";
+    };
+    const definition = DurableTask.define("active-session", () => ({ phase: "run" }), async (_input, _checkpoint, runtime) => {
+      entered.resolve();
+      await release.promise;
+      await chat.contextAsync();
+      await chat.submitAsync("during shutdown");
+      const commit = await runtime.commitAsync(() => TaskCommit.completed("phase saved"));
+      held = store.commitAsync(async () => { gateEntered.resolve(); await finalRelease.promise; });
+      await gateEntered.promise;
+      session.emit(sdkEvent("tool.execution_complete", "late-tool", {
+        toolCallId: "late", success: true, result: { content: "final" },
+      }));
+      return commit;
+    });
+    registry.install(new Extension("active-session", [], [], [definition]));
+    const task = await store.commitAsync(tx => tx.createTask(definition, null));
+    const checkpoint = chat.checkpointBarrierAsync.bind(chat);
+    chat.checkpointBarrierAsync = async () => {
+      if (!chat.sessionId) {
+        finalEntered.resolve();
+      }
+      await checkpoint();
+    };
+    running = harness.runTaskAsync(task.id);
+    await entered.promise;
+    first = harness.disposeAsync();
+    second = harness.disposeAsync();
+    release.resolve();
+    const outcome = await running;
+    assert.equal((outcome as { status: string }).status, "completed");
+    assert.equal(await Promise.race([
+      finalEntered.promise.then(() => "barrier"), stopped.promise.then(() => "stop"),
+    ]), "barrier");
+    assert.equal(chat.checkpoint()!["content"], "submitted");
+    assert.equal(stops, 0);
+    assert.throws(() => DurableStore.create(options), /lock/);
+    assert.throws(() => new DurableTaskRunner(store, registry), /runner|runtime/);
+    await assert.rejects(harness.runTaskAsync("new-task"), /closing/);
+    await assert.rejects(harness.createConversationAsync(), /closing/);
+    finalRelease.resolve();
+    await Promise.all([first, second, held]);
+    assert.equal(stops, 1);
+    store.dispose();
+    const reopened = DurableStore.create(options);
+    try {
+      const saved = reopened.document("durable.checkpoint", chat.id)!.latest;
+      assert(saved !== null && typeof saved === "object" && !Array.isArray(saved));
+      assert.equal(saved["content"], "final");
+    }
+    finally { reopened.dispose(); }
+  } finally {
+    release.resolve(); finalRelease.resolve();
+    await Promise.allSettled([running, first, second, held]);
+    await harness.disposeAsync(); store.dispose(); rmSync(dir, { recursive: true });
+  }
+});
+
+test("concurrent direct task-runner disposal joins the active drain", async () => {
+  const store = DurableStore.createEphemeral();
+  const registry = new ExtensionRegistry();
+  const entered = barrier(), release = barrier();
+  const definition = DurableTask.define("join-close", () => ({ phase: "run" }), async (_input, _checkpoint, runtime) => {
+    entered.resolve();
+    await release.promise;
+    return runtime.commitAsync(() => TaskCommit.completed(null));
+  });
+  registry.install(new Extension("join-close", [], [], [definition]));
+  const runner = new DurableTaskRunner(store, registry);
+  const task = await store.commitAsync(tx => tx.createTask(definition, null));
+  const running = runner.runTaskAsync(task.id);
+  await entered.promise;
+  const first = runner.disposeAsync();
+  let secondDone = false;
+  const second = runner.disposeAsync().then(() => { secondDone = true; });
+  try {
+    await Promise.resolve();
+    assert.equal(secondDone, false);
+  } finally {
+    release.resolve();
+    await Promise.all([running, first, second]);
+    store.dispose();
+  }
+});
+
+test("repeated checkpoint drains preserve one original storage failure", async () => {
+  const store = DurableStore.createEphemeral();
+  const session = sdkSession("checkpoint-failure");
+  const client = new CopilotClient();
+  client.createSession = async () => session.sdk;
+  client.stop = async () => [];
+  const harness = new DurableHarness(client, store, new ExtensionRegistry());
+  const original = new Error("checkpoint write failed");
+  try {
+    const chat = await harness.createConversationAsync();
+    const injection = mock.method(store, "commitAsync", async () => { throw original; });
+    session.emit(sdkEvent("tool.execution_complete", "failed-tool", { toolCallId: "failed", success: true }));
+    try {
+      await assert.rejects(harness.disposeAsync(), error => {
+        assert(error instanceof Error && !(error instanceof AggregateError));
+        assert.equal(error.message, `Conversation '${chat.id}' failed to persist a tool checkpoint.`);
+        assert.equal(error.cause, original);
+        return true;
+      });
+    } finally { injection.mock.restore(); }
+  } finally { store.dispose(); }
+});
+
 test("canonical repeated definitions retain every version across reopen", async () => {
   const dir = mkdtempSync(join(tmpdir(), "durable-ts-canonical-"));
   const file = join(dir, "store.jsonl");
@@ -44,6 +352,7 @@ test("canonical repeated definitions retain every version across reopen", async 
     const client = new CopilotClient();
     client.stop = async () => [];
     client.resumeSession = async id => sdkSession(id).sdk;
+    knownNativeSessions(client);
     const harness = new DurableHarness(client, store, new ExtensionRegistry());
     try {
       const child = await harness.resumeConversationAsync(fixture.forkIds[0]!);
@@ -142,6 +451,7 @@ test("canonical numeric fork states resume and TS forks persist numeric pending 
     const client = new CopilotClient();
     client.stop = async () => [];
     client.resumeSession = async id => sdkSession(id).sdk;
+    knownNativeSessions(client);
     mock.getter(client, "rpc", () => ({ sessions: { fork: async () => ({ sessionId: "ts-child" }) } }));
     const harness = new DurableHarness(client, store, new ExtensionRegistry());
     try {
@@ -284,6 +594,7 @@ test("shutdown drains every checkpoint and recovered phase before stopping SDK a
     });
     harness.findConversation(records[0]!.id)!.checkpointBarrierAsync = async () => { throw original; };
     harness.findConversation(records[1]!.id)!.checkpointBarrierAsync = async () => {
+      if (order.includes("barrier")) return;
       barrierEntered.resolve();
       await releaseBarrier.promise;
       await store.commitAsync(tx => tx.appendEntry(records[1]!.id, "last-checkpoint"));
@@ -324,7 +635,8 @@ test("harness disposal is idempotent and stops SDK after checkpoint failure", as
   const harness = new DurableHarness(client, store, new ExtensionRegistry());
   try {
     const record = await store.commitAsync(tx => tx.createConversation());
-    harness.findConversation(record.id)!.checkpointBarrierAsync = async () => { throw new Error("checkpoint failed"); };
+    const failure = new Error("checkpoint failed");
+    harness.findConversation(record.id)!.checkpointBarrierAsync = async () => { throw failure; };
     await assert.rejects(harness.disposeAsync(), /checkpoint failed/);
     await assert.rejects(harness.disposeAsync(), /checkpoint failed/);
     assert.equal(stops, 1);
@@ -541,6 +853,7 @@ test("completed legacy string fork intents remain resumable with an exact native
   const client = new CopilotClient();
   client.stop = async () => [];
   client.resumeSession = async id => sdkSession(id).sdk;
+  knownNativeSessions(client);
   const harness = new DurableHarness(client, store, new ExtensionRegistry());
   try {
     const child = await store.commitAsync(tx => {
@@ -575,6 +888,7 @@ test("history hydration is read-only and deduplicated across create, resume and 
   const session = sdkSession("native");
   client.createSession = async () => session.sdk;
   client.resumeSession = async () => session.sdk;
+  knownNativeSessions(client);
   client.stop = async () => [];
   let harness = new DurableHarness(client, store, new ExtensionRegistry());
   try {
@@ -588,7 +902,7 @@ test("history hydration is read-only and deduplicated across create, resume and 
     const id = chat.id;
     const checkpoint = chat.checkpoint();
     const bytes = readFileSync(file);
-    const resumed = sdkSession("native", history);
+    const resumed = sdkSession(String(chat.binding()!["sessionId"]), history);
     client.resumeSession = async () => resumed.sdk;
     for (let i = 0; i < 2; i++) {
       await harness.disposeAsync(); store.dispose();
@@ -626,6 +940,7 @@ test("forks inherit historical admissions, but child-owned uncertainty and incom
   const childSession = sdkSession("child", inherited);
   client.createSession = async () => parentSession.sdk;
   client.resumeSession = async () => childSession.sdk;
+  knownNativeSessions(client);
   let failFork = false;
   mock.getter(client, "rpc", () => ({ sessions: { fork: async () => {
     if (failFork) throw new Error("fork failed");
