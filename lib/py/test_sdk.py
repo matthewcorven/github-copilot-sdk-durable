@@ -22,6 +22,7 @@ from durable import (
     DurableRecoveryRequiredException,
 )
 from copilot.tools import Tool, ToolResult
+from copilot import CopilotClient, RuntimeConnection
 
 REPLAY_FIXTURES = Path(__file__).resolve().parents[2] / "tools" / "ReplayRuntime" / "fixtures"
 
@@ -36,7 +37,7 @@ def sdk_session(session_id="native", history=None):
     return SimpleNamespace(
         session_id=session_id, on=subscribe, emit=emit, listeners=listeners,
         get_events=AsyncMock(return_value=history or []), send=AsyncMock(return_value="sent"),
-        set_tools=AsyncMock(),
+        set_tools=AsyncMock(), disconnect=AsyncMock(),
     )
 
 
@@ -50,9 +51,513 @@ def sdk_client(session):
     )
 
 
+class ControlledSdkPeer:
+    """Controlled public TCP protocol, not native runtime certification."""
+
+    def __init__(self):
+        self.held_method: str | None = None
+        self.received = asyncio.Event()
+        self.release = asyncio.Event()
+        self.finished = asyncio.Event()
+        self.detach_received = asyncio.Event()
+        self.detach_release = asyncio.Event()
+        self.detach_release.set()
+        self.methods = []
+        self.notifications = []
+        self.detached = []
+        self.requests = []
+        self.peers = []
+        self.writers = []
+        self.failure: str | None = None
+        self.detach_error: str | None = None
+        self.metadata_exists = False
+
+    async def __aenter__(self):
+        self.server = await asyncio.start_server(self._peer, "127.0.0.1", 0)
+        self.port = self.server.sockets[0].getsockname()[1]
+        return self
+
+    async def __aexit__(self, *_):
+        self.release.set()
+        self.detach_release.set()
+        await asyncio.gather(*self.requests)
+        for writer in self.writers:
+            writer.close()
+            await writer.wait_closed()
+        self.server.close()
+        await self.server.wait_closed()
+        await asyncio.gather(*self.peers)
+
+    async def _peer(self, reader, writer):
+        self.peers.append(asyncio.current_task())
+        self.writers.append(writer)
+        while True:
+            headers = {}
+            while line := await reader.readline():
+                if line == b"\r\n":
+                    break
+                key, value = line.decode().split(":", 1)
+                headers[key.lower()] = value.strip()
+            if not line:
+                return
+            message = json.loads(await reader.readexactly(int(headers["content-length"])))
+            if "id" not in message:
+                self.notifications.append(message)
+            else:
+                self.requests.append(asyncio.create_task(self._respond(message, writer)))
+
+    async def _respond(self, message, writer):
+        method, params = message["method"], message.get("params", {})
+        self.methods.append(method)
+        if method == self.held_method:
+            self.received.set()
+            await self.release.wait()
+            self.finished.set()
+        if method == "connect":
+            result = {"ok": True, "protocolVersion": 3, "version": "controlled-public-rpc"}
+        elif method in ("session.create", "session.resume"):
+            result = {"sessionId": params["sessionId"], "capabilities": {}}
+        elif method == "sessions.fork":
+            result = {"sessionId": "controlled-child"}
+        elif method == "session.getMessages":
+            result = {"events": []}
+        elif method == "session.getMetadata" and self.metadata_exists:
+            result = {"session": {"sessionId": params["sessionId"], "startTime": "2026-11-02T00:00:00Z",
+                                  "modifiedTime": "2026-11-02T00:00:00Z", "isRemote": False}}
+        elif method == "session.detach":
+            self.detach_received.set()
+            await self.detach_release.wait()
+            if self.detach_error is None:
+                self.detached.append(params["sessionId"])
+                result = {"success": True}
+            else:
+                result = {"success": False, "error": self.detach_error}
+        else:
+            result = {}
+        response = {"jsonrpc": "2.0", "id": message["id"], "result": result}
+        if method == self.held_method and self.failure is not None:
+            response.pop("result")
+            response["error"] = {"code": -32000, "message": self.failure}
+        data = json.dumps(response).encode()
+        writer.write(f"Content-Length: {len(data)}\r\n\r\n".encode() + data)
+        await writer.drain()
+
+
 class RecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def _settle_lifecycle_tasks(self, *tasks: Awaitable[object] | None):
         await asyncio.gather(*(task for task in tasks if task is not None), return_exceptions=True)
+
+    async def test_revision_published_closed_harness_rejects_new_facade_operations(self):
+        for synchronous in (False, True):
+            for operation in ("create", "root", "resume", "fork"):
+                with self.subTest(synchronous=synchronous, operation=operation):
+                    store = DurableStore.create_ephemeral()
+                    session = sdk_session()
+                    client = sdk_client(session)
+                    async def create_session(**kwargs):
+                        session.session_id = kwargs["session_id"]
+                        return session
+                    client.create_session.side_effect = create_session
+                    host = DurableClientBuilder().use_store(store).use_client(client).build()
+                    await host.initialize_async()
+                    harness = host._harness
+                    assert harness is not None
+                    parent = await host.create_conversation_async()
+                    boundary = store.entries(parent.id)[-1]
+                    if synchronous:
+                        harness.close()
+                    else:
+                        await harness.close_async()
+                    before = store.provider.sequence
+                    calls = client.create_session.await_count
+                    try:
+                        with self.assertRaisesRegex(RuntimeError, "closing"):
+                            if operation == "create":
+                                await host.create_conversation_async()
+                            elif operation == "root":
+                                await host.root_async()
+                            elif operation == "resume":
+                                await host.resume_conversation_async(parent.id)
+                            else:
+                                await host.fork_async(parent, boundary)
+                        self.assertEqual(store.provider.sequence, before, "no writes after harness drain")
+                        self.assertEqual(client.create_session.await_count, calls, "no SDK calls after stop")
+                        self.assertEqual(session.listeners, [], "no listeners after harness drain")
+                        self.assertEqual(harness.conversations, [])
+                    finally:
+                        await host.close_async()
+                        store.close()
+
+    async def test_revision_issued_public_sdk_rpc_cancellation_retains_shutdown_ownership(self):
+        for facade, owned in ((False, False), (True, False), (True, True)):
+            for operation in ("create", "root", "resume-unbound", "resume-existing", "resume-missing",
+                              "fork", "fork-resume", "create-history", "resume-existing-history", "fork-history"):
+                with self.subTest(facade=facade, owned=owned, operation=operation):
+                    kind = operation.removesuffix("-history")
+                    if kind == "fork-resume":
+                        kind = "fork"
+                    with tempfile.TemporaryDirectory() as directory:
+                        async with ControlledSdkPeer() as peer:
+                            options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
+                            store = DurableStore.create(options)
+                            client = CopilotClient(connection=RuntimeConnection.for_uri(f"127.0.0.1:{peer.port}"))
+                            await client.start()
+                            host = None
+                            if facade:
+                                host = (DurableClientBuilder().use_store(store).use_client(client)
+                                        .configure(lambda o: setattr(o, "owns_store", owned))
+                                        .configure(lambda o: setattr(o, "owns_client", owned)).build())
+                                await host.initialize_async()
+                                harness = host._harness
+                                assert harness is not None
+                            else:
+                                harness = DurableHarness(client, store, ExtensionRegistry())
+                            target = host if host else harness
+                            parent = None
+                            if kind in ("fork", "resume-existing", "resume-missing"):
+                                parent = await target.create_conversation_async()
+                                identifier = parent.id
+                                if kind in ("resume-existing", "resume-missing"):
+                                    parent.detach()
+                            else:
+                                async def seed(tx):
+                                    return tx.create_conversation().id
+                                identifier = await store.commit_async(seed) if kind == "resume-unbound" else ""
+                            peer.metadata_exists = kind == "resume-existing"
+                            peer.held_method = ("session.getMessages" if operation.endswith("-history")
+                                                else "session.resume" if operation == "fork-resume"
+                                                else "sessions.fork" if kind == "fork"
+                                                else "session.resume" if kind == "resume-existing"
+                                                else "session.create")
+                            peer.detach_release.clear()
+                            action = (target.create_conversation_async() if kind == "create"
+                                      else target.root_async() if kind == "root"
+                                      else target.fork_async(parent, store.entries(parent.id)[-1]) if parent and kind == "fork"
+                                      else target.resume_conversation_async(identifier))
+                            creating = asyncio.create_task(action)
+                            closing = second = drain = detaching = None
+                            try:
+                                await asyncio.wait_for(peer.received.wait(), 10)
+                                creating.cancel("initiating caller cancelled after public RPC receipt")
+                                with self.assertRaisesRegex(asyncio.CancelledError, "initiating caller"):
+                                    await creating
+                                binding = harness.conversations[-1].binding()
+                                if kind == "fork":
+                                    late_id = "controlled-child"
+                                else:
+                                    assert binding is not None
+                                    late_id = binding.session_id
+                                closing = asyncio.create_task(target.close_async())
+                                second = asyncio.create_task(target.close_async())
+                                drain = await self._start_close_gate(harness, closing)
+                                self.assertFalse(peer.finished.is_set(), "the server is still executing the issued RPC")
+                                self.assertTrue(harness._conversation_operations or getattr(harness, "_sdk_operations", ()),
+                                                "cancelled caller must leave issued RPC ownership with shutdown")
+                                self.assertFalse(closing.done())
+                                self.assertFalse(second.done())
+                                closing.cancel("cancelled closer")
+                                with self.assertRaisesRegex(RuntimeError, "pending work"):
+                                    harness.close()
+                                with self.assertRaisesRegex(RuntimeError, "writer|already open"):
+                                    DurableStore.create(options)
+                                with self.assertRaisesRegex(RuntimeError, "another durable runtime"):
+                                    DurableHarness(client, store, ExtensionRegistry())
+                                peer.release.set()
+                                detaching = asyncio.create_task(peer.detach_received.wait())
+                                await asyncio.wait((detaching, second), return_when=asyncio.FIRST_COMPLETED)
+                                self.assertTrue(peer.detach_received.is_set(),
+                                                "shutdown must disconnect the late session, not merely forget its fence")
+                                await detaching
+                                self.assertTrue(peer.finished.is_set())
+                                self.assertFalse(second.done(), "SDK detach response also belongs to shutdown")
+                                self.assertFalse(store._closed)
+                                sequence = store.provider.sequence
+                                peer.detach_release.set()
+                                with self.assertRaisesRegex(asyncio.CancelledError, "cancelled closer"):
+                                    await closing
+                                await asyncio.gather(second, drain)
+                                self.assertEqual(peer.detached.count(late_id), 1,
+                                                 "late SDK session must be disconnected exactly once")
+                                self.assertIn("session.detach", peer.methods)
+                                self.assertEqual(peer.notifications, [], "create cancellation does not cancel the server RPC")
+                                self.assertFalse(harness._conversation_operations)
+                                self.assertFalse(harness._sdk_operations)
+                                self.assertEqual(harness.conversations, [])
+                                self.assertEqual(store.provider.sequence, sequence, "no late durable-core continuation")
+                                self.assertEqual(store._closed, owned)
+                                if owned:
+                                    reopened = DurableStore.create(options)
+                                    reopened.close()
+                                else:
+                                    with self.assertRaisesRegex(RuntimeError, "writer|already open"):
+                                        DurableStore.create(options)
+                            finally:
+                                peer.release.set()
+                                peer.detach_release.set()
+                                if detaching is not None and not detaching.done():
+                                    detaching.cancel()
+                                await self._settle_lifecycle_tasks(creating, closing, second, drain, detaching)
+                                await target.close_async()
+                                await client.stop()
+                                store.close()
+
+    async def test_revision_direct_harness_close_retains_prepublication_facade_admission(self):
+        store = DurableStore.create_ephemeral()
+        session = sdk_session()
+        client = sdk_client(session)
+        async def create_session(**kwargs):
+            session.session_id = kwargs["session_id"]
+            return session
+        client.create_session.side_effect = create_session
+        host = DurableClientBuilder().use_store(store).use_client(client).build()
+        async def seed(tx):
+            return tx.create_conversation()
+        parent = DurableConversation(store, await store.commit_async(seed), host.registry)
+        published, release = asyncio.Event(), asyncio.Event()
+        initialize = host._initialize_core_async
+        async def initialize_held():
+            await initialize()
+            published.set()
+            await release.wait()
+        host._initialize_core_async = initialize_held
+        accepted = asyncio.create_task(host.root_async())
+        closing = None
+        try:
+            await published.wait()
+            harness = host._harness
+            assert harness is not None
+            with self.assertRaisesRegex(RuntimeError, "pending work"):
+                harness.close()
+            closing = asyncio.create_task(harness.close_async())
+            drain = await self._start_close_gate(harness, closing)
+            for operation in (host.root_async(), host.create_conversation_async(),
+                              host.resume_conversation_async("missing"), host.fork_async(parent, "missing")):
+                with self.assertRaisesRegex(RuntimeError, "closing"):
+                    await operation
+            self.assertFalse(closing.done())
+            release.set()
+            chat = await accepted
+            await asyncio.gather(closing, drain)
+            self.assertEqual(client.create_session.await_count, 1)
+            self.assertIsNone(chat.session)
+            self.assertEqual(session.listeners, [])
+            self.assertFalse(store._closed)
+        finally:
+            release.set()
+            await self._settle_lifecycle_tasks(accepted, closing)
+            await host.close_async()
+            store.close()
+
+    async def test_revision_public_sdk_failure_after_cancellation_belongs_to_shutdown(self):
+        for operation in ("create", "resume", "fork"):
+            for cancelled in (False, True):
+                with self.subTest(operation=operation, cancelled=cancelled):
+                    async with ControlledSdkPeer() as peer:
+                        client = CopilotClient(connection=RuntimeConnection.for_uri(f"127.0.0.1:{peer.port}"))
+                        await client.start()
+                        store = DurableStore.create_ephemeral()
+                        harness = DurableHarness(client, store, ExtensionRegistry())
+                        parent = await harness.create_conversation_async() if operation != "create" else None
+                        if operation == "resume":
+                            assert parent is not None
+                            parent.detach()
+                            peer.metadata_exists = True
+                        peer.held_method = {"create": "session.create", "resume": "session.resume",
+                                            "fork": "sessions.fork"}[operation]
+                        peer.failure = "original controlled SDK failure"
+                        if operation == "create":
+                            action = harness.create_conversation_async()
+                        else:
+                            assert parent is not None
+                            action = (harness.resume_conversation_async(parent.id) if operation == "resume"
+                                      else harness.fork_async(parent, store.entries(parent.id)[-1]))
+                        pending = asyncio.create_task(action)
+                        closing = None
+                        try:
+                            await asyncio.wait_for(peer.received.wait(), 10)
+                            if cancelled:
+                                pending.cancel("caller cancellation is preserved")
+                                with self.assertRaisesRegex(asyncio.CancelledError, "caller cancellation"):
+                                    await pending
+                            closing = asyncio.create_task(harness.close_async())
+                            drain = await self._start_close_gate(harness, closing)
+                            peer.release.set()
+                            if cancelled:
+                                with self.assertRaisesRegex(Exception, "original controlled SDK failure") as failure:
+                                    await closing
+                                self.assertIs(failure.exception, harness._sdk_failures[0])
+                            else:
+                                with self.assertRaisesRegex(Exception, "original controlled SDK failure"):
+                                    await pending
+                                await closing
+                            await drain
+                            self.assertTrue(peer.finished.is_set())
+                            self.assertEqual(peer.detached.count("controlled-child"), 0)
+                            self.assertFalse(harness._sdk_operations)
+                            if operation == "fork":
+                                intent = harness.fork_intent_of(store.conversations[-1].id)
+                                assert intent is not None
+                                self.assertIs(intent.state, ForkIntentState.PENDING)
+                        finally:
+                            peer.release.set()
+                            await self._settle_lifecycle_tasks(pending, closing)
+                            await harness.close_async()
+                            store.close()
+
+    async def test_revision_cancelled_before_store_dispatch_issues_no_public_sdk_rpc(self):
+        for facade in (False, True):
+            with self.subTest(facade=facade):
+                async with ControlledSdkPeer() as peer:
+                    client = CopilotClient(connection=RuntimeConnection.for_uri(f"127.0.0.1:{peer.port}"))
+                    await client.start()
+                    store = DurableStore.create_ephemeral()
+                    host = DurableClientBuilder().use_store(store).use_client(client).build() if facade else None
+                    if host:
+                        await host.initialize_async()
+                        harness = host._harness
+                        assert harness is not None
+                    else:
+                        harness = DurableHarness(client, store, ExtensionRegistry())
+                    target = host if host else harness
+                    held, release, queued = asyncio.Event(), asyncio.Event(), asyncio.Event()
+                    async def hold(tx):
+                        held.set()
+                        await release.wait()
+                    holding = asyncio.create_task(store.commit_async(hold))
+                    await held.wait()
+                    commit = store.commit_async
+                    async def committing(body):
+                        queued.set()
+                        return await commit(body)
+                    store.commit_async = committing
+                    pending = asyncio.create_task(target.create_conversation_async())
+                    try:
+                        await queued.wait()
+                        pending.cancel("queued before SDK dispatch")
+                        with self.assertRaisesRegex(asyncio.CancelledError, "queued before SDK dispatch"):
+                            await pending
+                        self.assertEqual(peer.methods, ["connect"])
+                        self.assertEqual(store.conversations, [])
+                        self.assertFalse(harness._sdk_operations)
+                        release.set()
+                        await holding
+                        await target.close_async()
+                        self.assertEqual(peer.methods.count("session.create"), 0)
+                    finally:
+                        release.set()
+                        await self._settle_lifecycle_tasks(pending, holding)
+                        await target.close_async()
+                        await client.stop()
+                        store.close()
+
+    async def test_revision_fork_post_sdk_transaction_cancellation_and_failure_disconnect(self):
+        for commit_number in (2, 3):
+            for cancelled in (False, True):
+                with self.subTest(commit_number=commit_number, cancelled=cancelled):
+                    with tempfile.TemporaryDirectory() as directory:
+                        async with ControlledSdkPeer() as peer:
+                            options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
+                            store = DurableStore.create(options)
+                            client = CopilotClient(connection=RuntimeConnection.for_uri(f"127.0.0.1:{peer.port}"))
+                            await client.start()
+                            host = (DurableClientBuilder().use_store(store).use_client(client)
+                                    .configure(lambda o: setattr(o, "owns_store", True))
+                                    .configure(lambda o: setattr(o, "owns_client", True)).build())
+                            await host.initialize_async()
+                            harness = host._harness
+                            assert harness is not None
+                            parent = await host.create_conversation_async()
+                            commit = store.commit_async
+                            entered, release = asyncio.Event(), asyncio.Event()
+                            original = ValueError("original post-SDK transaction failure")
+                            count = 0
+                            before = 0
+                            async def committing(body):
+                                nonlocal count, before
+                                count += 1
+                                if count != commit_number:
+                                    return await commit(body)
+                                before = store.provider.sequence
+                                async def failing(tx):
+                                    await body(tx)
+                                    entered.set()
+                                    await release.wait()
+                                    raise original
+                                return await commit(failing)
+                            store.commit_async = committing
+                            peer.detach_release.clear()
+                            pending = asyncio.create_task(host.fork_async(parent, store.entries(parent.id)[-1]))
+                            closing = detaching = None
+                            try:
+                                await entered.wait()
+                                if cancelled:
+                                    pending.cancel("cancelled post-SDK transaction")
+                                else:
+                                    release.set()
+                                with self.assertRaises(asyncio.CancelledError if cancelled else ValueError) as caught:
+                                    await pending
+                                if not cancelled:
+                                    self.assertIs(caught.exception, original)
+                                self.assertEqual(store.provider.sequence, before, "the failed transaction must roll back")
+                                closing = asyncio.create_task(host.close_async())
+                                drain = await self._start_close_gate(harness, closing)
+                                detaching = asyncio.create_task(peer.detach_received.wait())
+                                await asyncio.wait((detaching, closing), return_when=asyncio.FIRST_COMPLETED)
+                                self.assertTrue(peer.detach_received.is_set(), "post-SDK failure must disconnect the child")
+                                await detaching
+                                self.assertFalse(closing.done())
+                                self.assertFalse(store._closed)
+                                with self.assertRaisesRegex(RuntimeError, "writer|already open"):
+                                    DurableStore.create(options)
+                                peer.detach_release.set()
+                                await asyncio.gather(closing, drain)
+                                self.assertEqual(peer.detached.count("controlled-child"), 1)
+                                self.assertEqual(store.provider.sequence, before)
+                                self.assertTrue(store._closed)
+                                reopened = DurableStore.create(options)
+                                reopened.close()
+                            finally:
+                                release.set()
+                                peer.detach_release.set()
+                                if detaching is not None and not detaching.done():
+                                    detaching.cancel()
+                                await self._settle_lifecycle_tasks(pending, closing, detaching)
+                                await host.close_async()
+
+    async def test_revision_public_sdk_cancelled_session_cleanup_failure_is_reported(self):
+        async with ControlledSdkPeer() as peer:
+            client = CopilotClient(connection=RuntimeConnection.for_uri(f"127.0.0.1:{peer.port}"))
+            await client.start()
+            store = DurableStore.create_ephemeral()
+            host = DurableClientBuilder().use_store(store).use_client(client).build()
+            await host.initialize_async()
+            harness = host._harness
+            assert harness is not None
+            peer.held_method = "session.create"
+            peer.detach_error = "explicit controlled detach failure"
+            pending = asyncio.create_task(host.create_conversation_async())
+            closing = None
+            try:
+                await peer.received.wait()
+                pending.cancel("caller cancelled")
+                with self.assertRaisesRegex(asyncio.CancelledError, "caller cancelled"):
+                    await pending
+                closing = asyncio.create_task(host.close_async())
+                peer.release.set()
+                with self.assertRaisesRegex(RuntimeError, "explicit controlled detach failure") as failure:
+                    await closing
+                self.assertIs(failure.exception, harness._sdk_failures[0])
+                self.assertEqual(peer.methods.count("session.detach"), 1, "cleanup must not retry indefinitely")
+                self.assertFalse(harness._sdk_operations)
+                self.assertEqual(harness.conversations, [])
+                self.assertFalse(store._closed, "borrowed store must not be closed even on cleanup failure")
+            finally:
+                peer.release.set()
+                peer.detach_error = None
+                await self._settle_lifecycle_tasks(pending, closing)
+                await host.close_async()
+                await client.stop()
+                store.close()
 
     async def test_review_conversation_lifecycle_retains_resources(self):
         from copilot._jsonrpc import JsonRpcClient
@@ -297,6 +802,8 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
                                 closing.cancel("closer cancelled")
                                 if cancel:
                                     pending.cancel("lifecycle cancelled")
+                                    if stage == "sdk":
+                                        release.set()
                                 else:
                                     release.set()
                                 if stage == "sdk":
@@ -309,7 +816,14 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
                                     self.assertIs(caught.exception, original)
                                 with self.assertRaisesRegex(asyncio.CancelledError, "closer cancelled"):
                                     await closing
-                                await asyncio.gather(second, drain)
+                                if cancel and stage == "sdk":
+                                    with self.assertRaises(ValueError) as shutdown:
+                                        await second
+                                    self.assertIs(shutdown.exception, original,
+                                                  "shutdown owns the abandoned SDK failure")
+                                    await drain
+                                else:
+                                    await asyncio.gather(second, drain)
                             self.assertTrue(stopped)
                             if stage == "store":
                                 self.assertEqual((store.provider.sequence, len(store.conversations)), (before, count))
