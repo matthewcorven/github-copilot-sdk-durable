@@ -9,6 +9,7 @@ import textwrap
 import uuid
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -26,7 +27,7 @@ class DeterministicParityTests(unittest.TestCase):
                 f"const require = createRequire({json.dumps((ROOT / 'lib/ts/package.json').as_uri())}); "
                 "const fs = require('node:fs'); "
                 f"const ts = require({json.dumps(str(ROOT / 'lib/ts/node_modules/typescript'))}); "
-                f"let source = fs.readFileSync({json.dumps(str(path))}, 'utf8'); "
+                f"let source = fs.readFileSync({json.dumps(str(path))}, 'utf8').replace(/\\r\\n?/g, '\\n'); "
                 f"source = source.replace({json.dumps(old)}, {json.dumps(new)}); "
                 f"source = source.replace('../../lib/ts/durable.ts', {json.dumps((ROOT / 'lib/ts/durable.ts').as_uri())}); "
                 "const code = ts.transpileModule(source, {compilerOptions: "
@@ -374,8 +375,8 @@ class LateJoinParityTests(unittest.TestCase):
             raise AssertionError(f"expected exactly one actual {language} model wait")
         return source.replace(target, instrumentation.rstrip() + "\n" + target)
 
-    def run_port(self, language, scenario, mutation=None):
-        path = ROOT / "examples" / language / f"20-late-join.{language}"
+    def run_port(self, language, scenario, mutation=None, path=None):
+        path = path or ROOT / "examples" / language / f"20-late-join.{language}"
         original = path.read_text()
         if language == "ts":
             source = original.replace("90000", "5000").replace("15000", "500")
@@ -396,6 +397,55 @@ class LateJoinParityTests(unittest.TestCase):
                 self, path, (original, source), env, Path(directory))
             artifacts = {p.name: p.read_text() for p in Path(directory).iterdir() if p.is_file()}
         return result, artifacts
+
+    def test_physical_line_endings_preserve_generated_clients(self):
+        run = subprocess.run
+
+        def inspect_generated_client(command, **kwargs):
+            if command[0] == "node":
+                execute = "import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));"
+                self.assertEqual(1, command[-1].count(execute))
+                capture = [*command[:-1], command[-1].replace(execute, "process.stdout.write(code);")]
+                generated = run(capture, **kwargs)
+                self.assertEqual(0, generated.returncode, generated.stderr)
+                code = generated.stdout
+                self.assertIn("deadline.abort(), 5000)", code,
+                              "generated client must contain the shortened overall deadline")
+                self.assertIn("snapshotDeadline.abort(), 500)", code,
+                              "generated client must contain the shortened history deadline")
+                self.assertNotIn("90000", code)
+                self.assertNotIn("15000", code)
+                self.assertIn('createConnection(pipe)', code,
+                              "generated client must install the observer readiness handshake")
+                self.assertIn('socket.end(Buffer.from([1])', code)
+                self.assertLess(code.index('createConnection(pipe)'),
+                                code.index('root.waitForEffectiveModelAsync()'))
+            return run(command, **kwargs)
+
+        pythonpath = os.pathsep.join(filter(None, (str(ROOT / "lib/py"), os.environ.get("PYTHONPATH"))))
+        with TemporaryDirectory(prefix="durable-physical-checkout-", dir=self.directory.name) as directory:
+            for ending in ("\n", "\r\n"):
+                for language in ("ts", "py"):
+                    with self.subTest(line_ending=repr(ending), language=language):
+                        original = ROOT / "examples" / language / f"20-late-join.{language}"
+                        path = Path(directory) / original.name
+                        physical = original.read_text().replace("\n", ending).encode()
+                        path.write_bytes(physical)
+                        self.assertEqual(physical, path.read_bytes())
+                        self.assertEqual(ending == "\r\n", b"\r\n" in physical)
+                        with mock.patch.dict(os.environ, PYTHONPATH=pythonpath), \
+                                mock.patch.object(subprocess, "run", side_effect=inspect_generated_client):
+                            result, artifacts = self.run_port(language, "delayed-user", path=path)
+                        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                        self.assertIn("model-observer-ready", artifacts["trace-delayed-user"])
+                        self.assertIn("getMessages:3", artifacts["trace-delayed-user"])
+                        self.assertIn("tool-result-after-snapshot:True", artifacts["trace-delayed-user"])
+                        self.assertIn("answer: One. Two. Three. Four. Five. DONE", result.stdout)
+                        self.assertIn("deltas received after joining: 1", result.stdout)
+                        self.assertLess(result.stdout.index("snapshot events:"),
+                                        result.stdout.index("live subscription installed"))
+                        self.assertLess(result.stdout.index("live subscription installed"),
+                                        result.stdout.index("event text delta:"))
 
     def test_actual_sdk_barrier_delayed_history_and_configuration(self):
         for language in ("ts", "py"):
