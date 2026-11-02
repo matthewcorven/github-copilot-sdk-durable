@@ -3568,6 +3568,7 @@ class DurableHarness:
         self._running_tasks: set[str] = set()
         self._task_completions: dict[str, asyncio.Future[TaskOutcome]] = {}
         self._in_flight: dict[str, asyncio.Task[TaskOutcome]] = {}
+        self._task_creations: set[asyncio.Future[None]] = set()
         self._submissions: set[asyncio.Task[Any]] = set()
         self._task_failures: list[BaseException] = []
         self._closed = False
@@ -4007,7 +4008,7 @@ class DurableHarness:
         background: bool = False,
         cancellation: asyncio.Event | None = None,
     ) -> DurableTaskRecord:
-        """Creates a durable task and schedules it."""
+        """Creates and schedules a task; close joins already accepted creations."""
         active = _active_task.get()
         if self._closed and not (self._is_active_task() and active is not None and owner_task_id == active[1]):
             raise RuntimeError("The durable harness is closing.")
@@ -4021,13 +4022,19 @@ class DurableHarness:
                 background=background,
             )
 
-        record = await self._store.commit_async(body)
-        self._start_task(record.id, cancellation)
-        return record
+        creation = asyncio.get_running_loop().create_future()
+        self._task_creations.add(creation)
+        try:
+            record = await self._store.commit_async(body)
+            self._start_task(record.id, cancellation, admitted=True)
+            return record
+        finally:
+            self._task_creations.discard(creation)
+            creation.set_result(None)
 
-    def _start_task(self, task_id: str, cancellation: asyncio.Event | None) -> None:
+    def _start_task(self, task_id: str, cancellation: asyncio.Event | None, *, admitted: bool = False) -> None:
         """Starts a task run without waiting for it, keeping a handle to drain on close."""
-        run = self._task_run(task_id, cancellation)
+        run = self._task_run(task_id, cancellation, admitted=admitted)
         # Scheduled failures are retained for shutdown, including when no caller joins.
         run.add_done_callback(lambda task: None if task.cancelled() else task.exception())
 
@@ -4044,13 +4051,13 @@ class DurableHarness:
         # Duplicate callers must not propagate cancellation into the shared run.
         return await self._task_run(task_id, cancellation)
 
-    def _task_run(self, task_id: str, cancellation: asyncio.Event | None) -> asyncio.Task[TaskOutcome]:
+    def _task_run(self, task_id: str, cancellation: asyncio.Event | None, *, admitted: bool = False) -> asyncio.Task[TaskOutcome]:
         existing = self._in_flight.get(task_id)
         if existing is not None:
             return existing
         record = self._store.task(task_id)
         active = _active_task.get()
-        if self._closed and not (self._is_active_task() and active is not None and record is not None
+        if self._closed and not admitted and not (self._is_active_task() and active is not None and record is not None
                                  and record.owner_task_id == active[1]):
             raise RuntimeError("The durable harness is closing.")
         completion = self._task_completions.get(task_id)
@@ -4241,7 +4248,7 @@ class DurableHarness:
 
     def close(self) -> None:
         """Detaches every conversation handle. The store stays the caller's."""
-        if (self._closing is not None and not self._closing.done()) or self._in_flight or self._submissions or any(
+        if (self._closing is not None and not self._closing.done()) or self._task_creations or self._in_flight or self._submissions or any(
             conversation._checkpoint_chain is not None and not conversation._checkpoint_chain.done()
             for conversation in self._conversations.values()
         ):
@@ -4276,8 +4283,8 @@ class DurableHarness:
 
         try:
             await drain(conversation.checkpoint_barrier_async() for conversation in self._conversations.values())
-            while self._in_flight:
-                await drain(list(self._in_flight.values()))
+            while self._task_creations or self._in_flight:
+                await drain([*self._task_creations, *self._in_flight.values()])
             while self._submissions:
                 # The initiating caller receives submission errors; shutdown joins cleanup.
                 await asyncio.gather(*list(self._submissions), return_exceptions=True)
