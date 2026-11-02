@@ -33,26 +33,26 @@ async function main() {
       if (action === "status") {
         const lines: string[] = [];
         for (const each of name ? [name] : Object.keys(agents)) {
-          const agent = agents[each];
+          const agent = Object.hasOwn(agents, each) ? agents[each] : undefined;
           if (agent) lines.push(`${each}: ${host.findConversation(agent.conversationId)?.busy ? "working" : "idle"}`);
         }
         return lines.length ? lines.join("\n") : "No subagents.";
       }
       if (!name) return `${action} needs a name.`;
       if (action === "spawn") {
-        if (agents[name]) return `${name} already exists; use send.`;
+        if (Object.hasOwn(agents, name)) return `${name} already exists; use send.`;
         const child = await host.createConversationAsync(new AgentChoices({
           model: "mai-code-1.1-flash",
           instructions: `You are the subagent "${name}". Answer the main agent's requests.`,
         }), null, chat.id);
         await chat.commitAsync((tx) => {
           const draft = tx.doc(subagents, chat.id);
-          draft.value[name] = { conversationId: child.id, reported: "0" };
+          draft.value = { ...draft.value, [name]: { conversationId: child.id, reported: "0" } };
           draft.save(tx.appendEntry(chat.id, "subagent", `spawned ${name}`));
         });
         return `Started ${name}.`;
       }
-      const agent = agents[name];
+      const agent = Object.hasOwn(agents, name) ? agents[name] : undefined;
       if (!agent) return `No subagent named ${name}.`;
       const target = await host.resumeConversationAsync(agent.conversationId);
       if (action === "stop") { await target.abortAsync(); return `Stopped ${name}.`; }
