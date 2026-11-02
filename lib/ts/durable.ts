@@ -3070,6 +3070,7 @@ export class DurableHarness {
   readonly runner: DurableTaskRunner;
   private readonly handles = new Map<string, DurableConversation>();
   private readonly failedSessions = new Map<string, CopilotSession>();
+  private readonly initializations = new Map<string, Promise<DurableConversation>>();
   private readonly conversationOperations = new Set<Promise<void>>();
   private rootCreation: Promise<DurableConversation> | undefined;
   private disposal: Promise<void> | undefined;
@@ -3209,20 +3210,30 @@ export class DurableHarness {
     ownerConversationId: string | null = null): Promise<DurableConversation> {
     return this.conversationOperation(() => this.createConversationCore(choices, ownerTaskId, ownerConversationId));
   }
-  private async createConversationCore(choices: AgentChoices, ownerTaskId: string | null,
+  private createConversationCore(choices: AgentChoices, ownerTaskId: string | null,
     ownerConversationId: string | null): Promise<DurableConversation> {
     if (choices.sandbox) DurableHarness.buildSandboxConfig(choices.sandbox, choices.workingDirectory);
-    const record = await this.store.commitAsync(tx => {
+    const creation: Promise<DurableConversation> = this.store.commitAsync(tx => {
       const record = tx.createConversation({ ownerTaskId, ownerConversationId });
       const draft = tx.doc(agentDocument, record.id);
       draft.value = wireChoices(choices);
       draft.save(tx.appendEntry(record.id, "agent"));
+      this.trackInitialization(record.id, creation);
       return record;
+    }).then(async record => {
+      const conversation = new DurableConversation(this, record, choices.hooks);
+      this.handles.set(record.id, conversation);
+      await this.createSession(conversation);
+      return conversation;
     });
-    const conversation = new DurableConversation(this, record, choices.hooks);
-    this.handles.set(record.id, conversation);
-    await this.createSession(conversation);
-    return conversation;
+    return creation;
+  }
+  private trackInitialization(id: string, initialization: Promise<DurableConversation>): void {
+    this.initializations.set(id, initialization);
+    const clear = () => {
+      if (this.initializations.get(id) === initialization) this.initializations.delete(id);
+    };
+    void initialization.then(clear, clear);
   }
   private async createSession(conversation: DurableConversation): Promise<void> {
     let binding = conversation.snapshot(bindingDocument);
@@ -3255,7 +3266,14 @@ export class DurableHarness {
   resumeConversationAsync(id: string): Promise<DurableConversation> {
     return this.conversationOperation(() => this.resumeConversationCore(id));
   }
-  private async resumeConversationCore(id: string): Promise<DurableConversation> {
+  private resumeConversationCore(id: string): Promise<DurableConversation> {
+    const pending = this.initializations.get(id);
+    if (pending) return pending;
+    const initialization = Promise.resolve().then(() => this.resumeSession(id));
+    this.trackInitialization(id, initialization);
+    return initialization;
+  }
+  private async resumeSession(id: string): Promise<DurableConversation> {
     const conversation = this.findConversation(id);
     if (!conversation) throw new Error(`Unknown conversation '${id}'.`);
     const failedSession = this.failedSessions.get(id);
@@ -3309,9 +3327,9 @@ export class DurableHarness {
   forkAsync(parent: DurableConversation, entryId: string): Promise<DurableConversation> {
     return this.conversationOperation(() => this.forkCore(parent, entryId));
   }
-  private async forkCore(parent: DurableConversation, entryId: string): Promise<DurableConversation> {
+  private forkCore(parent: DurableConversation, entryId: string): Promise<DurableConversation> {
     if (!this.store.entries(parent.id).includes(entryId)) throw new Error(`Unknown fork entry '${entryId}'.`);
-    const record = await this.store.commitAsync(tx => {
+    const creation: Promise<DurableConversation> = this.store.commitAsync(tx => {
       const fork = tx.createConversation({ parentConversationId: parent.id, forkEntryId: entryId });
       this.store.storeProvider.copyEntries(parent.id, fork.id, entryId);
       for (const doc of [...this.store.documents].filter(d => d.ownerId === parent.id))
@@ -3319,21 +3337,24 @@ export class DurableHarness {
       const intent = tx.doc(forkDocument, fork.id);
       intent.value = { parentConversationId: parent.id, forkEntryId: entryId, state: 0 };
       intent.save(tx.appendEntry(fork.id, "fork"));
+      this.trackInitialization(fork.id, creation);
       return fork;
+    }).then(async record => {
+      const conversation = this.findConversation(record.id)!;
+      // SDK boundary is exclusive. App-created entries have no SDK event identity; the
+      // reference C# fork uses all native context for those boundaries.
+      const forked = await this.client.rpc.sessions.fork({ sessionId: parent.session.sessionId });
+      await this.store.commitAsync(tx => {
+        const binding = tx.doc(bindingDocument, record.id);
+        binding.value = { sessionId: forked.sessionId, pinned: false };
+        binding.save(tx.appendEntry(record.id, "session-binding"));
+        const intent = tx.doc(forkDocument, record.id);
+        intent.value = { ...intent.value, sessionId: forked.sessionId, state: 1 };
+        intent.save(tx.appendEntry(record.id, "fork"));
+      });
+      return this.resumeSession(conversation.id);
     });
-    const conversation = this.findConversation(record.id)!;
-    // SDK boundary is exclusive. App-created entries have no SDK event identity; the
-    // reference C# fork uses all native context for those boundaries.
-    const forked = await this.client.rpc.sessions.fork({ sessionId: parent.session.sessionId });
-    await this.store.commitAsync(tx => {
-      const binding = tx.doc(bindingDocument, record.id);
-      binding.value = { sessionId: forked.sessionId, pinned: false };
-      binding.save(tx.appendEntry(record.id, "session-binding"));
-      const intent = tx.doc(forkDocument, record.id);
-      intent.value = { ...intent.value, sessionId: forked.sessionId, state: 1 };
-      intent.save(tx.appendEntry(record.id, "fork"));
-    });
-    return this.resumeConversationCore(conversation.id);
+    return creation;
   }
   createTaskAsync(...args: Parameters<DurableTaskRunner["createTaskAsync"]>): ReturnType<DurableTaskRunner["createTaskAsync"]> { return this.runner.createTaskAsync(...args); }
   runTaskAsync(...args: Parameters<DurableTaskRunner["runTaskAsync"]>): ReturnType<DurableTaskRunner["runTaskAsync"]> { return this.runner.runTaskAsync(...args); }
