@@ -153,6 +153,294 @@ class ControlledSdkPeer:
 
 
 class RecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_round_seven_configuration_drains_store_and_public_tools_rpc(self):
+        for facade, owns_client in ((False, True), (True, True), (True, False)):
+            for stage in ("store", "rpc", "cancel", "late-error"):
+                with self.subTest(facade=facade, owns_client=owns_client, stage=stage):
+                    with tempfile.TemporaryDirectory() as directory:
+                        async with ControlledSdkPeer() as peer:
+                            options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
+                            assert options.path is not None
+                            path = Path(options.path)
+                            store = DurableStore.create(options)
+                            client = CopilotClient(connection=RuntimeConnection.for_uri(f"127.0.0.1:{peer.port}"))
+                            await client.start()
+                            host = None
+                            if facade:
+                                host = (DurableClientBuilder().use_store(store).use_client(client)
+                                        .configure(lambda o: setattr(o, "owns_store", True))
+                                        .configure(lambda o: setattr(o, "owns_client", owns_client)).build())
+                                await host.initialize_async()
+                                harness = host._harness
+                                assert harness is not None
+                            else:
+                                harness = DurableHarness(client, store, ExtensionRegistry())
+                            chat = await harness.root_async()
+                            stopped = False
+                            stop = client.stop
+                            async def observe_stop():
+                                nonlocal stopped
+                                stopped = True
+                                return await stop()
+                            client.stop = observe_stop
+                            peer.held_method = "session.tools.set"
+                            if stage == "late-error":
+                                peer.failure = "late tools failure"
+                            held, release, entered = asyncio.Event(), asyncio.Event(), asyncio.Event()
+                            holding = None
+                            if stage == "store":
+                                async def hold(tx):
+                                    held.set()
+                                    await release.wait()
+                                holding = asyncio.create_task(store.commit_async(hold))
+                                await held.wait()
+                                commit = store.commit_async
+                                async def observe_commit(body):
+                                    entered.set()
+                                    return await commit(body)
+                                store.commit_async = observe_commit
+                            pending = asyncio.create_task(chat.configure_async(AgentChoices(instructions="accepted")))
+                            closing = drain = None
+                            try:
+                                await asyncio.wait_for((entered if stage == "store" else peer.received).wait(), 5)
+                                if stage in ("cancel", "late-error"):
+                                    pending.cancel("tools caller interrupted")
+                                    with self.assertRaisesRegex(asyncio.CancelledError, "tools caller interrupted"):
+                                        await pending
+                                closing = asyncio.create_task((host or harness).close_async())
+                                drain = await self._start_close_gate(harness, closing)
+                                async def observe_ownership_or_release():
+                                    assert harness is not None and closing is not None
+                                    while (not harness._conversation_operations and not harness._sdk_operations
+                                           and not closing.done() and not stopped and not store._closed):
+                                        await asyncio.sleep(0)
+                                await asyncio.wait_for(observe_ownership_or_release(), 5)
+                                self.assertFalse(stopped, "SDK stop must follow accepted configuration")
+                                self.assertFalse(store._closed, "owned writer must survive pending configuration")
+                                self.assertFalse(closing.done(), "configuration ownership must delay close")
+                                self.assertTrue(harness._conversation_operations or harness._sdk_operations,
+                                                "accepted configuration must retain shutdown ownership")
+                                with self.assertRaisesRegex(RuntimeError, "writer|already open"):
+                                    DurableStore.create(options)
+                                sequence = store.provider.sequence
+                                with self.assertRaisesRegex(RuntimeError, "closing"):
+                                    await chat.configure_async(AgentChoices(instructions="rejected"))
+                                self.assertEqual(store.provider.sequence, sequence)
+                                release.set()
+                                if holding is not None:
+                                    await holding
+                                await asyncio.wait_for(peer.received.wait(), 5)
+                                self.assertFalse(closing.done(), "received public tools ACK remains shutdown-owned")
+                                peer.release.set()
+                                if not pending.cancelled():
+                                    await pending
+                                if stage == "late-error":
+                                    with self.assertRaisesRegex(Exception, "late tools failure"):
+                                        await closing
+                                else:
+                                    await closing
+                                await drain
+                                choices = chat.choices()
+                                assert choices is not None
+                                self.assertEqual(choices.instructions, "accepted")
+                                self.assertEqual(peer.methods.count("session.tools.set"), 1)
+                                self.assertEqual(stopped, owns_client)
+                                self.assertEqual(store._closed, facade)
+                                sequence, contents = store.provider.sequence, path.read_bytes()
+                                with self.assertRaisesRegex(RuntimeError, "closing"):
+                                    await chat.configure_async(AgentChoices(instructions="after-close"))
+                                await asyncio.sleep(0)
+                                self.assertEqual((store.provider.sequence, path.read_bytes()),
+                                                 (sequence, contents), "no post-close durable writes")
+                                if facade:
+                                    reopened = DurableStore.create(options)
+                                    reopened.close()
+                            finally:
+                                release.set()
+                                peer.release.set()
+                                await self._settle_lifecycle_tasks(holding, pending, closing, drain)
+                                await client.stop()
+                                store.close()
+
+    async def test_round_seven_public_abort_owns_whole_child_first_cascade(self):
+        for facade in (False, True):
+            with self.subTest(facade=facade), tempfile.TemporaryDirectory() as directory:
+                async with ControlledSdkPeer() as peer:
+                    options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
+                    assert options.path is not None
+                    path = Path(options.path)
+                    store = DurableStore.create(options)
+                    client = CopilotClient(connection=RuntimeConnection.for_uri(f"127.0.0.1:{peer.port}"))
+                    await client.start()
+                    registry = ExtensionRegistry()
+                    order = []
+                    async def phase(_input, _checkpoint, runtime):
+                        return TaskCommit.completed()
+                    async def abort(_input, _checkpoint, runtime):
+                        order.append(runtime.task.id)
+                        await runtime.commit_async(lambda: TaskCommit.aborted())
+                        if runtime.task.owner_task_id is not None:
+                            await chat.configure_async(AgentChoices(instructions="abort-internal"))
+                            assert harness is not None
+                            with self.assertRaisesRegex(RuntimeError, "closing"):
+                                await asyncio.create_task(harness.abort_task_async("external"))
+                        return TaskCommit.aborted()
+                    definition = DurableTask.define("cascade", lambda: {}, phase, abort)
+                    registry.install(Extension("cascade", tasks=[definition]))
+                    host = None
+                    if facade:
+                        host = (DurableClientBuilder().use_store(store).use_client(client).use_registry(registry)
+                                .configure(lambda o: setattr(o, "owns_store", True))
+                                .configure(lambda o: setattr(o, "owns_client", True)).build())
+                        await host.initialize_async()
+                        harness = host._harness
+                        assert harness is not None
+                    else:
+                        harness = DurableHarness(client, store, registry)
+                    chat = await harness.root_async()
+                    async def seed(tx):
+                        parent = tx.create_task(definition)
+                        child = tx.create_task(definition, owner_task_id=parent.id)
+                        return parent, child
+                    parent, child = await store.commit_async(seed)
+                    stop = client.stop
+                    released_states = []
+                    async def observe_stop():
+                        released_states.append((list(order), parent.status, child.status))
+                        return await stop()
+                    client.stop = observe_stop
+                    await store._gate.acquire()
+                    pending = asyncio.create_task(harness.abort_task_async(parent.id))
+                    entered = asyncio.Event()
+                    asyncio.get_running_loop().call_soon(entered.set)
+                    await entered.wait()
+                    closing = asyncio.create_task((host or harness).close_async())
+                    drain = await self._start_close_gate(harness, closing)
+                    try:
+                        async def observe_ownership_or_release():
+                            assert harness is not None
+                            while not harness._conversation_operations and not released_states and not closing.done():
+                                await asyncio.sleep(0)
+                        await asyncio.wait_for(observe_ownership_or_release(), 5)
+                        self.assertEqual(order, [child.id])
+                        self.assertEqual(released_states, [], "SDK release must wait for both terminal records")
+                        self.assertFalse(store._closed, "owned writer must survive the pending abort cascade")
+                        self.assertTrue(harness._conversation_operations,
+                                        "accepted public cascade must retain shutdown ownership")
+                        self.assertFalse(closing.done(), "whole public cascade must be enrolled before its first await")
+                        self.assertFalse(store._closed)
+                        with self.assertRaisesRegex(RuntimeError, "writer|already open"):
+                            DurableStore.create(options)
+                        with self.assertRaisesRegex(RuntimeError, "closing"):
+                            await harness.abort_task_async(parent.id)
+                        store._gate.release()
+                        await pending
+                        await closing
+                        await drain
+                        self.assertEqual(order, [child.id, parent.id], "accepted recursion survives closing")
+                        self.assertEqual(peer.methods.count("session.tools.set"), 1)
+                        self.assertEqual(released_states,
+                                         [([child.id, parent.id], TaskStatus.TERMINAL, TaskStatus.TERMINAL)])
+                        self.assertTrue(all(record.status is TaskStatus.TERMINAL for record in (parent, child)))
+                        self.assertTrue(all(record.outcome is not None and record.outcome.is_aborted
+                                            for record in (parent, child)))
+                        sequence, contents = store.provider.sequence, path.read_bytes()
+                        with self.assertRaisesRegex(RuntimeError, "closing"):
+                            await harness.abort_task_async(parent.id)
+                        await asyncio.sleep(0)
+                        self.assertEqual((store.provider.sequence, path.read_bytes()), (sequence, contents))
+                    finally:
+                        if store._gate.locked():
+                            store._gate.release()
+                        await self._settle_lifecycle_tasks(pending, closing, drain)
+                        await client.stop()
+                        store.close()
+
+    async def test_round_seven_queued_configuration_and_abort_remain_caller_cancellable(self):
+        for operation in ("configure", "abort"):
+            with self.subTest(operation=operation):
+                async with ControlledSdkPeer() as peer:
+                    store = DurableStore.create_ephemeral()
+                    client = CopilotClient(connection=RuntimeConnection.for_uri(f"127.0.0.1:{peer.port}"))
+                    await client.start()
+                    registry = ExtensionRegistry()
+                    async def phase(_input, _checkpoint, runtime):
+                        return TaskCommit.completed()
+                    definition = DurableTask.define("cancel-abort", lambda: {}, phase)
+                    registry.install(Extension("cancel-abort", tasks=[definition]))
+                    harness = DurableHarness(client, store, registry)
+                    chat = await harness.root_async()
+                    async def seed(tx):
+                        return tx.create_task(definition)
+                    record = await store.commit_async(seed)
+                    await store._gate.acquire()
+                    pending = asyncio.create_task(
+                        chat.configure_async(AgentChoices(instructions="cancelled"))
+                        if operation == "configure" else harness.abort_task_async(record.id))
+                    entered = asyncio.Event()
+                    asyncio.get_running_loop().call_soon(entered.set)
+                    await entered.wait()
+                    try:
+                        pending.cancel("queued owner interrupted")
+                        with self.assertRaisesRegex(asyncio.CancelledError, "queued owner interrupted"):
+                            await pending
+                        sequence = store.provider.sequence
+                        self.assertFalse(harness._conversation_operations)
+                        self.assertFalse(harness._sdk_operations)
+                        store._gate.release()
+                        await harness.close_async()
+                        self.assertEqual(store.provider.sequence, sequence)
+                        self.assertNotEqual(record.status, TaskStatus.TERMINAL)
+                        self.assertNotIn("session.tools.set", peer.methods)
+                    finally:
+                        if store._gate.locked():
+                            store._gate.release()
+                        await self._settle_lifecycle_tasks(pending)
+                        await harness.close_async()
+                        store.close()
+
+    async def test_round_seven_active_task_can_configure_and_abort_child_during_close(self):
+        async with ControlledSdkPeer() as peer:
+            store = DurableStore.create_ephemeral()
+            client = CopilotClient(connection=RuntimeConnection.for_uri(f"127.0.0.1:{peer.port}"))
+            await client.start()
+            registry = ExtensionRegistry()
+            harness = DurableHarness(client, store, registry)
+            chat = await harness.root_async()
+            entered, release = asyncio.Event(), asyncio.Event()
+            child = None
+            async def phase(_input, _checkpoint, runtime):
+                entered.set()
+                await release.wait()
+                await chat.configure_async(AgentChoices(instructions="internal"))
+                assert child is not None
+                await harness.abort_task_async(child.id)
+                return await runtime.commit_async(lambda: TaskCommit.completed())
+            definition = DurableTask.define("reentrant-configure", lambda: {}, phase)
+            registry.install(Extension("reentrant-configure", tasks=[definition]))
+            async def seed(tx):
+                parent = tx.create_task(definition)
+                return parent, tx.create_task(definition, owner_task_id=parent.id)
+            parent, child = await store.commit_async(seed)
+            running = asyncio.create_task(harness.run_task_async(parent.id))
+            await entered.wait()
+            closing = asyncio.create_task(harness.close_async())
+            drain = await self._start_close_gate(harness, closing)
+            try:
+                release.set()
+                await running
+                await closing
+                await drain
+                self.assertEqual(peer.methods.count("session.tools.set"), 1)
+                choices = chat.choices()
+                assert choices is not None
+                self.assertEqual(choices.instructions, "internal")
+                self.assertTrue(child.outcome is not None and child.outcome.is_aborted)
+            finally:
+                release.set()
+                await self._settle_lifecycle_tasks(running, closing, drain)
+                store.close()
+
     async def _settle_lifecycle_tasks(self, *tasks: Awaitable[object] | None):
         await asyncio.gather(*(task for task in tasks if task is not None), return_exceptions=True)
 
