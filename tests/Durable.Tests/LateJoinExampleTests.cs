@@ -22,7 +22,8 @@ public class LateJoinExampleTests
         {
             var runtime = Path.Combine(directory.FullName, "runtime");
             Directory.CreateDirectory(runtime);
-            await File.WriteAllTextAsync(Path.Combine(runtime, "Program.cs"), MockRuntimeSource);
+            var runtimeSource = MockRuntimeSource.ReplaceLineEndings("\n");
+            await File.WriteAllTextAsync(Path.Combine(runtime, "Program.cs"), runtimeSource);
             await WriteProjectAsync(runtime, null);
             AssertSucceeded(await ExecuteAsync("dotnet", ["build", "--nologo", "-v:q"], runtime));
             var executable = Path.Combine(runtime, "bin", "Debug", "net10.0",
@@ -134,17 +135,17 @@ public class LateJoinExampleTests
             // generated example's ready signal until the peer probes it. The wire artifact
             // must reject that premature one-shot event, independent of thread scheduling.
             const string readinessProbe = "await observerReady.WriteAsync(new byte[] { 1 });";
-            var oldModelTiming = MockRuntimeSource.Replace(readinessProbe, """
+            var oldModelTiming = runtimeSource.Replace(readinessProbe, """
                 await Task.Delay(100);
                 await ReportModelAsync();
                 """ + "\n" + readinessProbe, StringComparison.Ordinal);
-            Assert.NotEqual(MockRuntimeSource, oldModelTiming);
+            Assert.NotEqual(runtimeSource, oldModelTiming);
             await File.WriteAllTextAsync(Path.Combine(runtime, "Program.cs"), oldModelTiming);
             AssertSucceeded(await ExecuteAsync("dotnet", ["build", "--nologo", "-v:q"], runtime));
             await BuildExampleAsync(example, source);
             var readinessMutation = await RunExampleAsync(example, executable, "old-model-timing");
             AssertFailed(readinessMutation, "Model report preceded observer readiness.");
-            await File.WriteAllTextAsync(Path.Combine(runtime, "Program.cs"), MockRuntimeSource);
+            await File.WriteAllTextAsync(Path.Combine(runtime, "Program.cs"), runtimeSource);
             AssertSucceeded(await ExecuteAsync("dotnet", ["build", "--nologo", "-v:q"], runtime));
 
             var noTool = await RunExampleAsync(example, executable, "no-tool");
@@ -165,9 +166,67 @@ public class LateJoinExampleTests
             var stalledRead = await RunExampleAsync(example, executable, "stalled-read");
             AssertFailed(stalledRead, "Late join timed out while reading the SDK snapshot");
 
+            // Hold the real store's admission settlement until the successful snapshot has
+            // installed its subscription. This makes the old peer's race causal, not a sleep.
+            var heldSettlement = source.Replace("var run = root.SubmitAsync(", """
+                var settlementRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                Task settlement = Task.CompletedTask;
+                var run = root.SubmitAsync(
+                """, StringComparison.Ordinal).Replace(
+                "Console.WriteLine(\"synchronization tool started; joining while the run is pending\");", """
+                Console.WriteLine("synchronization tool started; joining while the run is pending");
+                var settlementHeld = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                settlement = store.CommitAsync(async _ =>
+                {
+                    settlementHeld.TrySetResult();
+                    await settlementRelease.Task.WaitAsync(deadline.Token);
+                });
+                await settlementHeld.Task.WaitAsync(deadline.Token);
+                """, StringComparison.Ordinal).Replace(
+                "Console.WriteLine(\"live subscription installed; synchronization tool released\");", """
+                Console.WriteLine("live subscription installed; synchronization tool released");
+                settlementRelease.TrySetResult();
+                await settlement;
+                """, StringComparison.Ordinal).Replace("    deadline.Cancel();", """
+                    settlementRelease.TrySetResult();
+                    await settlement;
+                    deadline.Cancel();
+                """, StringComparison.Ordinal);
+            Assert.NotEqual(source, heldSettlement);
+            const string midJoinFailure = """
+                    if (scenario == "mid-join-error")
+                    {
+                        await EventAsync("session.error", new JsonObject { ["message"] = "mock original model failure", ["errorType"] = "model" });
+                        // A successful snapshot would race the asynchronous admission settlement.
+                        continue;
+                    }
+        """;
+            var racingSnapshot = runtimeSource.Replace(midJoinFailure.ReplaceLineEndings("\n"),
+                """
+                    if (scenario == "mid-join-error")
+                        await EventAsync("session.error", new JsonObject { ["message"] = "mock original model failure", ["errorType"] = "model" });
+        """.ReplaceLineEndings("\n"), StringComparison.Ordinal);
+            Assert.NotEqual(runtimeSource, racingSnapshot);
+            await File.WriteAllTextAsync(Path.Combine(runtime, "Program.cs"), racingSnapshot);
+            AssertSucceeded(await ExecuteAsync("dotnet", ["build", "--nologo", "-v:q"], runtime));
+            await BuildExampleAsync(example, heldSettlement);
+            var snapshotRace = await RunExampleAsync(example, executable, "mid-join-error");
+            AssertFailed(snapshotRace, "mock original model failure");
+            Assert.Contains("live subscription installed", snapshotRace.Output);
+            await File.WriteAllTextAsync(Path.Combine(runtime, "Program.cs"), runtimeSource);
+            AssertSucceeded(await ExecuteAsync("dotnet", ["build", "--nologo", "-v:q"], runtime));
+            await BuildExampleAsync(example, source);
+
             var midJoinError = await RunExampleAsync(example, executable, "mid-join-error");
             AssertFailed(midJoinError, "mock original model failure");
             Assert.DoesNotContain("live subscription installed", midJoinError.Output);
+            var midJoinWire = (await File.ReadAllLinesAsync(Path.Combine(example, "wire-mid-join-error")))
+                .Select(line => JsonNode.Parse(line)!).ToArray();
+            var snapshotRequest = Assert.Single(midJoinWire, message =>
+                message["method"]?.GetValue<string>() == "session.getMessages");
+            Assert.DoesNotContain(midJoinWire, message =>
+                message["result"] is not null &&
+                JsonNode.DeepEquals(message["id"], snapshotRequest["id"]));
 
             var noDelta = await RunExampleAsync(example, executable, "no-delta");
             AssertFailed(noDelta, "the late joiner received live deltas");
@@ -385,7 +444,11 @@ public class LateJoinExampleTests
                     if (scenario == "stalled-read") continue;
                     if (scenario == "delayed-user" && reads >= 3) await AddUserAsync();
                     if (scenario == "mid-join-error")
+                    {
                         await EventAsync("session.error", new JsonObject { ["message"] = "mock original model failure", ["errorType"] = "model" });
+                        // A successful snapshot would race the asynchronous admission settlement.
+                        continue;
+                    }
                     // Force generation into the snapshot/subscription gap if the source releases early.
                     if (scenario == "gap" && !resultReceived)
                     {
