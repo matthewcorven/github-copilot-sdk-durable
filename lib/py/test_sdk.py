@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 import json
+import subprocess
 from unittest.mock import patch, AsyncMock
 from types import SimpleNamespace
 from pathlib import Path
@@ -46,6 +47,427 @@ def sdk_client(session):
 
 
 class RecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_failing_recovered_task_does_not_skip_other_run_drain(self):
+        for facade in (False, True):
+            with self.subTest(facade=facade), tempfile.TemporaryDirectory() as directory:
+                options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
+                entered = {name: asyncio.Event() for name in ("bad", "good")}
+                release = {name: asyncio.Event() for name in ("bad", "good")}
+                async def phase(input, _checkpoint, runtime):
+                    entered[input].set()
+                    await release[input].wait()
+                    return await runtime.commit_async(lambda: TaskCommit.completed(input))
+                definition = DurableTask.define("task-errors", lambda: {"phase": "run"}, phase)
+                registry = ExtensionRegistry()
+                registry.install(Extension("task-errors", tasks=[definition]))
+                client = sdk_client(sdk_session())
+                host = None
+                if facade:
+                    host = (DurableClientBuilder().use_store_options(options).use_client(client)
+                            .use_registry(registry).configure(lambda o: setattr(o, "owns_client", True)).build())
+                    await host.initialize_async()
+                    store, harness = host.store, host._harness
+                    assert store is not None and harness is not None
+                else:
+                    store = DurableStore.create(options)
+                    harness = DurableHarness(client, store, registry)
+                async def create(tx):
+                    return [tx.create_task(definition, "bad"), tx.create_task(definition, "good")]
+                bad, good = await store.commit_async(create)
+                commit = store.commit_task_async
+                original = RuntimeError("task checkpoint storage failed")
+                async def fail_one(identifier, body):
+                    if identifier == bad.id:
+                        raise original
+                    return await commit(identifier, body)
+                recovery = None
+                closing = None
+                with patch.object(store, "commit_task_async", side_effect=fail_one):
+                    try:
+                        recovery = asyncio.create_task(harness.resume_async())
+                        await asyncio.gather(*(event.wait() for event in entered.values()))
+                        closing = asyncio.create_task(host.close_async() if host else harness.close_async())
+                        await asyncio.sleep(0)
+                        release["bad"].set()
+                        with self.assertRaises(RuntimeError) as raised:
+                            await recovery
+                        self.assertIs(raised.exception, original)
+                        await asyncio.sleep(0)
+                        await asyncio.sleep(0)
+                        client.stop.assert_not_awaited()
+                        self.assertFalse(closing.done())
+                        with self.assertRaisesRegex(RuntimeError, "scheduler|runner"):
+                            DurableHarness(client, store, registry)
+                        with self.assertRaises((OSError, RuntimeError)):
+                            DurableStore.create(options)
+                        release["good"].set()
+                        with self.assertRaises(RuntimeError) as raised:
+                            await closing
+                        self.assertIs(raised.exception, original)
+                        client.stop.assert_awaited_once()
+                        if not facade:
+                            store.close()
+                        reopened = DurableStore.create(options)
+                        try:
+                            result = reopened.task(good.id)
+                            assert result is not None
+                            self.assertIs(result.status, TaskStatus.TERMINAL)
+                            result = reopened.task(bad.id)
+                            assert result is not None
+                            self.assertIs(result.status, TaskStatus.PENDING)
+                        finally:
+                            reopened.close()
+                    finally:
+                        for event in release.values():
+                            event.set()
+                        await asyncio.gather(*([recovery] if recovery else []),
+                                             *([closing] if closing else []), return_exceptions=True)
+                        await asyncio.gather(*list(harness._in_flight.values()), return_exceptions=True)
+                        store.close()
+
+    async def test_cancelled_close_waits_for_checkpoint_and_surfaces_cancellation(self):
+        for facade in (False, True):
+            with self.subTest(facade=facade), tempfile.TemporaryDirectory() as directory:
+                options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
+                client = sdk_client(sdk_session())
+                registry = ExtensionRegistry()
+                host = None
+                if facade:
+                    host = (DurableClientBuilder().use_store_options(options).use_client(client)
+                            .use_registry(registry).configure(lambda o: setattr(o, "owns_client", True)).build())
+                    await host.initialize_async()
+                    store, harness = host.store, host._harness
+                    assert store is not None and harness is not None
+                else:
+                    store = DurableStore.create(options)
+                    harness = DurableHarness(client, store, registry)
+                async def create(tx):
+                    return tx.create_conversation()
+                record = await store.commit_async(create)
+                chat = harness.find_conversation(record.id)
+                assert chat is not None
+                entered, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+                async def checkpoint():
+                    entered.set()
+                    await release.wait()
+                    completed.set()
+                chat.checkpoint_barrier_async = checkpoint
+                closing = asyncio.create_task(host.close_async() if host else harness.close_async())
+                try:
+                    await entered.wait()
+                    closing.cancel("closer cancelled")
+                    await asyncio.sleep(0)
+                    await asyncio.sleep(0)
+                    self.assertFalse(closing.done())
+                    self.assertFalse(completed.is_set())
+                    client.stop.assert_not_awaited()
+                    with self.assertRaises((OSError, RuntimeError)):
+                        DurableStore.create(options)
+                    release.set()
+                    with self.assertRaisesRegex(asyncio.CancelledError, "closer cancelled"):
+                        await closing
+                    self.assertTrue(completed.is_set())
+                    client.stop.assert_awaited_once()
+                finally:
+                    release.set()
+                    await asyncio.gather(closing, return_exceptions=True)
+                    store.close()
+
+    async def test_close_preserves_first_error_and_reports_later_checkpoint_and_stop_errors(self):
+        store = DurableStore.create_ephemeral()
+        client = sdk_client(sdk_session())
+        harness = DurableHarness(client, store, ExtensionRegistry())
+        first, second, stop = RuntimeError("first"), RuntimeError("second"), RuntimeError("stop")
+        client.stop.side_effect = stop
+        try:
+            async def create(tx):
+                return [tx.create_conversation(), tx.create_conversation()]
+            records = await store.commit_async(create)
+            for record, error in zip(records, (first, second)):
+                conversation = harness.find_conversation(record.id)
+                assert conversation is not None
+                conversation.checkpoint_barrier_async = AsyncMock(side_effect=error)
+            with self.assertRaises(RuntimeError) as raised:
+                await harness.close_async()
+            self.assertIs(raised.exception, first)
+            cause = first.__cause__
+            assert isinstance(cause, BaseExceptionGroup)
+            self.assertEqual(list(cause.exceptions), [second, stop])
+        finally:
+            store.close()
+
+    async def test_canonical_jsonl_history_and_fork_states_roundtrip(self):
+        fixture = Path(__file__).resolve().parents[1] / "ts" / "canonical-fixture.cs"
+        def canonical(mode, path):
+            output = subprocess.check_output(
+                ["dotnet", "run", "--file", str(fixture), "--", mode, str(path)], text=True)
+            return json.loads(output.strip().splitlines()[-1])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "store.jsonl"
+            expected = canonical("create", path)
+            store = DurableStore.create(DurableStoreOptions(path=str(path)))
+            client = sdk_client(sdk_session("canonical-child"))
+            harness = DurableHarness(client, store, ExtensionRegistry())
+            try:
+                notes = store.document("interop.notes", expected["ownerId"])
+                assert notes is not None
+                self.assertEqual([v.value for v in notes.versions], [["first"], ["second"]])
+                self.assertEqual(notes.latest, ["second"])
+                parent = await harness.resume_conversation_async(expected["forkIds"][0])
+                async def append(tx):
+                    return tx.append_entry(parent.id, "boundary")
+                boundary = await store.commit_async(append)
+                child = await harness.fork_async(parent, boundary)
+                intent = store.document("durable.fork", child.id)
+                assert intent is not None
+                self.assertEqual([v.value["state"] for v in intent.versions[-2:]], [0, 1])
+            finally:
+                await harness.close_async()
+                store.close()
+            self.assertEqual(len(canonical("verify", path)["forkIds"]), 2)
+
+    async def test_auto_torn_utf8_and_unknown_legacy_bytes_are_distinguished(self):
+        from durable import DurableStoreFormat
+        prefix = json.dumps({"v": 1, "seq": 1, "type": "conversation",
+                             "payload": {"id": "saved"}}).encode() + b"\n"
+        torn = b'{"v":1,"seq":2,"type":"conversation","payload":{"id":"\xe9\x9b'
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "store.jsonl"
+            for format in (DurableStoreFormat.AUTO, DurableStoreFormat.JSONL):
+                for head in (b"", prefix):
+                    with self.subTest(format=format, head=head):
+                        path.write_bytes(head + torn)
+                        store = DurableStore.create(DurableStoreOptions(path=str(path), format=format))
+                        try:
+                            self.assertEqual([c.id for c in store.conversations], ["saved"] if head else [])
+                            self.assertEqual(path.read_bytes(), head)
+                        finally:
+                            store.close()
+            for malformed in (
+                b'{"sequence":4,"conversations":[{"id":"important"}]',
+                b'{"conversations":[{"id":"\xe9\x9b',
+                b'not a store', b'{"unknown":',
+                '{"conversations":[]}'.encode("utf-16"),
+                prefix + b'{"v":1,"payload":"\xe9\x9b"}\n',
+                prefix + b'not json\n',
+            ):
+                with self.subTest(malformed=malformed):
+                    path.write_bytes(malformed)
+                    with self.assertRaises((ValueError, UnicodeDecodeError)):
+                        DurableStore.create(DurableStoreOptions(path=str(path)))
+                    self.assertEqual(path.read_bytes(), malformed)
+            path.write_bytes(b'{"unidentifiable":')
+            store = DurableStore.create(DurableStoreOptions(path=str(path), format=DurableStoreFormat.JSONL))
+            try:
+                self.assertEqual(path.read_bytes(), b"")
+            finally:
+                store.close()
+            legacy = b'{"sequence":4,"conversations":[],"documents":[],"tasks":[],"entries":{},"entryRecords":[]}'
+            path.write_bytes(legacy)
+            store = DurableStore.create(DurableStoreOptions(path=str(path)))
+            store.close()
+            self.assertEqual(path.read_bytes(), legacy)
+
+    async def test_recovery_resumes_committed_pending_after_actual_close_reopen(self):
+        calls = []
+        async def phase(_input, _checkpoint, runtime):
+            calls.append(runtime.task.id)
+            return await runtime.commit_async(lambda: TaskCommit.completed({"recovered": True}))
+        definition = DurableTask.define("pending", lambda: {"phase": "run"}, phase)
+        registry = ExtensionRegistry()
+        registry.install(Extension("recovery", tasks=[definition]))
+        with tempfile.TemporaryDirectory() as directory:
+            options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
+            store = DurableStore.create(options)
+            async def create(tx):
+                return tx.create_task(definition)
+            record = await store.commit_async(create)
+            self.assertIs(record.status, TaskStatus.PENDING)
+            self.assertEqual(calls, [])
+            store.close()
+            store = DurableStore.create(options)
+            harness = DurableHarness(sdk_client(sdk_session()), store, registry)
+            try:
+                outcomes = await harness.resume_async()
+                self.assertEqual(len(outcomes), 1)
+                self.assertEqual(calls, [record.id])
+                recovered = store.task(record.id)
+                assert recovered is not None
+                self.assertIs(recovered.status, TaskStatus.TERMINAL)
+                await harness.close_async()
+                store.close()
+                store = DurableStore.create(options)
+                recovered = store.task(record.id)
+                assert recovered is not None
+                self.assertIs(recovered.status, TaskStatus.TERMINAL)
+            finally:
+                await harness.close_async()
+                store.close()
+
+    async def test_shutdown_drains_recovered_runs_and_retains_scheduler_ownership(self):
+        for facade in (False, True):
+            with self.subTest(facade=facade), tempfile.TemporaryDirectory() as directory:
+                options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
+                entered, release = asyncio.Event(), asyncio.Event()
+                order = []
+                async def phase(_input, _checkpoint, runtime):
+                    entered.set()
+                    await release.wait()
+                    commit = await runtime.commit_async(lambda: TaskCommit.completed({"saved": True}))
+                    order.append("run")
+                    return commit
+                definition = DurableTask.define("drain", lambda: {"phase": "run"}, phase)
+                registry = ExtensionRegistry()
+                registry.install(Extension("recovery", tasks=[definition]))
+                store = DurableStore.create(options)
+                async def create(tx):
+                    task = tx.create_task(definition)
+                    task.status = TaskStatus.RUNNING
+                    return task.id
+                identifier = await store.commit_async(create)
+                store.close()
+                client = sdk_client(sdk_session())
+                async def stop():
+                    order.append("stop")
+                client.stop = AsyncMock(side_effect=stop)
+                host = None
+                if facade:
+                    host = (DurableClientBuilder().use_store_options(options).use_client(client)
+                            .use_registry(registry).configure(lambda o: setattr(o, "owns_client", True)).build())
+                    await host.initialize_async()
+                    store = host.store
+                    assert store is not None
+                    harness = host._harness
+                    assert harness is not None
+                else:
+                    store = DurableStore.create(options)
+                    harness = DurableHarness(client, store, registry)
+                recovery = asyncio.create_task(harness.resume_async())
+                close = None
+                try:
+                    await entered.wait()
+                    close = asyncio.create_task(host.close_async() if host else harness.close_async())
+                    await asyncio.sleep(0)
+                    await asyncio.sleep(0)
+                    self.assertEqual(order, [])
+                    with self.assertRaisesRegex(RuntimeError, "scheduler|runner"):
+                        DurableHarness(client, store, registry)
+                    with self.assertRaises((OSError, RuntimeError)):
+                        DurableStore.create(options)
+                    release.set()
+                    await asyncio.gather(recovery, close)
+                    self.assertEqual(order, ["run", "stop"])
+                    if not facade:
+                        replacement = DurableHarness(client, store, registry)
+                        await replacement.close_async()
+                        store.close()
+                    reopened = DurableStore.create(options)
+                    try:
+                        recovered = reopened.task(identifier)
+                        assert recovered is not None
+                        self.assertIs(recovered.status, TaskStatus.TERMINAL)
+                    finally:
+                        reopened.close()
+                finally:
+                    release.set()
+                    await asyncio.gather(recovery, *([close] if close else []), return_exceptions=True)
+                    if host:
+                        await host.close_async()
+                    else:
+                        await harness.close_async()
+                    store.close()
+
+    async def test_failed_barrier_still_drains_all_barriers_and_scheduled_runs(self):
+        for facade in (False, True):
+            with self.subTest(facade=facade), tempfile.TemporaryDirectory() as directory:
+                options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))
+                entered, release = asyncio.Event(), asyncio.Event()
+                barrier_entered, release_barrier, barrier_done = asyncio.Event(), asyncio.Event(), asyncio.Event()
+                order = []
+                original = RuntimeError("first checkpoint")
+                async def phase(_input, _checkpoint, runtime):
+                    entered.set()
+                    await release.wait()
+                    commit = await runtime.commit_async(lambda: TaskCommit.completed(None))
+                    order.append("run")
+                    return commit
+                definition = DurableTask.define("drain", lambda: {"phase": "run"}, phase)
+                registry = ExtensionRegistry()
+                registry.install(Extension("drain", tasks=[definition]))
+                client = sdk_client(sdk_session())
+                async def stop():
+                    order.append("stop")
+                client.stop = AsyncMock(side_effect=stop)
+                host = None
+                if facade:
+                    host = (DurableClientBuilder().use_store_options(options).use_client(client)
+                            .use_registry(registry).configure(lambda o: setattr(o, "owns_client", True)).build())
+                    await host.initialize_async()
+                    store, harness = host.store, host._harness
+                    assert store is not None and harness is not None
+                else:
+                    store = DurableStore.create(options)
+                    harness = DurableHarness(client, store, registry)
+                async def create(tx):
+                    return [tx.create_conversation(), tx.create_conversation()]
+                records = await store.commit_async(create)
+                one, two = (harness.find_conversation(r.id) for r in records)
+                assert one is not None and two is not None
+                one.checkpoint_barrier_async = AsyncMock(side_effect=original)
+                async def delayed():
+                    barrier_entered.set()
+                    await release_barrier.wait()
+                    async def append(tx):
+                        tx.append_entry(records[1].id, "last-checkpoint")
+                    assert store is not None
+                    await store.commit_async(append)
+                    order.append("barrier")
+                    barrier_done.set()
+                two.checkpoint_barrier_async = delayed
+                record = await harness.create_task_async(definition)
+                await entered.wait()
+                closing = asyncio.create_task(host.close_async() if host else harness.close_async())
+                try:
+                    await barrier_entered.wait()
+                    await asyncio.sleep(0)
+                    await asyncio.sleep(0)
+                    self.assertEqual(order, [])
+                    self.assertFalse(closing.done())
+                    with self.assertRaises((OSError, RuntimeError)):
+                        DurableStore.create(options)
+                    release.set()
+                    await asyncio.wait_for(harness.wait_for_task_async(record.id), 1)
+                    await asyncio.sleep(0)
+                    await asyncio.sleep(0)
+                    self.assertEqual(order, ["run"])
+                    self.assertFalse(closing.done())
+                    release_barrier.set()
+                    await asyncio.wait_for(barrier_done.wait(), 1)
+                    with self.assertRaises(RuntimeError) as raised:
+                        await closing
+                    self.assertIs(raised.exception, original)
+                    self.assertEqual(order, ["run", "barrier", "stop"])
+                    if not facade:
+                        store.close()
+                    reopened = DurableStore.create(options)
+                    try:
+                        recovered = reopened.task(record.id)
+                        assert recovered is not None
+                        self.assertIs(recovered.status, TaskStatus.TERMINAL)
+                        self.assertEqual(len(reopened.entries(records[1].id)), 1)
+                    finally:
+                        reopened.close()
+                finally:
+                    release_barrier.set()
+                    release.set()
+                    await asyncio.gather(closing, return_exceptions=True)
+                    await asyncio.gather(*list(harness._in_flight.values()), return_exceptions=True)
+                    if host:
+                        await host.close_async()
+                    else:
+                        await harness.close_async()
+                    store.close()
+
     async def test_jsonl_noop_commit_after_reopen_preserves_document_bytes(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "store.jsonl"
