@@ -31,3 +31,6 @@ artifacts/
 
 # Node toolchain for the TypeScript port (lib/ts).
 node_modules/
+
+# Copilot CLI local tool-approval state (machine-local, never shared).
+.copilot/
