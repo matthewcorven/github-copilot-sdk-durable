@@ -55,6 +55,7 @@ jobs:
         run: |
           python3 -m pip install -e lib/py
           npm ci --prefix lib/ts
+          npm ci --prefix examples/ts
 
       - name: Restore
         run: dotnet restore lib/Copilot.Durable.csproj
@@ -80,9 +81,10 @@ jobs:
       # non-deterministic example fails one named step next to the plain pass it complements,
       # and so the dotnet restore/build/test cache the step above populated is reused.
       # The step above stays because it covers the live-gated examples this pass excludes.
-      # SKIP_TESTS=1 for the same reason as above; the deterministic suites the plain path
-      # never runs (ReplayRuntime.Tests, ReplayToolDispatchTests) are part of this step's
-      # value, so they are deliberately not skipped here.
+      # SKIP_TESTS is deliberately NOT set here: this step runs the suites the plain path
+      # never runs (ReplayRuntime.Tests, ReplayToolDispatchTests, the Python and TypeScript
+      # parity suites, and both language unit suites). Those are part of this step's value,
+      # so skipping them would leave the gate green while a parity regression shipped.
       - name: Validate examples (deterministic)
         run: ./scripts/validate.sh --deterministic
 

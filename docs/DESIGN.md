@@ -1094,6 +1094,13 @@ recompiled differently, and no example knows which runtime it is talking to.
   `effective model: <id>`, and the id must be the model the fixture records. See below.
 - The determinism check: each of those examples is run a second time and its output compared
   against the first run after normalisation. See below.
+- The parity and language unit suites, all with `DURABLE_RUNTIME_PATH` pointing at the recorded
+  runtime: `tests/parity` under `unittest` (which includes `test_mutations.py`, the meta-test
+  that mutates the sources in a copy and asserts the suite goes red), `npm run test:parity:ts`,
+  `npm test` in `lib/ts`, and `lib/py/test_sdk.py`. They need a Python interpreter that imports
+  the Copilot SDK (`lib/py/.venv`, or the package installed into `python3`) and `node_modules`
+  under both `lib/ts` and `examples/ts`; the script names whichever is missing and fails the run
+  rather than skipping the suite. `SKIP_TESTS=1` skips these along with the test projects.
 
 **The effective model.** A session-opening example prints the model the runtime reported for
 its session, read from `DurableConversation.EffectiveModel` — never from the harness's

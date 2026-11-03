@@ -569,7 +569,7 @@ records — read from the fixture, not from the library, so the check cannot agr
 it is checking by construction. And every such example is run a second time, with the temporary
 paths, session ids, and timestamps normalised, and must produce identical output.
 
-CI runs `dotnet test tests/Durable.Tests`, then `SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh`. Every example is compiled on every push, and the 15 that need no Copilot sign-in also execute with their assertions checked. The other 23 need a signed-in Copilot CLI and are not run in CI. CI does not run `--deterministic`, so the effective-model and determinism checks are not enforced there yet.
+CI runs `dotnet test tests/Durable.Tests`, then `SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh`, then `./scripts/validate.sh --deterministic`. Every example is compiled on every push, and the 15 that need no Copilot sign-in also execute with their assertions checked. The other 23 need a signed-in Copilot CLI and are not run in CI. The deterministic step enforces the effective-model and determinism checks, and also runs the Python and TypeScript parity suites and both language unit suites.
 
 ---
 
