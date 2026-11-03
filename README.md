@@ -93,6 +93,83 @@ copilot
 
 ## Running an example
 
+### TypeScript and Python parity (`00`–`35`)
+
+The ports bind to the official SDK packages **`@github/copilot-sdk`** (npm) and
+**`github-copilot-sdk`** (PyPI), pinned by the existing language manifests. They use
+the same durable concepts and JSONL store, not a replacement runtime. The global
+contract is [`examples/parity.json`](examples/parity.json); its schema, conditional
+LIVE assertions, and language mapping are documented in [DESIGN §3.15.1](docs/DESIGN.md#3151-language-ports-and-the-parity-contract).
+The newer C#-only examples `36` and `37` are outside this parity contract.
+
+From the repository root, restore the declared language dependencies once:
+
+```bash
+npm --prefix lib/ts ci
+npm --prefix examples/ts ci
+python3 -m venv examples/py/.venv
+source examples/py/.venv/bin/activate
+python -m pip install -e examples/py
+```
+
+The persistent TypeScript store requires the declared native `fs-ext` lock binding.
+Missing native locking fails explicitly; it never falls back to unlocked persistence.
+Installation and locking have been exercised on macOS, not certified on every platform.
+
+Run every ported example against the signed-in native CLI, including sandbox LIVE effects:
+
+```bash
+npm run examples:ts
+python examples/run_all.py
+```
+
+`--all-available` explicitly selects the same default mode. Missing APIs, assertions,
+timeouts, or runtime failures produce a nonzero exit; they are not successful skips.
+Remove `DURABLE_RUNTIME_PATH` and replay-fixture overrides before this mode.
+
+For the sign-in-free suite and **four full-output comparisons per language to actual
+checked-in C# output**, build the real ReplayRuntime and use deterministic mode:
+
+```bash
+dotnet build tools/ReplayRuntime/ReplayRuntime.csproj --nologo -v q
+npm run examples:ts -- --deterministic
+python examples/run_all.py --deterministic
+npm run examples:ts -- --deterministic --list
+python examples/run_all.py --deterministic --list
+```
+
+Both runners select `00,01,03,04,05,06,09,11,12,14,17,18,23,32,35` and print every
+exclusion with the exact reason from `scripts/validate.sh`. `17`, `18`, and `35`
+also have conditional LIVE behavior: inclusion here is not LIVE/model proof.
+Sessions generated from replay fixtures are explicitly **synthesised, not recorded
+transcripts**. Optional exact IDs can narrow a run, for example `--deterministic 00 01`.
+
+Range evidence records native successes and remaining acceptance gaps separately.
+Example `21` retains model/tool-selection flakiness; `35` does not claim host-decline
+behavior when no escalation was offered. Linux/Windows native enforcement remains
+uncertified. Example `20` tests synchronized late joining and post-open deadlines,
+but SDK bootstrap is noninterruptible: a never-settling SDK open is not proven bounded
+by the example's 90-second deadline.
+
+The parity facts include real process-crash/reopen recovery, exact fork transcript
+counts, rollback, and persisted abort outcomes. Run them and their real-source
+regression gates with:
+
+```bash
+npm run test:parity:ts
+python -m unittest discover -s tests/parity -p 'test_*.py' -v
+python examples/parity_manifest.py
+python tests/parity/capture_reference.py
+```
+
+The last command re-executes the four C# reference scenarios without rewriting their
+outputs. To deliberately refresh artifacts after an approved source/range change, use
+`python examples/parity_manifest.py --write` and
+`python tests/parity/capture_reference.py --write`; neither runner learns expected
+output from the ports.
+
+### C#
+
 Every example is one file. Run it from the `examples/` directory:
 
 ```bash
@@ -429,6 +506,27 @@ Validation runs in two complementary layers:
 
 1. **Self-asserting examples:** Every single example includes explicit `Check.*` assertions testing the durable invariants it claims (no duplicate executions across crash restarts, transaction rollback on mid-commit failure, document fork isolation, child-task abort cascade, etc.). An unhandled exception or failed assertion causes `validate.sh` to fail immediately.
 2. **xUnit test suite (`tests/Durable.Tests`):** Focused unit and integration tests verifying `DurableStore` rollback semantics, fork entry filtering and state independence, store crash recovery with memo idempotency, and abort propagation.
+
+The xUnit suite also runs the real Python and TypeScript late-join clients, including
+physical LF and CRLF source files. Before running it (directly or through `validate.sh`),
+install Python 3.11+ and Node.js 22.18+, then bootstrap the declared dependencies from the
+repository root:
+
+```bash
+python3 -m venv lib/py/.venv
+source lib/py/.venv/bin/activate
+python3 -m pip install -e lib/py
+npm ci --prefix lib/ts
+```
+
+Keep that environment activated when running `dotnet test` or `validate.sh`: the test
+launches `python3` from `PATH` (`python` on Windows), and its subprocesses reuse that
+interpreter. On Windows, activate `lib\py\.venv\Scripts\Activate.ps1` in PowerShell instead.
+Use `python` instead of `python3` for the Windows environment creation and pip commands.
+An existing virtual environment works too if its interpreter is on `PATH` and has the
+declared Python project installed. The Python SDK is pinned in `lib/py/pyproject.toml`;
+Node dependencies are restored from `lib/ts/package-lock.json`. CI provisions both
+languages and installs these dependencies before the unconditional .NET `Test` step.
 
 ```bash
 # Every example: compile, run xUnit suite, and run all 38 examples.

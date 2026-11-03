@@ -11,6 +11,18 @@ namespace Durable.Tests;
 /// </summary>
 public class LateJoinExampleTests
 {
+    [Fact]
+    public async Task PortHarness_PhysicalLineEndingsPreserveGeneratedClients()
+    {
+        var result = await ExecuteAsync(OperatingSystem.IsWindows() ? "python" : "python3",
+            ["-m", "unittest",
+                "examples.py.parity_test_11_21.LateJoinParityTests.test_physical_line_endings_preserve_generated_clients",
+                "-v"], FindRepository());
+        AssertSucceeded(result);
+        Assert.Contains("Ran 1 test", result.Output);
+        Assert.Contains("OK", result.Output);
+    }
+
     [Theory]
     [InlineData("\n")]
     [InlineData("\r\n")]
