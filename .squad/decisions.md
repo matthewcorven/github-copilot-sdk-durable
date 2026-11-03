@@ -606,3 +606,15 @@ lines, final line `Deterministic run passed.`
 is supposed to catch unverified claims. A gate whose greenness was never observed by the person merging
 it is exactly the false confidence the gate is meant to prevent. Also: do not pipe a long gate through
 `tail`; it buffers everything and makes progress unobservable. Redirect to a log file and grep it.
+
+### 2026-11-03T11:15:00Z: The slowest CI step is the one that proves the most — budget for it, do not trim it
+
+**By:** coordinator (Ralph round 13)
+**What:** Widening `scripts/validate.sh --deterministic` to run the Python and TypeScript parity suites plus both language unit suites took the `build` job from roughly 8 minutes to **14m12s**. That is a 75% increase in the wall-clock cost of the only gate that stands between `dev` and a parity regression. It was merged anyway, and the cost was stated explicitly in the PR body rather than discovered later by whoever next waits on CI.
+**Why:** The alternative — leaving the gate at five green checks that never touch the parity contract — is a gate that can be green while a real regression ships. That is not a cheaper gate; it is a more expensive one, because the cost moves from CI minutes to a shipped bug. The rule: when a gate's coverage and its runtime trade off, widen the coverage and pay the minutes. State the new cost in the PR so the trade is visible and reviewable, and so nobody later "optimizes" the suites back out without knowing what they are removing.
+
+### 2026-11-03T11:15:00Z: A gate that cannot run in CI is not a gate — install the dependency, do not narrow the check
+
+**By:** coordinator (Ralph round 13)
+**What:** Tester's #129 work added `npm run test:parity:ts` to the deterministic gate, but `.github/workflows/build.yml` installed only `lib/py` and `lib/ts` — never `examples/ts`. The parity suite imports `@github/copilot-sdk` from `examples/ts/tools.ts`, so the new step would have failed `ERR_MODULE_NOT_FOUND` on the first CI run. The fix was one line: `npm ci --prefix examples/ts`. The tempting alternative — dropping the parity suite from the gate because "it needs a dependency CI does not have" — would have silently reverted the entire point of the issue.
+**Why:** A prerequisite gap is an argument for installing the prerequisite, never for removing the check. The failure mode to watch for is a gate that passes locally (where `node_modules` happens to exist from earlier work) and fails in CI, or worse, gets quietly narrowed until it passes in both. Verify a widened gate **in the environment that will run it**, not just on the developer's machine — and when the environment is missing something, fix the environment.
