@@ -14,6 +14,12 @@
 # The deterministic mode is described in docs/DESIGN.md section 6. It runs the
 # examples and suites that need no Copilot sign-in, against the recorded runtime
 # in tools/ReplayRuntime, and it fails on the same terms as a live run.
+#
+# The deterministic mode also runs the parity and language unit suites. They need
+# a Python interpreter that can import the Copilot SDK (lib/py/.venv, or the SDK
+# installed into python3), node_modules under both lib/ts and examples/ts, and the
+# recorded runtime built from tools/ReplayRuntime. The script names whichever one
+# is missing and fails the run rather than skipping the suite.
 
 set -uo pipefail
 
@@ -108,7 +114,7 @@ REPLAY_PROBE="$ROOT/tools/polyglot-attach/python/attach.py"
 BANNED_TERMS=("mo""ck" "fa""ke" "st""ub" "sim""ulat")
 
 usage() {
-  sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 deterministic=0
@@ -184,6 +190,60 @@ run_test_project() {
 
   echo "FAIL     $label"
   return 1
+}
+
+# Runs one command in a directory and reports it the same way the example loop does. The
+# command arrives as separate arguments rather than as a string, so a label with spaces and a
+# command with its own arguments stay distinct without re-parsing either.
+run_suite() {
+  local label="$1" directory="$2"
+  shift 2
+  echo "=== $label ==="
+  if (cd "$directory" && "$@"); then
+    echo "PASS     $label"
+    return 0
+  fi
+
+  echo "FAIL     $label"
+  return 1
+}
+
+# The interpreter the Python suites run under, printed on stdout. lib/py/.venv is the
+# documented environment (README, "Validating the suite"); CI installs the package into the
+# system interpreter instead, so python3 is the fallback. Either way the interpreter has to
+# import the SDK: every Python example and every Python parity test imports it, and without it
+# they fail with ModuleNotFoundError from lib/py/durable.py rather than with anything that
+# names the missing prerequisite.
+python_for_suites() {
+  local candidate
+  for candidate in "$ROOT/lib/py/.venv/bin/python" python3; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import copilot' >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  echo "validate.sh: no Python interpreter can import the Copilot SDK, so the Python suites" >&2
+  echo "validate.sh: cannot run. Create the documented environment and install the package:" >&2
+  echo "validate.sh:   python3 -m venv lib/py/.venv && lib/py/.venv/bin/pip install -e lib/py" >&2
+  echo "validate.sh: or install it into python3: python3 -m pip install -e lib/py" >&2
+  return 1
+}
+
+# The TypeScript suites and the TypeScript examples resolve @github/copilot-sdk from
+# examples/ts/node_modules, and the parity tests run the examples as subprocesses. lib/ts has
+# its own node_modules for tsx. Both are needed and neither implies the other, so a missing one
+# is named here instead of surfacing as a module resolution error inside a test.
+require_node_modules() {
+  local missing=0 directory
+  for directory in "$ROOT/lib/ts/node_modules" "$ROOT/examples/ts/node_modules"; do
+    if [[ ! -d "$directory" ]]; then
+      echo "validate.sh: $directory is missing; run npm ci --prefix ${directory%/node_modules}" >&2
+      missing=$((missing + 1))
+    fi
+  done
+
+  return $((missing > 0))
 }
 
 # The model the fixture records for the session it records. This is the answer the runtime
@@ -276,6 +336,65 @@ run_deterministic() {
       failures=$((failures + 1))
     fi
     echo
+  fi
+
+  # The parity and language unit suites. They sit here rather than with the recorded-runtime
+  # suites above because they need the runtime this function has just built: lib/ts and lib/py
+  # read DURABLE_RUNTIME_PATH, and without it they skip the tests that drive the real runtime
+  # instead of failing, which is the silent pass this gate exists to prevent.
+  #
+  # Prerequisites, each named by the script when it is missing:
+  #   - a Python interpreter that imports the Copilot SDK: lib/py/.venv, or python3 with the
+  #     package installed. See python_for_suites.
+  #   - node_modules under lib/ts (tsx) and examples/ts (@github/copilot-sdk, which the parity
+  #     tests reach through the examples they run as subprocesses). See require_node_modules.
+  #   - the recorded runtime at $REPLAY_BIN, built above.
+  #   - lib/ts runs as `npm test -- --test-force-exit`: tsx --test keeps the process alive after
+  #     the last test without that flag, so the gate would hang instead of reporting.
+  #   - the Python parity suite is discovered as a directory, so test_mutations.py runs once as
+  #     one of its files rather than a second time on its own.
+  #   - lib/ts/parity.test.ts is reached by both the root parity script and lib/ts's own npm
+  #     test. That overlap is deliberate: each runs it beside a different set of tests.
+  #   - tests/Durable.Tests' PortHarness_PhysicalLineEndingsPreserveGeneratedClients shells out
+  #     to python3 and needs lib/py/.venv/bin on PATH. It is not part of this gate.
+  if [[ "${SKIP_TESTS:-0}" != "1" ]]; then
+    local python=""
+    if ! python="$(python_for_suites)"; then
+      failures=$((failures + 1))
+    fi
+
+    if ! require_node_modules; then
+      failures=$((failures + 1))
+    fi
+
+    if [[ -z "$runtime" ]]; then
+      echo "FAIL     parity and language suites (the recorded runtime did not build, so"
+      echo "         DURABLE_RUNTIME_PATH cannot be set; see the build error above)"
+      failures=$((failures + 1))
+    else
+      export DURABLE_RUNTIME_PATH="$runtime"
+
+      if [[ -n "$python" ]]; then
+        run_suite "parity (python)" "$ROOT" \
+          "$python" -m unittest discover -s tests/parity -t tests/parity -p 'test_*.py' \
+          || failures=$((failures + 1))
+        echo
+      fi
+
+      run_suite "parity (typescript)" "$ROOT" npm run test:parity:ts \
+        || failures=$((failures + 1))
+      echo
+
+      run_suite "lib/ts unit tests" "$ROOT/lib/ts" npm test -- --test-force-exit \
+        || failures=$((failures + 1))
+      echo
+
+      if [[ -n "$python" ]]; then
+        run_suite "lib/py unit tests" "$ROOT" "$python" lib/py/test_sdk.py \
+          || failures=$((failures + 1))
+        echo
+      fi
+    fi
   fi
 
   # The deterministic examples. Each one runs against the recorded runtime; a session the
