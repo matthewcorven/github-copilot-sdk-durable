@@ -28,7 +28,12 @@ def build(root=ROOT):
     sources = sorted(path.name for path in (root / "examples").glob("[0-3][0-9]-*.cs")
                      if int(path.name[:2]) <= 35)
     if [source[:2] for source in sources] != [f"{n:02}" for n in range(36)]:
-        raise ValueError("C# contract must contain every numbered example exactly once, 00..35")
+        present = [source[:2] for source in sources]
+        missing = [f"{n:02}" for n in range(36) if f"{n:02}" not in present]
+        duplicated = sorted({value for value in present if present.count(value) > 1})
+        raise ValueError("C# contract must contain every numbered example exactly once, 00..35; "
+                         f"missing example id(s): {', '.join(missing) or 'none'}; "
+                         f"duplicated example id(s): {', '.join(duplicated) or 'none'}")
     rows = {}
     for language, extension in [("ts", "ts"), ("py", "py")]:
         rows[language] = {}
@@ -51,7 +56,7 @@ def build(root=ROOT):
                 if row.get("path") not in (expected, Path(expected).name):
                     raise ValueError(f"{path}: {identifier} path must identify {expected}")
                 if not (root / expected).is_file():
-                    raise ValueError(f"Missing example: {expected}")
+                    raise ValueError(f"Missing example {identifier} for language {language}: {expected}")
                 status = row.get("status")
                 if status not in ("ported", "pending-native-api"):
                     raise ValueError(f"{path}: {identifier} invalid implementation status {status}")
@@ -72,7 +77,9 @@ def build(root=ROOT):
                     "rangeManifest": str(path.relative_to(root)), "evidence": row,
                 }
         if set(rows[language]) != {f"{n:02}" for n in range(36)}:
-            raise ValueError(f"{language}: range declarations must cover 00..35 exactly")
+            undeclared = sorted({f"{n:02}" for n in range(36)} - set(rows[language]))
+            raise ValueError(f"{language}: range declarations must cover 00..35 exactly; "
+                             f"missing example id(s) {', '.join(undeclared)}")
     entries = []
     for source in sources:
         identifier = source[:2]

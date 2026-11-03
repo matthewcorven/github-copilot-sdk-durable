@@ -77,6 +77,9 @@ class RunnerContractTests(unittest.TestCase):
                 result = execute(root, language, "--list")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("Missing example", result.stderr)
+                # A reader must learn both the language and the example id without parsing the path.
+                self.assertIn(f"Missing example 01 for language {language}: "
+                              f"examples/{language}/01-documents.{language}", result.stderr)
 
     def test_removed_global_entry_fails_both_runners(self):
         for language in ("ts", "py"):
@@ -88,6 +91,45 @@ class RunnerContractTests(unittest.TestCase):
                 result = execute(root, language, "--list")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("FAIL parity contract", result.stderr)
+                self.assertIn("35", result.stderr)
+
+    def test_deleted_csharp_source_names_the_missing_example_id(self):
+        for language in ("ts", "py"):
+            with self.subTest(language=language), isolated_contract() as root:
+                (root / "examples/33-sandbox-sdk-filesystem.cs").unlink()
+                result = execute(root, language, "--list")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("missing example id(s): 33", result.stderr)
+
+    def test_missing_range_declaration_names_the_language_and_example_id(self):
+        for language in ("ts", "py"):
+            with self.subTest(language=language), isolated_contract() as root:
+                path = root / "examples/ts/parity-22-35.json"
+                declaration = json.loads(path.read_text())
+                declaration["examples"] = [row for row in declaration["examples"] if row["id"] != "33"]
+                path.write_text(json.dumps(declaration))
+                result = execute(root, language, "--list")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("ts", result.stderr)
+                self.assertIn("33", result.stderr)
+                self.assertIn("missing", result.stderr.lower())
+
+    def test_missing_reference_output_inventory_names_the_example_id(self):
+        for language in ("ts", "py"):
+            with self.subTest(language=language), isolated_contract() as root:
+                path = root / "examples/parity.json"
+                manifest = json.loads(path.read_text())
+                for entry in manifest["examples"]:
+                    if entry["id"] == "00":
+                        entry["expectedOutput"] = None
+                path.write_text(json.dumps(manifest))
+                result = execute(root, language, "--list")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("00", result.stderr)
+                # ts reaches the expectedOutput gate; py's manifest-drift gate fires first and
+                # names the same id. Either way the reader learns which example is wrong.
+                self.assertTrue("examples/expected/00-conversation.txt" in result.stderr
+                                or "drifted example id(s): 00" in result.stderr, result.stderr)
 
     def test_changed_range_evidence_requires_explicit_manifest_regeneration(self):
         for language in ("ts", "py"):

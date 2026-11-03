@@ -36,8 +36,14 @@ def load_manifest():
             or any(type(entry["live"]) is not bool or type(entry["deterministic"]) is not bool
                    for entry in manifest["examples"])):
         raise ValueError("Global parity manifest has invalid version/scope/boolean field types")
-    if manifest != build():
-        raise ValueError("Global parity manifest differs from range/source declarations; regenerate explicitly")
+    expected = build()
+    if manifest != expected:
+        drifted = [entry["id"] for entry, actual in zip(expected["examples"], manifest["examples"])
+                   if entry != actual]
+        drifted += [entry["id"] for entry in expected["examples"][len(manifest["examples"]):]]
+        drifted += [entry["id"] for entry in manifest["examples"][len(expected["examples"]):]]
+        raise ValueError("Global parity manifest differs from range/source declarations; regenerate explicitly; "
+                         f"drifted example id(s): {', '.join(drifted) or 'none'}")
     provenance = json.loads((ROOT / "examples" / "expected" / "provenance.json").read_text())
     if sorted(provenance["outputs"]) != sorted(REFERENCE_IDS):
         raise ValueError("Reference output inventory must include four actual C# examples")
