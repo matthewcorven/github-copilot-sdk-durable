@@ -126,6 +126,7 @@ internal static class Program
 
         using var store = OpenStore(options);
         ClaimOwnership(store, options.StorePath);
+        ReportStore(store, options.StorePath);
 
         var registry = BuildRegistry();
         var definition = await LoadDefinitionAsync(store, registry, options);
@@ -169,6 +170,7 @@ internal static class Program
 
         using var store = OpenStore(options);
         ClaimOwnership(store, options.StorePath);
+        ReportStore(store, options.StorePath);
 
         var registry = BuildRegistry();
         var definition = await LoadDefinitionAsync(store, registry, options);
@@ -489,6 +491,7 @@ internal static class Program
 
         using var store = OpenStore(options);
         ClaimOwnership(store, options.StorePath);
+        ReportStore(store, options.StorePath);
 
         var registry = BuildRegistry();
         var definition = await LoadDefinitionAsync(store, registry, options);
@@ -872,6 +875,7 @@ internal static class Program
 
         using var store = OpenStore(options);
         ClaimOwnership(store, options.StorePath);
+        ReportStore(store, options.StorePath);
 
         var registry = BuildRegistry();
         var definition = await LoadDefinitionAsync(store, registry, options);
@@ -1270,6 +1274,35 @@ internal static class Program
         var line = $"containment: {containment} for agent '{agent}': {reason}";
         Console.Error.WriteLine(containment == Containment.None ? $"warning: {line}" : line);
     }
+
+    /// <summary>
+    /// Reports the store the host resolved, before anything is served.
+    /// </summary>
+    /// <remarks>
+    /// The format is the one the store settled on, not the one the caller asked for: an
+    /// <c>--format auto</c> run over a fresh path reports <c>jsonl</c>, because that is what
+    /// the store writes. The line is informational, so it carries no <c>warning:</c> prefix.
+    /// <para>
+    /// There is deliberately no platform line. The core path is free of platform-detection
+    /// APIs so it stays portable, and the host reports only what it can observe without
+    /// them.
+    /// </para>
+    /// </remarks>
+    private static void ReportStore(DurableStore store, string? storePath)
+    {
+        var line = store.IsPersistent
+            ? $"store: {FormatName(store.Format)} at {storePath}"
+            : $"store: {FormatName(store.Format)} (ephemeral)";
+        Console.Error.WriteLine(line);
+    }
+
+    private static string FormatName(DurableStoreFormat format) => format switch
+    {
+        DurableStoreFormat.Jsonl => "jsonl",
+        DurableStoreFormat.LegacyJson => "legacy-json",
+        DurableStoreFormat.InMemory => "in-memory",
+        _ => "auto",
+    };
 
     private const string HelpText = """
         durable-runtime: the durable agent host

@@ -555,6 +555,12 @@ durable guarantee above is the library's; the host only decides *which* store, *
   permission handler — including a careful one, because an unverifiable handler reads as the worst
   case. `run` proceeds with a warning; `serve` and `schedule` refuse to start with `None` unless
   `--allow-uncontained` is passed.
+- **The startup report.** Before serving, the host writes two lines to stderr: the store it resolved
+  (`store: jsonl at <path>`, or `store: in-memory (ephemeral)`) and then the containment
+  classification. The store line names the format the store *settled on*, not the one requested, so
+  `--format auto` over a fresh path reports `jsonl`. There is no platform line: the core path is
+  deliberately free of platform-detection APIs so it stays portable (criterion 6,
+  `CorePath_HasNoPlatformSpecificApis`), and the host reports only what it can observe without them.
 - **The effective model.** The model an agent *requests* is not the model the runtime *reported*.
   The host reads `WaitForEffectiveModelAsync` and prints what it returns. When the runtime reports
   nothing, the result carries `effectiveModel: null` and `modelReported: false` and the host prints
