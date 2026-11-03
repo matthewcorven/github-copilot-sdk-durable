@@ -14,7 +14,7 @@ public class LateJoinExampleTests
     [Fact]
     public async Task PortHarness_PhysicalLineEndingsPreserveGeneratedClients()
     {
-        var result = await ExecuteAsync(OperatingSystem.IsWindows() ? "python" : "python3",
+        var result = await ExecuteAsync(PythonInterpreter(),
             ["-m", "unittest",
                 "examples.py.parity_test_11_21.LateJoinParityTests.test_physical_line_endings_preserve_generated_clients",
                 "-v"], FindRepository());
@@ -380,6 +380,72 @@ public class LateJoinExampleTests
     {
         Assert.True(result.ExitCode != 0, $"Expected failure containing '{diagnostic}':\n{result.Output}");
         Assert.True(result.Output.Contains(diagnostic, StringComparison.Ordinal), result.Output);
+    }
+
+    // The interpreter the Python parity test runs under, mirroring python_for_suites() in
+    // scripts/validate.sh. lib/py/.venv is the documented environment (README, "Validating the
+    // suite"); CI installs the package into the system interpreter instead, so python3 is the
+    // fallback. Either way the interpreter has to import the SDK, because the parity test fails
+    // with ModuleNotFoundError from lib/py/durable.py rather than with anything that names the
+    // missing prerequisite.
+    private static string PythonInterpreter()
+    {
+        var repository = FindRepository();
+        string[] candidates =
+        [
+            OperatingSystem.IsWindows()
+                ? Path.Combine(repository, "lib", "py", ".venv", "Scripts", "python.exe")
+                : Path.Combine(repository, "lib", "py", ".venv", "bin", "python"),
+            OperatingSystem.IsWindows() ? "python" : "python3",
+        ];
+        foreach (var candidate in candidates)
+        {
+            if (ImportsCopilot(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        Assert.Fail("No Python interpreter can import the Copilot SDK, so the Python parity test "
+            + "cannot run. Create the documented environment and install the package: "
+            + "python3 -m venv lib/py/.venv && lib/py/.venv/bin/pip install -e lib/py "
+            + "(or install it into python3: python3 -m pip install -e lib/py).");
+        return string.Empty;
+    }
+
+    private static bool ImportsCopilot(string interpreter)
+    {
+        var start = new ProcessStartInfo(interpreter)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        start.ArgumentList.Add("-c");
+        start.ArgumentList.Add("import copilot");
+        try
+        {
+            using var process = Process.Start(start);
+            if (process is null)
+            {
+                return false;
+            }
+
+            process.StandardOutput.ReadToEnd();
+            process.StandardError.ReadToEnd();
+            if (!process.WaitForExit(30_000))
+            {
+                process.Kill(entireProcessTree: true);
+                return false;
+            }
+
+            return process.ExitCode == 0;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // The candidate is not on PATH at all; try the next one.
+            return false;
+        }
     }
 
     private static string FindRepository()

@@ -357,8 +357,9 @@ run_deterministic() {
   #     one of its files rather than a second time on its own.
   #   - lib/ts/parity.test.ts is reached by both the root parity script and lib/ts's own npm
   #     test. That overlap is deliberate: each runs it beside a different set of tests.
-  #   - tests/Durable.Tests' PortHarness_PhysicalLineEndingsPreserveGeneratedClients shells out
-  #     to python3 and needs lib/py/.venv/bin on PATH. It is not part of this gate.
+  #   - tests/Durable.Tests' PortHarness_PhysicalLineEndingsPreserveGeneratedClients resolves
+  #     its own interpreter (lib/py/.venv first, then PATH), so it no longer needs the venv on
+  #     PATH. It is still not part of this gate.
   if [[ "${SKIP_TESTS:-0}" != "1" ]]; then
     local python=""
     if ! python="$(python_for_suites)"; then

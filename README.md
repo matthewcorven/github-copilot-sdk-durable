@@ -519,12 +519,14 @@ python3 -m pip install -e lib/py
 npm ci --prefix lib/ts
 ```
 
-Keep that environment activated when running `dotnet test` or `validate.sh`: the test
-launches `python3` from `PATH` (`python` on Windows), and its subprocesses reuse that
-interpreter. On Windows, activate `lib\py\.venv\Scripts\Activate.ps1` in PowerShell instead.
-Use `python` instead of `python3` for the Windows environment creation and pip commands.
-An existing virtual environment works too if its interpreter is on `PATH` and has the
-declared Python project installed. The Python SDK is pinned in `lib/py/pyproject.toml`;
+The late-join test resolves its interpreter itself: it prefers `lib/py/.venv/bin/python`
+(`lib\py\.venv\Scripts\python.exe` on Windows) and falls back to `python3` (`python` on
+Windows) from `PATH`, using the first candidate that can import the Copilot SDK. Activating
+the environment is therefore optional for `dotnet test` and `validate.sh`, but the
+interpreter it selects must have the declared Python project installed. On Windows, activate
+`lib\py\.venv\Scripts\Activate.ps1` in PowerShell instead. Use `python` instead of `python3`
+for the Windows environment creation and pip commands. The Python SDK is pinned in
+`lib/py/pyproject.toml`;
 Node dependencies are restored from `lib/ts/package-lock.json`. CI provisions both
 languages and installs these dependencies before the unconditional .NET `Test` step.
 
