@@ -349,8 +349,10 @@ run_deterministic() {
   #   - node_modules under lib/ts (tsx) and examples/ts (@github/copilot-sdk, which the parity
   #     tests reach through the examples they run as subprocesses). See require_node_modules.
   #   - the recorded runtime at $REPLAY_BIN, built above.
-  #   - lib/ts runs as `npm test -- --test-force-exit`: tsx --test keeps the process alive after
-  #     the last test without that flag, so the gate would hang instead of reporting.
+  #   - lib/ts runs as `npm test -- --test-force-exit`. The flag is also in lib/ts's own test
+  #     script; passing it here as well is deliberate belt-and-braces, so the gate still
+  #     terminates if that script is ever reverted. tsx --test keeps the process alive after
+  #     the last test without the flag, so the gate would hang instead of reporting.
   #   - the Python parity suite is discovered as a directory, so test_mutations.py runs once as
   #     one of its files rather than a second time on its own.
   #   - lib/ts/parity.test.ts is reached by both the root parity script and lib/ts's own npm
