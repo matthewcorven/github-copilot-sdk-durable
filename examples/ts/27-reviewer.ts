@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   AgentChoices, DurableHarness, DurableStore, Extension, ExtensionRegistry,
   PromptSection, type DurableConversation, type DurableTool,
@@ -19,7 +19,7 @@ async function main() {
       if (args === null || typeof args !== "object" || !("path" in args) ||
         typeof args.path !== "string") throw new Error("read_file path must be a string");
       const path = args.path;
-      const full = join(worktree, path);
+      const full = resolve(worktree, path);
       return existsSync(full) ? readFileSync(full, "utf8") : `(no such file: ${path})`;
     },
   };
