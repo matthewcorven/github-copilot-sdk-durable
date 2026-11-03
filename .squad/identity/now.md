@@ -1,7 +1,7 @@
 ---
-updated_at: 2026-11-03T07:05:00Z
-updated_by: coordinator (Ralph round 11)
-focus_area: PR #130 merged and epic #8 fully closed; #129 widening the deterministic gate; three un-decomposed epics remain
+updated_at: 2026-11-03T09:40:00Z
+updated_by: coordinator (Ralph round 12)
+focus_area: #129 gate widening verified green and opened as PR #131; three un-decomposed epics remain
 active_issues: [5, 6, 19, 129]
 ---
 
@@ -9,12 +9,11 @@ active_issues: [5, 6, 19, 129]
 
 ## Where the team is
 
-`dev` is at `05d8750` ("docs(squad): round 11 handoff — epic #8 closed, PR #130 merged"). **Zero open
-PRs.** PR #130 squash-merged as `7a5e373` after all three CI jobs (build, Host smoke ubuntu, Host smoke
-windows) went green.
+`dev` is at `2fef50c` ("docs(squad): record round 11"). **One open PR: #131**, which carries #129 — the
+widened deterministic gate. PR #130 squash-merged as `7a5e373` after all three CI jobs went green.
 
-Open issues: **#129** (chore, `validate.sh` coverage gap — in flight) and three epics — **#5, #6, #19**.
-All board items are `Todo`.
+Open issues: **#129** (chore, `validate.sh` coverage gap — PR #131 open) and three epics — **#5, #6,
+#19**. All board items are `Todo`.
 
 Epic #4 (polyglot ports) is **CLOSED** with all five acceptance criteria verified empirically.
 Epic #8 (runtime host) is **CLOSED** with all eight criteria verified or deliberately scoped.
@@ -29,6 +28,7 @@ Epic #8 (runtime host) is **CLOSED** with all eight criteria verified or deliber
 | #122 | #103 | CLOSED as superseded — merge tree byte-identical to `dev` |
 | #125 | #104 | MERGED `a953d32` — the `advanced-read-tools.test.mjs` guard, +56 lines |
 | #130 | #8 | MERGED `7a5e373` — resolved store backend reported on host startup |
+| #131 | #129 | OPEN — widened deterministic gate (parity + language unit suites) |
 
 Issues closed: #98, #102, #103, #104, #105, and **epic #4**. All six sub-issues of epic #4 and all
 six of epic #8 are CLOSED.

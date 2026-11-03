@@ -77,15 +77,15 @@ hash here; it goes stale the moment this file is committed. Confirm with
 
 ### Where `dev` is
 
-`dev` head is **`b0156be`** — "chore: ignore machine-local .copilot/ tool-approval
-state". **Epics #4 and #8 are both CLOSED** with every criterion verified. One PR
-(#130) carries the epic-#8 criterion-8 implementation; one issue (#129) is in flight.
+`dev` head is **`2fef50c`** — "docs(squad): record round 11". **Epics #4 and #8 are
+both CLOSED** with every criterion verified. PR #130 (epic-#8 criterion 8) is merged.
+PR #131 carries #129, the widened deterministic gate.
 
 ### Open issues — one chore, three epics
 
 | Issue | Owner label | State |
 |-------|-------------|-------|
-| #129 | `squad:tester` | `type:chore` — widen `validate.sh --deterministic`; in progress |
+| #129 | `squad:tester` | `type:chore` — widen `validate.sh --deterministic`; PR #131 open |
 | #19 | `squad:tester` | un-decomposed, zero sub-issues |
 | #6 | `squad:tester` | un-decomposed, zero sub-issues |
 | #5 | `squad:polyglot-engineer` | un-decomposed, zero sub-issues, `help wanted` |
@@ -115,7 +115,7 @@ Issues closed this round: #98, #102, #103, #104, #105, **epic #4**, and **epic #
 | #123 | — | `d34d84d` | SDK-bound TypeScript and Python durable language support |
 | #126 | #105 | `352c076` | Full 36×2 parity contract, runners, global manifest |
 | #125 | #104 | `a953d32` | The `advanced-read-tools.test.mjs` guard, +56 lines |
-| #130 | #8 | pending | Resolved store backend reported on host startup |
+| #130 | #8 | `7a5e373` | Resolved store backend reported on host startup |
 
 ### #126 subsumed #102/#103/#104
 
@@ -250,8 +250,7 @@ report: `containment: {Sandboxed|PermissionGated|None} for agent '{name}': {reas
 
 ### Startable vs blocked
 
-**Startable now:** #129 (the `validate.sh` widening, in flight) and **#19**, the next
-tractable epic — its `lib/SandboxSupport.cs` surface already partly exists
+**Startable now:** **#19**, the next tractable epic — its `lib/SandboxSupport.cs` surface already partly exists
 (`SandboxRunMode` at 28, `Resolve` at 73, `AssertPolicy` at 111, `AssertDenied` at 174,
 `AssertNoPermissionDenial` at 207). Decompose #19 into its five sub-issues before
 working it; do not work an epic directly.
@@ -341,6 +340,16 @@ run those suites, look under `lib/ts/` and `lib/py/`, not the repo root.
 Six real gaps surfaced during PR #83 and PR #84 and were deliberately left out of
 scope. They are listed in `.squad/decisions.md` under "Six agent-surfaced follow-ups
 are known and unfiled". File them when the board is otherwise clear.
+
+Three more surfaced during #129 and were deliberately left out of its scope:
+
+- `lib/ts/package.json`'s `test` script lacks `--test-force-exit`, so a bare
+  `npm test` hangs forever. The gate works around it; the script should be fixed.
+- `PortHarness_PhysicalLineEndingsPreserveGeneratedClients`
+  (`tests/Durable.Tests/LateJoinExampleTests.cs:15`) shells out to `python3 -m
+  unittest` via `PATH` and needs `lib/py/.venv/bin` on `PATH`. Latent CI failure.
+- `README.md` claimed CI does not run `--deterministic`; corrected in #131, but the
+  same paragraph's example counts are worth re-checking against the manifest.
 
 ### Hard constraints
 

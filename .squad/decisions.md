@@ -580,3 +580,29 @@ The exclusion is recorded in `docs/DESIGN.md` §3.9 rather than satisfied.
 load-bearing (it is what makes the host runnable on Linux and Windows from one code path); a startup log
 line is not. When a spec contradicts itself, satisfy the invariant and write down why the other clause
 was dropped — silently picking one side leaves the next reader to re-litigate it.
+
+### 2026-11-03T09:35:00Z: A gate that cannot run in CI is not a gate — install the dependency, do not narrow the check
+
+**By:** coordinator (Ralph round 12)
+**What:** #129 widened `scripts/validate.sh --deterministic` to run the Python and TypeScript parity
+suites and both language unit suites. The TypeScript parity suite runs the examples as subprocesses, so
+it resolves `@github/copilot-sdk` from `examples/ts/node_modules` — and `.github/workflows/build.yml`
+installed only `lib/ts`. The widened gate would therefore have failed CI on a missing directory. The fix
+was one line, `npm ci --prefix examples/ts`, not a narrower `require_node_modules`.
+**Why:** The tempting fix is to relax the check so it passes in the environment that cannot satisfy it.
+That converts a real prerequisite into a silent skip, which is the exact failure mode #129 exists to
+close. When a gate needs something CI does not provide, provide it in CI. The same missing directory had
+already produced three spurious example failures (05, 06, 09) during earlier verification, so the
+workflow gap was costing correctness outside the gate too.
+
+### 2026-11-03T09:38:00Z: Verify the gate yourself before merging the PR that widens it
+
+**By:** coordinator (Ralph round 12)
+**What:** Tester reported `./scripts/validate.sh --deterministic` green with all four new suites PASS.
+I re-ran it end to end on `dev` at `2fef50c` and confirmed independently: exit 0, `PASS` on
+`parity (python)`, `parity (typescript)`, `lib/ts unit tests`, `lib/py unit tests`, **zero** `FAIL`
+lines, final line `Deterministic run passed.`
+**Why:** An agent's report is a claim, not evidence — and this particular claim is about the gate that
+is supposed to catch unverified claims. A gate whose greenness was never observed by the person merging
+it is exactly the false confidence the gate is meant to prevent. Also: do not pipe a long gate through
+`tail`; it buffers everything and makes progress unobservable. Redirect to a log file and grep it.
