@@ -70,7 +70,7 @@ label, and move to the next actionable item.  Do not halt the loop.
 
 ## Session Handoff — read this before your first dispatch
 
-State as of **2026-11-03, Ralph round 11**. Everything below was verified against the
+State as of **2026-11-03, Ralph round 14**. Everything below was verified against the
 live board, the open PRs, and `git worktree list` — not assumed. Do not trust a commit
 hash here; it goes stale the moment this file is committed. Confirm with
 `gh issue list`, `gh pr list`, and `git worktree list`.
@@ -79,25 +79,31 @@ hash here; it goes stale the moment this file is committed. Confirm with
 
 `dev` head is **`feafd0a`** — "ci: widen the deterministic gate to the parity and
 language suites (#131)". **Epics #4 and #8 are both CLOSED** with every criterion
-verified. PR #130 (epic-#8 criterion 8) and PR #131 (#129, the widened deterministic
-gate) are both merged. **Zero open PRs.**
+verified. **Two open PRs**, both from this round: **#138** (#132) and **#139** (#133).
+Both fixes are independently verified; both are waiting on the `build` job.
 
-### Open issues — three epics, two bugs
+### Open issues — three epics, two bugs in review, four sub-issues
 
 | Issue | Owner label | State |
 |-------|-------------|-------|
-| #19 | `squad:tester` | un-decomposed epic, zero sub-issues |
+| #19 | `squad:tester` | **decomposed** into #134-#137; blocked by all four |
 | #6 | `squad:tester` | un-decomposed epic, zero sub-issues |
 | #5 | `squad:polyglot-engineer` | un-decomposed epic, zero sub-issues, `help wanted` |
-| #132 | `squad:tester` | `type:bug` — `lib/ts` `npm test` hangs without `--test-force-exit` |
-| #133 | `squad:tester` | `type:bug` — `PortHarness` test depends on `lib/py/.venv/bin` on `PATH` |
+| #132 | `squad:tester` | `type:bug` — fix in review as **#138** |
+| #133 | `squad:tester` | `type:bug` — fix in review as **#139** |
+| #134 | `squad:tester` | `SKIP_SANDBOX=1` escape in `scripts/validate.sh` |
+| #135 | `squad:tester` | `policy`-mode expected-output fixtures for 33/34/35 |
+| #136 | `squad:docs` | advisory host-enforcement CI job + `docs/SANDBOX_CI.md` |
+| #137 | `squad:tester` | check-first: does the completeness gate name language *and* id? |
 
-All board items are `Todo`. #5, #6, and #19 have **zero** sub-issues — they are
-un-decomposed epics and cannot be closed on sub-issue completion alone. Decompose
-before working them. **#19 is the most tractable** (see "Startable vs blocked").
+#5 and #6 have **zero** sub-issues — they are un-decomposed epics and cannot be closed
+on sub-issue completion alone. Decompose before working them.
 
-#132 and #133 are small, self-contained, and independent of the epics. Either is a
-good warm-up round.
+**#19 is decomposed and startable.** Its four sub-issues are filed, board-added as
+`Todo`, and linked the right way round (`#19` is blocked by each of them). Work them
+individually; do not work the epic directly. **Five of #19's nine criteria were already
+satisfied** before decomposition — read the decomposition note on #19 (comment
+`6602722428`) before writing any code, or you will re-implement what already exists.
 
 ### Closed this round — do not reopen
 
@@ -123,6 +129,8 @@ Issues closed this round: #98, #102, #103, #104, #105, **#129**, **epic #4**, an
 | #125 | #104 | `a953d32` | The `advanced-read-tools.test.mjs` guard, +56 lines |
 | #130 | #8 | `7a5e373` | Resolved store backend reported on host startup |
 | #131 | #129 | `feafd0a` | Widened `--deterministic` to the parity and language suites |
+| #138 | #132 | pending | `--test-force-exit` in `lib/ts`'s `test` script |
+| #139 | #133 | pending | `PortHarness` resolves its own Python interpreter |
 
 ### #126 subsumed #102/#103/#104
 
@@ -257,15 +265,24 @@ report: `containment: {Sandboxed|PermissionGated|None} for agent '{name}': {reas
 
 ### Startable vs blocked
 
-**Startable now:** **#132** or **#133** (small, independent), then **#19**, the next tractable epic — its `lib/SandboxSupport.cs` surface already partly exists
-(`SandboxRunMode` at 28, `Resolve` at 73, `AssertPolicy` at 111, `AssertDenied` at 174,
-`AssertNoPermissionDenial` at 207). Decompose #19 into its five sub-issues before
-working it; do not work an epic directly.
+**Startable now:** **#134**, **#135**, **#136**, or **#137** — epic #19's four
+sub-issues, all filed, board-added as `Todo`, and linked so that #19 is blocked by each
+of them. Work them individually; do not work the epic directly.
+
+#137 is check-first and cheapest. #134 is a small `scripts/validate.sh` change. #135
+and #136 are larger (fixtures and a CI job respectively).
+
+**Before touching any of them, read the decomposition note on #19** (comment
+`6602722428`). Five of #19's nine criteria were already satisfied before decomposition
+— `lib/SandboxSupport.cs` already has `SandboxRunMode` (28), `Resolve` (73),
+`AssertPolicy` (111), `AssertDenied` (174), `AssertNoPermissionDenial` (207); `33 34 35`
+are already in `LIVE_EXAMPLES` (`scripts/validate.sh:31`); `policy_resolved` is already
+emitted and asserted. Re-implementing those is the main risk in this epic.
 
 **Blocked — do not start:**
 
 - **#5** ← #4 (now closed, so #5 is unblocked but un-decomposed). **#6** ← #5, #4.
-  **#19** ← #6.
+- **#19** ← #134, #135, #136, #137. It is startable only through its sub-issues.
 - **#4, #8** — CLOSED epics. Do not reopen; work any follow-up as a new issue.
 
 These are native `blockedBy` links and they are authoritative. Before 2026-10-31 the
@@ -348,17 +365,18 @@ Six real gaps surfaced during PR #83 and PR #84 and were deliberately left out o
 scope. They are listed in `.squad/decisions.md` under "Six agent-surfaced follow-ups
 are known and unfiled". File them when the board is otherwise clear.
 
-Three more surfaced during #129. Two are now filed; one remains unfiled:
+Three more surfaced during #129. Two are now fixed and in review; one remains unfiled:
 
-- **Filed as #132** — `lib/ts/package.json`'s `test` script lacks
-  `--test-force-exit`, so a bare `npm test` hangs forever. The gate works around it;
-  the script itself should be fixed.
-- **Filed as #133** — `PortHarness_PhysicalLineEndingsPreserveGeneratedClients`
-  (`tests/Durable.Tests/LateJoinExampleTests.cs:15`) shells out to `python3 -m
-  unittest` via `PATH` and needs `lib/py/.venv/bin` on `PATH`. Latent CI failure.
-- **Still unfiled** — `README.md` claimed CI does not run `--deterministic`;
-  corrected in #131, but the same paragraph's example counts are worth re-checking
-  against the manifest.
+- **#132 — fixed, PR #138.** `lib/ts/package.json`'s `test` script lacked
+  `--test-force-exit`, so a bare `npm test` hung forever. The gate worked around it;
+  the script itself is now fixed. Verified: 123/123 pass, exits on its own.
+- **#133 — fixed, PR #139.** `PortHarness_PhysicalLineEndingsPreserveGeneratedClients`
+  (`tests/Durable.Tests/LateJoinExampleTests.cs`) shelled out to `python3 -m unittest`
+  via `PATH` and needed `lib/py/.venv/bin` on `PATH`. It now resolves its own
+  interpreter. Verified with a before/after control: fails without the fix, passes
+  with it.
+- **Still unfiled** — `README.md`'s example counts in the same paragraph are worth
+  re-checking against `examples/parity.json`.
 
 ### Hard constraints
 

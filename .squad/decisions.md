@@ -618,3 +618,99 @@ it is exactly the false confidence the gate is meant to prevent. Also: do not pi
 **By:** coordinator (Ralph round 13)
 **What:** Tester's #129 work added `npm run test:parity:ts` to the deterministic gate, but `.github/workflows/build.yml` installed only `lib/py` and `lib/ts` — never `examples/ts`. The parity suite imports `@github/copilot-sdk` from `examples/ts/tools.ts`, so the new step would have failed `ERR_MODULE_NOT_FOUND` on the first CI run. The fix was one line: `npm ci --prefix examples/ts`. The tempting alternative — dropping the parity suite from the gate because "it needs a dependency CI does not have" — would have silently reverted the entire point of the issue.
 **Why:** A prerequisite gap is an argument for installing the prerequisite, never for removing the check. The failure mode to watch for is a gate that passes locally (where `node_modules` happens to exist from earlier work) and fails in CI, or worse, gets quietly narrowed until it passes in both. Verify a widened gate **in the environment that will run it**, not just on the developer's machine — and when the environment is missing something, fix the environment.
+
+---
+
+## 2026-11-03T13:45:00Z — Round 14: an agent with a broken environment will revert a correct fix
+
+**By:** coordinator (Ralph round 14)
+
+**What:** Backend Engineer applied the correct one-line fix for #132
+(`"test": "tsx --test --test-force-exit *.test.ts"`). It then ran the suite itself,
+saw 117 pass / 2 fail, concluded its change had broken something, and **reverted it**.
+I had already verified the same change green (123/123, exit 0) — the two failures were
+`Runtime executable does not exist`, i.e. a wrong `DURABLE_RUNTIME_PATH`, the exact
+trap that had already caught me earlier in the session.
+
+The agent re-applied the fix only after I sent it the literal path. Its own baseline
+run with the *unmodified* `package.json` produced the identical 117/2/2-cancelled
+signature, which is the proof the failures were never attributable to the flag.
+
+**Why it matters:** a dispatch prompt that says "verify with the suite" without pinning
+the environment variables that suite needs is a prompt that invites a false negative —
+and a false negative here produced a *silent regression of a correct fix*. The tree was
+clean after the agent reported, which read like completion but was actually a revert.
+
+**Rule:**
+- When a fix's verification depends on an environment value I already know, **put the
+  literal value in the dispatch prompt.** Do not say "build the runtime and set
+  `DURABLE_RUNTIME_PATH`" — write out the full path.
+- After an agent reports, **re-check `git status`/`git diff` before believing it
+  landed.** A clean tree can mean a revert, not a completion.
+- When an agent reports failures, **reproduce them yourself before accepting the
+  diagnosis.** Twice this session the "failure" was environmental.
+
+The concrete value, for the next prompt:
+`DURABLE_RUNTIME_PATH=/Users/core/git/matthewcorven/github-copilot-sdk-durable/tools/ReplayRuntime/bin/Debug/net10.0/ReplayRuntime`
+
+---
+
+## 2026-11-03T13:50:00Z — Round 14: a before/after control is the only real proof a fix works
+
+**By:** coordinator (Ralph round 14)
+
+**What:** For #133 I verified the fix by running the PortHarness test three ways:
+
+1. With the fix stashed — **1 failed**.
+2. With the fix restored, same ambient `PATH` — **1 passed**.
+3. The whole `LateJoinExample` filter — **3/3 passed**.
+
+Step 1 is the part that matters. Without it, "it passes now" is consistent with the
+environment having changed rather than the code having been fixed — and this session
+had already produced two environmental false alarms (#132 above, and Tester's TS
+"regression" that turned out to pre-date all four open PRs).
+
+**Why it matters:** a fix verification that only runs the post-state cannot distinguish
+"fixed" from "was never broken in this environment" or "the environment shifted".
+The before-state costs one `git stash push <file>` and one test run.
+
+**Rule:** for every bug fix, run the failing test **without** the fix first, then with
+it, on the same environment. Record both results in the PR body. If the pre-fix run
+does not fail, the bug report is wrong and the fix is unverified — stop and find out
+which.
+
+---
+
+## 2026-11-03T13:55:00Z — Round 14: decompose an epic by verifying its criteria, not by trusting its suggested children
+
+**By:** coordinator (Ralph round 14)
+
+**What:** Epic #19 lists six suggested sub-issues. Before filing anything I verified
+all nine acceptance criteria against the current tree, and found **five already
+satisfied**:
+
+| Criterion | Status before decomposition | Evidence |
+|---|---|---|
+| 1 — run modes | satisfied | `SandboxRunMode` `Replayed`/`Enforced`, `lib/SandboxSupport.cs:28` |
+| 3 — assertion split | satisfied | `AssertPolicy` 111, `AssertDenied` 174, `AssertNoPermissionDenial` 207 |
+| 4 — `policy_resolved` | satisfied | `examples/py/34-…py:130`, `_sandbox_policy_22_35.py:82`, `35-…py:104,140` |
+| 5 (first half) — live examples | satisfied | `33 34 35` already in `LIVE_EXAMPLES`, `scripts/validate.sh:31` |
+| 9 (part) — vocabulary | satisfied | `grep -rniE 'mock\|fake\|stub\|simulat' examples/*.cs examples/*.py` → no matches |
+
+Four genuine gaps remained, and they became **#134** (`SKIP_SANDBOX=1`), **#135**
+(`policy`-mode fixtures), **#136** (advisory CI job + `docs/SANDBOX_CI.md`), **#137**
+(check-first: does the completeness gate name language *and* id?).
+
+Note that the filed set is **not** the suggested set. The issue's six suggested children
+did not map cleanly onto the four real gaps, and one suggested child (#137's subject)
+may already be satisfied — it was filed as `type:spike`, check-first, precisely so that
+the work starts by disproving the need.
+
+**Why it matters:** an epic's "suggested sub-issues" are a guess written when the epic
+was filed. Decomposing by transcribing them would have generated work for five
+already-built criteria and missed the shape of the four real gaps.
+
+**Rule:** before filing an epic's sub-issues, verify every acceptance criterion against
+the live tree and record the evidence in a decomposition note on the epic. File only
+the gaps. When a gap is uncertain, file it as a check-first spike rather than as
+implementation work.

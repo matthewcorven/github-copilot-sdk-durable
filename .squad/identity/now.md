@@ -1,8 +1,8 @@
 ---
-updated_at: 2026-11-03T11:15:00Z
-updated_by: coordinator (Ralph round 13)
-focus_area: #129 landed as #131 — the deterministic gate now runs the parity and language suites; three un-decomposed epics and two small bugs remain
-active_issues: [5, 6, 19, 132, 133]
+updated_at: 2026-11-03T13:40:00Z
+updated_by: coordinator (Ralph round 14)
+focus_area: #132 and #133 fixed and in review as #138/#139; epic #19 decomposed into #134-#137; three epics remain
+active_issues: [5, 6, 19, 132, 133, 134, 135, 136, 137]
 ---
 
 # Now
@@ -10,11 +10,11 @@ active_issues: [5, 6, 19, 132, 133]
 ## Where the team is
 
 `dev` is at `feafd0a` ("ci: widen the deterministic gate to the parity and language suites (#131)").
-**Zero open PRs.** PR #131 squash-merged after `build` went green in 14m12s — the widened gate is now
-the slowest CI step, and that is the point.
+**Two open PRs**, both from round 14: **#138** (`#132`) and **#139** (`#133`). Both fixes are
+independently verified; both are waiting on the ~14-minute `build` job.
 
-Open issues: three epics — **#5, #6, #19** — plus two small bugs filed this round, **#132** and
-**#133**. All board items are `Todo`.
+Open issues: three epics — **#5, #6, #19** — plus **#132** and **#133** (in review), and epic #19's
+four sub-issues **#134–#137**, all `Todo` on the board. #132 and #133 are not on the board yet.
 
 Epic #4 (polyglot ports) is **CLOSED** with all five acceptance criteria verified empirically.
 Epic #8 (runtime host) is **CLOSED** with all eight criteria verified or deliberately scoped.
@@ -30,6 +30,8 @@ Epic #8 (runtime host) is **CLOSED** with all eight criteria verified or deliber
 | #125 | #104 | MERGED `a953d32` — the `advanced-read-tools.test.mjs` guard, +56 lines |
 | #130 | #8 | MERGED `7a5e373` — resolved store backend reported on host startup |
 | #131 | #129 | MERGED `feafd0a` — widened deterministic gate (parity + language unit suites) |
+| #138 | #132 | OPEN — `--test-force-exit` in `lib/ts`'s `test` script |
+| #139 | #133 | OPEN — `PortHarness` resolves its own Python interpreter |
 
 Issues closed: #98, #102, #103, #104, #105, **#129**, and **epic #4**. All six sub-issues of epic #4
 and all six of epic #8 are CLOSED. Filed this round: **#132** (`lib/ts` `npm test` hangs without
@@ -161,16 +163,26 @@ the payload commits, verified by tree-hash equality per top-level directory.
 
 ## Next action
 
-Land PR #130 (wait for `build` + both `Host smoke` jobs, then squash-merge). Then pick up **#129** —
-widening `scripts/validate.sh --deterministic` to cover the parity suite, `test_mutations.py`, and
-both language unit suites. It is small, self-contained, and closes the gap that let a five-green gate
-coexist with a real parity failure.
+Land **#138** and **#139** (wait for `build` + both `Host smoke` jobs, then squash-merge), close
+**#132** and **#133**, and add both to the board as `Done`.
 
-After that, the three remaining epics are all **un-decomposed** (zero sub-issues). **#19 is the most
-tractable**: `lib/SandboxSupport.cs` already has `SandboxRunMode` (28), `Resolve` (73),
-`AssertPolicy` (111), `AssertDenied` (174), `AssertNoPermissionDenial` (207), `Expand` (230),
-`PrintList` (236), and the issue names five clear sub-issues to file. #5 depends on #3 and #4; #6
-depends on #5 and #4.
+Then work epic #19's four sub-issues, which are filed, board-added, and linked (`#19` is blocked by
+each of them):
+
+| Sub-issue | Criterion | Gap |
+|---|---|---|
+| **#134** | 5 (second half) | `SKIP_SANDBOX=1` appears nowhere but `docs/implementation/ISSUE_1_HANDOFF.md:217` |
+| **#135** | 2 + 6 | no `policy`-mode expected-output fixtures for 33/34/35; `expectedOutput` is `null` |
+| **#136** | 8 + 9 | no advisory host-enforcement CI job, no `continue-on-error`, no `docs/SANDBOX_CI.md` |
+| **#137** | 7 | check-first: does the completeness gate name language *and* id? |
+
+**Five of #19's nine criteria were already satisfied** before decomposition — do not re-implement
+them. `lib/SandboxSupport.cs` already has `SandboxRunMode` (28), `Resolve` (73), `AssertPolicy`
+(111), `AssertDenied` (174), `AssertNoPermissionDenial` (207), `Expand` (230), `PrintList` (236);
+`33 34 35` are already in `LIVE_EXAMPLES` (`scripts/validate.sh:31`); `policy_resolved` is already
+emitted and asserted; and the "no simulated sandbox" wording criterion already holds.
+
+#5 depends on #3 and #4; #6 depends on #5 and #4.
 
 ## Do not
 
