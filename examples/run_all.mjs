@@ -35,10 +35,14 @@ export function loadManifest() {
   const sources = readdirSync(join(root, "examples")).filter(path => /^[0-3][0-9]-.*\.cs$/.test(path)
     && Number(path.slice(0, 2)) <= 35).sort();
   const ids = Array.from({ length: 36 }, (_, n) => String(n).padStart(2, "0"));
+  const sourceIds = sources.map(source => source.slice(0, 2));
+  const manifestIds = manifest.examples.map(entry => entry.id);
   if (manifest.schemaVersion !== 1 || manifest.reference !== "scripts/validate.sh" || !isDeepStrictEqual(manifest.scope, [0, 35])
-      || !isDeepStrictEqual(sources.map(source => source.slice(0, 2)), ids)
-      || !isDeepStrictEqual(manifest.examples.map(entry => entry.id), ids)) {
-    throw new Error("Inventory must contain all 36 C# examples exactly once, 00..35");
+      || !isDeepStrictEqual(sourceIds, ids) || !isDeepStrictEqual(manifestIds, ids)) {
+    const missing = ids.filter(id => !sourceIds.includes(id) || !manifestIds.includes(id));
+    const duplicated = ids.filter(id => sourceIds.filter(value => value === id).length > 1
+      || manifestIds.filter(value => value === id).length > 1);
+    throw new Error(`Inventory must contain all 36 C# examples exactly once, 00..35; missing example id(s): ${missing.join(", ") || "none"}; duplicated example id(s): ${duplicated.join(", ") || "none"}`);
   }
   const declarations = {};
   for (const language of ["ts", "py"]) {
@@ -57,7 +61,8 @@ export function loadManifest() {
         declarations[language].set(evidence.id, { evidence, path });
       }
     }
-    if (declarations[language].size !== 36) throw new Error(`${language}: missing range inventory`);
+    const undeclared = ids.filter(id => !declarations[language].has(id));
+    if (undeclared.length) throw new Error(`${language}: missing range inventory for example id(s) ${undeclared.join(", ")}`);
   }
   for (const [index, entry] of manifest.examples.entries()) {
     const source = sources[index];
@@ -67,12 +72,16 @@ export function loadManifest() {
         || entry.deterministic !== selected || entry.liveReason !== (reasons[name] ?? null)
         || (!selected && !entry.liveReason)) throw new Error(`${entry.id}: C# selection/reason mismatch`);
     const expectedOutput = referenceIds.includes(entry.id) ? `examples/expected/${name}.txt` : null;
-    if (entry.expectedOutput !== expectedOutput) throw new Error(`${entry.id}: missing reference output inventory`);
+    if (entry.expectedOutput !== expectedOutput) {
+      throw new Error(`${entry.id}: missing reference output inventory (expected ${expectedOutput ?? "none"})`);
+    }
     for (const language of ["ts", "py"]) {
       const row = entry.languages[language];
       const declaration = declarations[language].get(entry.id);
       const path = `examples/${language}/${name}.${language}`;
-      if (row.path !== path || !existsSync(join(root, path))) throw new Error(`Missing example: ${path}`);
+      if (row.path !== path || !existsSync(join(root, path))) {
+        throw new Error(`Missing example ${entry.id} for language ${language}: ${path}`);
+      }
       if (!["ported", "pending-native-api"].includes(row.status)
           || !["supported", "unsupported", "not-applicable"].includes(row.sandboxMode)
           || (row.status === "pending-native-api" && (typeof row.evidence.pendingReason !== "string" || !row.evidence.pendingReason.trim()))
