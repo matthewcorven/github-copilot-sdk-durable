@@ -70,27 +70,25 @@ label, and move to the next actionable item.  Do not halt the loop.
 
 ## Session Handoff — read this before your first dispatch
 
-State as of **2026-11-03, Ralph round 14**. Everything below was verified against the
+State as of **2026-11-03, Ralph round 15**. Everything below was verified against the
 live board, the open PRs, and `git worktree list` — not assumed. Do not trust a commit
 hash here; it goes stale the moment this file is committed. Confirm with
 `gh issue list`, `gh pr list`, and `git worktree list`.
 
 ### Where `dev` is
 
-`dev` head is **`feafd0a`** — "ci: widen the deterministic gate to the parity and
-language suites (#131)". **Epics #4 and #8 are both CLOSED** with every criterion
-verified. **Two open PRs**, both from this round: **#138** (#132) and **#139** (#133).
-Both fixes are independently verified; both are waiting on the `build` job.
+`dev` head is **`ac4c2e3`** — "fix(tests): resolve the Python interpreter instead of
+trusting PATH (#139)". **Epics #4 and #8 are both CLOSED** with every criterion
+verified. **Zero open PRs.** Round 14's two fixes landed: #138 as `f383c63`, #139 as
+`ac4c2e3`; both `build` jobs went green (14m45s and 13m16s).
 
-### Open issues — three epics, two bugs in review, four sub-issues
+### Open issues — three epics, four sub-issues
 
 | Issue | Owner label | State |
 |-------|-------------|-------|
 | #19 | `squad:tester` | **decomposed** into #134-#137; blocked by all four |
 | #6 | `squad:tester` | un-decomposed epic, zero sub-issues |
 | #5 | `squad:polyglot-engineer` | un-decomposed epic, zero sub-issues, `help wanted` |
-| #132 | `squad:tester` | `type:bug` — fix in review as **#138** |
-| #133 | `squad:tester` | `type:bug` — fix in review as **#139** |
 | #134 | `squad:tester` | `SKIP_SANDBOX=1` escape in `scripts/validate.sh` |
 | #135 | `squad:tester` | `policy`-mode expected-output fixtures for 33/34/35 |
 | #136 | `squad:docs` | advisory host-enforcement CI job + `docs/SANDBOX_CI.md` |
@@ -117,8 +115,8 @@ satisfied** before decomposition — read the decomposition note on #19 (comment
 them would have changed nothing. That tree-hash comparison is the proof; use it before
 closing any PR as superseded.
 
-Issues closed this round: #98, #102, #103, #104, #105, **#129**, **epic #4**, and
-**epic #8**.
+Issues closed this round: #98, #102, #103, #104, #105, **#129**, **#132**, **#133**,
+**epic #4**, and **epic #8**.
 
 ### Merged this round
 
@@ -129,8 +127,8 @@ Issues closed this round: #98, #102, #103, #104, #105, **#129**, **epic #4**, an
 | #125 | #104 | `a953d32` | The `advanced-read-tools.test.mjs` guard, +56 lines |
 | #130 | #8 | `7a5e373` | Resolved store backend reported on host startup |
 | #131 | #129 | `feafd0a` | Widened `--deterministic` to the parity and language suites |
-| #138 | #132 | pending | `--test-force-exit` in `lib/ts`'s `test` script |
-| #139 | #133 | pending | `PortHarness` resolves its own Python interpreter |
+| #138 | #132 | `f383c63` | `--test-force-exit` in `lib/ts`'s `test` script |
+| #139 | #133 | `ac4c2e3` | `PortHarness` resolves its own Python interpreter |
 
 ### #126 subsumed #102/#103/#104
 
@@ -365,12 +363,13 @@ Six real gaps surfaced during PR #83 and PR #84 and were deliberately left out o
 scope. They are listed in `.squad/decisions.md` under "Six agent-surfaced follow-ups
 are known and unfiled". File them when the board is otherwise clear.
 
-Three more surfaced during #129. Two are now fixed and in review; one remains unfiled:
+Three more surfaced during #129. Two are now fixed and merged; one remains unfiled:
 
-- **#132 — fixed, PR #138.** `lib/ts/package.json`'s `test` script lacked
-  `--test-force-exit`, so a bare `npm test` hung forever. The gate worked around it;
-  the script itself is now fixed. Verified: 123/123 pass, exits on its own.
-- **#133 — fixed, PR #139.** `PortHarness_PhysicalLineEndingsPreserveGeneratedClients`
+- **#132 — fixed and merged, `f383c63` (PR #138).** `lib/ts/package.json`'s `test`
+  script lacked `--test-force-exit`, so a bare `npm test` hung forever. The gate worked
+  around it; the script itself is now fixed. Verified: 123/123 pass, exits on its own.
+- **#133 — fixed and merged, `ac4c2e3` (PR #139).**
+  `PortHarness_PhysicalLineEndingsPreserveGeneratedClients`
   (`tests/Durable.Tests/LateJoinExampleTests.cs`) shelled out to `python3 -m unittest`
   via `PATH` and needed `lib/py/.venv/bin` on `PATH`. It now resolves its own
   interpreter. Verified with a before/after control: fails without the fix, passes

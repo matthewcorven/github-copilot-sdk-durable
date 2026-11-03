@@ -714,3 +714,21 @@ already-built criteria and missed the shape of the four real gaps.
 the live tree and record the evidence in a decomposition note on the epic. File only
 the gaps. When a gap is uncertain, file it as a check-first spike rather than as
 implementation work.
+
+### 2026-11-03T14:20:00Z: A green `build` on a bug-fix PR is not evidence the bug is fixed
+
+**By:** coordinator (Ralph round 15)
+**What:** #138 and #139 both went green — `build` 14m45s and 13m16s, both `Host smoke` jobs
+pass — and both were merged. But CI never exercised the *defect*: `build` runs
+`./scripts/validate.sh --deterministic`, which invokes the lib/ts suite as
+`npm test -- --test-force-exit` (the flag supplied on the command line), so it would have
+passed with or without the `package.json` change. Likewise the PortHarness test passes in CI
+because CI's `PATH` happens to contain a working `python3`; the fix only matters on a machine
+where it does not.
+**Why:** The real proof for both was the local before/after control, not the CI result. For
+#133 that was explicit: stash the fix → 1 failed, pop the fix → 1 passed. For #132 it was
+`npm test` exiting 0 with 123/123 where it previously hung forever.
+**Consequence:** When a fix targets an environment-dependent defect, CI green is necessary but
+not sufficient. State the control that actually proves the fix, and do not let a green check
+substitute for it. If CI cannot reproduce the defect, say so in the PR body rather than
+implying CI validated the fix.

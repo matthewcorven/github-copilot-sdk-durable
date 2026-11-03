@@ -1,20 +1,20 @@
 ---
-updated_at: 2026-11-03T13:40:00Z
-updated_by: coordinator (Ralph round 14)
-focus_area: #132 and #133 fixed and in review as #138/#139; epic #19 decomposed into #134-#137; three epics remain
-active_issues: [5, 6, 19, 132, 133, 134, 135, 136, 137]
+updated_at: 2026-11-03T14:20:00Z
+updated_by: coordinator (Ralph round 15)
+focus_area: #132 and #133 merged and closed; epic #19's four sub-issues are the only startable work
+active_issues: [5, 6, 19, 134, 135, 136, 137]
 ---
 
 # Now
 
 ## Where the team is
 
-`dev` is at `feafd0a` ("ci: widen the deterministic gate to the parity and language suites (#131)").
-**Two open PRs**, both from round 14: **#138** (`#132`) and **#139** (`#133`). Both fixes are
-independently verified; both are waiting on the ~14-minute `build` job.
+`dev` is at `ac4c2e3` ("fix(tests): resolve the Python interpreter instead of trusting PATH (#139)").
+**Zero open PRs.** Round 14's two fixes landed: #138 as `f383c63`, #139 as `ac4c2e3`. Both `build`
+jobs went green (14m45s and 13m16s).
 
-Open issues: three epics — **#5, #6, #19** — plus **#132** and **#133** (in review), and epic #19's
-four sub-issues **#134–#137**, all `Todo` on the board. #132 and #133 are not on the board yet.
+Open issues: three epics — **#5, #6, #19** — plus epic #19's four sub-issues **#134–#137**, all
+`Todo` on the board. **#132 and #133 are closed and `Done` on the board.**
 
 Epic #4 (polyglot ports) is **CLOSED** with all five acceptance criteria verified empirically.
 Epic #8 (runtime host) is **CLOSED** with all eight criteria verified or deliberately scoped.
@@ -30,12 +30,12 @@ Epic #8 (runtime host) is **CLOSED** with all eight criteria verified or deliber
 | #125 | #104 | MERGED `a953d32` — the `advanced-read-tools.test.mjs` guard, +56 lines |
 | #130 | #8 | MERGED `7a5e373` — resolved store backend reported on host startup |
 | #131 | #129 | MERGED `feafd0a` — widened deterministic gate (parity + language unit suites) |
-| #138 | #132 | OPEN — `--test-force-exit` in `lib/ts`'s `test` script |
-| #139 | #133 | OPEN — `PortHarness` resolves its own Python interpreter |
+| #138 | #132 | MERGED `f383c63` — `--test-force-exit` in `lib/ts`'s `test` script |
+| #139 | #133 | MERGED `ac4c2e3` — `PortHarness` resolves its own Python interpreter |
 
-Issues closed: #98, #102, #103, #104, #105, **#129**, and **epic #4**. All six sub-issues of epic #4
-and all six of epic #8 are CLOSED. Filed this round: **#132** (`lib/ts` `npm test` hangs without
-`--test-force-exit`) and **#133** (`PortHarness` test depends on `lib/py/.venv/bin` on `PATH`).
+Issues closed: #98, #102, #103, #104, #105, **#129**, **#132**, **#133**, and **epics #4 and #8**.
+All six sub-issues of epic #4 and all six of epic #8 are CLOSED. #132 and #133 were filed in round 13,
+fixed in round 14, and merged and closed in round 15.
 
 ## Epic #4 — closed, five criteria verified
 
@@ -163,11 +163,9 @@ the payload commits, verified by tree-hash equality per top-level directory.
 
 ## Next action
 
-Land **#138** and **#139** (wait for `build` + both `Host smoke` jobs, then squash-merge), close
-**#132** and **#133**, and add both to the board as `Done`.
-
-Then work epic #19's four sub-issues, which are filed, board-added, and linked (`#19` is blocked by
-each of them):
+Work epic #19's four sub-issues, which are filed, board-added, and linked (`#19` is blocked by
+each of them). **#137 is check-first and cheapest** — Tester is on it now. **#134** is a small
+`validate.sh` change. **#135** and **#136** are larger.
 
 | Sub-issue | Criterion | Gap |
 |---|---|---|
