@@ -70,28 +70,29 @@ label, and move to the next actionable item.  Do not halt the loop.
 
 ## Session Handoff — read this before your first dispatch
 
-State as of **2026-11-03, Ralph round 9**. Everything below was verified against the
+State as of **2026-11-03, Ralph round 11**. Everything below was verified against the
 live board, the open PRs, and `git worktree list` — not assumed. Do not trust a commit
 hash here; it goes stale the moment this file is committed. Confirm with
 `gh issue list`, `gh pr list`, and `git worktree list`.
 
 ### Where `dev` is
 
-`dev` head is **`a953d32`** — "Port examples 22-35 with native parity evidence (#125)".
-**Zero open PRs.** The polyglot epic #4 is **CLOSED** with all five criteria verified.
+`dev` head is **`b0156be`** — "chore: ignore machine-local .copilot/ tool-approval
+state". **Epics #4 and #8 are both CLOSED** with every criterion verified. One PR
+(#130) carries the epic-#8 criterion-8 implementation; one issue (#129) is in flight.
 
-### Open issues — four, all epics
+### Open issues — one chore, three epics
 
 | Issue | Owner label | State |
 |-------|-------------|-------|
-| #8 | `squad:core-engineer` | 7 of 8 criteria verified; criterion 8 in progress |
+| #129 | `squad:tester` | `type:chore` — widen `validate.sh --deterministic`; in progress |
 | #19 | `squad:tester` | un-decomposed, zero sub-issues |
 | #6 | `squad:tester` | un-decomposed, zero sub-issues |
 | #5 | `squad:polyglot-engineer` | un-decomposed, zero sub-issues, `help wanted` |
 
-All four board items are `Todo`. **Only #8 has sub-issues** (6, all CLOSED). #5, #6, and
-#19 have **zero** sub-issues — they are un-decomposed epics and cannot be closed on
-sub-issue completion alone. Decompose before working them.
+All board items are `Todo`. #5, #6, and #19 have **zero** sub-issues — they are
+un-decomposed epics and cannot be closed on sub-issue completion alone. Decompose
+before working them. **#19 is the most tractable** (see "Startable vs blocked").
 
 ### Closed this round — do not reopen
 
@@ -105,7 +106,7 @@ sub-issue completion alone. Decompose before working them.
 them would have changed nothing. That tree-hash comparison is the proof; use it before
 closing any PR as superseded.
 
-Issues closed this round: #98, #102, #103, #104, #105, and **epic #4**.
+Issues closed this round: #98, #102, #103, #104, #105, **epic #4**, and **epic #8**.
 
 ### Merged this round
 
@@ -114,6 +115,7 @@ Issues closed this round: #98, #102, #103, #104, #105, and **epic #4**.
 | #123 | — | `d34d84d` | SDK-bound TypeScript and Python durable language support |
 | #126 | #105 | `352c076` | Full 36×2 parity contract, runners, global manifest |
 | #125 | #104 | `a953d32` | The `advanced-read-tools.test.mjs` guard, +56 lines |
+| #130 | #8 | pending | Resolved store backend reported on host startup |
 
 ### #126 subsumed #102/#103/#104
 
@@ -157,18 +159,27 @@ touches both a no-op file and a genuine file must still be cherry-picked. And
 `git cherry-pick --continue` after resolving to identical content prints "nothing to
 commit" and leaves the sequencer in place — follow it with `--skip`.
 
-### Epic #8 criterion 8 — the one open criterion, and its built-in contradiction
+### Epic #8 criterion 8 — closed, with one deliberate exclusion
 
-Criterion 8 is a three-clause sentence:
+Criterion 8 was a three-clause sentence:
 
 > The host's agent-definition schema accepts a sandbox policy, **a host-started agent
 > reports the resolved backend and platform on startup**, and the host's documentation
 > states the interaction between "approve all permissions" and "no sandbox".
 
-Two clauses are already satisfied: the sandbox policy is in the schema
-(`AgentDefinitionValidator.cs:111` → `ValidateSandboxPolicy` at 115, documented at
-`docs/DESIGN.md:351` §3.7, with `docs/SANDBOX_MATRIX.md`), and the approve-all vs
-no-sandbox interaction is documented (`README.md:492`, `docs/DESIGN.md:231`, `:369`).
+All three clauses are now satisfied except the word "platform", which is a **deliberate,
+documented exclusion**:
+
+- **Sandbox policy in the schema** — `AgentDefinitionValidator.cs:111` →
+  `ValidateSandboxPolicy` at 115, documented at `docs/DESIGN.md:351` §3.7, with
+  `docs/SANDBOX_MATRIX.md`.
+- **Approve-all vs no-sandbox interaction** — `README.md:492`, `docs/DESIGN.md:231`,
+  `:369`.
+- **Resolved backend on startup** — PR #130. `DurableStore` gained
+  `internal DurableStoreFormat Format => _format;` beside the existing `Provider`
+  accessor, and `Program.ReportStore` writes `store: {format} at {path}` (or
+  `store: {format} (ephemeral)`) to stderr immediately after `ClaimOwnership` and
+  **before** `ReportContainment`, on all four store-opening paths.
 
 **The "platform" half is FORBIDDEN by an existing invariant.**
 `tests/Durable.Tests/RuntimeHostPortabilityTests.cs:80`
@@ -176,16 +187,18 @@ no-sandbox interaction is documented (`README.md:492`, `docs/DESIGN.md:231`, `:3
 except `HostShutdown.cs` matches
 `\b(OperatingSystem|OSPlatform|RuntimeInformation|PosixSignal|PosixSignalRegistration|DllImport|LibraryImport|Registry|WindowsIdentity)\b|Environment\s*\.\s*(OSVersion|SpecialFolder)|[A-Za-z]:\\`.
 That test **is** the enforcement of criterion 6. A literal platform startup line would
-break criterion 6. **Do not add platform detection; do not weaken that test.** Record
-the platform half as a deliberate, documented exclusion.
+break criterion 6. **Do not add platform detection; do not weaken that test.** The
+exclusion is recorded in `docs/DESIGN.md` §3.9 under "The startup report".
 
-**The "resolved backend" half is satisfiable.** `DurableStore` keeps `_format` private
-with no accessor (`lib/Durable.cs:1746`), but `internal IDurableStoreProvider Provider
-=> _provider;` already exists at `:2336` and `lib/Copilot.Durable.csproj:42` grants
-`InternalsVisibleTo("Durable.Runtime")`. Adding `internal DurableStoreFormat Format =>
-_format;` is sufficient and does not change public API. `DurableStoreOptions.Format` is
-public (line 734, default `Auto`) — the *requested* format is public, only the
-*resolved* one is not.
+**The trap that made this non-trivial:** `_format` was *not* already the resolved value.
+`DurableStore.Create` stored `options.Format` verbatim, so an `Auto` store reported
+`Auto` forever. The fix is `ResolveFormat(provider, options)`, which maps the **selected
+provider's type** to its format and falls back to `options.Format` for caller-supplied
+factories. A "resolved" accessor is only truthful if the value is resolved at open time.
+
+**Second trap:** `LegacyJson` stores write nothing until their first commit, so a freshly
+created legacy path is still empty and `Auto` correctly sniffs it as `Jsonl`. Any test
+that reopens a legacy store with `Auto` must commit a conversation first.
 
 The host's real answer to "what bounds this agent's authority" is the containment
 report: `containment: {Sandboxed|PermissionGated|None} for agent '{name}': {reason}`
@@ -204,7 +217,9 @@ report: `containment: {Sandboxed|PermissionGated|None} for agent '{name}': {reas
 - **`scripts/validate.sh --deterministic` does not run the parity suite**,
   `test_mutations.py`, or either language unit suite. It runs 17 of 38 examples with
   only the `ReplayToolDispatchTests` filter. "Five green gates" and "parity suite red"
-  can coexist. Widening it is a real gap that belongs in its own issue.
+  can coexist. Widening it is tracked by **#129**. `.github/workflows/build.yml` already
+  runs `./scripts/validate.sh --deterministic` as its own step, so widening the script
+  widens CI automatically — **no workflow change is needed**.
 
 ### Environment prerequisites that silently break suites
 
@@ -235,16 +250,17 @@ report: `containment: {Sandboxed|PermissionGated|None} for agent '{name}': {reas
 
 ### Startable vs blocked
 
-**Startable now:** #8 criterion 8 (the resolved-store-backend startup report). #19 is the
-next most tractable epic — its `lib/SandboxSupport.cs` surface already partly exists
+**Startable now:** #129 (the `validate.sh` widening, in flight) and **#19**, the next
+tractable epic — its `lib/SandboxSupport.cs` surface already partly exists
 (`SandboxRunMode` at 28, `Resolve` at 73, `AssertPolicy` at 111, `AssertDenied` at 174,
-`AssertNoPermissionDenial` at 207).
+`AssertNoPermissionDenial` at 207). Decompose #19 into its five sub-issues before
+working it; do not work an epic directly.
 
 **Blocked — do not start:**
 
 - **#5** ← #4 (now closed, so #5 is unblocked but un-decomposed). **#6** ← #5, #4.
   **#19** ← #6.
-- **#4, #8** — epics. Work them through their children, never directly.
+- **#4, #8** — CLOSED epics. Do not reopen; work any follow-up as a new issue.
 
 These are native `blockedBy` links and they are authoritative. Before 2026-10-31 the
 sequencing lived only in issue-body prose, so a naive scan saw eight blocked issues as
