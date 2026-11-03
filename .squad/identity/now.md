@@ -1,20 +1,24 @@
 ---
-updated_at: 2026-11-03T14:20:00Z
-updated_by: coordinator (Ralph round 15)
-focus_area: #132 and #133 merged and closed; epic #19's four sub-issues are the only startable work
-active_issues: [5, 6, 19, 134, 135, 136, 137]
+updated_at: 2026-11-03T15:10:00Z
+updated_by: coordinator (Ralph round 16)
+focus_area: #137 landed; epic #19's three remaining sub-issues plus #141 are the startable work
+active_issues: [5, 6, 19, 134, 135, 136, 141]
 ---
 
 # Now
 
 ## Where the team is
 
-`dev` is at `ac4c2e3` ("fix(tests): resolve the Python interpreter instead of trusting PATH (#139)").
-**Zero open PRs.** Round 14's two fixes landed: #138 as `f383c63`, #139 as `ac4c2e3`. Both `build`
-jobs went green (14m45s and 13m16s).
+`dev` is at `bbb781b` ("fix(examples): name both the language and the example id in completeness
+errors (#140)"). **Zero open PRs.** Round 16 landed #137 as `bbb781b`; `build` went green in 14m45s.
 
-Open issues: three epics — **#5, #6, #19** — plus epic #19's four sub-issues **#134–#137**, all
-`Todo` on the board. **#132 and #133 are closed and `Done` on the board.**
+**The deterministic gate is green on `dev`** — `./scripts/validate.sh --deterministic` returns
+`EXIT=0` with zero `^FAIL` lines. If it is not green for you, read the environment section below
+before suspecting a diff.
+
+Open issues: three epics — **#5, #6, #19** — plus epic #19's three remaining sub-issues
+**#134, #135, #136** and the capture-reference bug **#141**, all `Todo` on the board.
+**#132, #133, and #137 are closed and `Done`.**
 
 Epic #4 (polyglot ports) is **CLOSED** with all five acceptance criteria verified empirically.
 Epic #8 (runtime host) is **CLOSED** with all eight criteria verified or deliberately scoped.
@@ -32,6 +36,7 @@ Epic #8 (runtime host) is **CLOSED** with all eight criteria verified or deliber
 | #131 | #129 | MERGED `feafd0a` — widened deterministic gate (parity + language unit suites) |
 | #138 | #132 | MERGED `f383c63` — `--test-force-exit` in `lib/ts`'s `test` script |
 | #139 | #133 | MERGED `ac4c2e3` — `PortHarness` resolves its own Python interpreter |
+| #140 | #137 | MERGED `bbb781b` — completeness errors name both language and example id |
 
 Issues closed: #98, #102, #103, #104, #105, **#129**, **#132**, **#133**, and **epics #4 and #8**.
 All six sub-issues of epic #4 and all six of epic #8 are CLOSED. #132 and #133 were filed in round 13,
@@ -160,19 +165,28 @@ the payload commits, verified by tree-hash equality per top-level directory.
 - GitHub project automation moves a board item to `Done` when its issue closes; manual
   `item-edit` is usually unnecessary. Item IDs are `PVTI_lAHOAajMkc4BobdZzhE1Z…` — note the `h`;
   better to read `.id` from `gh project item-list 5 --owner matthewcorven --format json`.
+- **`dotnet` must resolve to `/opt/homebrew/bin/dotnet` (SDK 10.0.402).** A .NET 11 RC at
+  `/usr/local/share/dotnet` can win the PATH; when it does, every net10.0 test host aborts and the
+  gate reports **22 failed checks** including **17 C# examples at `exit 150`**. The Homebrew SDK
+  was still installed, just unlinked. **Fix: `brew link --overwrite dotnet`.** Read the log's
+  actual error text first, then `which -a dotnet` / `dotnet --list-sdks`.
+- **A green `build` on a bug-fix PR is not evidence the bug is fixed.** CI runs
+  `npm test -- --test-force-exit` (so a `package.json` change is never exercised) and CI's PATH
+  happens to contain a working `python3` (so the #133 fix was never exercised). Both PRs would
+  have gone green without their fixes. **State a local before/after control in the PR body.**
 
 ## Next action
 
-Work epic #19's four sub-issues, which are filed, board-added, and linked (`#19` is blocked by
-each of them). **#137 is check-first and cheapest** — Tester is on it now. **#134** is a small
-`validate.sh` change. **#135** and **#136** are larger.
+Work epic #19's three remaining sub-issues, which are filed, board-added, and linked (`#19` is
+blocked by each of them). **#134 is in flight** — Tester is on it. **#135** and **#136** are
+larger. **#141** is an independent, reproducible bug and a good Tester task.
 
 | Sub-issue | Criterion | Gap |
 |---|---|---|
 | **#134** | 5 (second half) | `SKIP_SANDBOX=1` appears nowhere but `docs/implementation/ISSUE_1_HANDOFF.md:217` |
 | **#135** | 2 + 6 | no `policy`-mode expected-output fixtures for 33/34/35; `expectedOutput` is `null` |
 | **#136** | 8 + 9 | no advisory host-enforcement CI job, no `continue-on-error`, no `docs/SANDBOX_CI.md` |
-| **#137** | 7 | check-first: does the completeness gate name language *and* id? |
+| **#137** | 7 | **DONE** `bbb781b` — the gate did not name both; it does now |
 
 **Five of #19's nine criteria were already satisfied** before decomposition — do not re-implement
 them. `lib/SandboxSupport.cs` already has `SandboxRunMode` (28), `Resolve` (73), `AssertPolicy`

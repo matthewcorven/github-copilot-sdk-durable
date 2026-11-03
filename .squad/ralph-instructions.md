@@ -70,19 +70,22 @@ label, and move to the next actionable item.  Do not halt the loop.
 
 ## Session Handoff — read this before your first dispatch
 
-State as of **2026-11-03, Ralph round 15**. Everything below was verified against the
+State as of **2026-11-03, Ralph round 16**. Everything below was verified against the
 live board, the open PRs, and `git worktree list` — not assumed. Do not trust a commit
 hash here; it goes stale the moment this file is committed. Confirm with
 `gh issue list`, `gh pr list`, and `git worktree list`.
 
 ### Where `dev` is
 
-`dev` head is **`ac4c2e3`** — "fix(tests): resolve the Python interpreter instead of
-trusting PATH (#139)". **Epics #4 and #8 are both CLOSED** with every criterion
-verified. **Zero open PRs.** Round 14's two fixes landed: #138 as `f383c63`, #139 as
-`ac4c2e3`; both `build` jobs went green (14m45s and 13m16s).
+`dev` head is **`bbb781b`** — "fix(examples): name both the language and the example id
+in completeness errors (#140)". **Epics #4 and #8 are both CLOSED** with every criterion
+verified. **Zero open PRs.** Round 16 landed #137 as `bbb781b` (`build` green in 14m45s).
 
-### Open issues — three epics, four sub-issues
+**The deterministic gate is green on `dev`** — `./scripts/validate.sh --deterministic`
+returns `EXIT=0` with zero `^FAIL` lines. If it is not green for you, read
+`### Environment prerequisites` before suspecting a diff.
+
+### Open issues — three epics, three sub-issues, one bug
 
 | Issue | Owner label | State |
 |-------|-------------|-------|
@@ -92,7 +95,7 @@ verified. **Zero open PRs.** Round 14's two fixes landed: #138 as `f383c63`, #13
 | #134 | `squad:tester` | `SKIP_SANDBOX=1` escape in `scripts/validate.sh` |
 | #135 | `squad:tester` | `policy`-mode expected-output fixtures for 33/34/35 |
 | #136 | `squad:docs` | advisory host-enforcement CI job + `docs/SANDBOX_CI.md` |
-| #137 | `squad:tester` | check-first: does the completeness gate name language *and* id? |
+| #141 | `squad:tester` | five `test_capture_reference.py` tests fail on clean `dev` |
 
 #5 and #6 have **zero** sub-issues — they are un-decomposed epics and cannot be closed
 on sub-issue completion alone. Decompose before working them.
@@ -116,7 +119,7 @@ them would have changed nothing. That tree-hash comparison is the proof; use it 
 closing any PR as superseded.
 
 Issues closed this round: #98, #102, #103, #104, #105, **#129**, **#132**, **#133**,
-**epic #4**, and **epic #8**.
+**#137**, **epic #4**, and **epic #8**.
 
 ### Merged this round
 
@@ -129,6 +132,7 @@ Issues closed this round: #98, #102, #103, #104, #105, **#129**, **#132**, **#13
 | #131 | #129 | `feafd0a` | Widened `--deterministic` to the parity and language suites |
 | #138 | #132 | `f383c63` | `--test-force-exit` in `lib/ts`'s `test` script |
 | #139 | #133 | `ac4c2e3` | `PortHarness` resolves its own Python interpreter |
+| #140 | #137 | `bbb781b` | Completeness errors name both the language and the example id |
 
 ### #126 subsumed #102/#103/#104
 
@@ -236,6 +240,16 @@ report: `containment: {Sandboxed|PermissionGated|None} for agent '{name}': {reas
 
 ### Environment prerequisites that silently break suites
 
+- **⚠️ `dotnet` must resolve to `/opt/homebrew/bin/dotnet` (SDK 10.0.402).** A .NET 11 RC
+  also lives at `/usr/local/share/dotnet` and can win the PATH. When it does, every
+  net10.0 test host aborts with `You must install or update .NET to run this application.
+  Framework: 'Microsoft.NETCore.App', version '10.0.0'` and the gate reports **22 failed
+  checks** — `ReplayRuntime.Tests`, `ReplayToolDispatchTests`, `lib/py unit tests`
+  (`errors=1`), and **17 C# examples at `exit 150`**. The Homebrew SDK was still
+  installed, just unlinked. **Fix: `brew link --overwrite dotnet`** (72 symlinks).
+  **Diagnostic order for any broad gate failure: read the log's actual error text FIRST,
+  then `which -a dotnet` / `dotnet --list-sdks` / `dotnet --list-runtimes`.** `exit 150`
+  on every C# example is the signature of a runtime-resolution failure, not a regression.
 - **`lib/py/.venv` is required and was deleted once by disk cleanup.**
   `python examples/run_all.py --deterministic` fails all 15 selected examples with
   `ModuleNotFoundError: No module named 'copilot'` from `lib/py/durable.py:38`. Recreate
@@ -249,8 +263,14 @@ report: `containment: {Sandboxed|PermissionGated|None} for agent '{name}': {reas
 - `tsx --test` never exits without `--test-force-exit`.
 - `node --test tests/parity/` fails with MODULE_NOT_FOUND; use `npm run test:parity:ts`.
   A single file works with `node --experimental-transform-types --test <file>`.
-- `PortHarness_PhysicalLineEndingsPreserveGeneratedClients` needs `lib/py/.venv/bin` on
-  `PATH`. `lib/ts` `npm test` needs `DURABLE_RUNTIME_PATH` set.
+- `lib/ts` `npm test` needs `DURABLE_RUNTIME_PATH` set to
+  `tools/ReplayRuntime/bin/Debug/net10.0/ReplayRuntime` — **Debug**, capital `R`, no
+  hyphen. Guessing `Release/.../replay-runtime` produces 22 spurious
+  `Runtime executable does not exist` failures. This mistake has bitten the coordinator,
+  Backend Engineer, and Tester independently.
+- `PortHarness_PhysicalLineEndingsPreserveGeneratedClients` **no longer** needs
+  `lib/py/.venv/bin` on `PATH` — #133 fixed it to resolve its own interpreter. If it
+  fails, the venv is genuinely missing, not merely off-PATH.
 - Disk pressure is real: `/System/Volumes/Data` hit 100% twice, causing `index.lock` and
   `MSB3923` failures. `uv cache clean` freed 11.6 GiB; `~/.nuget/packages` (13G) is the
   next lever. **Cleanup deleted `lib/py/.venv` once — check it before blaming the code.**
@@ -263,12 +283,16 @@ report: `containment: {Sandboxed|PermissionGated|None} for agent '{name}': {reas
 
 ### Startable vs blocked
 
-**Startable now:** **#134**, **#135**, **#136**, or **#137** — epic #19's four
-sub-issues, all filed, board-added as `Todo`, and linked so that #19 is blocked by each
-of them. Work them individually; do not work the epic directly.
+**Startable now:** **#134**, **#135**, **#136**, or **#141** — epic #19's three
+remaining sub-issues plus the capture-reference bug. All are board-added as `Todo`.
 
-#137 is check-first and cheapest. #134 is a small `scripts/validate.sh` change. #135
-and #136 are larger (fixtures and a CI job respectively).
+**#137 is DONE** (`bbb781b`, PR #140) — the gate did *not* name both language and id;
+it does now. Do not re-open it.
+
+#134 is a small `scripts/validate.sh` change. #135 and #136 are larger (fixtures and a
+CI job respectively). **#141** is a real, reproducible bug: five
+`tests/parity/test_capture_reference.py` tests fail on clean `dev` and turn the
+deterministic gate red. It is independent of epic #19.
 
 **Before touching any of them, read the decomposition note on #19** (comment
 `6602722428`). Five of #19's nine criteria were already satisfied before decomposition
@@ -374,6 +398,14 @@ Three more surfaced during #129. Two are now fixed and merged; one remains unfil
   via `PATH` and needed `lib/py/.venv/bin` on `PATH`. It now resolves its own
   interpreter. Verified with a before/after control: fails without the fix, passes
   with it.
+- **#141 — filed, `Todo`.** Five `tests/parity/test_capture_reference.py` tests fail on
+  clean `dev`: two `CaptureReferenceTests.test_actual_csharp_references_match_and_capture_at_resolved_runtime`
+  subTests (`linked=False`, `linked=True`) and three
+  `CaptureGuardMutationTests.test_removed_or_source_only_guards_fail_actual_capture_regression`
+  subTests (`if False:`, `deployed = source`, `fixture_hash = sha256(...)`). Proven
+  pre-existing: clean `dev` discovers 30 tests with 5 failures; with #137's change it
+  discovers 33 with the same 5. Identical with `DURABLE_RUNTIME_PATH` set. These were
+  masked until #129 made the gate run the parity suite at all.
 - **Still unfiled** — `README.md`'s example counts in the same paragraph are worth
   re-checking against `examples/parity.json`.
 
@@ -386,6 +418,12 @@ Three more surfaced during #129. Two are now fixed and merged; one remains unfil
 - There is **no solution file** at the repo root — `dotnet build -c Release` fails with
   `MSB1003`. Build `lib/Copilot.Durable.csproj` by path.
 - Baseline: `dotnet test tests/Durable.Tests` → **162 passed** on `dev` @ `3a0b17b`.
+- **A green `build` on a bug-fix PR is not evidence the bug is fixed.** CI runs
+  `npm test -- --test-force-exit` (the flag is on the command line, so a `package.json`
+  change is never exercised) and CI's `PATH` happens to contain a working `python3` (so
+  the #133 fix was never exercised either). Both PRs would have gone green without their
+  fixes. **State a local before/after control in the PR body; do not let a green check
+  substitute for it.**
 - `scripts/validate.sh` bans `mock|fake|stub|simulat` in `examples/*.cs`. Use
   "double", "stand-in", or "synthesised".
 - Any new internal document must be added to `InternalDocumentKinds` in

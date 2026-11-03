@@ -732,3 +732,32 @@ where it does not.
 not sufficient. State the control that actually proves the fix, and do not let a green check
 substitute for it. If CI cannot reproduce the defect, say so in the PR body rather than
 implying CI validated the fix.
+
+### 2026-11-03T15:10:00Z: A broad gate failure is usually a toolchain problem, not a diff
+
+**By:** coordinator (Ralph round 16)
+**What:** `./scripts/validate.sh --deterministic` reported 22 failed checks — `ReplayRuntime.Tests`,
+`ReplayToolDispatchTests`, `lib/py unit tests` (`errors=1`), and 17 C# examples at `exit 150`. The
+cause was not the four-file change under test. `dotnet` resolved to `/usr/local/share/dotnet/dotnet`,
+a .NET 11 RC whose only runtime is `Microsoft.NETCore.App 11.0.0-rc.2`, so every net10.0 test host
+aborted with `You must install or update .NET to run this application. Framework:
+'Microsoft.NETCore.App', version '10.0.0'`. The Homebrew SDK 10.0.402 was still installed but
+**unlinked** — `/opt/homebrew/bin/dotnet` did not exist. `brew link --overwrite dotnet` restored 72
+symlinks and the gate returned `EXIT=0` with zero failures, with the change still in place.
+**Why:** I nearly attributed a 22-check failure to a four-file manifest-message change, which is
+categorically impossible. The signature was unmistakable in hindsight: `exit 150` on *every* C#
+example is a runtime-resolution failure, never a code regression. **Diagnostic order for any broad
+gate failure: read the log's actual error text FIRST, then `which -a dotnet` / `dotnet --list-sdks`
+/ `dotnet --list-runtimes`.** A five-second toolchain probe would have saved a ten-minute gate run
+and a wrong hypothesis.
+
+### 2026-11-03T15:10:00Z: An agent record can be cleared while its work survives on disk
+
+**By:** coordinator (Ralph round 16)
+**What:** `read_agent` on Tester's #137 agent returned `No agent found with agent_id: … The agent
+may have been cleared or never existed.` The work was fully present: four modified files in the
+working tree, +75/−11, with four new tests. I recovered it, verified it (17/17 with the venv
+interpreter; 9 failures with the source fix stashed), and landed it as `bbb781b`.
+**Why:** A missing agent record is not evidence of missing work. **Always check
+`git status --porcelain` before concluding an agent produced nothing** — and before re-dispatching
+the same task, which would duplicate effort and risk a conflicting second implementation.
