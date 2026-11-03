@@ -1832,8 +1832,28 @@ public sealed class DurableStore : IDisposable
         IDurableStoreProvider provider = SelectProvider(options);
 
         provider.Open(options);
-        return new DurableStore(provider, options.Path, options.Format);
+        return new DurableStore(provider, options.Path, ResolveFormat(provider, options));
     }
+
+    /// <summary>
+    /// Resolves the format the store will actually use. <see cref="DurableStoreFormat.Auto"/>
+    /// is a request, not a format: it is settled at open time by sniffing the file, so the
+    /// store records the answer rather than the question.
+    /// </summary>
+    /// <remarks>
+    /// The provider the options selected is the answer, because that is what the store
+    /// writes through. A provider that is not one of the built-in file formats — a
+    /// caller-supplied factory or a registered name — has no format to report, so the
+    /// requested format is kept as-is.
+    /// </remarks>
+    private static DurableStoreFormat ResolveFormat(IDurableStoreProvider provider, DurableStoreOptions options) =>
+        provider switch
+        {
+            JsonlStoreProvider => DurableStoreFormat.Jsonl,
+            LegacyJsonStoreProvider => DurableStoreFormat.LegacyJson,
+            InMemoryStoreProvider => DurableStoreFormat.InMemory,
+            _ => options.Format,
+        };
 
     /// <summary>
     /// Picks the provider the options select. An explicit factory wins, then a
@@ -2334,6 +2354,21 @@ public sealed class DurableStore : IDisposable
     /// records a transaction owns -- a fork's inherited entries, a copied document.
     /// </summary>
     internal IDurableStoreProvider Provider => _provider;
+
+    /// <summary>
+    /// The format the store actually resolved to. <see cref="DurableStoreFormat.Auto"/> is
+    /// resolved at open time by sniffing the file, so this reports what the store does
+    /// rather than what the caller asked for — the same distinction <see cref="IsPersistent"/>
+    /// draws.
+    /// </summary>
+    /// <remarks>
+    /// The host prints this at startup so an operator can tell which backend a run is
+    /// writing to without reading the store file. It stays internal because the resolved
+    /// format is an implementation detail of the open: a caller that asked for
+    /// <see cref="DurableStoreFormat.Auto"/> has no reason to branch on the answer, and
+    /// the public surface should not grow to expose it.
+    /// </remarks>
+    internal DurableStoreFormat Format => _format;
 
     /// <summary>
     /// Re-reads the store file into memory, discarding the in-memory state. A store

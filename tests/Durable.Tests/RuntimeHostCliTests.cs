@@ -266,6 +266,56 @@ public sealed class RuntimeHostCliTests
     }
 
     [Fact]
+    public async Task Run_ReportsTheResolvedStoreOnStartup()
+    {
+        using var scratch = new Scratch();
+        var storePath = scratch.PathIn("store.jsonl");
+        var definitionPath = scratch.Write("reviewer.json", ReviewerDefinition);
+
+        var (exitCode, _, stderr) = await RunHostAsync(
+            "run", "--agent", "reviewer", "--input", "hello",
+            "--definition", definitionPath, "--store", storePath, "--format", "jsonl");
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains($"store: jsonl at {storePath}", stderr, StringComparison.Ordinal);
+
+        // The startup report reads store-then-containment.
+        Assert.True(
+            stderr.IndexOf("store: jsonl", StringComparison.Ordinal)
+                < stderr.IndexOf("containment:", StringComparison.Ordinal),
+            $"the store line should precede the containment line, got:\n{stderr}");
+    }
+
+    [Fact]
+    public async Task Run_ReportsTheEphemeralStoreForInMemory()
+    {
+        using var scratch = new Scratch();
+        var definitionPath = scratch.Write("reviewer.json", ReviewerDefinition);
+
+        var (exitCode, _, stderr) = await RunHostAsync(
+            "run", "--agent", "reviewer", "--input", "hello",
+            "--definition", definitionPath, "--format", "in-memory");
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("store: in-memory (ephemeral)", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Run_ResolvesAutoToJsonlOverAFreshPath()
+    {
+        using var scratch = new Scratch();
+        var storePath = scratch.PathIn("fresh.jsonl");
+        var definitionPath = scratch.Write("reviewer.json", ReviewerDefinition);
+
+        var (exitCode, _, stderr) = await RunHostAsync(
+            "run", "--agent", "reviewer", "--input", "hello",
+            "--definition", definitionPath, "--store", storePath, "--format", "auto");
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains($"store: jsonl at {storePath}", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Serve_RefusesToStartUncontainedUnlessAllowed()
     {
         using var scratch = new Scratch();

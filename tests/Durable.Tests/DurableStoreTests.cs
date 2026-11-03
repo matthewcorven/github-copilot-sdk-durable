@@ -687,4 +687,63 @@ public class DurableStoreTests
             }
         }
     }
+
+    [Fact]
+    public async Task Format_ReportsTheResolvedFormatNotTheRequestedAuto()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"durable-test-format-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var freshPath = Path.Combine(dir, "fresh.jsonl");
+        var legacyPath = Path.Combine(dir, "legacy.json");
+
+        try
+        {
+            // Auto over a path that does not exist yet resolves to the canonical JSONL
+            // format, so the store reports what it writes rather than the request.
+            using (var fresh = DurableStore.Create(new DurableStoreOptions
+            {
+                Path = freshPath,
+                Format = DurableStoreFormat.Auto,
+            }))
+            {
+                Assert.Equal(DurableStoreFormat.Jsonl, fresh.Format);
+                Assert.True(fresh.IsPersistent);
+            }
+
+            // Auto over an existing legacy snapshot resolves to the format it was written in.
+            using (var legacy = DurableStore.Create(new DurableStoreOptions
+            {
+                Path = legacyPath,
+                Format = DurableStoreFormat.LegacyJson,
+            }))
+            {
+                Assert.Equal(DurableStoreFormat.LegacyJson, legacy.Format);
+                await legacy.CommitAsync(transaction =>
+                {
+                    transaction.CreateConversation();
+                    return Task.CompletedTask;
+                });
+            }
+
+            using (var reopened = DurableStore.Create(new DurableStoreOptions
+            {
+                Path = legacyPath,
+                Format = DurableStoreFormat.Auto,
+            }))
+            {
+                Assert.Equal(DurableStoreFormat.LegacyJson, reopened.Format);
+            }
+
+            using var ephemeral = DurableStore.CreateEphemeral();
+            Assert.Equal(DurableStoreFormat.InMemory, ephemeral.Format);
+            Assert.False(ephemeral.IsPersistent);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
 }
