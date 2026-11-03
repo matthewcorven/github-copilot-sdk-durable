@@ -1,0 +1,2704 @@
+{
+  "schemaVersion": 1,
+  "scope": [
+    0,
+    35
+  ],
+  "reference": "scripts/validate.sh",
+  "examples": [
+    {
+      "id": "00",
+      "source": "00-conversation.cs",
+      "live": false,
+      "deterministic": true,
+      "liveReason": null,
+      "expectedOutput": "examples/expected/00-conversation.txt",
+      "languages": {
+        "ts": {
+          "path": "examples/ts/00-conversation.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-00-10.json",
+          "evidence": {
+            "id": "00",
+            "source": "00-conversation.cs",
+            "path": "00-conversation.ts",
+            "file": "00-conversation.ts",
+            "original": "../00-conversation.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": null,
+            "deterministic": true,
+            "deterministicExclusionReason": null,
+            "command": [
+              "node",
+              "--experimental-transform-types",
+              "examples/ts/00-conversation.ts"
+            ],
+            "assertionParity": "all original facts verified with real SDK/replay"
+          }
+        },
+        "py": {
+          "path": "examples/py/00-conversation.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-00-10.json",
+          "evidence": {
+            "id": "00",
+            "source": "00-conversation.cs",
+            "path": "00-conversation.py",
+            "file": "00-conversation.py",
+            "original": "../00-conversation.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": null,
+            "deterministic": true,
+            "deterministicExclusionReason": null,
+            "command": [
+              "python3",
+              "examples/py/00-conversation.py"
+            ],
+            "assertionParity": "all original facts verified with real SDK/replay"
+          }
+        }
+      }
+    },
+    {
+      "id": "01",
+      "source": "01-documents.cs",
+      "live": false,
+      "deterministic": true,
+      "liveReason": null,
+      "expectedOutput": "examples/expected/01-documents.txt",
+      "languages": {
+        "ts": {
+          "path": "examples/ts/01-documents.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-00-10.json",
+          "evidence": {
+            "id": "01",
+            "source": "01-documents.cs",
+            "path": "01-documents.ts",
+            "file": "01-documents.ts",
+            "original": "../01-documents.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": null,
+            "deterministic": true,
+            "deterministicExclusionReason": null,
+            "command": [
+              "node",
+              "--experimental-transform-types",
+              "examples/ts/01-documents.ts"
+            ],
+            "assertionParity": "all original facts verified with real SDK/replay"
+          }
+        },
+        "py": {
+          "path": "examples/py/01-documents.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-00-10.json",
+          "evidence": {
+            "id": "01",
+            "source": "01-documents.cs",
+            "path": "01-documents.py",
+            "file": "01-documents.py",
+            "original": "../01-documents.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": null,
+            "deterministic": true,
+            "deterministicExclusionReason": null,
+            "command": [
+              "python3",
+              "examples/py/01-documents.py"
+            ],
+            "assertionParity": "all original facts verified with real SDK/replay"
+          }
+        }
+      }
+    },
+    {
+      "id": "02",
+      "source": "02-forks.cs",
+      "live": false,
+      "deterministic": false,
+      "liveReason": "needs sessions.fork, which the runtime does not answer",
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/02-forks.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-00-10.json",
+          "evidence": {
+            "id": "02",
+            "source": "02-forks.cs",
+            "path": "02-forks.ts",
+            "file": "02-forks.ts",
+            "original": "../02-forks.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": "needs sessions.fork, which the runtime does not answer",
+            "deterministic": false,
+            "deterministicExclusionReason": "needs sessions.fork, which the runtime does not answer",
+            "command": [
+              "node",
+              "--experimental-transform-types",
+              "examples/ts/02-forks.ts"
+            ],
+            "assertionParity": "all original facts verified with native SDK"
+          }
+        },
+        "py": {
+          "path": "examples/py/02-forks.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-00-10.json",
+          "evidence": {
+            "id": "02",
+            "source": "02-forks.cs",
+            "path": "02-forks.py",
+            "file": "02-forks.py",
+            "original": "../02-forks.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": "needs sessions.fork, which the runtime does not answer",
+            "deterministic": false,
+            "deterministicExclusionReason": "needs sessions.fork, which the runtime does not answer",
+            "command": [
+              "python3",
+              "examples/py/02-forks.py"
+            ],
+            "assertionParity": "all original facts verified with native SDK"
+          }
+        }
+      }
+    },
+    {
+      "id": "03",
+      "source": "03-owned-conversations.cs",
+      "live": false,
+      "deterministic": true,
+      "liveReason": null,
+      "expectedOutput": "examples/expected/03-owned-conversations.txt",
+      "languages": {
+        "ts": {
+          "path": "examples/ts/03-owned-conversations.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-00-10.json",
+          "evidence": {
+            "id": "03",
+            "source": "03-owned-conversations.cs",
+            "path": "03-owned-conversations.ts",
+            "file": "03-owned-conversations.ts",
+            "original": "../03-owned-conversations.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": null,
+            "deterministic": true,
+            "deterministicExclusionReason": null,
+            "command": [
+              "node",
+              "--experimental-transform-types",
+              "examples/ts/03-owned-conversations.ts"
+            ],
+            "assertionParity": "all original facts verified with real SDK/replay"
+          }
+        },
+        "py": {
+          "path": "examples/py/03-owned-conversations.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-00-10.json",
+          "evidence": {
+            "id": "03",
+            "source": "03-owned-conversations.cs",
+            "path": "03-owned-conversations.py",
+            "file": "03-owned-conversations.py",
+            "original": "../03-owned-conversations.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": null,
+            "deterministic": true,
+            "deterministicExclusionReason": null,
+            "command": [
+              "python3",
+              "examples/py/03-owned-conversations.py"
+            ],
+            "assertionParity": "all original facts verified with real SDK/replay"
+          }
+        }
+      }
+    },
+    {
+      "id": "04",
+      "source": "04-watches.cs",
+      "live": false,
+      "deterministic": true,
+      "liveReason": null,
+      "expectedOutput": "examples/expected/04-watches.txt",
+      "languages": {
+        "ts": {
+          "path": "examples/ts/04-watches.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-00-10.json",
+          "evidence": {
+            "id": "04",
+            "source": "04-watches.cs",
+            "path": "04-watches.ts",
+            "file": "04-watches.ts",
+            "original": "../04-watches.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": null,
+            "deterministic": true,
+            "deterministicExclusionReason": null,
+            "command": [
+              "node",
+              "--experimental-transform-types",
+              "examples/ts/04-watches.ts"
+            ],
+            "assertionParity": "all original facts verified with real SDK/replay"
+          }
+        },
+        "py": {
+          "path": "examples/py/04-watches.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-00-10.json",
+          "evidence": {
+            "id": "04",
+            "source": "04-watches.cs",
+            "path": "04-watches.py",
+            "file": "04-watches.py",
+            "original": "../04-watches.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": null,
+            "deterministic": true,
+            "deterministicExclusionReason": null,
+            "command": [
+              "python3",
+              "examples/py/04-watches.py"
+            ],
+            "assertionParity": "all original facts verified with real SDK/replay"
+          }
+        }
+      }
+    },
+    {
+      "id": "05",
+      "source": "05-harness.cs",
+      "live": false,
+      "deterministic": true,
+      "liveReason": null,
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/05-harness.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-00-10.json",
+          "evidence": {
+            "id": "05",
+            "source": "05-harness.cs",
+            "path": "05-harness.ts",
+            "file": "05-harness.ts",
+            "original": "../05-harness.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": null,
+            "deterministic": true,
+            "deterministicExclusionReason": null,
+            "command": [
+              "node",
+              "--experimental-transform-types",
+              "examples/ts/05-harness.ts"
+            ],
+            "assertionParity": "all original facts verified with real SDK/replay"
+          }
+        },
+        "py": {
+          "path": "examples/py/05-harness.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-00-10.json",
+          "evidence": {
+            "id": "05",
+            "source": "05-harness.cs",
+            "path": "05-harness.py",
+            "file": "05-harness.py",
+            "original": "../05-harness.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": null,
+            "deterministic": true,
+            "deterministicExclusionReason": null,
+            "command": [
+              "python3",
+              "examples/py/05-harness.py"
+            ],
+            "assertionParity": "all original facts verified with real SDK/replay"
+          }
+        }
+      }
+    },
+    {
+      "id": "06",
+      "source": "06-configuration.cs",
+      "live": false,
+      "deterministic": true,
+      "liveReason": null,
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/06-configuration.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-00-10.json",
+          "evidence": {
+            "id": "06",
+            "source": "06-configuration.cs",
+            "path": "06-configuration.ts",
+            "file": "06-configuration.ts",
+            "original": "../06-configuration.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": null,
+            "deterministic": true,
+            "deterministicExclusionReason": null,
+            "command": [
+              "node",
+              "--experimental-transform-types",
+              "examples/ts/06-configuration.ts"
+            ],
+            "assertionParity": "all original facts verified with real SDK/replay"
+          }
+        },
+        "py": {
+          "path": "examples/py/06-configuration.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-00-10.json",
+          "evidence": {
+            "id": "06",
+            "source": "06-configuration.cs",
+            "path": "06-configuration.py",
+            "file": "06-configuration.py",
+            "original": "../06-configuration.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": null,
+            "deterministic": true,
+            "deterministicExclusionReason": null,
+            "command": [
+              "python3",
+              "examples/py/06-configuration.py"
+            ],
+            "assertionParity": "all original facts verified with real SDK/replay"
+          }
+        }
+      }
+    },
+    {
+      "id": "07",
+      "source": "07-harness-conversations.cs",
+      "live": true,
+      "deterministic": false,
+      "liveReason": "sets a reasoning effort, so the harness queries models.list for a model the fixture does not record",
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/07-harness-conversations.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-00-10.json",
+          "evidence": {
+            "id": "07",
+            "source": "07-harness-conversations.cs",
+            "path": "07-harness-conversations.ts",
+            "file": "07-harness-conversations.ts",
+            "original": "../07-harness-conversations.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "sets a reasoning effort, so the harness queries models.list for a model the fixture does not record",
+            "deterministic": false,
+            "deterministicExclusionReason": "sets a reasoning effort, so the harness queries models.list for a model the fixture does not record",
+            "command": [
+              "node",
+              "--experimental-transform-types",
+              "examples/ts/07-harness-conversations.ts"
+            ],
+            "assertionParity": "all original facts verified with native SDK, including unchanged minimal reasoning effort"
+          }
+        },
+        "py": {
+          "path": "examples/py/07-harness-conversations.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-00-10.json",
+          "evidence": {
+            "id": "07",
+            "source": "07-harness-conversations.cs",
+            "path": "07-harness-conversations.py",
+            "file": "07-harness-conversations.py",
+            "original": "../07-harness-conversations.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "sets a reasoning effort, so the harness queries models.list for a model the fixture does not record",
+            "deterministic": false,
+            "deterministicExclusionReason": "sets a reasoning effort, so the harness queries models.list for a model the fixture does not record",
+            "command": [
+              "python3",
+              "examples/py/07-harness-conversations.py"
+            ],
+            "assertionParity": "all original facts verified with native SDK"
+          }
+        }
+      }
+    },
+    {
+      "id": "08",
+      "source": "08-context.cs",
+      "live": true,
+      "deterministic": false,
+      "liveReason": "needs sessions.fork, which the runtime does not answer",
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/08-context.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-00-10.json",
+          "evidence": {
+            "id": "08",
+            "source": "08-context.cs",
+            "path": "08-context.ts",
+            "file": "08-context.ts",
+            "original": "../08-context.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "needs sessions.fork, which the runtime does not answer",
+            "deterministic": false,
+            "deterministicExclusionReason": "needs sessions.fork, which the runtime does not answer",
+            "command": [
+              "node",
+              "--experimental-transform-types",
+              "examples/ts/08-context.ts"
+            ],
+            "assertionParity": "all original facts verified with native SDK and actual model answer CONTEXT"
+          }
+        },
+        "py": {
+          "path": "examples/py/08-context.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-00-10.json",
+          "evidence": {
+            "id": "08",
+            "source": "08-context.cs",
+            "path": "08-context.py",
+            "file": "08-context.py",
+            "original": "../08-context.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "needs sessions.fork, which the runtime does not answer",
+            "deterministic": false,
+            "deterministicExclusionReason": "needs sessions.fork, which the runtime does not answer",
+            "command": [
+              "python3",
+              "examples/py/08-context.py"
+            ],
+            "assertionParity": "all original facts verified with native SDK and actual model answer CONTEXT"
+          }
+        }
+      }
+    },
+    {
+      "id": "09",
+      "source": "09-registry-reload.cs",
+      "live": false,
+      "deterministic": true,
+      "liveReason": null,
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/09-registry-reload.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-00-10.json",
+          "evidence": {
+            "id": "09",
+            "source": "09-registry-reload.cs",
+            "path": "09-registry-reload.ts",
+            "file": "09-registry-reload.ts",
+            "original": "../09-registry-reload.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": null,
+            "deterministic": true,
+            "deterministicExclusionReason": null,
+            "command": [
+              "node",
+              "--experimental-transform-types",
+              "examples/ts/09-registry-reload.ts"
+            ],
+            "assertionParity": "all original facts verified with real SDK/replay"
+          }
+        },
+        "py": {
+          "path": "examples/py/09-registry-reload.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-00-10.json",
+          "evidence": {
+            "id": "09",
+            "source": "09-registry-reload.cs",
+            "path": "09-registry-reload.py",
+            "file": "09-registry-reload.py",
+            "original": "../09-registry-reload.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": null,
+            "deterministic": true,
+            "deterministicExclusionReason": null,
+            "command": [
+              "python3",
+              "examples/py/09-registry-reload.py"
+            ],
+            "assertionParity": "all original facts verified with real SDK/replay"
+          }
+        }
+      }
+    },
+    {
+      "id": "10",
+      "source": "10-extension-state.cs",
+      "live": true,
+      "deterministic": false,
+      "liveReason": "asserts a tool wrote into the document; the recording has no tool call",
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/10-extension-state.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-00-10.json",
+          "evidence": {
+            "id": "10",
+            "source": "10-extension-state.cs",
+            "path": "10-extension-state.ts",
+            "file": "10-extension-state.ts",
+            "original": "../10-extension-state.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "asserts a tool wrote into the document; the recording has no tool call",
+            "deterministic": false,
+            "deterministicExclusionReason": "asserts a tool wrote into the document; the recording has no tool call",
+            "command": [
+              "node",
+              "--experimental-transform-types",
+              "examples/ts/10-extension-state.ts"
+            ],
+            "assertionParity": "all original facts verified with native model/tool execution and separately with scripted SDK tool-state replay"
+          }
+        },
+        "py": {
+          "path": "examples/py/10-extension-state.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-00-10.json",
+          "evidence": {
+            "id": "10",
+            "source": "10-extension-state.cs",
+            "path": "10-extension-state.py",
+            "file": "10-extension-state.py",
+            "original": "../10-extension-state.cs",
+            "status": "ported",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "asserts a tool wrote into the document; the recording has no tool call",
+            "deterministic": false,
+            "deterministicExclusionReason": "asserts a tool wrote into the document; the recording has no tool call",
+            "command": [
+              "python3",
+              "examples/py/10-extension-state.py"
+            ],
+            "assertionParity": "all original facts verified with native model/tool execution and separately with scripted SDK tool-state replay"
+          }
+        }
+      }
+    },
+    {
+      "id": "11",
+      "source": "11-tasks.cs",
+      "live": false,
+      "deterministic": true,
+      "liveReason": null,
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/11-tasks.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-11-21.json",
+          "evidence": {
+            "file": "11-tasks.ts",
+            "id": "11",
+            "path": "examples/ts/11-tasks.ts",
+            "source": "11-tasks.cs",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": null,
+            "status": "ported",
+            "validationStatus": "deterministic-passed",
+            "command": [
+              "node",
+              "--experimental-transform-types",
+              "examples/ts/11-tasks.ts"
+            ],
+            "assertionCount": 9,
+            "limitations": [
+              "Uses the native DurableTaskRunner rather than the unavailable SDK harness; creates a real store conversation owner. No SDK session or effective-model report is claimed."
+            ]
+          }
+        },
+        "py": {
+          "path": "examples/py/11-tasks.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-11-21.json",
+          "evidence": {
+            "file": "11-tasks.py",
+            "id": "11",
+            "path": "examples/py/11-tasks.py",
+            "source": "11-tasks.cs",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": null,
+            "status": "ported",
+            "validationStatus": "deterministic-passed",
+            "command": [
+              "python3",
+              "examples/py/11-tasks.py"
+            ],
+            "assertionCount": 9,
+            "limitations": [
+              "Uses the actual DurableHarness task scheduler with client=None, not open_async or an SDK session. No effective-model report is claimed."
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "12",
+      "source": "12-recovery.cs",
+      "live": false,
+      "deterministic": true,
+      "liveReason": null,
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/12-recovery.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-11-21.json",
+          "evidence": {
+            "file": "12-recovery.ts",
+            "id": "12",
+            "path": "examples/ts/12-recovery.ts",
+            "source": "12-recovery.cs",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": null,
+            "status": "ported",
+            "validationStatus": "deterministic-passed",
+            "command": [
+              "node",
+              "--experimental-transform-types",
+              "examples/ts/12-recovery.ts"
+            ],
+            "additionalEvidence": [
+              "Real JSONL close/reopen preserves interrupted tick 2 and both memos.",
+              "Attempts == [1,2,2,3,4,5] while printed == [1,2,3,4,5].",
+              "Mutation disabling the memo read fails the original no-duplicates assertion and exits nonzero."
+            ],
+            "limitations": [
+              "Uses the native DurableTaskRunner, not an SDK session; no effective-model report is claimed.",
+              "Native sleepUntilAsync waits before saving the next checkpoint; no persisted wake-time claim is made."
+            ],
+            "requiredAssertions": [
+              "completed",
+              "counted to 5",
+              "printed == [1,2,3,4,5]",
+              "saved phase == tick",
+              "saved n == 2",
+              "saved memos count == 2"
+            ]
+          }
+        },
+        "py": {
+          "path": "examples/py/12-recovery.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-11-21.json",
+          "evidence": {
+            "file": "12-recovery.py",
+            "id": "12",
+            "path": "examples/py/12-recovery.py",
+            "source": "12-recovery.cs",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": null,
+            "status": "ported",
+            "validationStatus": "deterministic-passed",
+            "command": [
+              "python3",
+              "examples/py/12-recovery.py"
+            ],
+            "assertionCount": 6,
+            "additionalEvidence": [
+              "Explicit barrier interrupts tick 2 before saving its next checkpoint.",
+              "Real JSONL store is closed and reopened twice; read-only open does not resume.",
+              "Attempts == [1,2,2,3,4,5] while printed == [1,2,3,4,5].",
+              "Mutation disabling the memo read fails the original no-duplicates assertion and exits nonzero."
+            ],
+            "limitations": [
+              "Uses the actual DurableHarness task scheduler with client=None. No SDK session or effective-model report is claimed.",
+              "Native sleep_until_async waits before saving the next checkpoint, matching current C# implementation; no persisted wake-time claim is made."
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "13",
+      "source": "13-chat.cs",
+      "live": true,
+      "deterministic": false,
+      "liveReason": "asserts the model's answer; the recording has no model answer",
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/13-chat.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-11-21.json",
+          "evidence": {
+            "file": "13-chat.ts",
+            "id": "13",
+            "path": "examples/ts/13-chat.ts",
+            "source": "13-chat.cs",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "Original submits a model turn and asserts the answer is Paris plus user/assistant/system transcript events.",
+            "exclusionReason": "asserts the model's answer; the recording has no model answer",
+            "status": "ported",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "answer": "Paris",
+              "contextKinds": [
+                "user.message",
+                "assistant.message",
+                "system.message"
+              ],
+              "visibleEntries": 0
+            },
+            "referenceCorrection": "9763763737615ba5d55b08607df37aee09613337 changes the stale >=1 entry assertion to exactly zero app-written entries; Paris and user/assistant/system assertions remain unchanged.",
+            "limitations": [
+              "Native assertions passed; raw system-prompt content is not published. The basic replay fixture still cannot prove Paris or user/system history."
+            ],
+            "requiredAssertions": [
+              "trimmed answer == Paris",
+              "entries count == 0",
+              "user event exists",
+              "assistant event exists",
+              "system event exists"
+            ]
+          }
+        },
+        "py": {
+          "path": "examples/py/13-chat.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-11-21.json",
+          "evidence": {
+            "file": "13-chat.py",
+            "id": "13",
+            "path": "examples/py/13-chat.py",
+            "source": "13-chat.cs",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "Original submits a model turn and asserts Paris plus user/assistant/system transcript events.",
+            "exclusionReason": "asserts the model's answer; the recording has no model answer",
+            "status": "ported",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "answer": "Paris",
+              "contextKinds": [
+                "user.message",
+                "assistant.message",
+                "system.message"
+              ],
+              "visibleEntries": 0
+            },
+            "referenceCorrection": "9763763737615ba5d55b08607df37aee09613337 changes the stale >=1 entry assertion to exactly zero app-written entries; Paris and user/assistant/system assertions remain unchanged.",
+            "limitations": [
+              "Native assertions passed; raw system-prompt content is not published. The basic replay fixture still cannot prove Paris or user/system history."
+            ],
+            "requiredAssertions": [
+              "trimmed answer == Paris",
+              "entries count == 0",
+              "user event exists",
+              "assistant event exists",
+              "system event exists"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "14",
+      "source": "14-system-prompt.cs",
+      "live": false,
+      "deterministic": true,
+      "liveReason": null,
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/14-system-prompt.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-11-21.json",
+          "evidence": {
+            "file": "14-system-prompt.ts",
+            "id": "14",
+            "path": "examples/ts/14-system-prompt.ts",
+            "source": "14-system-prompt.cs",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": null,
+            "status": "ported",
+            "validationStatus": "configuration-passed",
+            "command": [
+              "node",
+              "--experimental-transform-types",
+              "examples/ts/14-system-prompt.ts"
+            ],
+            "fixture": "examples/ts/14-system-prompt.fixture.json",
+            "fixtureEnvironmentVariable": "DURABLE_EXAMPLE_FIXTURE",
+            "limitations": [
+              "Validated with the actual SDK and ReplayRuntime for configuration isolation and prompt rendering only.",
+              "Generated session IDs produce the explicit synthesised-session marker. This is not recorded model-transcript evidence.",
+              "The fixture reports no model; output says (not reported), without substituting the requested model."
+            ],
+            "requiredAssertions": [
+              "root cwd == packages",
+              "subagent cwd != packages",
+              "subagent instructions unchanged",
+              "root instructions unchanged",
+              "root extensions count >= 2"
+            ]
+          }
+        },
+        "py": {
+          "path": "examples/py/14-system-prompt.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-11-21.json",
+          "evidence": {
+            "file": "14-system-prompt.py",
+            "id": "14",
+            "path": "examples/py/14-system-prompt.py",
+            "source": "14-system-prompt.cs",
+            "sandboxMode": "not-applicable",
+            "live": false,
+            "liveReason": null,
+            "status": "ported",
+            "validationStatus": "configuration-passed",
+            "command": [
+              "lib/py/.venv/bin/python",
+              "examples/py/14-system-prompt.py"
+            ],
+            "fixture": "examples/ts/14-system-prompt.fixture.json",
+            "fixtureEnvironmentVariable": "DURABLE_EXAMPLE_FIXTURE",
+            "limitations": [
+              "Validated with the actual SDK and ReplayRuntime for configuration isolation and prompt rendering only.",
+              "Generated session IDs produce the explicit synthesised-session marker. This is not recorded model-transcript evidence.",
+              "The fixture reports no model; output says (not reported), without substituting the requested model."
+            ],
+            "requiredAssertions": [
+              "root cwd == packages",
+              "subagent cwd != packages",
+              "subagent instructions unchanged",
+              "root instructions unchanged",
+              "root extensions count >= 2"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "15",
+      "source": "15-real-model.cs",
+      "live": true,
+      "deterministic": false,
+      "liveReason": "asserts the answer streamed as deltas; the recording has no model answer",
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/15-real-model.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-11-21.json",
+          "evidence": {
+            "file": "15-real-model.ts",
+            "id": "15",
+            "path": "examples/ts/15-real-model.ts",
+            "source": "15-real-model.cs",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "Original streams real model output and compares all delta characters to final answer length.",
+            "exclusionReason": "asserts the answer streamed as deltas; the recording has no model answer",
+            "status": "ported",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "streamedCharacters": 120,
+              "finalCharacters": 120
+            },
+            "limitations": [
+              "Native streaming assertions passed; this is not replay-transcript evidence."
+            ],
+            "requiredAssertions": [
+              "answer exists",
+              "printed > 0",
+              "printed == final content length",
+              "final content length > 0"
+            ]
+          }
+        },
+        "py": {
+          "path": "examples/py/15-real-model.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-11-21.json",
+          "evidence": {
+            "file": "15-real-model.py",
+            "id": "15",
+            "path": "examples/py/15-real-model.py",
+            "source": "15-real-model.cs",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "Original streams real model output and compares all delta characters to final answer length.",
+            "exclusionReason": "asserts the answer streamed as deltas; the recording has no model answer",
+            "status": "ported",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "streamedCharacters": 113,
+              "finalCharacters": 113
+            },
+            "limitations": [
+              "Native streaming assertions passed. Character counts use UTF-16 code units to match C# and TypeScript."
+            ],
+            "requiredAssertions": [
+              "answer exists",
+              "printed > 0",
+              "printed == final content length",
+              "final content length > 0"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "16",
+      "source": "16-coding-tools.cs",
+      "live": true,
+      "deterministic": false,
+      "liveReason": "asserts the app's read_file tool ran; the recording has no tool call",
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/16-coding-tools.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-11-21.json",
+          "evidence": {
+            "file": "16-coding-tools.ts",
+            "id": "16",
+            "path": "examples/ts/16-coding-tools.ts",
+            "source": "16-coding-tools.cs",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "Original asks a model to select read/edit/shell tools and verifies actual file effects and hook timings.",
+            "exclusionReason": "asserts the app's read_file tool ran; the recording has no tool call",
+            "status": "ported",
+            "validationStatus": "live-flaky",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "passingExitCode": 0,
+              "tools": [
+                "read_file",
+                "edit_file",
+                "run_shell"
+              ],
+              "toolFailures": 0,
+              "file": "hello durable",
+              "shellTimings": 1
+            },
+            "limitations": [
+              "Initial native run failed because run_shell was not called; unchanged-source repeats passed all original assertions. Model tool selection is not deterministic.",
+              "File tools reject paths outside the temporary workspace; shell calls have a ten-second timeout. Failed commands surface as tool failures."
+            ],
+            "requiredAssertions": [
+              "read_file ran",
+              "edit_file ran",
+              "run_shell ran",
+              "tool failure count == 0",
+              "file == hello durable",
+              "timings count == 1"
+            ]
+          }
+        },
+        "py": {
+          "path": "examples/py/16-coding-tools.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-11-21.json",
+          "evidence": {
+            "file": "16-coding-tools.py",
+            "id": "16",
+            "path": "examples/py/16-coding-tools.py",
+            "source": "16-coding-tools.cs",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "Original asks a model to select read/edit/shell tools and verifies actual file effects and hook timings.",
+            "exclusionReason": "asserts the app's read_file tool ran; the recording has no tool call",
+            "status": "ported",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "tools": [
+                "read_file",
+                "edit_file",
+                "run_shell"
+              ],
+              "toolFailures": 0,
+              "file": "hello durable",
+              "shellTimings": 1
+            },
+            "limitations": [
+              "Initial native failures exposed /var versus /private/var containment mismatch. Canonicalizing the workspace fixed it; unchanged original effect assertions passed, and a real-source alias/escape mutation regression protects the guard.",
+              "File tools reject paths outside the temporary workspace; shell calls have a ten-second timeout. Failed commands surface as tool failures."
+            ],
+            "requiredAssertions": [
+              "read_file ran",
+              "edit_file ran",
+              "run_shell ran",
+              "tool failure count == 0",
+              "file == hello durable",
+              "timings count == 1"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "17",
+      "source": "17-print.cs",
+      "live": true,
+      "deterministic": true,
+      "liveReason": null,
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/17-print.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-11-21.json",
+          "evidence": {
+            "file": "17-print.ts",
+            "id": "17",
+            "path": "examples/ts/17-print.ts",
+            "source": "17-print.cs",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "Original awaits one model submission with built-in read permission and prints its final answer.",
+            "exclusionReason": null,
+            "status": "ported",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "nonemptyAnswer": true,
+              "answers": 1
+            },
+            "deterministicValidation": "passed-fixture",
+            "fixture": "tools/ReplayRuntime/fixtures/basic.json",
+            "fixtureEnvironmentVariable": "DURABLE_EXAMPLE_FIXTURE",
+            "limitations": [
+              "Native answer assertions passed in a disposable directory. Model diagnostics remain on stderr, separate from answer stdout."
+            ],
+            "requiredAssertions": [
+              "answer exists",
+              "trimmed answer length > 0",
+              "answers count == 1"
+            ]
+          }
+        },
+        "py": {
+          "path": "examples/py/17-print.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-11-21.json",
+          "evidence": {
+            "file": "17-print.py",
+            "id": "17",
+            "path": "examples/py/17-print.py",
+            "source": "17-print.cs",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "Original awaits one model submission with built-in read permission and prints its final answer.",
+            "exclusionReason": null,
+            "status": "ported",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "nonemptyAnswer": true,
+              "answers": 1
+            },
+            "deterministicValidation": "passed-fixture",
+            "fixture": "tools/ReplayRuntime/fixtures/basic.json",
+            "fixtureEnvironmentVariable": "DURABLE_EXAMPLE_FIXTURE",
+            "limitations": [
+              "Native answer assertions passed in a disposable directory. Model diagnostics remain on stderr, separate from answer stdout."
+            ],
+            "requiredAssertions": [
+              "answer exists",
+              "trimmed answer length > 0",
+              "answers count == 1"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "18",
+      "source": "18-json.cs",
+      "live": true,
+      "deterministic": true,
+      "liveReason": null,
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/18-json.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-11-21.json",
+          "evidence": {
+            "file": "18-json.ts",
+            "id": "18",
+            "path": "examples/ts/18-json.ts",
+            "source": "18-json.cs",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "Original emits a snapshot followed by session events from a model/tool run, serialized as JSON objects.",
+            "exclusionReason": null,
+            "status": "ported",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "jsonLines": 115,
+              "snapshotFirst": true,
+              "toolStarts": 2,
+              "assistantMessages": 3
+            },
+            "deterministicValidation": "passed-fixture",
+            "fixture": "tools/ReplayRuntime/fixtures/basic.json",
+            "fixtureEnvironmentVariable": "DURABLE_EXAMPLE_FIXTURE",
+            "limitations": [
+              "Native snapshot/event JSON assertions passed. Model-report diagnostics go to stderr, leaving stdout JSON-only."
+            ],
+            "requiredAssertions": [
+              "lines count >= 1",
+              "every line is a JSON object",
+              "snapshot line exists",
+              "event line exists"
+            ]
+          }
+        },
+        "py": {
+          "path": "examples/py/18-json.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-11-21.json",
+          "evidence": {
+            "file": "18-json.py",
+            "id": "18",
+            "path": "examples/py/18-json.py",
+            "source": "18-json.cs",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "Original emits a snapshot followed by session events from a model/tool run, serialized as JSON objects.",
+            "exclusionReason": null,
+            "status": "ported",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "jsonLines": 110,
+              "snapshotFirst": true,
+              "toolStarts": 2,
+              "assistantMessages": 3,
+              "sdkUnknownEvents": 24
+            },
+            "deterministicValidation": "passed-fixture",
+            "fixture": "tools/ReplayRuntime/fixtures/basic.json",
+            "fixtureEnvironmentVariable": "DURABLE_EXAMPLE_FIXTURE",
+            "limitations": [
+              "Native snapshot/event JSON assertions passed. SDK 1.0.28 decoded 24 newer CLI 1.0.105 event kinds as unknown; no complete future-event schema claim is made. Model-report diagnostics go to stderr, leaving stdout JSON-only."
+            ],
+            "requiredAssertions": [
+              "lines count >= 1",
+              "every line is a JSON object",
+              "snapshot line exists",
+              "event line exists"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "19",
+      "source": "19-inbox.cs",
+      "live": true,
+      "deterministic": false,
+      "liveReason": "asserts both prompts are in the transcript; the recording has no user-message events",
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/19-inbox.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-11-21.json",
+          "evidence": {
+            "file": "19-inbox.ts",
+            "id": "19",
+            "path": "examples/ts/19-inbox.ts",
+            "source": "19-inbox.cs",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "Original submits overlapping model turns and checks both inputs and per-submission answers were retained.",
+            "exclusionReason": "asserts both prompts are in the transcript; the recording has no user-message events",
+            "status": "ported",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "firstAnswer": "4",
+              "followUpAnswer": "6",
+              "userMessages": 2,
+              "answers": 2
+            },
+            "limitations": [
+              "Native overlapping-submission assertions passed.",
+              "The original release gate is unused and does not control model completion; this port does not claim a deterministic busy barrier."
+            ],
+            "requiredAssertions": [
+              "user messages count == 2",
+              "2+2 input exists",
+              "3+3 input exists",
+              "first answer exists",
+              "follow-up answer exists",
+              "first answer nonempty",
+              "follow-up answer nonempty",
+              "answers count == 2"
+            ]
+          }
+        },
+        "py": {
+          "path": "examples/py/19-inbox.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-11-21.json",
+          "evidence": {
+            "file": "19-inbox.py",
+            "id": "19",
+            "path": "examples/py/19-inbox.py",
+            "source": "19-inbox.cs",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "Original submits overlapping model turns and checks both inputs and per-submission answers were retained.",
+            "exclusionReason": "asserts both prompts are in the transcript; the recording has no user-message events",
+            "status": "ported",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 0,
+              "firstAnswer": "4",
+              "followUpAnswer": "6",
+              "userMessages": 2,
+              "answers": 2
+            },
+            "limitations": [
+              "Native overlapping-submission assertions passed.",
+              "The original release gate is unused and does not control model completion; this port does not claim a deterministic busy barrier."
+            ],
+            "requiredAssertions": [
+              "user messages count == 2",
+              "2+2 input exists",
+              "3+3 input exists",
+              "first answer exists",
+              "follow-up answer exists",
+              "first answer nonempty",
+              "follow-up answer nonempty",
+              "answers count == 2"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "20",
+      "source": "20-late-join.cs",
+      "live": true,
+      "deterministic": false,
+      "liveReason": "asserts the snapshot holds the user message; the recording has no user-message events",
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/20-late-join.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-11-21.json",
+          "evidence": {
+            "file": "20-late-join.ts",
+            "id": "20",
+            "path": "examples/ts/20-late-join.ts",
+            "source": "20-late-join.cs",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "Original joins a streaming model run after 1.5 seconds and requires live deltas after the snapshot; timing is not guaranteed by a completed recording.",
+            "exclusionReason": "asserts the snapshot holds the user message; the recording has no user-message events",
+            "status": "ported",
+            "validationStatus": "live-passed",
+            "referenceStatus": "synchronized-reference-ported",
+            "referenceCorrection": {
+              "commit": "fdf325bae125768aff8d8e1b8f0eec7fc4ee2955",
+              "pullRequest": "https://github.com/matthewcorven/github-copilot-sdk-durable/pull/128",
+              "contract": "Actual async wait_for_join SDK tool; exact custom-tool grant; completion/error races; actual user history before subscription; subscription before release; host cancellation and release in finally. All five original assertions remain."
+            },
+            "synchronization": {
+              "tool": "wait_for_join",
+              "deadlineClockSeconds": 90,
+              "historyDeadlineSeconds": 15,
+              "conditionalHistoryPollMilliseconds": 50,
+              "subscriptionBeforeRelease": true,
+              "bootstrapCancellationGuaranteed": false
+            },
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "cliVersion": "1.0.105",
+              "sdkVersion": "1.0.28",
+              "runs": [
+                {
+                  "exitCode": 0,
+                  "durationSeconds": 7.84,
+                  "snapshotEvents": 11,
+                  "snapshotUserEvent": true,
+                  "deltasAfterJoin": 11,
+                  "completedAnswerCharacters": 38
+                },
+                {
+                  "exitCode": 0,
+                  "durationSeconds": 7.97,
+                  "snapshotEvents": 10,
+                  "snapshotUserEvent": true,
+                  "deltasAfterJoin": 12,
+                  "completedAnswerCharacters": 34,
+                  "answer": "One.\nTwo.\nThree.\nFour.\nFive.\nDONE."
+                }
+              ],
+              "subscriptionBeforeDelta": true,
+              "representativeAnswer": "One.\n\nTwo.\n\nThree.\n\nFour.\n\nFive.\n\nDONE",
+              "earlierSynchronizedRuns": [
+                {
+                  "exitCode": 0,
+                  "durationSeconds": 7.39,
+                  "snapshotEvents": 10,
+                  "deltasAfterJoin": 11,
+                  "completedAnswerCharacters": 38
+                },
+                {
+                  "exitCode": 0,
+                  "durationSeconds": 9.09,
+                  "snapshotEvents": 10,
+                  "deltasAfterJoin": 11,
+                  "completedAnswerCharacters": 38
+                }
+              ]
+            },
+            "historicalNativeEvidence": {
+              "reference": "pre-fdf325b fixed 1.5-second join",
+              "reportedModel": "gpt-6-luna",
+              "passingExitCode": 0,
+              "passingSnapshotEvents": 4,
+              "failingExitCode": 1,
+              "failedAssertion": "the snapshot holds the user message",
+              "failingSnapshotKinds": [
+                "session.start"
+              ]
+            },
+            "sdkTransportEvidence": [
+              "Delayed user history is read conditionally until the third post-submission SDK snapshot.",
+              "Missing invocation, early completion, original model errors, missing/stalled history, no deltas, empty/missing answer and no idle fail loudly.",
+              "Actual handler cleanup runs without a success result after cancellation.",
+              "Actual-source mutations restoring the old delay and releasing before the snapshot fail nonzero."
+            ],
+            "limitations": [
+              "Original liveReason is retained verbatim as historical classification; the tested reference replaces the uncoordinated 1.5-second delay with a real tool barrier, not manufactured history.",
+              "The original basic replay recording still cannot prove user history or streaming; the new SDK protocol peer is deterministic test evidence only.",
+              "The 90-second clock bounds joining and completion once a harness is owned. Facade bootstrap has no cancellation parameter; interruption of an open that never settles is not guaranteed or proved by these tests."
+            ],
+            "requiredAssertions": [
+              "snapshot count >= 1",
+              "snapshot user event exists",
+              "post-join deltas count >= 1",
+              "answer exists",
+              "trimmed answer nonempty"
+            ]
+          }
+        },
+        "py": {
+          "path": "examples/py/20-late-join.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-11-21.json",
+          "evidence": {
+            "file": "20-late-join.py",
+            "id": "20",
+            "path": "examples/py/20-late-join.py",
+            "source": "20-late-join.cs",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "Original joins a streaming model run after 1.5 seconds and requires live deltas after the snapshot; timing is not guaranteed by a completed recording.",
+            "exclusionReason": "asserts the snapshot holds the user message; the recording has no user-message events",
+            "status": "ported",
+            "validationStatus": "live-passed",
+            "referenceStatus": "synchronized-reference-ported",
+            "referenceCorrection": {
+              "commit": "fdf325bae125768aff8d8e1b8f0eec7fc4ee2955",
+              "pullRequest": "https://github.com/matthewcorven/github-copilot-sdk-durable/pull/128",
+              "contract": "Actual async wait_for_join SDK tool; exact custom-tool grant; completion/error races; actual user history before subscription; subscription before release; host cancellation and release in finally. All five original assertions remain."
+            },
+            "synchronization": {
+              "tool": "wait_for_join",
+              "deadlineClockSeconds": 90,
+              "historyDeadlineSeconds": 15,
+              "conditionalHistoryPollMilliseconds": 50,
+              "subscriptionBeforeRelease": true,
+              "bootstrapCancellationGuaranteed": false
+            },
+            "nativeEvidence": {
+              "reportedModel": "gpt-6-luna",
+              "cliVersion": "1.0.105",
+              "sdkVersion": "1.0.28",
+              "runs": [
+                {
+                  "exitCode": 0,
+                  "durationSeconds": 8.06,
+                  "snapshotEvents": 10,
+                  "snapshotUserEvent": true,
+                  "deltasAfterJoin": 11,
+                  "completedAnswerCharacters": 38
+                },
+                {
+                  "exitCode": 0,
+                  "durationSeconds": 10.92,
+                  "snapshotEvents": 10,
+                  "snapshotUserEvent": true,
+                  "deltasAfterJoin": 11,
+                  "completedAnswerCharacters": 38
+                }
+              ],
+              "subscriptionBeforeDelta": true,
+              "representativeAnswer": "One.\n\nTwo.\n\nThree.\n\nFour.\n\nFive.\n\nDONE",
+              "earlierSynchronizedRuns": [
+                {
+                  "exitCode": 0,
+                  "durationSeconds": 7.79,
+                  "snapshotEvents": 10,
+                  "deltasAfterJoin": 11,
+                  "completedAnswerCharacters": 38
+                },
+                {
+                  "exitCode": 0,
+                  "durationSeconds": 11.26,
+                  "snapshotEvents": 10,
+                  "deltasAfterJoin": 11,
+                  "completedAnswerCharacters": 38
+                }
+              ]
+            },
+            "historicalNativeEvidence": {
+              "reference": "pre-fdf325b fixed 1.5-second join",
+              "reportedModel": "gpt-6-luna",
+              "exitCode": 1,
+              "failedAssertion": "the snapshot holds the user message",
+              "snapshotKinds": [
+                "session.start"
+              ],
+              "eventualUserMessages": 1,
+              "deltasAfterJoin": 11
+            },
+            "sdkTransportEvidence": [
+              "Delayed user history is read conditionally until the third post-submission SDK snapshot.",
+              "Missing invocation, early completion, original model errors, missing/stalled history, no deltas, empty/missing answer and no idle fail loudly.",
+              "Actual handler cleanup runs without a success result after cancellation.",
+              "Actual-source mutations restoring the old delay and releasing before the snapshot fail nonzero."
+            ],
+            "limitations": [
+              "Original liveReason is retained verbatim as historical classification; the tested reference replaces the uncoordinated 1.5-second delay with a real tool barrier, not manufactured history.",
+              "Python SDK ToolInvocation has no cancellation signal field: SDK task cancellation propagates and the host cancelled/deadline guard runs before ToolResult. No SDK token or new production Abort API is invented.",
+              "The original basic replay recording still cannot prove user history or streaming; the new SDK protocol peer is deterministic test evidence only.",
+              "The 90-second clock bounds joining and completion once a harness is owned. Facade bootstrap has no cancellation parameter; interruption of an open that never settles is not guaranteed or proved by these tests."
+            ],
+            "requiredAssertions": [
+              "snapshot count >= 1",
+              "snapshot user event exists",
+              "post-join deltas count >= 1",
+              "answer exists",
+              "trimmed answer nonempty"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "21",
+      "source": "21-subagent-foreground.cs",
+      "live": true,
+      "deterministic": false,
+      "liveReason": "asserts a subagent tool created a child conversation; the recording has no tool call",
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/21-subagent-foreground.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-11-21.json",
+          "evidence": {
+            "file": "21-subagent-foreground.ts",
+            "id": "21",
+            "path": "examples/ts/21-subagent-foreground.ts",
+            "source": "21-subagent-foreground.cs",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "Original requires a parent model tool call to create an owned child session, await its answer, and return it to the parent.",
+            "exclusionReason": "asserts a subagent tool created a child conversation; the recording has no tool call",
+            "status": "ported",
+            "validationStatus": "live-passed",
+            "nativeEvidence": {
+              "reportedParentModel": "gpt-6-luna",
+              "exitCode": 0,
+              "ownedChildren": 1,
+              "returnedPrimes": [
+                2,
+                3,
+                5
+              ]
+            },
+            "limitations": [
+              "Native parent-tool/owned-child assertions passed.",
+              "The child requests the original mai-code-1.1-flash choice; its effective model was not reported by this example and is not inferred from the request.",
+              "The original creates a new child on every tool invocation; no crash-reuse or task-owned cancellation guarantee is claimed."
+            ],
+            "requiredAssertions": [
+              "children count == 1",
+              "child exists in store",
+              "child id != parent id",
+              "parent answer exists",
+              "parent answer contains 2"
+            ]
+          }
+        },
+        "py": {
+          "path": "examples/py/21-subagent-foreground.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-11-21.json",
+          "evidence": {
+            "file": "21-subagent-foreground.py",
+            "id": "21",
+            "path": "examples/py/21-subagent-foreground.py",
+            "source": "21-subagent-foreground.cs",
+            "sandboxMode": "not-applicable",
+            "live": true,
+            "liveReason": "Original requires a parent model tool call to create an owned child session, await its answer, and return it to the parent.",
+            "exclusionReason": "asserts a subagent tool created a child conversation; the recording has no tool call",
+            "status": "ported",
+            "validationStatus": "live-flaky",
+            "nativeEvidence": {
+              "reportedParentModel": "gpt-6-luna",
+              "passingExitCode": 0,
+              "ownedChildren": 1,
+              "returnedPrimes": [
+                2,
+                3,
+                5
+              ],
+              "failingExitCode": 1,
+              "failedAssertion": "the subagent tool created exactly one child conversation",
+              "failingChildren": 0
+            },
+            "limitations": [
+              "A native run with diagnostic-only instrumentation preserving all assertions passed the actual parent-tool/owned-child flow. Uninstrumented runs also failed with zero children; passing evidence does not erase model/tool-choice flakiness.",
+              "The child requests the original mai-code-1.1-flash choice; its effective model was not reported by this example and is not inferred from the request.",
+              "The original creates a new child on every tool invocation; no crash-reuse or task-owned cancellation guarantee is claimed."
+            ],
+            "requiredAssertions": [
+              "children count == 1",
+              "child exists in store",
+              "child id != parent id",
+              "parent answer exists",
+              "parent answer contains 2"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "22",
+      "source": "22-subagent-background.cs",
+      "live": true,
+      "deterministic": false,
+      "liveReason": "needs a subagent request the runtime does not answer",
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/22-subagent-background.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-22-35.json",
+          "evidence": {
+            "number": 22,
+            "name": "subagent-background",
+            "id": "22",
+            "source": "22-subagent-background.cs",
+            "file": "examples/ts/22-subagent-background.ts",
+            "path": "examples/ts/22-subagent-background.ts",
+            "sandboxMode": "not-applicable",
+            "status": "ported",
+            "mode": "LIVE",
+            "assertions": [
+              "reader survives reopen",
+              "the subagent conversation ID is unchanged",
+              "reopened runtime status names reader"
+            ],
+            "liveReason": "needs a subagent request the runtime does not answer"
+          }
+        },
+        "py": {
+          "path": "examples/py/22-subagent-background.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-22-35.json",
+          "evidence": {
+            "number": 22,
+            "name": "subagent-background",
+            "id": "22",
+            "source": "22-subagent-background.cs",
+            "path": "examples/py/22-subagent-background.py",
+            "sandboxMode": "not-applicable",
+            "file": "examples/py/22-subagent-background.py",
+            "status": "ported",
+            "mode": "LIVE",
+            "assertions": [
+              "reader survives reopen",
+              "the subagent conversation ID is unchanged",
+              "reopened runtime status names reader"
+            ],
+            "liveReason": "needs a subagent request the runtime does not answer"
+          }
+        }
+      }
+    },
+    {
+      "id": "23",
+      "source": "23-child-tasks.cs",
+      "live": false,
+      "deterministic": true,
+      "liveReason": null,
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/23-child-tasks.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-22-35.json",
+          "evidence": {
+            "number": 23,
+            "name": "child-tasks",
+            "id": "23",
+            "source": "23-child-tasks.cs",
+            "file": "examples/ts/23-child-tasks.ts",
+            "path": "examples/ts/23-child-tasks.ts",
+            "sandboxMode": "not-applicable",
+            "liveReason": null,
+            "status": "ported",
+            "mode": "deterministic",
+            "verification": "Actual SDK ReplayRuntime passed every child/ownership/fail-fast/abort assertion. C# stdout labels and enum casing match; task IDs differ.",
+            "assertions": [
+              "four payment children and conversation ownership",
+              "declined checkout fails with an error",
+              "expired card is never charged",
+              "visa-1 remains charged",
+              "fail-fast aborts exactly visa-3 and visa-4",
+              "cancelled checkout and all four children are aborted and terminal",
+              "aborted charges are undone",
+              "both abort fan-outs reach the exact expected card set"
+            ]
+          }
+        },
+        "py": {
+          "path": "examples/py/23-child-tasks.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-22-35.json",
+          "evidence": {
+            "number": 23,
+            "name": "child-tasks",
+            "id": "23",
+            "source": "23-child-tasks.cs",
+            "path": "examples/py/23-child-tasks.py",
+            "sandboxMode": "not-applicable",
+            "liveReason": null,
+            "file": "examples/py/23-child-tasks.py",
+            "status": "ported",
+            "mode": "deterministic",
+            "verification": "Actual SDK ReplayRuntime passed every child/ownership/fail-fast/abort assertion. C# stdout labels and enum casing match; task IDs differ.",
+            "assertions": [
+              "four payment children and conversation ownership",
+              "declined checkout fails with an error",
+              "expired card is never charged",
+              "visa-1 remains charged",
+              "fail-fast aborts exactly visa-3 and visa-4",
+              "cancelled checkout and all four children are aborted and terminal",
+              "aborted charges are undone",
+              "both abort fan-outs reach the exact expected card set"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "24",
+      "source": "24-compaction.cs",
+      "live": true,
+      "deterministic": false,
+      "liveReason": "needs a compaction request the runtime does not answer",
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/24-compaction.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-22-35.json",
+          "evidence": {
+            "number": 24,
+            "name": "compaction",
+            "id": "24",
+            "source": "24-compaction.cs",
+            "file": "examples/ts/24-compaction.ts",
+            "path": "examples/ts/24-compaction.ts",
+            "sandboxMode": "not-applicable",
+            "status": "ported",
+            "mode": "LIVE",
+            "assertions": [
+              "five nonempty answers",
+              "plain chat checkpoints produce zero public app entries",
+              "model context is not empty"
+            ],
+            "referenceCommit": "7448ed34956966b0afa2df79adc76a76031312e0",
+            "nativeVerification": "Corrected native run passed five nonempty answers, exactly zero public entries and nonempty SDK context. Internal checkpoints remain persisted; compaction count is observational and was zero.",
+            "liveReason": "needs a compaction request the runtime does not answer"
+          }
+        },
+        "py": {
+          "path": "examples/py/24-compaction.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-22-35.json",
+          "evidence": {
+            "number": 24,
+            "name": "compaction",
+            "id": "24",
+            "source": "24-compaction.cs",
+            "path": "examples/py/24-compaction.py",
+            "sandboxMode": "not-applicable",
+            "file": "examples/py/24-compaction.py",
+            "status": "ported",
+            "mode": "LIVE",
+            "assertions": [
+              "five nonempty answers",
+              "plain chat checkpoints produce zero public app entries",
+              "model context is not empty"
+            ],
+            "referenceCommit": "7448ed34956966b0afa2df79adc76a76031312e0",
+            "nativeVerification": "Corrected native run passed five nonempty answers, exactly zero public entries and nonempty SDK context. Internal checkpoints remain persisted; compaction count is observational and was zero.",
+            "liveReason": "needs a compaction request the runtime does not answer"
+          }
+        }
+      }
+    },
+    {
+      "id": "25",
+      "source": "25-coding-agent.cs",
+      "live": true,
+      "deterministic": false,
+      "liveReason": "asserts the tool ran in the conversation's directory; the recording has no tool call",
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/25-coding-agent.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-22-35.json",
+          "evidence": {
+            "number": 25,
+            "name": "coding-agent",
+            "id": "25",
+            "source": "25-coding-agent.cs",
+            "file": "examples/ts/25-coding-agent.ts",
+            "path": "examples/ts/25-coding-agent.ts",
+            "sandboxMode": "not-applicable",
+            "status": "ported",
+            "mode": "LIVE",
+            "assertions": [
+              "initial working directory equals workspace",
+              "actual tool answer names workspace",
+              "configured directory changes to app",
+              "actual second tool answer names app"
+            ],
+            "liveReason": "asserts the tool ran in the conversation's directory; the recording has no tool call"
+          }
+        },
+        "py": {
+          "path": "examples/py/25-coding-agent.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-22-35.json",
+          "evidence": {
+            "number": 25,
+            "name": "coding-agent",
+            "id": "25",
+            "source": "25-coding-agent.cs",
+            "path": "examples/py/25-coding-agent.py",
+            "sandboxMode": "not-applicable",
+            "file": "examples/py/25-coding-agent.py",
+            "status": "ported",
+            "mode": "LIVE",
+            "assertions": [
+              "initial working directory equals workspace",
+              "actual tool answer names workspace",
+              "configured directory changes to app",
+              "actual second tool answer names app"
+            ],
+            "liveReason": "asserts the tool ran in the conversation's directory; the recording has no tool call"
+          }
+        }
+      }
+    },
+    {
+      "id": "26",
+      "source": "26-plan-mode.cs",
+      "live": true,
+      "deterministic": false,
+      "liveReason": "asserts the plan was written to the document; the recording has no tool call",
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/26-plan-mode.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-22-35.json",
+          "evidence": {
+            "number": 26,
+            "name": "plan-mode",
+            "id": "26",
+            "source": "26-plan-mode.cs",
+            "file": "examples/ts/26-plan-mode.ts",
+            "path": "examples/ts/26-plan-mode.ts",
+            "sandboxMode": "not-applicable",
+            "status": "ported",
+            "mode": "LIVE",
+            "assertions": [
+              "coding tools are read_file",
+              "plan tools are submit_plan",
+              "leaving plan mode restores read_file",
+              "tool writes a nonempty plan document",
+              "every plan step has content"
+            ],
+            "liveReason": "asserts the plan was written to the document; the recording has no tool call"
+          }
+        },
+        "py": {
+          "path": "examples/py/26-plan-mode.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-22-35.json",
+          "evidence": {
+            "number": 26,
+            "name": "plan-mode",
+            "id": "26",
+            "source": "26-plan-mode.cs",
+            "path": "examples/py/26-plan-mode.py",
+            "sandboxMode": "not-applicable",
+            "file": "examples/py/26-plan-mode.py",
+            "status": "ported",
+            "mode": "LIVE",
+            "assertions": [
+              "coding tools are read_file",
+              "plan tools are submit_plan",
+              "leaving plan mode restores read_file",
+              "tool writes a nonempty plan document",
+              "every plan step has content"
+            ],
+            "liveReason": "asserts the plan was written to the document; the recording has no tool call"
+          }
+        }
+      }
+    },
+    {
+      "id": "27",
+      "source": "27-reviewer.cs",
+      "live": true,
+      "deterministic": false,
+      "liveReason": "asserts the review loop ran more than one pass; the recording has no tool call",
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/27-reviewer.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-22-35.json",
+          "evidence": {
+            "number": 27,
+            "name": "reviewer",
+            "id": "27",
+            "source": "27-reviewer.cs",
+            "file": "examples/ts/27-reviewer.ts",
+            "path": "examples/ts/27-reviewer.ts",
+            "sandboxMode": "not-applicable",
+            "status": "ported",
+            "mode": "LIVE",
+            "assertions": [
+              "reviewer choices retain requested model, extension, read-only tool, and directory",
+              "at least two review passes and answers",
+              "last answer contains No further findings."
+            ],
+            "liveReason": "asserts the review loop ran more than one pass; the recording has no tool call"
+          }
+        },
+        "py": {
+          "path": "examples/py/27-reviewer.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-22-35.json",
+          "evidence": {
+            "number": 27,
+            "name": "reviewer",
+            "id": "27",
+            "source": "27-reviewer.cs",
+            "path": "examples/py/27-reviewer.py",
+            "sandboxMode": "not-applicable",
+            "file": "examples/py/27-reviewer.py",
+            "status": "ported",
+            "mode": "LIVE",
+            "assertions": [
+              "reviewer choices retain requested model, extension, read-only tool, and directory",
+              "at least two review passes and answers",
+              "last answer contains No further findings."
+            ],
+            "liveReason": "asserts the review loop ran more than one pass; the recording has no tool call"
+          }
+        }
+      }
+    },
+    {
+      "id": "28",
+      "source": "28-sandbox-per-conversation.cs",
+      "live": true,
+      "deterministic": false,
+      "liveReason": "asserts a file the sandboxed tool wrote; the recording has no tool call",
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/28-sandbox-per-conversation.ts",
+          "status": "ported",
+          "sandboxMode": "supported",
+          "rangeManifest": "examples/ts/parity-22-35.json",
+          "evidence": {
+            "number": 28,
+            "name": "sandbox-per-conversation",
+            "id": "28",
+            "source": "28-sandbox-per-conversation.cs",
+            "file": "examples/ts/28-sandbox-per-conversation.ts",
+            "path": "examples/ts/28-sandbox-per-conversation.ts",
+            "status": "ported",
+            "mode": "policy",
+            "sandboxMode": "supported",
+            "liveReason": "asserts a file the sandboxed tool wrote; the recording has no tool call",
+            "verification": "Policy mode passed native SDK wire and distinct document directories. Added SDK --live policy mode passed actual alice/bob file contents with explicit narrowly classified host-hook tolerance; the default non-tolerant live attempt reported the installed hook's sandbox denial.",
+            "notes": [
+              "The C# reference confines a custom tool using a sandbox document. This port preserves that document and also verifies the required native SDK filesystem policy.",
+              "Only the added actual-SDK --live policy mode explicitly tolerates narrowly classified host hook sandbox denials. The library and this example's default policy-mode option remain false; file-content and policy assertions remain active."
+            ],
+            "assertions": [
+              "distinct per-conversation directories",
+              "each document points at its own directory",
+              "requested policy survives the SDK wire"
+            ],
+            "liveAssertions": [
+              {
+                "assertion": "alice's note contains from alice in alice's sandbox",
+                "status": "LIVE",
+                "reason": "Asserts a file the sandboxed tool wrote; the recording has no tool call."
+              },
+              {
+                "assertion": "bob's note contains from bob in bob's sandbox",
+                "status": "LIVE",
+                "reason": "Asserts a file the sandboxed tool wrote; the recording has no tool call."
+              }
+            ]
+          }
+        },
+        "py": {
+          "path": "examples/py/28-sandbox-per-conversation.py",
+          "status": "ported",
+          "sandboxMode": "supported",
+          "rangeManifest": "examples/py/parity-22-35.json",
+          "evidence": {
+            "number": 28,
+            "name": "sandbox-per-conversation",
+            "id": "28",
+            "source": "28-sandbox-per-conversation.cs",
+            "path": "examples/py/28-sandbox-per-conversation.py",
+            "file": "examples/py/28-sandbox-per-conversation.py",
+            "status": "ported",
+            "mode": "policy",
+            "sandboxMode": "supported",
+            "liveReason": "asserts a file the sandboxed tool wrote; the recording has no tool call",
+            "verification": "Policy mode passed native SDK wire and distinct document directories. Added SDK --live policy mode passed actual alice/bob file contents with explicit narrowly classified host-hook tolerance; the default non-tolerant live attempt reported the installed hook's sandbox denial.",
+            "notes": [
+              "The C# reference confines a custom tool using a sandbox document. This port preserves that document and also verifies the required native SDK filesystem policy.",
+              "Only the added actual-SDK --live policy mode explicitly tolerates narrowly classified host hook sandbox denials. The library and this example's default policy-mode option remain false; file-content and policy assertions remain active."
+            ],
+            "assertions": [
+              "distinct per-conversation directories",
+              "each document points at its own directory",
+              "requested policy survives the SDK wire"
+            ],
+            "liveAssertions": [
+              {
+                "assertion": "alice's note contains from alice in alice's sandbox",
+                "status": "LIVE",
+                "reason": "Asserts a file the sandboxed tool wrote; the recording has no tool call."
+              },
+              {
+                "assertion": "bob's note contains from bob in bob's sandbox",
+                "status": "LIVE",
+                "reason": "Asserts a file the sandboxed tool wrote; the recording has no tool call."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "29",
+      "source": "29-tool-override.cs",
+      "live": true,
+      "deterministic": false,
+      "liveReason": "asserts the venv shell replaced the plain one; the recording has no tool call",
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/29-tool-override.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-22-35.json",
+          "evidence": {
+            "number": 29,
+            "name": "tool-override",
+            "id": "29",
+            "source": "29-tool-override.cs",
+            "file": "examples/ts/29-tool-override.ts",
+            "path": "examples/ts/29-tool-override.ts",
+            "sandboxMode": "not-applicable",
+            "status": "ported",
+            "mode": "LIVE",
+            "assertions": [
+              "venv answer contains .venv",
+              "plain answer does not contain .venv",
+              "wrapper times exactly two shell calls"
+            ],
+            "liveReason": "asserts the venv shell replaced the plain one; the recording has no tool call"
+          }
+        },
+        "py": {
+          "path": "examples/py/29-tool-override.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-22-35.json",
+          "evidence": {
+            "number": 29,
+            "name": "tool-override",
+            "id": "29",
+            "source": "29-tool-override.cs",
+            "path": "examples/py/29-tool-override.py",
+            "sandboxMode": "not-applicable",
+            "file": "examples/py/29-tool-override.py",
+            "status": "ported",
+            "mode": "LIVE",
+            "assertions": [
+              "venv answer contains .venv",
+              "plain answer does not contain .venv",
+              "wrapper times exactly two shell calls"
+            ],
+            "liveReason": "asserts the venv shell replaced the plain one; the recording has no tool call"
+          }
+        }
+      }
+    },
+    {
+      "id": "30",
+      "source": "30-reload-and-restart.cs",
+      "live": true,
+      "deterministic": false,
+      "liveReason": "waits for a runtime restart the recording does not perform",
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/30-reload-and-restart.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-22-35.json",
+          "evidence": {
+            "number": 30,
+            "name": "reload-and-restart",
+            "id": "30",
+            "source": "30-reload-and-restart.cs",
+            "file": "examples/ts/30-reload-and-restart.ts",
+            "path": "examples/ts/30-reload-and-restart.ts",
+            "sandboxMode": "not-applicable",
+            "status": "ported",
+            "mode": "LIVE",
+            "timeoutSeconds": 300,
+            "notes": [
+              "The C# original takes approximately 124 seconds in this environment. Allow 300 seconds outside the standalone invocation; the deliberate 120-second tool-start gate is not a default-runner false failure."
+            ],
+            "assertions": [
+              "in-flight call finishes on v1",
+              "next call uses v2",
+              "restarted process initially has no installed tool",
+              "installing code binds stored extension name to version"
+            ],
+            "liveReason": "waits for a runtime restart the recording does not perform"
+          }
+        },
+        "py": {
+          "path": "examples/py/30-reload-and-restart.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-22-35.json",
+          "evidence": {
+            "number": 30,
+            "name": "reload-and-restart",
+            "id": "30",
+            "source": "30-reload-and-restart.cs",
+            "path": "examples/py/30-reload-and-restart.py",
+            "sandboxMode": "not-applicable",
+            "file": "examples/py/30-reload-and-restart.py",
+            "status": "ported",
+            "mode": "LIVE",
+            "timeoutSeconds": 300,
+            "notes": [
+              "The C# original takes approximately 124 seconds in this environment. Allow 300 seconds outside the standalone invocation; the deliberate 120-second tool-start gate is not a default-runner false failure."
+            ],
+            "assertions": [
+              "in-flight call finishes on v1",
+              "next call uses v2",
+              "restarted process initially has no installed tool",
+              "installing code binds stored extension name to version"
+            ],
+            "liveReason": "waits for a runtime restart the recording does not perform"
+          }
+        }
+      }
+    },
+    {
+      "id": "31",
+      "source": "31-permissions.cs",
+      "live": true,
+      "deterministic": false,
+      "liveReason": "asserts a permission request the recording does not contain",
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/31-permissions.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-22-35.json",
+          "evidence": {
+            "number": 31,
+            "name": "permissions",
+            "id": "31",
+            "source": "31-permissions.cs",
+            "file": "examples/ts/31-permissions.ts",
+            "path": "examples/ts/31-permissions.ts",
+            "sandboxMode": "not-applicable",
+            "status": "ported",
+            "mode": "LIVE",
+            "assertions": [
+              "independently captured denied and reopened effects remain zero with runtime answers",
+              "reopened choices have no grants",
+              "granted tool runs exactly once with an answer",
+              "permission-review app document is anchored to exactly the visible boundary",
+              "fork choices and review inherit the exact earlier single grant",
+              "parent's later unused grant remains absent from the fork",
+              "path scope matches at a boundary, not a sibling prefix",
+              "absent grants confer no capability"
+            ],
+            "referenceCommit": "7448ed34956966b0afa2df79adc76a76031312e0",
+            "nativeVerification": "Corrected native run passed denied/reopened effects zero, granted effect exactly one, explicit reviewed boundary, exact fork choices/review snapshot and no inheritance of the parent's later unused grant. Store-backed assertions run before teardown.",
+            "liveReason": "asserts a permission request the recording does not contain"
+          }
+        },
+        "py": {
+          "path": "examples/py/31-permissions.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-22-35.json",
+          "evidence": {
+            "number": 31,
+            "name": "permissions",
+            "id": "31",
+            "source": "31-permissions.cs",
+            "path": "examples/py/31-permissions.py",
+            "sandboxMode": "not-applicable",
+            "file": "examples/py/31-permissions.py",
+            "status": "ported",
+            "mode": "LIVE",
+            "assertions": [
+              "independently captured denied and reopened effects remain zero with runtime answers",
+              "reopened choices have no grants",
+              "granted tool runs exactly once with an answer",
+              "permission-review app document is anchored to exactly the visible boundary",
+              "fork choices and review inherit the exact earlier single grant",
+              "parent's later unused grant remains absent from the fork",
+              "path scope matches at a boundary, not a sibling prefix",
+              "absent grants confer no capability"
+            ],
+            "referenceCommit": "7448ed34956966b0afa2df79adc76a76031312e0",
+            "nativeVerification": "Corrected native run passed denied/reopened effects zero, granted effect exactly one, explicit reviewed boundary, exact fork choices/review snapshot and no inheritance of the parent's later unused grant. Store-backed assertions run before teardown.",
+            "liveReason": "asserts a permission request the recording does not contain"
+          }
+        }
+      }
+    },
+    {
+      "id": "32",
+      "source": "32-jsonl-store.cs",
+      "live": false,
+      "deterministic": true,
+      "liveReason": null,
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/32-jsonl-store.ts",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/ts/parity-22-35.json",
+          "evidence": {
+            "number": 32,
+            "name": "jsonl-store",
+            "id": "32",
+            "source": "32-jsonl-store.cs",
+            "file": "examples/ts/32-jsonl-store.ts",
+            "path": "examples/ts/32-jsonl-store.ts",
+            "sandboxMode": "not-applicable",
+            "liveReason": null,
+            "status": "ported",
+            "mode": "store-only",
+            "timeoutSeconds": 30,
+            "invocation": [
+              "lib/ts/node_modules/.bin/tsx",
+              "examples/ts/32-jsonl-store.ts"
+            ],
+            "verification": "Actual store-only standalone passed JSONL persistence/reopen/physical torn-tail truncation; exact C# labels and five-record count retained.",
+            "assertions": [
+              "explicit path selects persistent tier",
+              "commit creates the store file",
+              "multiple JSONL record envelopes",
+              "reopen restores the committed document",
+              "committed version survives torn tail",
+              "torn tail is physically truncated at open",
+              "default path is absolute under durable/durable-store.jsonl",
+              "ephemeral tier persists nothing"
+            ],
+            "liveAssertions": []
+          }
+        },
+        "py": {
+          "path": "examples/py/32-jsonl-store.py",
+          "status": "ported",
+          "sandboxMode": "not-applicable",
+          "rangeManifest": "examples/py/parity-22-35.json",
+          "evidence": {
+            "number": 32,
+            "name": "jsonl-store",
+            "id": "32",
+            "source": "32-jsonl-store.cs",
+            "path": "examples/py/32-jsonl-store.py",
+            "sandboxMode": "not-applicable",
+            "liveReason": null,
+            "file": "examples/py/32-jsonl-store.py",
+            "status": "ported",
+            "mode": "store-only",
+            "invocation": [
+              "python3",
+              "examples/py/32-jsonl-store.py"
+            ],
+            "timeoutSeconds": 30,
+            "verification": "Actual store-only standalone passed normally and under -O; default-path mutation caused a named assertion failure.",
+            "assertions": [
+              "explicit path selects persistent tier",
+              "commit creates the store file",
+              "multiple JSONL record envelopes",
+              "reopen restores the committed document",
+              "committed version survives torn tail",
+              "torn tail is physically truncated at open",
+              "default path is absolute under durable/durable-store.jsonl",
+              "ephemeral tier persists nothing"
+            ],
+            "liveAssertions": []
+          }
+        }
+      }
+    },
+    {
+      "id": "33",
+      "source": "33-sandbox-sdk-filesystem.cs",
+      "live": true,
+      "deterministic": false,
+      "liveReason": "asserts a write landed on disk; the recording has no tool call",
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/33-sandbox-sdk-filesystem.ts",
+          "status": "ported",
+          "sandboxMode": "supported",
+          "rangeManifest": "examples/ts/parity-22-35.json",
+          "evidence": {
+            "number": 33,
+            "name": "sandbox-sdk-filesystem",
+            "id": "33",
+            "source": "33-sandbox-sdk-filesystem.cs",
+            "file": "examples/ts/33-sandbox-sdk-filesystem.ts",
+            "path": "examples/ts/33-sandbox-sdk-filesystem.ts",
+            "status": "ported",
+            "mode": "policy",
+            "sandboxMode": "supported",
+            "liveReason": "asserts a write landed on disk; the recording has no tool call",
+            "verification": "Actual SDK policy mode passed. Native --live on macOS seatbelt passed permitted file content, denied filesystem classification/outcome and unchanged denied file; original explicit host-hook-denial tolerance is used.",
+            "assertions": [
+              "filesystem fields survive the SDK wire",
+              "workspace token expands against the conversation directory",
+              "no unexpanded policy paths remain"
+            ],
+            "liveAssertions": [
+              {
+                "assertion": "permitted write lands on disk with content permitted",
+                "status": "LIVE",
+                "reason": "The recording has no tool call, so no sandboxed write lands on disk."
+              },
+              {
+                "assertion": "engaged backend reports a filesystem denial and the denied file retains its original content",
+                "status": "LIVE",
+                "reason": "Requires an engaged sandbox backend and a real denied tool call; preserve the C# backend-engaged guard."
+              }
+            ]
+          }
+        },
+        "py": {
+          "path": "examples/py/33-sandbox-sdk-filesystem.py",
+          "status": "ported",
+          "sandboxMode": "supported",
+          "rangeManifest": "examples/py/parity-22-35.json",
+          "evidence": {
+            "number": 33,
+            "name": "sandbox-sdk-filesystem",
+            "id": "33",
+            "source": "33-sandbox-sdk-filesystem.cs",
+            "path": "examples/py/33-sandbox-sdk-filesystem.py",
+            "file": "examples/py/33-sandbox-sdk-filesystem.py",
+            "status": "ported",
+            "mode": "policy",
+            "sandboxMode": "supported",
+            "liveReason": "asserts a write landed on disk; the recording has no tool call",
+            "verification": "Actual SDK policy mode passed. Native --live on macOS seatbelt passed permitted file content, denied filesystem classification/outcome and unchanged denied file; original explicit host-hook-denial tolerance is used.",
+            "assertions": [
+              "filesystem fields survive the SDK wire",
+              "workspace token expands against the conversation directory",
+              "no unexpanded policy paths remain"
+            ],
+            "liveAssertions": [
+              {
+                "assertion": "permitted write lands on disk with content permitted",
+                "status": "LIVE",
+                "reason": "The recording has no tool call, so no sandboxed write lands on disk."
+              },
+              {
+                "assertion": "engaged backend reports a filesystem denial and the denied file retains its original content",
+                "status": "LIVE",
+                "reason": "Requires an engaged sandbox backend and a real denied tool call; preserve the C# backend-engaged guard."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "34",
+      "source": "34-sandbox-sdk-network-credentials.cs",
+      "live": true,
+      "deterministic": false,
+      "liveReason": "asserts the sandboxed shell sees a masked credential; the recording has no tool call",
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/34-sandbox-sdk-network-credentials.ts",
+          "status": "ported",
+          "sandboxMode": "supported",
+          "rangeManifest": "examples/ts/parity-22-35.json",
+          "evidence": {
+            "number": 34,
+            "name": "sandbox-sdk-network-credentials",
+            "id": "34",
+            "source": "34-sandbox-sdk-network-credentials.cs",
+            "file": "examples/ts/34-sandbox-sdk-network-credentials.ts",
+            "path": "examples/ts/34-sandbox-sdk-network-credentials.ts",
+            "status": "ported",
+            "mode": "policy",
+            "sandboxMode": "supported",
+            "liveReason": "asserts the sandboxed shell sees a masked credential; the recording has no tool call",
+            "verification": "Both native SDK policies passed exact wire assertions. Native --live on macOS seatbelt proved both nonempty masked credential digest/length reports, no allowed-host denial, and permissive blocked-host denial. Locked connection produced no classified denial, so that original conditional assertion was explicitly skipped.",
+            "assertions": [
+              "locked and permissive network flags and host lists survive the wire",
+              "auth, dev-tool, MCP, and LSP fields survive the wire",
+              "credential policy carries only variable names and inject hosts",
+              "proxy fields map only when configured",
+              "resolved-policy fields agree when reported"
+            ],
+            "liveAssertions": [
+              {
+                "assertion": "both sandboxed shells see a nonempty masked credential whose digest differs from the generated value",
+                "status": "LIVE",
+                "reason": "The recording has no tool call to produce the digest/length report; missing or empty output is not evidence of masking."
+              },
+              {
+                "assertion": "allowed-host and blocked-host observations reflect the sandbox's network policy",
+                "status": "LIVE",
+                "reason": "Requires real network tool calls and backend observations; retain the C# engaged/report guards and do not invent HTTP success."
+              }
+            ]
+          }
+        },
+        "py": {
+          "path": "examples/py/34-sandbox-sdk-network-credentials.py",
+          "status": "ported",
+          "sandboxMode": "supported",
+          "rangeManifest": "examples/py/parity-22-35.json",
+          "evidence": {
+            "number": 34,
+            "name": "sandbox-sdk-network-credentials",
+            "id": "34",
+            "source": "34-sandbox-sdk-network-credentials.cs",
+            "path": "examples/py/34-sandbox-sdk-network-credentials.py",
+            "file": "examples/py/34-sandbox-sdk-network-credentials.py",
+            "status": "ported",
+            "mode": "policy",
+            "sandboxMode": "supported",
+            "liveReason": "asserts the sandboxed shell sees a masked credential; the recording has no tool call",
+            "verification": "Both native SDK policies passed exact wire assertions. Native --live on macOS seatbelt proved both nonempty masked credential digest/length reports, no allowed-host denial, and permissive blocked-host denial. Locked connection produced no classified denial, so that original conditional assertion was explicitly skipped.",
+            "assertions": [
+              "locked and permissive network flags and host lists survive the wire",
+              "auth, dev-tool, MCP, and LSP fields survive the wire",
+              "credential policy carries only variable names and inject hosts",
+              "proxy fields map only when configured",
+              "resolved-policy fields agree when reported"
+            ],
+            "liveAssertions": [
+              {
+                "assertion": "both sandboxed shells see a nonempty masked credential whose digest differs from the generated value",
+                "status": "LIVE",
+                "reason": "The recording has no tool call to produce the digest/length report; missing or empty output is not evidence of masking."
+              },
+              {
+                "assertion": "allowed-host and blocked-host observations reflect the sandbox's network policy",
+                "status": "LIVE",
+                "reason": "Requires real network tool calls and backend observations; retain the C# engaged/report guards and do not invent HTTP success."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "35",
+      "source": "35-sandbox-sdk-observability-bypass.cs",
+      "live": true,
+      "deterministic": true,
+      "liveReason": null,
+      "expectedOutput": null,
+      "languages": {
+        "ts": {
+          "path": "examples/ts/35-sandbox-sdk-observability-bypass.ts",
+          "status": "ported",
+          "sandboxMode": "supported",
+          "rangeManifest": "examples/ts/parity-22-35.json",
+          "evidence": {
+            "number": 35,
+            "name": "sandbox-sdk-observability-bypass",
+            "id": "35",
+            "source": "35-sandbox-sdk-observability-bypass.cs",
+            "file": "examples/ts/35-sandbox-sdk-observability-bypass.ts",
+            "path": "examples/ts/35-sandbox-sdk-observability-bypass.ts",
+            "status": "ported",
+            "mode": "policy",
+            "deterministic": true,
+            "sandboxMode": "supported",
+            "liveReason": null,
+            "verification": "Replay passed deterministic policy/trust/legacy/zero-escalation assertions. Native macOS seatbelt passed permission approval, sandbox filesystem denial, tool refusal, unchanged denied file, successful control write, sandboxed call and keychain assertions. One normal host prompt was inspected; no escalation was offered, so the actual decline branch remains unproven.",
+            "notes": [
+              "The C# original runs deterministically without a successful tool call. Do not classify this entire example as LIVE.",
+              "No backend engagement skips the three-part enforcement proof; no offered escalation asserts zero declines and zero bypass_decided events, explicitly leaving the host decline branch unproven."
+            ],
+            "assertions": [
+              "policy survives the SDK wire",
+              "top-level seatbelt keychain field takes precedence over deprecated experimental.seatbelt",
+              "durable mapping never emits deprecated seatbelt fields",
+              "trust true maps to User and false maps to Session",
+              "AllowBypass false records no bypass decision",
+              "no offered escalation means zero declines and zero bypass decisions"
+            ],
+            "liveAssertions": [
+              {
+                "assertion": "engaged backend provides permission approval, sandbox denial, tool refusal, unchanged denied file, and successful control write",
+                "status": "LIVE",
+                "reason": "Conditional enforcement proof requires a real engaged backend and tool effects absent from the recording."
+              },
+              {
+                "assertion": "macOS reports the requested keychain capability when the backend engages",
+                "status": "LIVE",
+                "reason": "Conditional platform/backend observation cannot be invented from a configured policy."
+              },
+              {
+                "assertion": "offered escalation produces exactly one inspected host decline and one declined model-requested bypass decision",
+                "status": "LIVE",
+                "reason": "Conditional on an actual offered escalation; the SDK cannot force the prompt and the recording does not exercise the host decline branch."
+              }
+            ]
+          }
+        },
+        "py": {
+          "path": "examples/py/35-sandbox-sdk-observability-bypass.py",
+          "status": "ported",
+          "sandboxMode": "supported",
+          "rangeManifest": "examples/py/parity-22-35.json",
+          "evidence": {
+            "number": 35,
+            "name": "sandbox-sdk-observability-bypass",
+            "id": "35",
+            "source": "35-sandbox-sdk-observability-bypass.cs",
+            "path": "examples/py/35-sandbox-sdk-observability-bypass.py",
+            "file": "examples/py/35-sandbox-sdk-observability-bypass.py",
+            "status": "ported",
+            "mode": "policy",
+            "deterministic": true,
+            "sandboxMode": "supported",
+            "liveReason": null,
+            "verification": "Replay passed deterministic policy/trust/legacy/zero-escalation assertions. Native macOS seatbelt passed permission approval, sandbox filesystem denial, tool refusal, unchanged denied file, successful control write, sandboxed call and keychain assertions. One normal host prompt was inspected; no escalation was offered, so the actual decline branch remains unproven.",
+            "notes": [
+              "The C# original runs deterministically without a successful tool call. Do not classify this entire example as LIVE.",
+              "No backend engagement skips the three-part enforcement proof; no offered escalation asserts zero declines and zero bypass_decided events, explicitly leaving the host decline branch unproven."
+            ],
+            "assertions": [
+              "policy survives the SDK wire",
+              "top-level seatbelt keychain field takes precedence over deprecated experimental.seatbelt",
+              "durable mapping never emits deprecated seatbelt fields",
+              "trust true maps to User and false maps to Session",
+              "AllowBypass false records no bypass decision",
+              "no offered escalation means zero declines and zero bypass decisions"
+            ],
+            "liveAssertions": [
+              {
+                "assertion": "engaged backend provides permission approval, sandbox denial, tool refusal, unchanged denied file, and successful control write",
+                "status": "LIVE",
+                "reason": "Conditional enforcement proof requires a real engaged backend and tool effects absent from the recording."
+              },
+              {
+                "assertion": "macOS reports the requested keychain capability when the backend engages",
+                "status": "LIVE",
+                "reason": "Conditional platform/backend observation cannot be invented from a configured policy."
+              },
+              {
+                "assertion": "offered escalation produces exactly one inspected host decline and one declined model-requested bypass decision",
+                "status": "LIVE",
+                "reason": "Conditional on an actual offered escalation; the SDK cannot force the prompt and the recording does not exercise the host decline branch."
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

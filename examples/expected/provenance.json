@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "scenario": "actual C# execution with ReplayRuntime basic.json; generated sessions are synthesised, not recorded transcripts",
+  "normalizer": "examples/run_all.py:normalise_output (mirrors scripts/validate.sh plus generated c/e/t IDs and platform paths)",
+  "fixture": "tools/ReplayRuntime/fixtures/basic.json",
+  "fixtureSha256": "257ccaeea0ff70baa70d95401811e40944bf11e6b42abccff4975ddfbcb9d050",
+  "outputs": {
+    "00": {
+      "command": [
+        "dotnet",
+        "run",
+        "examples/00-conversation.cs",
+        "--verbosity",
+        "quiet",
+        "-p:NoWarn=GHCP001%3BCA2266"
+      ],
+      "source": "examples/00-conversation.cs",
+      "sourceSha256": "052f28976786878194bd06610ce761843d205d95fd976e1ebe39763bd78af8d1",
+      "expectedSha256": "751cd53f56cdaa9a4719b87f39cd602d63ff7eb26b5adc5e355430f3ea649a5b"
+    },
+    "01": {
+      "command": [
+        "dotnet",
+        "run",
+        "examples/01-documents.cs",
+        "--verbosity",
+        "quiet",
+        "-p:NoWarn=GHCP001%3BCA2266"
+      ],
+      "source": "examples/01-documents.cs",
+      "sourceSha256": "0744690b6425c9588625d2642739e10f07aecfca88c63600009a90461abe16bb",
+      "expectedSha256": "6321f948bda7704d74467891607792e322470915a84a97152fb6062d63a58659"
+    },
+    "03": {
+      "command": [
+        "dotnet",
+        "run",
+        "examples/03-owned-conversations.cs",
+        "--verbosity",
+        "quiet",
+        "-p:NoWarn=GHCP001%3BCA2266"
+      ],
+      "source": "examples/03-owned-conversations.cs",
+      "sourceSha256": "a4ddfdd58c28975002db28c354c2a110b93a27bb87f6b020b324a9c6e78b3078",
+      "expectedSha256": "bd38825dad266fdb21d2ae41356d1c61d9ace7e075eb4383fc54dd5efdda1e4d"
+    },
+    "04": {
+      "command": [
+        "dotnet",
+        "run",
+        "examples/04-watches.cs",
+        "--verbosity",
+        "quiet",
+        "-p:NoWarn=GHCP001%3BCA2266"
+      ],
+      "source": "examples/04-watches.cs",
+      "sourceSha256": "d4774227586360ed63ab80a821c216384a4082fa5865daa7c08f6b71f98f3473",
+      "expectedSha256": "299c51119284ba107c6506bf845fca2543c782ba8a2045620bbf972b2d555a26"
+    }
+  }
+}
