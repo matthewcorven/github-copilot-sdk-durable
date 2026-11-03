@@ -7,7 +7,7 @@
   "main": "durable.ts",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "tsx --test *.test.ts"
+    "test": "tsx --test --test-force-exit *.test.ts"
   },
   "dependencies": {
     "@github/copilot-sdk": "1.0.28"
