@@ -555,3 +555,28 @@ From **PR #84** (#39):
 **References:** PR #119, PR #122, PR #125, PR #126, #102, #103, #104, #105
 **Why:** `gh pr view --json mergeable` reports `MERGEABLE` for an empty PR — it answers "can this merge without conflict", not "does this change anything". Merging an empty PR produces a merge commit that claims work it did not do, pollutes history, and makes the issue-closure trail misleading. The tree hash is the decisive diagnostic because it compares *content*, not commit ancestry: two branches with entirely different commit graphs can produce the same tree, and that is exactly what a squash-merge of shared history produces.
 **How it applies:** Before merging any PR that overlaps another already-merged PR, run `git merge-tree --write-tree <base> <branch>` and compare the resulting tree hash to `git rev-parse <base>^{tree}`. If they match, the PR is empty — close it as superseded and cite the hash. Do not rely on `mergeable` status, commit count, or diff stat against the branch's own base, all of which are misleading after a squash-merge. Note that pairwise mergeability does not imply sequence mergeability: every one of these four PRs merged cleanly into `dev` alone, yet the issue-order sequence conflicted at #125.
+
+### 2026-11-03T07:00:00Z: A gate that runs a subset of the suites is a gate that lies
+
+**By:** coordinator (Ralph round 11)
+**What:** `scripts/validate.sh --deterministic` runs 17 of 38 examples and only the
+`ReplayToolDispatchTests` filter. It does **not** run the parity suite, `test_mutations.py`, or either
+language unit suite. A run can therefore report five green gates while the parity suite is red — which
+is exactly what happened during the #126 merge investigation. Widening it is issue #129.
+**Why:** The value of a deterministic gate is that green means green. A gate that silently omits the
+suites most likely to catch a regression is worse than no gate, because it manufactures false
+confidence. `.github/workflows/build.yml` already invokes the script as its own step, so widening the
+script widens CI with no workflow change.
+
+### 2026-11-03T07:02:00Z: When a criterion contradicts an enforced invariant, document the exclusion — do not weaken the invariant
+
+**By:** coordinator (Ralph round 11)
+**What:** Epic #8 criterion 8 asked the host to report "the resolved backend and platform on startup".
+The backend half shipped in PR #130. The platform half is impossible without breaking criterion 6,
+because `RuntimeHostPortabilityTests.CorePath_HasNoPlatformSpecificApis()` forbids every platform API
+in `src/Durable.Runtime/*.cs` except `HostShutdown.cs` — and that test *is* criterion 6's enforcement.
+The exclusion is recorded in `docs/DESIGN.md` §3.9 rather than satisfied.
+**Why:** Two criteria in the same epic cannot both be satisfied literally. The portability invariant is
+load-bearing (it is what makes the host runnable on Linux and Windows from one code path); a startup log
+line is not. When a spec contradicts itself, satisfy the invariant and write down why the other clause
+was dropped — silently picking one side leaves the next reader to re-litigate it.
