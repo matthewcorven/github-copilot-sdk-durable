@@ -1,101 +1,178 @@
 ---
-updated_at: 2026-10-29T09:22:51-04:00
-focus_area: Ralph round 5 — nine PRs merged (#55-#63), nine issues closed, wave 5 dispatched (#37, #38, #46, #47, #51)
-active_issues: [37, 38, 46, 47, 51]
+updated_at: 2026-11-03T06:20:00Z
+updated_by: coordinator (Ralph round 10)
+focus_area: Epics #4 and #8 both closed with every criterion verified; three un-decomposed epics remain
+active_issues: [5, 6, 19, 129]
 ---
 
-# What We're Focused On
+# Now
 
-**Ralph round 5 — NINE PRs MERGED, NINE ISSUES CLOSED (2026-10-29).** User granted merge approval
-for the session. All nine green PRs squash-merged to `dev` in dependency order:
+## Where the team is
 
-| PR | Issue | Squash commit | Unblocked |
-|----|-------|---------------|-----------|
-| #56 | #35 | `e53bddf` | #36 |
-| #58 | #43 | `65ef760` | #44 |
-| #57 | #49 | `50936a7` | #50 |
-| #55 | #17 | `7afb560` | — |
-| #59 | #18 | `86ea980` | — |
-| #60 | #44 | `7ebca4d` | #45 |
-| #61 | #50 | `6f90060` | #51 |
-| #63 | #45 | `121954e` | #46, #47 |
-| #62 | #36 | `8d13a83` | #37, #38 |
+`dev` is at `a953d32` ("Port examples 22-35 with native parity evidence (#125)"). **One open PR: #130**
+(the resolved-store-backend startup report, awaiting CI).
 
-**All nine issues closed manually.** GitHub only auto-closes on `Closes #N` when the PR targets the
-*default* branch (`main`), not `dev` — so PRs that did carry the keyword left their issues open.
-Closed #17, #18, #35, #43, #49, #44, #50, #45, #36 with `--reason completed`.
+Open issues: **#129** (chore, `validate.sh` coverage gap) and three epics — **#5, #6, #19**. All board
+items are `Todo`.
 
-**Board flipped:** #36, #44, #45, #50 → Done. #37, #38, #46, #47, #51 → In Progress.
+Epic #4 (polyglot ports) is **CLOSED** with all five acceptance criteria verified empirically.
+Epic #8 (runtime host) is **CLOSED** with all eight criteria verified or deliberately scoped.
 
-**Wave 5 dispatched — five issues, all in background from `origin/dev` @ `8d13a83`:**
+## What landed this round
 
-| # | Slice | Owner | Worktree | Branch |
-|---|-------|-------|----------|--------|
-| 37 | 7.3 Identity binding, admission, checkpointing, resume | Core Engineer | `-37` | `squad/37-identity-binding-admission` |
-| 38 | 7.4 Coordinated transcript and document forks | Core Engineer | `-38` | `squad/38-coordinated-forks` |
-| 46 | 3.4 Deterministic replay docs + determinism check | Core Engineer | `-46` | `squad/46-replay-docs-determinism` |
-| 51 | 2.3 Provider-neutral store conformance suite | Core Engineer | `-51` | `squad/51-provider-conformance` |
-| 47 | 3.5 Polyglot attach verification | Polyglot Engineer | `-47` | `squad/47-polyglot-attach` |
+| PR | Issue | Outcome |
+|----|-------|---------|
+| #123 | — | MERGED `d34d84d` — SDK-bound TS/PY durable language support |
+| #126 | #105 | MERGED `352c076` — full 36×2 parity contract, runners, global manifest |
+| #119 | #102 | CLOSED as superseded — merge tree byte-identical to `dev` |
+| #122 | #103 | CLOSED as superseded — merge tree byte-identical to `dev` |
+| #125 | #104 | MERGED `a953d32` — the `advanced-read-tools.test.mjs` guard, +56 lines |
 
-#37 and #38 carry the PR #56 review findings that name them (SDK configuration entry point;
-`ForkAsync` entry-id semantics). #51 builds on #50's provider seam — `Provider` > `ProviderName` >
-`Format`, process-wide registration, store-owned provider lifetime. #46 starts from a tree that
-already greps clean for banned vocabulary, so only new violations matter.
+Issues closed: #98, #102, #103, #104, #105, and **epic #4**. All six sub-issues of epic #4 and all
+six of epic #8 are CLOSED.
 
-**Still blocked:** #4←3, #5←4,3, #6←5,4,3, #8←7,3, #19←6,3, #39←37, #40←39,38, #41←40, #48←46,
-#52←51, #53←51, #54←51. Epics #2, #3, #7 remain open by design — their children are in flight.
+## Epic #4 — closed, five criteria verified
 
-**Not granted:** release / `dev`→`main` promotion. Merge approval covers PRs only, this session.
+1. **36 examples per language** — counted: TS 36, PY 36, C# 38. TS/PY cover 00–35 exactly.
+2. **Test commands pass with the four parity facts** — TS rollback tests at
+   `lib/ts/durable.test.ts:596,2008,2238,2519`; PY `test_abort_cascade_commits_default_abort_and_preserves_pending_records`
+   at `lib/py/test_sdk.py:3656`. PY unit suite empirically `Ran 72 tests` / `OK`.
+3. **Documented per-language run command that exits non-zero on failure** — `README.md:122-123`,
+   `:135-138`. Empirically green in both languages: `TypeScript: 15 selected, 0 failures, 4 actual
+   C# output comparisons` and the identical Python line.
+4. **≥4 examples compared against checked-in expected output** — `examples/expected/` holds 5 files
+   (`00-conversation.txt`, `01-documents.txt`, `03-owned-conversations.txt`, `04-watches.txt`,
+   `provenance.json`), referenced from `examples/parity.json` `expectedOutput` (lines 15, 74, 192,
+   251). **Genuinely enforced**, not merely present: `run_all.mjs:157-170` and `run_all.py:117-129`
+   compare normalised stdout and fail on mismatch or on `compared !== required`; `run_all.mjs:95-100`
+   gates on `provenance.json` `expectedSha256`; `run_all.mjs:69-70` gates the manifest inventory;
+   `tests/parity/runner.test.mjs:22` asserts the expected-ID set.
+5. **DESIGN section + README coordinates** — `docs/DESIGN.md:877` `### 3.15.1 Language ports and the
+   parity contract`; `README.md:98-99` names `@github/copilot-sdk` and `github-copilot-sdk`.
 
-## Round-5 durable decisions
+## Epic #8 — CLOSED, all eight criteria verified
 
-- **#45 vocabulary doc edits are in scope and were accepted.** Three doc edits in
-  `docs/implementation/ISSUE_1_HANDOFF.md` fixed the last 4 pre-existing banned-vocabulary hits.
-  The whole source tree now greps clean for `mock|fake|stub|simulat`; #48's vocabulary obligation
-  is already satisfied and its scope should be re-read before dispatch.
-- **#50's provider seam was delivered additively, as the Lead required.** `DurableStoreOptions.Provider`
-  > `ProviderName` > `Format`; `RegisterProvider` / `UnregisterProvider` / `IsProviderRegistered`
-  over an `OrdinalIgnoreCase` dictionary; the settled store-creation surface was not changed.
-- **Regression: the #36 refactor silently deleted #44's `ResolveRuntimePath` feature.** A clean
-  build (0 errors) did not catch it; only 3 failing tests did. Binding lesson: after a conflict
-  resolution, grep the method name, verify the enclosing class is on the live call path, and run
-  the suite. A clean build does not prove a feature survived a rebase.
+Verified: (1) effective-model run command, (2) `serve --http`/`--rpc` integration tests on an
+ephemeral port, (3) `schedule --every 5m` survives restart, (4) missed-run policy, (5) `--dev-tunnel`,
+(6) Linux+Windows CI smoke, (7) DESIGN §3.9 + README CLI docs.
 
-## Branch model
+**Criterion 8 is a three-clause sentence. All three clauses are now satisfied or deliberately scoped:**
 
-`main` is the **release branch and the repo default** (changed 2026-10-28). `dev` is the
-integration branch. Feature work branches from `origin/dev` and PRs target `dev`. `dev` -> `main`
-only at release. `origin` is SSH. **Squash-merge is the convention** (`gh pr merge <n> --squash
---delete-branch`); `dev` has linear history, no merge commits.
+> The host's agent-definition schema accepts a sandbox policy, **a host-started agent reports the
+> resolved backend and platform on startup**, and the host's documentation states the interaction
+> between "approve all permissions" and "no sandbox".
 
-## Board
+- Sandbox policy in schema: ✅ `AgentDefinitionValidator.cs:111` → `ValidateSandboxPolicy` at 115.
+- Approve-all vs no-sandbox docs: ✅ `README.md:492`, `docs/DESIGN.md:231`, `:369`.
+- **Resolved backend on startup: ✅ implemented in PR #130.** `store: jsonl at <path>` or
+  `store: in-memory (ephemeral)`, printed after `ClaimOwnership` in all four entry paths and before
+  the containment report.
+- **Platform on startup: deliberately excluded** — see below.
 
-GitHub-copilot-sdk-durable Roadmap (project 5, owner matthewcorven).
-Done: #1, #9-#18, #30, #35, #36, #43, #44, #45, #49, #50.
-In Progress: #37, #38, #46, #47, #51.
-Todo: #2, #3, #4, #5, #6, #7, #8, #19, #39, #40, #41, #48, #52, #53, #54.
+**The "platform" half is FORBIDDEN by an existing invariant.**
+`tests/Durable.Tests/RuntimeHostPortabilityTests.cs:80` `CorePath_HasNoPlatformSpecificApis()`
+asserts no `src/Durable.Runtime/*.cs` except `HostShutdown.cs` matches
+`\b(OperatingSystem|OSPlatform|RuntimeInformation|PosixSignal|PosixSignalRegistration|DllImport|LibraryImport|Registry|WindowsIdentity)\b|Environment\s*\.\s*(OSVersion|SpecialFolder)|[A-Za-z]:\\`.
+That test *is* the enforcement of criterion 6. A literal platform startup line would break
+criterion 6. **Do not add platform detection; do not weaken that test.**
 
-**Native-unblocked:** #2, #3, #7 — all three are epics whose children are already in flight or
-natively blocked. No leaf issue is startable beyond wave 5.
-**Blocked (do not start):** #4, #5, #6, #8, #19, #39, #40, #41, #48, #52, #53, #54.
+**The "resolved backend" half needed a real fix, not just an accessor.** `DurableStore._format` was
+assigned `options.Format` **verbatim**, so an `--format auto` store carried the *question* (`Auto`)
+rather than the *answer* — any accessor would have been a lie. `ResolveFormat(provider, options)` now
+maps the selected provider to the format it actually writes through (`JsonlStoreProvider`→`jsonl`,
+`LegacyJsonStoreProvider`→`legacy-json`, `InMemoryStoreProvider`→`in-memory`, caller-supplied
+factory→requested format unchanged). The accessor is `internal DurableStoreFormat Format => _format;`
+beside the existing `Provider` accessor at `:2336`; `lib/Copilot.Durable.csproj:42` grants
+`InternalsVisibleTo("Durable.Runtime")`, so no public API grew.
+
+**Gotcha for any future format-sniffing test:** a `LegacyJson` store writes nothing until its first
+commit, so a freshly created legacy path is still empty and `Auto` correctly sniffs it as `Jsonl`.
+The test commits a conversation before reopening with `Auto`.
+
+The host's real answer to "what bounds this agent's authority" is the containment report:
+`containment: {Sandboxed|PermissionGated|None} for agent '{name}': {reason}`
+(`Program.cs:1268-1272`, called from all four store-opening paths at 134, 177, 496, 873).
+
+## The finding that mattered
+
+**#126 subsumed #102/#103/#104.** It ports all 36 examples (00–35) in both languages and owns the
+global `examples/parity.json` manifest (`"scope": [0, 35]`), which is exactly what #105 was scoped
+to do. After #126 merged, `git merge-tree --write-tree` for #119 and #122 returned a tree
+**byte-identical to `origin/dev`** (`7f0fc017ba188b4eff8104e63f4ae750e9f0eb44`) — merging them
+would have changed nothing. That tree-hash comparison is the proof; it is why they were closed
+rather than merged.
+
+**#126 shipped a real regression.** It changed `resolve(base, path)` → `join(base, path)` in the
+`read_file` handlers of `examples/ts/26-plan-mode.ts` and `examples/ts/27-reviewer.ts`. `join`
+prepends the working directory to absolute paths, so absolute-path reads broke. #126 had no test
+asserting `join`; #125's `advanced-read-tools.test.mjs` is the guard that caught it. Fixed in
+`98af351` before merge. The Python ports were already correct (`Path(directory) / params.path`
+discards the left operand when the right is absolute).
+
+**The rebase trap.** Every polyglot branch was cut from `915e13a` and carried the shared SDK history
+that `d34d84d` squash-merged. `git rebase origin/dev` replays all of it and conflicts on every
+`lib/` file. `-X ours` is worse — it keeps non-conflicting branch hunks, producing 4544 spurious
+insertions. Correct procedure: `git reset --hard origin/dev` + selective `git cherry-pick` of only
+the payload commits, verified by tree-hash equality per top-level directory.
+
+## Corrections to prior handoffs
+
+- **Supplement 002's "stale abort anchor" claim is false.** All 8 mutation anchors in
+  `tests/parity/test_mutations.py` resolve to exactly one occurrence. `abortTaskAsync` is defined at
+  `lib/ts/durable.ts:2277`; no `abortCascadeAsync` exists. Verified twice (coordinator + Tester);
+  `test_mutations.py` passes 2/2. Do not dispatch a fix for this.
+- **Tester's "2 failing TS tests" was an environment artifact.** Running
+  `DURABLE_RUNTIME_PATH=... npx tsx --test --test-force-exit durable.test.ts` on `dev` gives
+  **119/119 pass**. The guard and the test were both introduced by `d34d84d` and no PR touches them.
+- **`scripts/validate.sh --deterministic` does not run the parity suite**, `test_mutations.py`, or
+  either language unit suite. "Five green gates" and "parity suite red" can coexist. Widening it is
+  a real gap that belongs in its own issue.
+
+## Environment notes
+
+- **`lib/py/.venv` is required and was silently missing.** `python examples/run_all.py --deterministic`
+  fails all 15 selected examples with `ModuleNotFoundError: No module named 'copilot'` from
+  `lib/py/durable.py:38`. The venv had been deleted during an earlier disk-pressure cleanup.
+  Recreate with `python -m venv .venv` in `lib/py`, then
+  `pip install "github-copilot-sdk==1.0.28"`. **`pytest` is NOT installed there** — run the unit
+  suite as `python lib/py/test_sdk.py` (unittest).
+- **`examples/ts` needs its own `npm ci`.** `npm run examples:ts` fails with
+  `ERR_MODULE_NOT_FOUND: Cannot find package '@github/copilot-sdk' imported from examples/ts/tools.ts`
+  unless `examples/ts/node_modules` exists. `lib/ts/node_modules` alone is not enough. This produced
+  3 spurious failures (05, 06, 09) that vanished after `npm --prefix examples/ts ci`.
+- `tsx --test` never exits without `--test-force-exit`.
+- `node --test tests/parity/` fails with MODULE_NOT_FOUND; use `npm run test:parity:ts`. A single
+  file works with `node --experimental-transform-types --test <file>`.
+- `PortHarness_PhysicalLineEndingsPreserveGeneratedClients` needs `lib/py/.venv/bin` on `PATH`.
+- `lib/ts` `npm test` needs `DURABLE_RUNTIME_PATH` set.
+- No solution file at the repo root — `dotnet build` alone fails with MSB1003. Name a project.
+- Disk pressure is real: `/System/Volumes/Data` hit 100% twice, causing `index.lock` and `MSB3923`
+  failures. `uv cache clean` freed 11.6 GiB; `~/.nuget/packages` (13G) is the next lever.
+  **Cleanup deleted `lib/py/.venv` once — check it before blaming the code.**
+- `gh pr view --json mergeable` returns `UNKNOWN` for ~20–25s after a push.
+- Draft PRs cannot be merged — `gh pr ready <n>` first.
+- GitHub project automation moves a board item to `Done` when its issue closes; manual
+  `item-edit` is usually unnecessary. Item IDs are `PVTI_lAHOAajMkc4BobdZzhE1Z…` — note the `h`;
+  better to read `.id` from `gh project item-list 5 --owner matthewcorven --format json`.
 
 ## Next action
 
-**Ralph round 5 in flight (2026-10-29).** Five issues dispatched in background from `origin/dev` @
-`8d13a83`. Next startable work appears only after a human merges: merging #37 unblocks **#39**,
-merging #38 unblocks **#40** (with #39), merging #46 unblocks **#48**, merging #51 unblocks
-**#52**, **#53** and **#54**. #47 has no dependents.
+Land PR #130 (wait for `build` + both `Host smoke` jobs, then squash-merge). Then pick up **#129** —
+widening `scripts/validate.sh --deterministic` to cover the parity suite, `test_mutations.py`, and
+both language unit suites. It is small, self-contained, and closes the gap that let a five-green gate
+coexist with a real parity failure.
 
-**Process lessons recorded** in `.squad/decisions.md` this round:
+After that, the three remaining epics are all **un-decomposed** (zero sub-issues). **#19 is the most
+tractable**: `lib/SandboxSupport.cs` already has `SandboxRunMode` (28), `Resolve` (73),
+`AssertPolicy` (111), `AssertDenied` (174), `AssertNoPermissionDenial` (207), `Expand` (230),
+`PrintList` (236), and the issue names five clear sub-issues to file. #5 depends on #3 and #4; #6
+depends on #5 and #4.
 
-- Delivery-gap lesson — a dispatched agent can report done with only a local commit. Audit
-  artifacts (commit SHA, remote branch, PR, CI), never the completion report.
-- PR evidence standard — CI `build=SUCCESS` is necessary but not sufficient. Verify locally with
-  `dotnet build`, `dotnet test tests/Durable.Tests` (plus any new test project the PR added), and
-  `COMPILE_ONLY=1 ./scripts/validate.sh <example>`.
-- Rebase-survival lesson — a clean build does not prove a merged feature survived a conflict
-  resolution. Grep the deleted method, check the enclosing class, run the suite.
+## Do not
 
-**Open question — do not auto-release:** `lib/Copilot.Durable.csproj` is at `0.5.0` and
-`CHANGELOG.md` has an `## [Unreleased]` entry. Cutting `v0.5.0` is a separate `dev` -> `main`
-promotion per `docs/RELEASING.md` and needs user sign-off. `dev` is now well ahead of `main`.
+- Do not touch #3 (closed, 2/8 criteria pass, needs human re-scope).
+- Do not cut a release — `lib/Copilot.Durable.csproj` is at 0.5.0 and needs user sign-off.
+- Do not re-open #119/#122; their content is fully in `dev`.
+- Do not re-open #4 or #8; both are closed with per-criterion evidence comments.
+- Do not add platform detection to `src/Durable.Runtime/` or weaken
+  `RuntimeHostPortabilityTests.CorePath_HasNoPlatformSpecificApis`.
