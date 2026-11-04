@@ -148,6 +148,20 @@ class CaptureGuardMutationTests(unittest.TestCase):
                 self.assertIn("Actual C# output verified: 04-watches.cs", result.stderr)
                 self.assertIn("AssertionError", result.stderr)
 
+    def test_example_stdout_carrying_a_warning_fails_the_clean_output_guard(self):
+        # The clean-output guard has no other direct test: the mutations above only exercise the
+        # deployment guards. A build warning is not example stdout, so capture must refuse the
+        # run rather than record the warning as part of the reference.
+        with capture_tree() as root:
+            source = next((root / "examples").glob("00-*.cs"))
+            source.write_text(source.read_text() + '\nConsole.WriteLine("probe: warning NU1903 from the example");\n')
+            before = artifacts(root)
+            result = capture(root)
+            self.assertEqual(artifacts(root), before, result.stdout + result.stderr)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn(f"Reference capture is not clean example stdout: {source.name}", result.stderr)
+            self.assertNotIn("Actual C# output verified:", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
