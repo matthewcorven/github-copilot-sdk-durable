@@ -17,13 +17,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT="$HERE/baseline/AgentOrchestrator.csproj"
 PORT="${PORT:-5027}"
 
-# The repo has no root solution and this machine has more than one dotnet; prefer the
-# Homebrew SDK that carries the .NET 10 Blazor toolchain.
-DOTNET="${DOTNET:-/opt/homebrew/bin/dotnet}"
-if [ ! -x "$DOTNET" ]; then
-  DOTNET="$(command -v dotnet || true)"
-fi
-if [ -z "$DOTNET" ]; then
+# The project needs the .NET 10 SDK (the Blazor toolchain and the net10.0 target). On
+# this development machine `dotnet` resolves to the Homebrew SDK 10.0.402; set DOTNET
+# to an absolute path if the `dotnet` on PATH is a different install.
+DOTNET="${DOTNET:-dotnet}"
+if ! command -v "$DOTNET" >/dev/null 2>&1; then
   echo "run.sh: no dotnet executable found; install the .NET 10 SDK" >&2
   exit 1
 fi
@@ -44,7 +42,7 @@ trap cleanup EXIT INT TERM
 "$DOTNET" publish "$PROJECT" -c Release -o "$SCRATCH/app" --nologo -v quiet
 
 echo
-echo "Band A baseline (AgentOrchestrator, unmodified upstream behaviour)"
+echo "Band A baseline (BandABaseline)"
 echo "  URL:     http://localhost:$PORT"
 echo "  Scratch: $SCRATCH   (KEEP=1 to keep it)"
 echo "  Stop with Ctrl-C."

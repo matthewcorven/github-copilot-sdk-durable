@@ -19,15 +19,16 @@ The Durable variant of this scenario is a separate work item (#145, #146, #148).
 
 | Requirement | Version | Notes |
 | --- | --- | --- |
-| .NET SDK | 10.0 | `net10.0` target; the .NET 10 Blazor toolchain is required |
+| .NET SDK | 10.0 | `net10.0` target; the .NET 10 Blazor toolchain is required. `dotnet` on `PATH` must be 10.0.x, or set `DOTNET` to that install |
 | GitHub Copilot CLI | signed in | The SDK spawns the runtime over stdio; `copilot` must be on `PATH` and authenticated |
 
 The app needs no Azure subscription and no database server: listings are seeded into a local
 SQLite file on first start from `baseline/Data/Properties/*.json`.
 
-Check the sign-in before running:
+Check both before running:
 
 ```bash
+dotnet --version   # 10.0.x
 copilot --version
 ```
 
@@ -42,7 +43,7 @@ cd real-world-scenarios/band-a-local-dev-tool
 prints:
 
 ```
-Band A baseline (AgentOrchestrator, unmodified upstream behaviour)
+Band A baseline (BandABaseline)
   URL:     http://localhost:5027
   Scratch: /var/folders/…/band-a-baseline.XXXXXX   (KEEP=1 to keep it)
   Stop with Ctrl-C.
@@ -115,10 +116,10 @@ Nothing that a compiler required. The upstream project builds as vendored agains
 `Agent.cs`, `AppState.cs`, `Program.cs`, `Phase.cs`, `PropertyDatabase.cs` and every Razor
 file are unmodified copies.
 
-Two upstream warnings are visible on every build and start: NU1903 for
-`SQLitePCLRaw.lib.e_sqlite3` 2.1.10 (a transitive dependency of
-`Microsoft.EntityFrameworkCore.Sqlite` 9.0.0) and EF's `KeyFeatures` value-converter
-warning. Neither is fixed, because fixing them means changing the pinned packages.
+One build warning is visible on every build: NU1903 for `SQLitePCLRaw.lib.e_sqlite3` 2.1.10
+(a transitive dependency of `Microsoft.EntityFrameworkCore.Sqlite` 9.0.0). At startup EF
+also logs a `KeyFeatures` value-converter warning. Neither is fixed, because fixing them
+means changing the pinned packages.
 
 ## What was executed
 

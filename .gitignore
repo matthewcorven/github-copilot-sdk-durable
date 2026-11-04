@@ -38,10 +38,8 @@ node_modules/
 # Copilot CLI local tool-approval state (machine-local, never shared).
 .copilot/
 
-# Band A baseline: scratch output from run.sh is kept in $TMPDIR, not here.
-# The app writes properties.db and .copilot/ beside its assembly; both are inside
-# the published scratch directory, but ignore them if someone runs `dotnet run`
-# from baseline/ directly.
+# Band A baseline: properties.db and its sidecars land beside the assembly if
+# someone runs `dotnet run` from baseline/ directly; run.sh publishes into
+# $TMPDIR so they do not. `.copilot/` is already ignored globally, above.
 real-world-scenarios/band-a-local-dev-tool/baseline/properties.db
 real-world-scenarios/band-a-local-dev-tool/baseline/properties.db-*
-real-world-scenarios/band-a-local-dev-tool/baseline/.copilot/
