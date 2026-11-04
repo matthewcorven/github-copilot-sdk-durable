@@ -1,0 +1,31 @@
+{
+  "id": 52,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 758000,
+  "currency": "CAD",
+  "address": {
+    "street": "39 Queens Quay East, Unit 621",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M5E 0A4",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 2,
+  "squareFootage": 846,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 1975,
+  "parkingSpaces": 1,
+  "shortDescription": "Spacious 2-bedroom condo in East Bayfront with open layout, balcony, and underground parking.",
+  "fullDescription": "Welcome to 39 Queens Quay East, Unit 621 in the vibrant East Bayfront neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen is a chef’s dream with quartz countertops, a large island, and high-end stainless-steel appliances. Upstairs, 2 bright bedrooms include a primary retreat with ensuite and double closets. Building amenities include a fitness centre, rooftop terrace, party room, and 24-hour concierge. This coveted pocket puts you within walking distance of top schools, green spaces, and vibrant dining.",
+  "keyFeatures": [
+    "Renovated galley kitchen with breakfast bar",
+    "Laneway parking for two vehicles",
+    "Juliet balcony off primary bedroom",
+    "Surrounded by cafes, galleries, and boutiques",
+    "Pot lights and designer fixtures throughout",
+    "Spacious kitchen with marble backsplash and gas range"
+  ],
+  "listedDate": "2026-04-26"
+}

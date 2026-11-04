@@ -1,0 +1,31 @@
+{
+  "id": 22,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 435000,
+  "currency": "CAD",
+  "address": {
+    "street": "55 Bremner Boulevard, Unit 3201",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M5J 0A6",
+    "country": "Canada"
+  },
+  "bedrooms": 1,
+  "bathrooms": 1,
+  "squareFootage": 595,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 1976,
+  "parkingSpaces": 1,
+  "shortDescription": "Spacious 1-bedroom condo in CityPlace with open layout, balcony, and underground parking.",
+  "fullDescription": "Welcome to 55 Bremner Boulevard, Unit 3201 in the vibrant CityPlace neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area showcases original architectural details alongside tasteful modern updates. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. All 1 bedrooms are generously sized, and the primary offers a spa-inspired four-piece ensuite. Additional highlights include in-suite laundry, ample storage, and energy-efficient mechanicals. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Juliet balcony off primary bedroom",
+    "Two-car attached garage",
+    "Floor-to-ceiling windows with city views",
+    "Steps to TTC subway and streetcar",
+    "Open kitchen with waterfall island and pot lights",
+    "Soaring nine-foot ceilings"
+  ],
+  "listedDate": "2026-03-01"
+}

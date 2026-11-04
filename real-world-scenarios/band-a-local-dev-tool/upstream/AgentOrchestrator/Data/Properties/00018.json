@@ -1,0 +1,30 @@
+{
+  "id": 18,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 438000,
+  "currency": "CAD",
+  "address": {
+    "street": "42 Carlaw Avenue, Unit 710",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4M 2R6",
+    "country": "Canada"
+  },
+  "bedrooms": 1,
+  "bathrooms": 1,
+  "squareFootage": 695,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2012,
+  "parkingSpaces": 0,
+  "shortDescription": "Spacious 1-bedroom condo in Leslieville with open layout, balcony, and underground parking.",
+  "fullDescription": "Welcome to 42 Carlaw Avenue, Unit 710 in the vibrant Leslieville neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area showcases original architectural details alongside tasteful modern updates. The kitchen is a chef’s dream with quartz countertops, a large island, and high-end stainless-steel appliances. All 1 bedrooms are generously sized, and the primary offers a spa-inspired four-piece ensuite. The finished lower level adds valuable living space with a recreation room, extra bathroom, and storage. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Spacious kitchen with marble backsplash and gas range",
+    "Underground parking spot included",
+    "Rooftop terrace with skyline views",
+    "Crown mouldings and wainscotting",
+    "Ensuite bathroom with heated floors"
+  ],
+  "listedDate": "2026-04-26"
+}

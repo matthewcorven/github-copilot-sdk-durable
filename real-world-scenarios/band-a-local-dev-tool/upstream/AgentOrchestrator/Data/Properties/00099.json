@@ -1,0 +1,31 @@
+{
+  "id": 99,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 1954000,
+  "currency": "CAD",
+  "address": {
+    "street": "90 Summerhill Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4T 1A8",
+    "country": "Canada"
+  },
+  "bedrooms": 4,
+  "bathrooms": 2,
+  "squareFootage": 1873,
+  "lotSizeSquareFootage": 5187,
+  "yearBuilt": 1919,
+  "parkingSpaces": 2,
+  "shortDescription": "Character-filled 4-bedroom detached residence in Summerhill featuring original details and modern upgrades.",
+  "fullDescription": "Welcome to 90 Summerhill Avenue in the vibrant Summerhill neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area opens onto a spacious combined living and dining area flooded with afternoon sun. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. The 4 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. The deep lot provides ample space for gardening, play, or future expansion. This coveted pocket puts you within walking distance of top schools, green spaces, and vibrant dining.",
+  "keyFeatures": [
+    "Finished basement with recreation room",
+    "Minutes to parks, shops, and restaurants",
+    "Private driveway with detached garage",
+    "Renovated galley kitchen with breakfast bar",
+    "Floor-to-ceiling windows with city views",
+    "Integrated single-car garage"
+  ],
+  "listedDate": "2026-05-02"
+}

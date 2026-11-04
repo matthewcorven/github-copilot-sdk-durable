@@ -1,0 +1,31 @@
+{
+  "id": 98,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 1990000,
+  "currency": "CAD",
+  "address": {
+    "street": "35 Foxbar Road",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4V 2G6",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 3,
+  "squareFootage": 2408,
+  "lotSizeSquareFootage": 5510,
+  "yearBuilt": 1946,
+  "parkingSpaces": 1,
+  "shortDescription": "Bright and airy 2-bedroom detached home in the heart of South Hill, move-in ready with generous lot.",
+  "fullDescription": "Welcome to 35 Foxbar Road in the vibrant South Hill neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area features gleaming hardwood floors and an abundance of natural light from oversized windows. The kitchen is a chef’s dream with quartz countertops, a large island, and high-end stainless-steel appliances. The sleeping quarters comprise 2 comfortable bedrooms, the largest enjoying a private ensuite bathroom. The finished lower level adds valuable living space with a recreation room, extra bathroom, and storage. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Soaring nine-foot ceilings",
+    "Private driveway with detached garage",
+    "Fenced yard ideal for children and pets",
+    "Pet-friendly building",
+    "Steps to TTC subway and streetcar",
+    "Minutes to parks, shops, and restaurants"
+  ],
+  "listedDate": "2026-04-24"
+}

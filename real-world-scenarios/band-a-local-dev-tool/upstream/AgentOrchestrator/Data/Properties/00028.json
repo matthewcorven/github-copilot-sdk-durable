@@ -1,0 +1,31 @@
+{
+  "id": 28,
+  "type": "Bungalow",
+  "status": "For Sale",
+  "price": 1559000,
+  "currency": "CAD",
+  "address": {
+    "street": "50 Kingsbridge Garden Circle",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M2R 1S2",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 2,
+  "squareFootage": 1165,
+  "lotSizeSquareFootage": 6079,
+  "yearBuilt": 1957,
+  "parkingSpaces": 1,
+  "shortDescription": "Updated 3-bedroom bungalow in Willowdale offering single-level living and a finished basement.",
+  "fullDescription": "Welcome to 50 Kingsbridge Garden Circle in the vibrant Willowdale neighbourhood. This inviting bungalow offers the ease of single-level living with a generous lot and private garden. The main living area boasts an open-concept design with pot lights and a cosy gas fireplace. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. Upstairs, 3 bright bedrooms include a primary retreat with ensuite and double closets. Smart-home features, updated plumbing, and a newer roof provide peace of mind for years to come. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Built-in bookshelves in den",
+    "Soaring nine-foot ceilings",
+    "Landscaped front and rear gardens",
+    "Walking distance to top-rated schools",
+    "Modern eat-in kitchen with stainless steel appliances",
+    "Steps to TTC subway and streetcar"
+  ],
+  "listedDate": "2026-05-01"
+}

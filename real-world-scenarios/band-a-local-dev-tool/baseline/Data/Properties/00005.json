@@ -1,0 +1,32 @@
+{
+  "id": 5,
+  "type": "Apartment",
+  "status": "For Sale",
+  "price": 524900,
+  "currency": "CAD",
+  "address": {
+    "street": "2221 Yonge Street, Suite 4812",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4S 2B4",
+    "country": "Canada"
+  },
+  "bedrooms": 1,
+  "bathrooms": 1,
+  "squareFootage": 620,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2024,
+  "parkingSpaces": 0,
+  "shortDescription": "Brand-new one-bedroom apartment in a boutique mid-rise at Yonge and Eglinton with top-tier finishes and vibrant neighbourhood amenities.",
+  "fullDescription": "Welcome to this never-lived-in one-bedroom suite in a recently completed boutique building at the heart of Midtown Toronto. The thoughtfully designed layout maximises every square foot: nine-foot ceilings and oversized windows create an airy feel, while premium laminate flooring and designer lighting add warmth. The galley kitchen boasts soft-close cabinetry, quartz countertops, and a full-size stainless-steel appliance package. The bedroom comfortably fits a king-size bed and includes a double closet with built-in organiser. The four-piece bathroom features a deep soaker tub and floor-to-ceiling tile. Building amenities include a gym, co-working lounge, pet wash station, and parcel room. Directly above Eglinton station on the new Crosstown LRT and steps from shops, cinemas, and Eglinton Park.",
+  "keyFeatures": [
+    "Brand new — never occupied",
+    "Nine-foot ceilings with oversized windows",
+    "Quartz countertops and premium appliance package",
+    "Deep soaker tub in four-piece bathroom",
+    "Building gym, co-working lounge, and pet wash station",
+    "Directly above Eglinton Crosstown LRT station",
+    "Walk score 95 — Yonge and Eglinton neighbourhood"
+  ],
+  "listedDate": "2026-05-03"
+}

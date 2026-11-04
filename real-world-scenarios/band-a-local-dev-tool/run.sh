@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Starts the Band A baseline (the vendored AgentOrchestrator) and prints the URL.
+# Ctrl-C stops it.
+#
+# Usage:
+#   ./run.sh            # build, run, print the URL, remove the scratch directory on exit
+#   KEEP=1 ./run.sh     # keep the scratch directory (Copilot sign-in, properties database)
+#   PORT=5028 ./run.sh  # use a port other than 5027
+#
+# The app writes two things: `properties.db` (SQLite, seeded from Data/Properties at
+# first start) and the Copilot client's base directory (`AppState.cs` puts it under
+# AppContext.BaseDirectory). Both therefore resolve under the scratch directory this
+# script publishes into, never inside the repository.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT="$HERE/baseline/AgentOrchestrator.csproj"
+PORT="${PORT:-5027}"
+
+# The project needs the .NET 10 SDK (the Blazor toolchain and the net10.0 target). On
+# this development machine `dotnet` resolves to the Homebrew SDK 10.0.402; set DOTNET
+# to an absolute path if the `dotnet` on PATH is a different install.
+DOTNET="${DOTNET:-dotnet}"
+if ! command -v "$DOTNET" >/dev/null 2>&1; then
+  echo "run.sh: no dotnet executable found; install the .NET 10 SDK" >&2
+  exit 1
+fi
+
+SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/band-a-baseline.XXXXXX")"
+cleanup() {
+  if [ "${KEEP:-0}" = "1" ]; then
+    echo
+    echo "Scratch directory kept: $SCRATCH"
+  else
+    rm -rf "$SCRATCH"
+  fi
+}
+trap cleanup EXIT INT TERM
+
+# Publish into the scratch directory so AppContext.BaseDirectory — the root the app
+# uses for properties.db and for the Copilot base directory — is inside scratch.
+"$DOTNET" publish "$PROJECT" -c Release -o "$SCRATCH/app" --nologo -v quiet
+
+echo
+echo "Band A baseline (BandABaseline)"
+echo "  URL:     http://localhost:$PORT"
+echo "  Scratch: $SCRATCH   (KEEP=1 to keep it)"
+echo "  Stop with Ctrl-C."
+echo
+
+cd "$SCRATCH/app"
+ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS="http://localhost:$PORT" \
+  "$DOTNET" BandABaseline.dll

@@ -1,0 +1,31 @@
+{
+  "id": 55,
+  "type": "Apartment",
+  "status": "For Sale",
+  "price": 1131000,
+  "currency": "CAD",
+  "address": {
+    "street": "209 Fort York Boulevard, Unit 870",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M5V 4A1",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 1,
+  "squareFootage": 1439,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2016,
+  "parkingSpaces": 0,
+  "shortDescription": "Contemporary 3-bedroom apartment in Bathurst Quay with designer finishes and vibrant neighbourhood.",
+  "fullDescription": "Welcome to 209 Fort York Boulevard, Unit 870 in the vibrant Bathurst Quay neighbourhood. This contemporary apartment features a thoughtfully designed layout that maximises natural light. The main living area opens onto a spacious combined living and dining area flooded with afternoon sun. The kitchen is a chef’s dream with quartz countertops, a large island, and high-end stainless-steel appliances. Upstairs, 3 bright bedrooms include a primary retreat with ensuite and double closets. A private outdoor space — perfect for morning coffee or summer entertaining — completes the package. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Private south-facing backyard with patio",
+    "Soaring nine-foot ceilings",
+    "Close to waterfront trails and cycling paths",
+    "Smart home wiring throughout",
+    "Updated kitchen with quartz counters and soft-close cabinetry",
+    "Juliet balcony off primary bedroom"
+  ],
+  "listedDate": "2026-03-18"
+}

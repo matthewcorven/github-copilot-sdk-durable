@@ -1,0 +1,31 @@
+{
+  "id": 66,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 536000,
+  "currency": "CAD",
+  "address": {
+    "street": "5460 Yonge Street, Unit 1702",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M2N 6K7",
+    "country": "Canada"
+  },
+  "bedrooms": 1,
+  "bathrooms": 1,
+  "squareFootage": 595,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2004,
+  "parkingSpaces": 1,
+  "shortDescription": "Spacious 1-bedroom condo in Willowdale with open layout, balcony, and underground parking.",
+  "fullDescription": "Welcome to 5460 Yonge Street, Unit 1702 in the vibrant Willowdale neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area opens onto a spacious combined living and dining area flooded with afternoon sun. The kitchen is a chef’s dream with quartz countertops, a large island, and high-end stainless-steel appliances. The sleeping quarters comprise 1 comfortable bedrooms, the largest enjoying a private ensuite bathroom. A private outdoor space — perfect for morning coffee or summer entertaining — completes the package. The location is unbeatable: steps to TTC transit, acclaimed restaurants, and everyday shopping.",
+  "keyFeatures": [
+    "Private driveway with detached garage",
+    "Minutes to parks, shops, and restaurants",
+    "Private south-facing backyard with patio",
+    "24-hour concierge and security",
+    "Exposed brick accent wall",
+    "Built-in bookshelves in den"
+  ],
+  "listedDate": "2026-04-03"
+}

@@ -1,0 +1,32 @@
+{
+  "id": 1,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 1895000,
+  "currency": "CAD",
+  "address": {
+    "street": "45 Balsam Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4E 3B6",
+    "country": "Canada"
+  },
+  "bedrooms": 4,
+  "bathrooms": 3,
+  "squareFootage": 2850,
+  "lotSizeSquareFootage": 5200,
+  "yearBuilt": 1922,
+  "parkingSpaces": 2,
+  "shortDescription": "Stunning fully renovated 4-bedroom detached home in The Beaches with modern finishes and a sun-drenched south-facing garden.",
+  "fullDescription": "This beautifully renovated detached home sits on a tree-lined street in one of Toronto's most coveted neighbourhoods. The open-concept main floor features hardwood floors throughout, a chef's kitchen with quartz countertops and premium stainless-steel appliances, and a spacious living room with a wood-burning fireplace. Upstairs you'll find four generous bedrooms including a primary suite with walk-in closet and luxurious ensuite. The finished basement offers a recreation room, additional bathroom, and ample storage. Step outside to a professionally landscaped backyard with a large deck perfect for entertaining. Minutes from Queen Street East shops, Kew Gardens, and the boardwalk.",
+  "keyFeatures": [
+    "Renovated chef's kitchen with quartz countertops",
+    "Hardwood floors throughout",
+    "Wood-burning fireplace in living room",
+    "Finished basement with recreation room",
+    "South-facing landscaped backyard with deck",
+    "Walking distance to beach and boardwalk",
+    "Private driveway with detached garage"
+  ],
+  "listedDate": "2026-04-18"
+}

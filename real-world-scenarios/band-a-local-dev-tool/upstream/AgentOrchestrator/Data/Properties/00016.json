@@ -1,0 +1,31 @@
+{
+  "id": 16,
+  "type": "Semi-Detached",
+  "status": "For Sale",
+  "price": 1638000,
+  "currency": "CAD",
+  "address": {
+    "street": "175 Jones Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4M 3A2",
+    "country": "Canada"
+  },
+  "bedrooms": 4,
+  "bathrooms": 3,
+  "squareFootage": 1601,
+  "lotSizeSquareFootage": 2914,
+  "yearBuilt": 1913,
+  "parkingSpaces": 1,
+  "shortDescription": "Well-maintained 4-bedroom semi in Leslieville with updated kitchen and south-facing garden.",
+  "fullDescription": "Welcome to 175 Jones Avenue in the vibrant Leslieville neighbourhood. This charming semi-detached home seamlessly blends period character with modern comfort. The main living area showcases original architectural details alongside tasteful modern updates. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. All 4 bedrooms are generously sized, and the primary offers a spa-inspired four-piece ensuite. The deep lot provides ample space for gardening, play, or future expansion. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Floor-to-ceiling windows with city views",
+    "Two-car attached garage",
+    "Walk score over 90",
+    "Ensuite bathroom with heated floors",
+    "Chef’s kitchen with granite countertops and premium appliances",
+    "Underground parking spot included"
+  ],
+  "listedDate": "2026-03-18"
+}

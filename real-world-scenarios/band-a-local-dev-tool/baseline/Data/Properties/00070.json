@@ -1,0 +1,30 @@
+{
+  "id": 70,
+  "type": "Apartment",
+  "status": "For Sale",
+  "price": 519000,
+  "currency": "CAD",
+  "address": {
+    "street": "8 Rean Drive, Unit 615",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M2K 3B9",
+    "country": "Canada"
+  },
+  "bedrooms": 1,
+  "bathrooms": 1,
+  "squareFootage": 604,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2024,
+  "parkingSpaces": 1,
+  "shortDescription": "Contemporary 1-bedroom apartment in Bayview Village with designer finishes and vibrant neighbourhood.",
+  "fullDescription": "Welcome to 8 Rean Drive, Unit 615 in the vibrant Bayview Village neighbourhood. This contemporary apartment features a thoughtfully designed layout that maximises natural light. The main living area opens onto a spacious combined living and dining area flooded with afternoon sun. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. The sleeping quarters comprise 1 comfortable bedrooms, the largest enjoying a private ensuite bathroom. Building amenities include a fitness centre, rooftop terrace, party room, and 24-hour concierge. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Open-concept living and dining area",
+    "Building gym and party room",
+    "Close to waterfront trails and cycling paths",
+    "Spacious kitchen with marble backsplash and gas range",
+    "Integrated single-car garage"
+  ],
+  "listedDate": "2026-03-18"
+}

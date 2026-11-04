@@ -1,0 +1,31 @@
+{
+  "id": 96,
+  "type": "Semi-Detached",
+  "status": "For Sale",
+  "price": 2167000,
+  "currency": "CAD",
+  "address": {
+    "street": "130 Spadina Road",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M5R 2T8",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 1,
+  "squareFootage": 2500,
+  "lotSizeSquareFootage": 3500,
+  "yearBuilt": 1955,
+  "parkingSpaces": 2,
+  "shortDescription": "Well-maintained 3-bedroom semi in The Annex with updated kitchen and south-facing garden.",
+  "fullDescription": "Welcome to 130 Spadina Road in the vibrant The Annex neighbourhood. This charming semi-detached home seamlessly blends period character with modern comfort. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen is a chef’s dream with quartz countertops, a large island, and high-end stainless-steel appliances. The 3 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. Additional highlights include in-suite laundry, ample storage, and energy-efficient mechanicals. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Updated kitchen with quartz counters and soft-close cabinetry",
+    "Wraparound porch with heritage details",
+    "Surrounded by cafes, galleries, and boutiques",
+    "Laneway parking for two vehicles",
+    "Ensuite bathroom with heated floors",
+    "Walking distance to top-rated schools"
+  ],
+  "listedDate": "2026-04-18"
+}

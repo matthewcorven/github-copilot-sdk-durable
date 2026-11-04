@@ -1,0 +1,31 @@
+{
+  "id": 20,
+  "type": "Semi-Detached",
+  "status": "For Sale",
+  "price": 1801000,
+  "currency": "CAD",
+  "address": {
+    "street": "19 Bain Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4K 1E7",
+    "country": "Canada"
+  },
+  "bedrooms": 5,
+  "bathrooms": 3,
+  "squareFootage": 1836,
+  "lotSizeSquareFootage": 3500,
+  "yearBuilt": 1943,
+  "parkingSpaces": 2,
+  "shortDescription": "Stylish 5-bedroom semi-detached in Riverdale blending Victorian charm with contemporary living.",
+  "fullDescription": "Welcome to 19 Bain Avenue in the vibrant Riverdale neighbourhood. This charming semi-detached home seamlessly blends period character with modern comfort. The main living area showcases original architectural details alongside tasteful modern updates. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. Upstairs, 5 bright bedrooms include a primary retreat with ensuite and double closets. The deep lot provides ample space for gardening, play, or future expansion. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Open-concept living and dining area",
+    "Fenced yard ideal for children and pets",
+    "Laneway parking for two vehicles",
+    "Built-in bookshelves in den",
+    "Chef’s kitchen with granite countertops and premium appliances",
+    "Modern eat-in kitchen with stainless steel appliances"
+  ],
+  "listedDate": "2026-04-22"
+}

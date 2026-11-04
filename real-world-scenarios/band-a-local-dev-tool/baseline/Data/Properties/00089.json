@@ -1,0 +1,31 @@
+{
+  "id": 89,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 2125000,
+  "currency": "CAD",
+  "address": {
+    "street": "1101 Leslie Street",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M3C 3L8",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 3,
+  "squareFootage": 2697,
+  "lotSizeSquareFootage": 3681,
+  "yearBuilt": 2020,
+  "parkingSpaces": 1,
+  "shortDescription": "Spacious 3-bedroom detached home on a quiet street in Don Mills with mature trees and a private backyard.",
+  "fullDescription": "Welcome to 1101 Leslie Street in the vibrant Don Mills neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area opens onto a spacious combined living and dining area flooded with afternoon sun. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. The sleeping quarters comprise 3 comfortable bedrooms, the largest enjoying a private ensuite bathroom. Additional highlights include in-suite laundry, ample storage, and energy-efficient mechanicals. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Open kitchen with waterfall island and pot lights",
+    "Building gym and party room",
+    "Exposed brick accent wall",
+    "Rooftop terrace with skyline views",
+    "Integrated single-car garage",
+    "Walk score over 90"
+  ],
+  "listedDate": "2026-04-26"
+}

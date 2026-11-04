@@ -1,0 +1,31 @@
+{
+  "id": 6,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 431000,
+  "currency": "CAD",
+  "address": {
+    "street": "310 Bloor Street West, Unit 1501",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M5S 1W4",
+    "country": "Canada"
+  },
+  "bedrooms": 1,
+  "bathrooms": 1,
+  "squareFootage": 556,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 1990,
+  "parkingSpaces": 1,
+  "shortDescription": "Bright 1-bedroom condo in The Annex with floor-to-ceiling windows and stunning city views.",
+  "fullDescription": "Welcome to 310 Bloor Street West, Unit 1501 in the vibrant The Annex neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area opens onto a spacious combined living and dining area flooded with afternoon sun. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. The 1 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. The deep lot provides ample space for gardening, play, or future expansion. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Finished basement with recreation room",
+    "Chef’s kitchen with granite countertops and premium appliances",
+    "Steps to TTC subway and streetcar",
+    "Rooftop terrace with skyline views",
+    "Soaring nine-foot ceilings",
+    "Close to waterfront trails and cycling paths"
+  ],
+  "listedDate": "2026-03-28"
+}

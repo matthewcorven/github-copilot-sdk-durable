@@ -1,0 +1,31 @@
+{
+  "id": 27,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 728000,
+  "currency": "CAD",
+  "address": {
+    "street": "225 Sherway Gardens Road, Unit 504",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M9C 0A3",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 1,
+  "squareFootage": 875,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2023,
+  "parkingSpaces": 0,
+  "shortDescription": "Modern 2-bedroom suite in Etobicoke with premium finishes and full building amenities.",
+  "fullDescription": "Welcome to 225 Sherway Gardens Road, Unit 504 in the vibrant Etobicoke neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. The sleeping quarters comprise 2 comfortable bedrooms, the largest enjoying a private ensuite bathroom. Building amenities include a fitness centre, rooftop terrace, party room, and 24-hour concierge. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Open-concept living and dining area",
+    "24-hour concierge and security",
+    "Private driveway with detached garage",
+    "Open kitchen with waterfall island and pot lights",
+    "Fenced yard ideal for children and pets",
+    "Close to waterfront trails and cycling paths"
+  ],
+  "listedDate": "2026-03-22"
+}

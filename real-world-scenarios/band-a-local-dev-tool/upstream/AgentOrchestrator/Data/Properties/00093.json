@@ -1,0 +1,31 @@
+{
+  "id": 93,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 2283000,
+  "currency": "CAD",
+  "address": {
+    "street": "96 Waverley Road",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4L 3T1",
+    "country": "Canada"
+  },
+  "bedrooms": 5,
+  "bathrooms": 3,
+  "squareFootage": 2755,
+  "lotSizeSquareFootage": 5732,
+  "yearBuilt": 1927,
+  "parkingSpaces": 2,
+  "shortDescription": "Spacious 5-bedroom detached home on a quiet street in Kew Beach with mature trees and a private backyard.",
+  "fullDescription": "Welcome to 96 Waverley Road in the vibrant Kew Beach neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area boasts an open-concept design with pot lights and a cosy gas fireplace. The kitchen is a chef’s dream with quartz countertops, a large island, and high-end stainless-steel appliances. The sleeping quarters comprise 5 comfortable bedrooms, the largest enjoying a private ensuite bathroom. Building amenities include a fitness centre, rooftop terrace, party room, and 24-hour concierge. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Fenced yard ideal for children and pets",
+    "Open kitchen with waterfall island and pot lights",
+    "Smart home wiring throughout",
+    "Soaring nine-foot ceilings",
+    "Integrated single-car garage",
+    "Wraparound porch with heritage details"
+  ],
+  "listedDate": "2026-03-28"
+}

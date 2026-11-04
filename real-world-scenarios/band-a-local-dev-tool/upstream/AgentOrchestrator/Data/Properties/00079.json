@@ -1,0 +1,31 @@
+{
+  "id": 79,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 2519000,
+  "currency": "CAD",
+  "address": {
+    "street": "1750 St. Clair Avenue West",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6N 1J3",
+    "country": "Canada"
+  },
+  "bedrooms": 5,
+  "bathrooms": 2,
+  "squareFootage": 2981,
+  "lotSizeSquareFootage": 4749,
+  "yearBuilt": 1909,
+  "parkingSpaces": 1,
+  "shortDescription": "Bright and airy 5-bedroom detached home in the heart of Earlscourt, move-in ready with generous lot.",
+  "fullDescription": "Welcome to 1750 St. Clair Avenue West in the vibrant Earlscourt neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area showcases original architectural details alongside tasteful modern updates. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. The sleeping quarters comprise 5 comfortable bedrooms, the largest enjoying a private ensuite bathroom. Building amenities include a fitness centre, rooftop terrace, party room, and 24-hour concierge. The location is unbeatable: steps to TTC transit, acclaimed restaurants, and everyday shopping.",
+  "keyFeatures": [
+    "Juliet balcony off primary bedroom",
+    "Close to waterfront trails and cycling paths",
+    "Exposed brick accent wall",
+    "Chef’s kitchen with granite countertops and premium appliances",
+    "Energy-efficient windows and furnace",
+    "Updated kitchen with quartz counters and soft-close cabinetry"
+  ],
+  "listedDate": "2026-04-26"
+}
