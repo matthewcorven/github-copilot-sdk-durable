@@ -20,7 +20,7 @@ test("global manifest selects the exact C# sign-in-free set including conditiona
   assert.deepEqual(manifest.examples.filter(entry => entry.deterministic).map(entry => entry.id),
     ["00", "01", "03", "04", "05", "06", "09", "11", "12", "14", "17", "18", "23", "32", "35"]);
   assert.deepEqual(manifest.examples.filter(entry => entry.expectedOutput).map(entry => entry.id),
-    ["00", "01", "03", "04"]);
+    ["00", "01", "03", "04", "35"]);
   assert.equal(manifest.examples[35].live, true);
   assert.equal(manifest.examples[35].liveReason, null);
   assert.equal(manifest.examples[35].languages.ts.sandboxMode, "supported");

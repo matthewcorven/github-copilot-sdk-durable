@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const referenceIds = ["00", "01", "03", "04"];
+const referenceIds = ["00", "01", "03", "04", "35"];
 const readJson = path => JSON.parse(readFileSync(join(root, path), "utf8"));
 const sha256 = path => createHash("sha256").update(readFileSync(join(root, path))).digest("hex");
 
@@ -99,7 +99,7 @@ export function loadManifest() {
   const provenance = readJson("examples/expected/provenance.json");
   if (!isDeepStrictEqual(Object.keys(provenance.outputs).sort(), [...referenceIds].sort())
       || provenance.fixtureSha256 !== sha256("tools/ReplayRuntime/fixtures/basic.json")) {
-    throw new Error("Four actual C# reference outputs and the captured fixture are required");
+    throw new Error(`The actual C# reference outputs (${referenceIds.join(", ")}) and the captured fixture are required`);
   }
   for (const entry of manifest.examples.filter(entry => entry.expectedOutput)) {
     const output = readFileSync(join(root, entry.expectedOutput), "utf8");

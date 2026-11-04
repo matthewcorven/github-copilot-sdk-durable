@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 RANGES = ["00-10", "11-21", "22-35"]
-REFERENCE_IDS = ["00", "01", "03", "04"]
+REFERENCE_IDS = ["00", "01", "03", "04", "35"]
 
 
 def reference_selection(root=ROOT):

@@ -127,7 +127,7 @@ python examples/run_all.py
 timeouts, or runtime failures produce a nonzero exit; they are not successful skips.
 Remove `DURABLE_RUNTIME_PATH` and replay-fixture overrides before this mode.
 
-For the sign-in-free suite and **four full-output comparisons per language to actual
+For the sign-in-free suite and **five full-output comparisons per language to actual
 checked-in C# output**, build the real ReplayRuntime and use deterministic mode:
 
 ```bash
@@ -141,6 +141,10 @@ python examples/run_all.py --deterministic --list
 Both runners select `00,01,03,04,05,06,09,11,12,14,17,18,23,32,35` and print every
 exclusion with the exact reason from `scripts/validate.sh`. `17`, `18`, and `35`
 also have conditional LIVE behavior: inclusion here is not LIVE/model proof.
+`33` and `34` stay excluded: both assert an effect a tool call produced on disk, and
+the recording has no tool call, so the recorded runtime cannot satisfy them. Only
+`35` exercises its sandbox policy without a tool call, and its `policy`-mode output
+is the fifth reference fixture.
 Sessions generated from replay fixtures are explicitly **synthesised, not recorded
 transcripts**. Optional exact IDs can narrow a run, for example `--deterministic 00 01`.
 
@@ -162,7 +166,7 @@ python examples/parity_manifest.py
 python tests/parity/capture_reference.py
 ```
 
-The last command re-executes the four C# reference scenarios without rewriting their
+The last command re-executes the five C# reference scenarios without rewriting their
 outputs. To deliberately refresh artifacts after an approved source/range change, use
 `python examples/parity_manifest.py --write` and
 `python tests/parity/capture_reference.py --write`; neither runner learns expected

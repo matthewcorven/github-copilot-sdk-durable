@@ -968,10 +968,10 @@ Corrected examples `24` and `31` distinguish SDK context from zero public app en
 permission review uses an app-owned document and verifies fork-boundary grants rather
 than treating internal checkpoint/admission anchors as public transcript entries.
 
-**Output comparison.** Deterministic runs compare the entire normalized stdout of four
-actual ported examples per language against `examples/expected/*.txt`. The files were
-captured by executing the same C# sources with ReplayRuntime `basic.json`, not invented
-from the port. `tests/parity/capture_reference.py` repeats the C# capture and compares it
+**Output comparison.** Deterministic runs compare the entire normalized stdout of five
+actual ported examples per language against `examples/expected/*.txt` (`00`, `01`, `03`,
+`04`, and `35`). The files were captured by executing the same C# sources with
+ReplayRuntime `basic.json`, not invented from the port. `tests/parity/capture_reference.py` repeats the C# capture and compares it
 without rewriting; `--write` is the explicit recapture operation. Provenance includes
 exact commands and SHA-256 hashes of the C# source, fixture, and expected stdout.
 

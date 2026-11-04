@@ -57,11 +57,13 @@ class RunnerContractTests(unittest.TestCase):
         self.assertEqual(result.stdout, expected)
         self.assertNotEqual(normalise_output("count: 3\n"), normalise_output("count: 2\n"))
 
-    def test_exact_inventory_selection_and_four_csharp_outputs(self):
+    def test_exact_inventory_selection_and_five_csharp_outputs(self):
         manifest = load_manifest()
         self.assertEqual(len(manifest["examples"]), 36)
         selected = [entry["id"] for entry in manifest["examples"] if entry["deterministic"]]
         self.assertEqual(selected, ["00", "01", "03", "04", "05", "06", "09", "11", "12", "14", "17", "18", "23", "32", "35"])
+        self.assertEqual([entry["id"] for entry in manifest["examples"] if entry["expectedOutput"]],
+                         ["00", "01", "03", "04", "35"])
         for language in ("ts", "py"):
             result = execute(ROOT, language, "--deterministic", "--list")
             self.assertEqual(result.returncode, 0, result.stderr)
