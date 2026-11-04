@@ -14,6 +14,11 @@
 #                   rebuilds the agents before restoring the checkpoint.
 #   KEEP=1          keep the checkpoint directory even when run.sh created it.
 #
+# Exit codes: 0 the workflow completed; 1 endpoint or build failure (the checkpoint directory is left
+#             in place, so a retry can run after the build is fixed); 2 bad usage or no gate.json;
+#             anything else is the workflow's own status. A run.sh scratch directory is removed on
+#             exit, success or failure, unless KEEP=1; any other directory is kept.
+#
 # Usage: ./resume.sh [-h|--help] <checkpoint-directory>
 
 set -uo pipefail
@@ -48,7 +53,10 @@ if [[ ! -f "$CHECKPOINT_DIR/gate.json" ]]; then
 fi
 
 # Only a directory run.sh marked as scratch is ours to delete. Decided up front, so the exit path
-# does not depend on what the resumed workflow leaves behind.
+# does not depend on what the resumed workflow leaves behind. The marker records provenance directly
+# instead of guessing from the path: a temp-root or prefix check would be wrong for a symlink, a
+# custom TMPDIR, or a deliberate CHECKPOINT_DIR outside the temp directory, and would miss a caller's
+# directory that merely sits under the temp root with a hand-written gate.json.
 SCRATCH_DIR=0
 if [[ -f "$CHECKPOINT_DIR/$SCRATCH_MARKER" ]]; then
   SCRATCH_DIR=1
@@ -64,7 +72,6 @@ remove_scratch() {
     echo "not removing non-scratch directory: $CHECKPOINT_DIR" >&2
   fi
 }
-trap remove_scratch EXIT
 
 export CHECKPOINT_DIR
 
@@ -76,6 +83,11 @@ if ! dotnet build "$HERE/baseline/BaselineCheckpoint.cs" >/dev/null 2>&1; then
   echo "resume.sh: build failed" >&2
   exit 1
 fi
+
+# Armed only once the build succeeded: a build failure is retryable (missing package, no network) and
+# leaves the checkpoint directory in place, matching run.sh, which keeps its scratch when it did not
+# reach the gate. From here on the directory is removed on exit, success or failure, unless KEEP=1.
+trap remove_scratch EXIT
 
 dotnet run --no-build "$HERE/baseline/BaselineCheckpoint.cs" -- resume
 status=$?
