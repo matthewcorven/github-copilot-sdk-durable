@@ -7,9 +7,9 @@
 // `RalphLoopAsync`. It is not written to a store and no event is journaled. Killing the
 // process loses it.
 //
-// Part of the point is the seam: this file names no type from `lib/Durable.cs`. The SDK
-// bindings are confined to `RunOneIterationAsync`; the control flow above it is plain C#
-// so another language port only has to swap that one method for its own SDK calls.
+// Part of the point is the seam: the SDK bindings are confined to `RunOneIterationAsync`.
+// The control flow above it is plain C#, so another language port only has to swap that one
+// method for its own SDK calls.
 
 #:package GitHub.Copilot.SDK@1.0.26
 #:property TargetFramework=net10.0
@@ -54,12 +54,11 @@ static async Task<int> RalphLoopAsync(string[] args)
     var prompt = File.ReadAllText(promptPath);
 
     // RALPH_MODEL overrides the pinned model. Unset means the pinned model.
-    var model = Environment.GetEnvironmentVariable("RALPH_MODEL") is { Length: > 0 } overridden
-        ? overridden
-        : PinnedModel;
+    var fromEnvironment = Environment.GetEnvironmentVariable("RALPH_MODEL") is { Length: > 0 };
+    var model = fromEnvironment ? Environment.GetEnvironmentVariable("RALPH_MODEL")! : PinnedModel;
 
     Console.WriteLine($"target:    {target}");
-    Console.WriteLine($"model:     {model}{(model == PinnedModel ? " (pinned)" : " (RALPH_MODEL)")}");
+    Console.WriteLine($"model:     {model}{(fromEnvironment ? " (RALPH_MODEL)" : " (pinned)")}");
     Console.WriteLine($"plan:      {planPath}");
     Console.WriteLine($"prompt:    {promptPath}");
     Console.WriteLine($"max:       {maxIterations} iterations");

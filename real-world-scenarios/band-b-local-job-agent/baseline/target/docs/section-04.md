@@ -1,5 +1,5 @@
-A checkpoint is written per iteration.
+A snapshot is written per iteration.
 
 ### Storage
 
-The store is append-only.
+The ledger is append-only.

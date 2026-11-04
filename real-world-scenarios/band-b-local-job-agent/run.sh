@@ -52,6 +52,13 @@ echo
 loop_status=$?
 
 echo
+# The cap is a documented outcome, not a verification failure: report it as itself.
+if [ "$loop_status" -eq 3 ]; then
+  echo "iteration cap reached; the plan is still open. See the loop output above."
+  echo "target: $target"
+  exit 3
+fi
+
 if ! bash "$here/baseline/verify.sh" "$target"; then
   echo
   echo "the loop stopped but the target does not match the plan"

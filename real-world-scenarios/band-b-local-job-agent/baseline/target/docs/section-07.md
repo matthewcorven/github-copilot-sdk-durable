@@ -1,4 +1,4 @@
-Admission gates conversation creation.
+Gating caps conversation creation.
 
 ### Policy
 

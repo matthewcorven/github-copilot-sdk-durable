@@ -6,6 +6,7 @@ agent edit files in a scratch directory, re-reads the plan, and repeats until th
 reports complete.
 
 **What it is not:** durable. The loop's position is a local variable in a running process.
+Nothing in this tree imports, references, or asserts on the Durable library.
 **If you kill the process mid-iteration, there is no record of which step was running.** The
 plan file may have been half-updated; recovery is re-reading the markdown and hoping the last
 edit was consistent. That is the property Band B exists to measure — issue #148.
@@ -72,8 +73,9 @@ agent edits real files and ticks items as it goes, and only after re-reading the
 
 Printing is not enough. After the loop exits, `baseline/verify.sh` checks the target on disk:
 
-- the headings in `release-notes.md` moved exactly one level, the title and the fenced block did not;
-- every `New` bullet ends with `<!-- NEW -->` exactly once;
+- every heading in `release-notes.md` moved exactly one level (each expected heading is
+  asserted, not a sample), and the fenced block is untouched;
+- every `New` bullet ends with `<!-- NEW -->` exactly once, preceded by one space;
 - every `docs/section-*.md` opens with an H1;
 - the link and the date in sections 03 and 09 were repointed and replaced;
 - `PLAN.md` says `Status: complete` and has no open item.
@@ -104,8 +106,8 @@ Exit statuses:
 | --- | --- |
 | 0 | The plan reported complete and the files match |
 | 1 | The target does not match the plan (from `run.sh`) |
-| 2 | No `PLAN.md` in the working directory |
-| 3 | Iteration cap reached with the plan still open |
+| 2 | No `PLAN.md` in the working directory, or no `dotnet` on `PATH` (from `run.sh`) |
+| 3 | Iteration cap reached with the plan still open (`run.sh` reports this as 3, not 1) |
 
 `RALPH_MODEL` is passed straight to the session. The loop does not check it against the
 account's model list, so a model the CLI rejects fails that iteration; this CLI (1.0.105)
@@ -113,14 +115,21 @@ accepted an unknown name and ran on its default, without saying so.
 
 ## The loop shape
 
-Preserved from `upstream/ralph-loop.ts`:
+The vendored recipe runs a **fixed iteration count**: it reads the prompt once before the
+loop (`upstream/ralph-loop.ts:37`), creates a session and sends that prompt per iteration,
+and stops only when it reaches `maxIterations` — there is no completion check in the file.
+Issue #149 asks for a loop that also re-reads the plan and stops when it reports complete, so
+items 1 and 2 below are **added over the vendored file**, not preserved from it:
 
-1. read the plan file once per iteration;
-2. if the plan reports complete, stop;
-3. otherwise create a **fresh** session (no resume, no context carried over) in the target
-   directory, with permission requests approved for unattended operation;
-4. send the prompt and wait for the turn to finish;
-5. dispose the session and loop.
+1. read the plan file once per iteration; *(added — the recipe reads the prompt once)*
+2. if the plan reports complete, stop; *(added — the recipe has no completion condition)*
+3. create a **fresh** session (no resume, no context carried over) in the target directory,
+   with permission requests approved for unattended operation; *(preserved)*
+4. send the prompt and wait for the turn to finish; *(preserved)*
+5. dispose the session and loop. *(preserved)*
+
+Also not ported: the recipe's `plan`/`build` modes, and its numeric argument anywhere on the
+command line — this port takes the cap only as the first argument.
 
 The SDK bindings are one method, `RunOneIterationAsync`. The control flow above it —
 `RalphLoopAsync` — is plain C#, so a port to another language swaps that one method and

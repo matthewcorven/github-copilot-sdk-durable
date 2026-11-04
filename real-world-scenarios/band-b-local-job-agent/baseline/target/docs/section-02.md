@@ -1,4 +1,4 @@
-A resume reads the last checkpoint.
+A resume reads the last snapshot.
 
 ### Sessions
 

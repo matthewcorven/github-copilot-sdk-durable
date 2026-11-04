@@ -11,9 +11,20 @@ fail=0
 
 notes="$target/release-notes.md"
 
-# 1. Headings demoted: the two known headings must have moved one level, the title must not.
-grep -qx '### Overview' "$notes" || { echo "FAIL  release-notes.md: '### Overview' expected"; fail=1; }
-grep -qx '### New' "$notes" || { echo "FAIL  release-notes.md: '### New' expected"; fail=1; }
+# 1. Every heading in release-notes.md moved exactly one level. The template's headings are
+#    fixed, so all of them are asserted, not a sample.
+while IFS= read -r expected; do
+  grep -qxF "$expected" "$notes" || { echo "FAIL  release-notes.md: '$expected' expected"; fail=1; }
+done <<'HEADINGS'
+# Release notes
+### Overview
+### New
+### Fixes
+#### Panic on empty plan
+#### Timeout drift
+##### Retries
+### Upgrade notes
+HEADINGS
 grep -qx '# Release notes' "$notes" || { echo "FAIL  release-notes.md: title changed"; fail=1; }
 # The fenced block's pseudo-heading must be untouched.
 grep -qx '## This heading is inside a fence and must not change.' "$notes" \
@@ -33,9 +44,14 @@ if [ -z "$new_bullets" ]; then
   fail=1
 else
   while IFS= read -r line; do
+    count="$(grep -o -- '<!-- NEW -->' <<< "$line" | wc -l | tr -d ' ')"
+    if [ "$count" != "1" ]; then
+      echo "FAIL  release-notes.md: bullet needs the marker exactly once (found $count): $line"
+      fail=1
+    fi
     case "$line" in
       *" <!-- NEW -->") ;;
-      *) echo "FAIL  release-notes.md: bullet missing marker: $line"; fail=1 ;;
+      *) echo "FAIL  release-notes.md: marker not preceded by a space: $line"; fail=1 ;;
     esac
   done <<< "$new_bullets"
 fi

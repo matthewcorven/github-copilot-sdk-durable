@@ -7,7 +7,7 @@ This release settles the queue.
 ## New
 
 - Background resume for interrupted jobs
-- Per-iteration checkpoint inspection
+- Per-iteration snapshot inspection
 - A `--dry-run` flag on the runner
 
 ## Fixes
