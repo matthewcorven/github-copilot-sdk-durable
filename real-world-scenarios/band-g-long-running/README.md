@@ -112,6 +112,28 @@ it behind — that is the handoff — so `resume.sh` is what removes it, on exit
 `run.sh` fails it removes its own directory, since there is nothing to resume from. Nothing is ever
 written inside the repository.
 
+### Scratch directories
+
+Neither script deletes a directory it did not create. Three rules cover it, and they hold whether
+the run succeeds or fails:
+
+| Rule | Where it is enforced |
+| --- | --- |
+| `run.sh` writes an empty `.band-g-scratch` marker into every checkpoint directory it creates, and removes only directories it created. | `run.sh` |
+| `resume.sh` removes a checkpoint directory only when that marker is present. Otherwise it prints `not removing non-scratch directory: <path>` and leaves the directory and its contents alone. | `resume.sh` |
+| A pre-populated `CHECKPOINT_DIR` is refused, not emptied: `run.sh` exits 2 with a message and does not touch the path. A path that does not exist is created and marked; an existing *empty* directory is used as it is and left unmarked, so it is never removed later. | `run.sh` |
+
+`KEEP=1` still wins in both scripts: it keeps the directory even when it is marked scratch. The
+marker is a plain file, so it does not disturb the checkpoint store, which only reads the framework's
+own `*.json` / `index.jsonl` files.
+
+The rule matters because `CHECKPOINT_DIR` is a caller-supplied path, and `gate.json` alone is not a
+provenance check: any directory an author writes a `gate.json` into would otherwise satisfy
+`resume.sh` and be deleted on exit. Pointing either script at a hand-written directory is now safe —
+the directory survives, with a message saying why.
+
+`./run.sh --help` and `./resume.sh --help` print the same rules from the script headers.
+
 ## What was executed
 
 Both processes were run against an OpenAI-compatible endpoint (`openai/gpt-4o` through a hosted
