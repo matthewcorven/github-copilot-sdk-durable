@@ -68,7 +68,8 @@
         "examples/35-sandbox-sdk-observability-bypass.cs",
         "--verbosity",
         "quiet",
-        "-p:NoWarn=GHCP001%3BCA2266"
+        "-p:NoWarn=GHCP001%3BCA2266",
+        "-p:NuGetAudit=false"
       ],
       "source": "examples/35-sandbox-sdk-observability-bypass.cs",
       "sourceSha256": "1943c040e9fa8d1b1214bc675764b4da1ae9943c397e99336b061706f9f8b2ff",
