@@ -1,0 +1,129 @@
+{
+  "protocolVersion": 3,
+  "runtimeVersion": "0.0.0-replay",
+  "models": [
+    {
+      "id": "replay-model",
+      "name": "Replay Model",
+      "vendor": "replay",
+      "capabilities": {
+        "supports": {
+          "toolCalls": true
+        }
+      }
+    }
+  ],
+  "sessions": [
+    {
+      "id": "baseline-enquiry",
+      "model": "replay-model",
+      "turns": [
+        {
+          "messageId": "msg-0001",
+          "content": "Checking whether this enquiry is genuine.",
+          "toolRequests": [
+            {
+              "name": "set_current_phase",
+              "toolCallId": "call-0001",
+              "arguments": {
+                "phase": "validating"
+              }
+            },
+            {
+              "name": "report_intent",
+              "toolCallId": "call-0002",
+              "arguments": {
+                "intent": "Validate home enquiry"
+              }
+            }
+          ]
+        },
+        {
+          "messageId": "msg-0002",
+          "content": "Searching the listings for the customer's criteria.",
+          "toolRequests": [
+            {
+              "name": "set_current_phase",
+              "toolCallId": "call-0006",
+              "arguments": {
+                "phase": "searching"
+              }
+            },
+            {
+              "name": "report_intent",
+              "toolCallId": "call-0003",
+              "arguments": {
+                "intent": "Searching listings"
+              }
+            },
+            {
+              "name": "search_properties",
+              "toolCallId": "call-0004",
+              "arguments": {
+                "type": "",
+                "status": "",
+                "city": "Toronto",
+                "province": "",
+                "minPrice": 0,
+                "maxPrice": 900000,
+                "minBedrooms": 3,
+                "maxBedrooms": 0,
+                "minBathrooms": 0,
+                "textContains": "",
+                "limit": 3
+              }
+            }
+          ]
+        },
+        {
+          "messageId": "msg-0003",
+          "content": "Report: the customer wants a three-bedroom family home near schools under $900k. Top matches: 12 Maple Row and 88 Birch Lane.",
+          "toolRequests": [
+            {
+              "name": "set_current_phase",
+              "toolCallId": "call-0007",
+              "arguments": {
+                "phase": "writing_report"
+              }
+            },
+            {
+              "name": "set_current_phase",
+              "toolCallId": "call-0005",
+              "arguments": {
+                "phase": "done"
+              }
+            }
+          ]
+        },
+        {
+          "messageId": "msg-0004",
+          "content": "The report is written and the enquiry is done."
+        },
+        {
+          "messageId": "msg-0005",
+          "content": "The enquiry is complete."
+        },
+        {
+          "messageId": "msg-0006",
+          "content": "The enquiry is complete."
+        },
+        {
+          "messageId": "msg-0007",
+          "content": "The enquiry is complete."
+        },
+        {
+          "messageId": "msg-0008",
+          "content": "The enquiry is complete."
+        },
+        {
+          "messageId": "msg-0009",
+          "content": "The enquiry is complete."
+        },
+        {
+          "messageId": "msg-0010",
+          "content": "The enquiry is complete."
+        }
+      ]
+    }
+  ]
+}
