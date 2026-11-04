@@ -2598,7 +2598,7 @@
       "live": true,
       "deterministic": true,
       "liveReason": null,
-      "expectedOutput": null,
+      "expectedOutput": "examples/expected/35-sandbox-sdk-observability-bypass.txt",
       "languages": {
         "ts": {
           "path": "examples/ts/35-sandbox-sdk-observability-bypass.ts",

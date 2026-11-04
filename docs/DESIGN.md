@@ -932,7 +932,7 @@ until the contract is deliberately updated.
 | `examples[].id`, `source` | Two-digit ID and exact C# basename, each present once. |
 | `live` | Exact membership in C# `LIVE_EXAMPLES`; not an implementation status. |
 | `deterministic`, `liveReason` | Exact C# deterministic selection and verbatim exclusion reason, or `null` for an included scenario. These are independent of `live` (`17`, `18`, `35` have both flags). |
-| `expectedOutput` | Checked-in actual C# stdout path for `00`, `01`, `03`, `04`; `null` elsewhere. |
+| `expectedOutput` | Checked-in actual C# stdout path for `00`, `01`, `03`, `04`, `35`; `null` elsewhere. |
 | `languages.ts` / `languages.py` | Exact source `path`, `status`, `sandboxMode`, `rangeManifest`, and the unchanged range row as `evidence`. |
 | `status` | `ported` means implemented; **does not mean LIVE-validated**. `pending-native-api` requires an actionable `evidence.pendingReason` and fails when selected, rather than becoming an exclusion or a pass. |
 | `sandboxMode` | `supported`, `unsupported`, or `not-applicable`; unsupported requires specific proven `evidence.sandboxReason`, never a blanket claim that the SDK lacks sandbox configuration. |
@@ -948,8 +948,9 @@ each other ID and its exact C# exclusion reason. `--list` validates and prints s
 only; it is not execution evidence. Optional IDs narrow, never widen, the selected mode.
 Example `30` retains its real startup delay and a 300-second runner limit.
 
-Sandbox `28`, `33`, and `34` have default policy-only checks and separate required LIVE
-effects; passing the former does not prove the latter. `35` has a deterministic SDK
+Sandbox `28`, `33`, and `34` each assert an effect only a LIVE tool call produces, and
+none of them has a policy-only path that passes on a non-enforcing host: `33` asserts a
+shell redirect landed before any backend-gated branch. `35` has a deterministic SDK
 observation path and conditional backend/enforcement/bypass assertions. The SDK exposes
 native sandbox configuration in both languages: availability of that wire API is not
 proof of native enforcement, credential injection, or a granted bypass on a given host.
@@ -968,12 +969,13 @@ Corrected examples `24` and `31` distinguish SDK context from zero public app en
 permission review uses an app-owned document and verifies fork-boundary grants rather
 than treating internal checkpoint/admission anchors as public transcript entries.
 
-**Output comparison.** Deterministic runs compare the entire normalized stdout of four
-actual ported examples per language against `examples/expected/*.txt`. The files were
-captured by executing the same C# sources with ReplayRuntime `basic.json`, not invented
-from the port. `tests/parity/capture_reference.py` repeats the C# capture and compares it
-without rewriting; `--write` is the explicit recapture operation. Provenance includes
-exact commands and SHA-256 hashes of the C# source, fixture, and expected stdout.
+**Output comparison.** Deterministic runs compare the entire normalized stdout of five
+actual ported examples per language against `examples/expected/*.txt` (`00`, `01`, `03`,
+`04`, and `35`). The files were captured by executing the same C# sources with
+ReplayRuntime `basic.json`, not invented from the port.
+`tests/parity/capture_reference.py` repeats the C# capture and compares it without
+rewriting; `--write` is the explicit recapture operation. Provenance includes exact
+commands and SHA-256 hashes of the C# source, fixture, and expected stdout.
 
 Both normalizers mirror `scripts/validate.sh`: volatile temporary paths, session IDs,
 GUIDs and timestamps become placeholders; they additionally handle Windows temporary

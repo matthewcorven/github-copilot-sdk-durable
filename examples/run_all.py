@@ -46,7 +46,8 @@ def load_manifest():
                          f"drifted example id(s): {', '.join(drifted) or 'none'}")
     provenance = json.loads((ROOT / "examples" / "expected" / "provenance.json").read_text())
     if sorted(provenance["outputs"]) != sorted(REFERENCE_IDS):
-        raise ValueError("Reference output inventory must include four actual C# examples")
+        raise ValueError("Reference output inventory must include exactly the actual C# examples: "
+                         f"{', '.join(REFERENCE_IDS)}")
     def sha256(path):
         return hashlib.sha256(path.read_bytes()).hexdigest()
     if provenance["fixtureSha256"] != sha256(ROOT / "tools/ReplayRuntime/fixtures/basic.json"):

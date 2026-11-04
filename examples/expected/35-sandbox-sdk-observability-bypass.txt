@@ -1,0 +1,19 @@
+resolved filesystem policy:
+  readwrite: [<temp>]
+  readonly: [<temp>]
+  denied: [<temp>]
+  allowBypass: False, keychainAccess: True
+effective model: replay-model
+
+run mode: Replayed (backend: unsupported, platform: other, outcome: inactive)
+observed decision kinds, in order (0):
+
+no sandbox backend engaged on this host: the policy was replayed, not enforced
+the three-part proof needs a backend that actually applies the policy, so it is skipped
+effective model: replay-model
+
+second session, AllowBypass = true: 0 decision(s)
+notice: the runtime offered no sandbox-bypass escalation for this session, so the decline path was not exercised. The host handler was installed and the policy set AllowBypass = true; the runtime decides whether to surface the prompt, and the SDK exposes no call that forces it. The handler's decline branch is therefore unproven here.
+
+assertion set: policy only
+host-handler prompts inspected: 0, escalation prompts seen: 0, bypasses declined: 0

@@ -56,6 +56,19 @@
       "source": "examples/04-watches.cs",
       "sourceSha256": "d4774227586360ed63ab80a821c216384a4082fa5865daa7c08f6b71f98f3473",
       "expectedSha256": "299c51119284ba107c6506bf845fca2543c782ba8a2045620bbf972b2d555a26"
+    },
+    "35": {
+      "command": [
+        "dotnet",
+        "run",
+        "examples/35-sandbox-sdk-observability-bypass.cs",
+        "--verbosity",
+        "quiet",
+        "-p:NoWarn=GHCP001%3BCA2266"
+      ],
+      "source": "examples/35-sandbox-sdk-observability-bypass.cs",
+      "sourceSha256": "1943c040e9fa8d1b1214bc675764b4da1ae9943c397e99336b061706f9f8b2ff",
+      "expectedSha256": "da94cb579afc599fd177723242b0907290682dc67a890935990c776f26454b53"
     }
   }
 }
