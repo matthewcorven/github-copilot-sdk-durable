@@ -80,7 +80,8 @@ host_probe() {
 platform="$(detect_platform)"
 backend="$(expected_backend "$platform")"
 
-echo "=== Sandbox advisory (advisory only: a difference here never fails a pull request) ==="
+echo "=== Sandbox advisory (advisory only: a platform difference never fails a pull request;"
+echo "    a report that never reaches this summary does) ==="
 echo "platform: $platform"
 echo "expected backend on $platform: $backend"
 echo "  the value the runtime reports when a backend engages on $platform. This line is an"

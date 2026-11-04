@@ -285,8 +285,8 @@ var ran = new List<string>();
 // tool call runs and the masking loop below stops the example; the report above is what a CI
 // advisory job reads, and it must not be the thing that is lost. Resolving here returns the
 // same values as resolving later: SandboxSupport.Resolve reads only the first policy_resolved
-// and the first enforcement_state, both of which are already in the stream, so its position
-// relative to the masking loop is not load-bearing.
+// and the first enforcement_state, so decisions recorded after this point cannot change them.
+// Its position relative to the masking loop is therefore not load-bearing.
 var lockedReport = SandboxSupport.Resolve(locked.SandboxDecisions);
 var permissiveReport = SandboxSupport.Resolve(permissive.SandboxDecisions);
 

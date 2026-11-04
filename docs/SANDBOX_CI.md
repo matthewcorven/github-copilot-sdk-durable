@@ -39,7 +39,7 @@ proof.
 |---|---|---|---|
 | `build` job, `Validate examples` | live, recorded runtime | The deterministic set runs against the recording. Examples that need sign-in are skipped before they are compiled, so this step neither compiles nor runs 33/34/35 (`SKIP_LIVE=1`); the `build` step above it compiles `lib/` and the tests, and `dotnet test` compiles the test projects. | `ubuntu-latest` only, required. |
 | `build` job, `Validate examples (deterministic)` | `Replayed` | Policy propagation: the sandbox policy is built, the `{workspace}` token expands, and the wire mapping is field-for-field. Policy assertions only. | `ubuntu-latest` only, required. |
-| `sandbox-advisory` job | `Replayed` | The same policy propagation, on three platforms, plus the runtime's reported backend and platform per example. Advisory only. | All three runners, `continue-on-error: true`. |
+| `sandbox-advisory` job | `Replayed` | The same policy propagation, on three platforms, plus the runtime's reported backend and platform per example. Advisory only. | All three runners; the reporting step is tolerate-on-error, the report-complete assertion is not. |
 | A signed-in developer host with a real backend | `Enforced` | The three-part enforcement proof: the permission layer did not deny the call, the sandbox did deny it, and the durable layer and the sandbox did their separate jobs. | Not in CI. |
 
 **Replay/offline is not enforcement.** `SandboxSupport.Resolve()` reports
@@ -91,9 +91,13 @@ propagated: `continue-on-error` is on the reporting step, so a platform differen
 nothing, while the report-complete assertion is not tolerated — a script that produces no
 report turns the check red.
 
-The reported exit code is shell-dependent and is not a diagnostic on its own: the same abort
-that macOS and Linux report as `134` can appear under a different code on Windows. Read it
-alongside the output, which names the failed assertion.
+The `run mode: not reported (exit $status)` branch is the local and fallback case, not current
+CI behaviour: all three examples now print a run-mode line, so in CI that branch does not fire.
+It stays for a host where an example dies before its report — for example an old checkout, or a
+build that fails to start. When it does fire, the reported exit code is shell-dependent and is
+not a diagnostic on its own: the same abort that macOS and Linux report as `134` can appear
+under a different code on Windows. Read it alongside the output, which names the failed
+assertion.
 
 ## 4. Degrade, do not fail
 
