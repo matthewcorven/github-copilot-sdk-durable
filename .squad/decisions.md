@@ -761,3 +761,64 @@ interpreter; 9 failures with the source fix stashed), and landed it as `bbb781b`
 **Why:** A missing agent record is not evidence of missing work. **Always check
 `git status --porcelain` before concluding an agent produced nothing** — and before re-dispatching
 the same task, which would duplicate effort and risk a conflicting second implementation.
+
+### 2026-11-03T21:55:00Z: Real-world scenario program — seven bands, measured baselines, no pre-filed releases
+
+**By:** coordinator (program planning)
+**What:** Filed #142 (program epic) + 7 band epics (#143, #148, #153, #158, #164, #170, #175) + 29 work
+issues + matrix (#180) and TL;DR (#181). 70 native `blocked by` edges. All labeled `model:high` or `model:low`
+with a rationale line so the coordinator routes without re-deriving difficulty.
+
+Rules that shaped it:
+- **Baselines are references, not adversaries.** Every band vendors a first-party Microsoft/Azure/GitHub
+  implementation (MIT required for vendoring; `NO-VENDOR` otherwise), normalizes it to C#, and keeps a pinned
+  unmodified copy under `upstream/` for fidelity checks.
+- **Fault evidence is mandatory and identical across bands** — kill -9 mid-turn, restart after checkpoint,
+  duplicate delivery, concurrent clients, store outage. Band E adds endpoint death; Band C adds the
+  cooldown-desync race.
+- **Two bands are known to be honest ties, and the issues say so.** Band G's baseline already resumes across
+  processes (`magentic_checkpoint.py`), and `agent-framework-durable-extension` is an official event-sourced
+  durable agent. Band F's baseline already checkpoints via `FileCheckpointStorage`. Their Durable-variant
+  issues require writing down what, if anything, is actually added.
+- **Release issues are not pre-filed.** A durable-variant issue that discovers a real gap files the release
+  issue itself and blocks on it. Pre-filing seven releases would manufacture work for changes that may not be
+  needed.
+
+**Versioning contract** (revised twice, final): start pinned at `v0.4.0`; iterate on `dev`; land a scenario
+pinned to a release cut in a *preceding* PR. A scenario PR does not carry an unpublished layer shape.
+
+**Why:** The repo's 38 examples prove capabilities in isolation but never against a third-party baseline and
+never on purpose-failing runs. Without a baseline the comparison is assertion; without faults it flatters the
+library. The program exists to make both measurable, and to publish the result even where it is a tie.
+
+### 2026-11-03T22:20:00Z: Native `blocked by` links alone do not make a queue — the helper reads issue bodies
+
+**By:** coordinator (program planning)
+
+**What:** Filed the program's first dependency graph entirely with native `blocked by` links (70 edges, all
+verified via GraphQL). The `issue-work-queue` helper then reported **every one of the 40 issues as available** —
+its 25-item blocked list was empty. The helper parses `## Depends On` / `## Blocked By` sections from issue
+bodies; native links are invisible to it.
+
+Fixes applied, in order:
+
+1. Installed the plugin: `copilot plugin install github-issues@corven-agent-tools`. The marketplace
+   (`corven-agent-tools`) was already registered and `change-learn` was installed from it — only the plugin was
+   missing. Note the repo is **private**, so `raw.githubusercontent.com` returns 404; read it through the
+   authenticated API.
+2. Added `## Depends On` to all 40 issues.
+3. Added `.github/issue-queue.json` declaring project 5, so no agent needs to know the project number.
+4. Fixed a second, worse bug: band epics depended on #142 and each first work issue depended on its epic, so
+   **nothing was startable** — epics stay open all program long. Work issues now depend only on work issues.
+   Result: 12 available (5 pre-existing + the 7 band entry points), 25 blocked.
+5. Added the precedence rule to `.github/copilot-instructions.md`, as the skill instructs consumers to do.
+6. The drift diagnostic caught 4 issues never added to the board (#178–#181); they are now on it.
+
+**Why:** Two independent traps. The first is a contract mismatch — "dependencies" meant different things to
+me (GitHub's native feature) and to the tool (issue-body prose). The second is a modelling error that only
+surfaced once the tool could read the graph: modelling an epic as a prerequisite makes the whole tree
+unstartable, because an epic is a container, not a task. Verification against the real consumer is what caught
+both; GraphQL showed 70/70 edges and proved nothing about whether work could start.
+
+**Rule:** After filing a dependency graph, run the consumer — not a query that confirms what was written.
+`issue_queue.py --mode status` is the acceptance test, and "all N issues available" is the failure signal.
