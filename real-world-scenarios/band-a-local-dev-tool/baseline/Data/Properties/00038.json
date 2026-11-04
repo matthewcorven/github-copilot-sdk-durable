@@ -1,0 +1,30 @@
+{
+  "id": 38,
+  "type": "Townhouse",
+  "status": "For Sale",
+  "price": 983000,
+  "currency": "CAD",
+  "address": {
+    "street": "55 Howard Park Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6R 1V6",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 1,
+  "squareFootage": 1510,
+  "lotSizeSquareFootage": 1807,
+  "yearBuilt": 2018,
+  "parkingSpaces": 0,
+  "shortDescription": "Modern 2-bedroom townhouse in Howard Park with rooftop terrace and integrated garage.",
+  "fullDescription": "Welcome to 55 Howard Park Avenue in the vibrant Howard Park neighbourhood. This stylish multi-level townhouse provides the space of a house with the convenience of condo living. The main living area opens onto a spacious combined living and dining area flooded with afternoon sun. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. Upstairs, 2 bright bedrooms include a primary retreat with ensuite and double closets. Smart-home features, updated plumbing, and a newer roof provide peace of mind for years to come. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Open-concept living and dining area",
+    "Close to waterfront trails and cycling paths",
+    "Juliet balcony off primary bedroom",
+    "Open kitchen with waterfall island and pot lights",
+    "Integrated single-car garage"
+  ],
+  "listedDate": "2026-04-03"
+}

@@ -1,0 +1,31 @@
+{
+  "id": 74,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 2761000,
+  "currency": "CAD",
+  "address": {
+    "street": "510 College Street, Unit 402",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6G 1A6",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 2,
+  "squareFootage": 3447,
+  "lotSizeSquareFootage": 6823,
+  "yearBuilt": 1918,
+  "parkingSpaces": 2,
+  "shortDescription": "Character-filled 3-bedroom detached residence in Little Italy featuring original details and modern upgrades.",
+  "fullDescription": "Welcome to 510 College Street, Unit 402 in the vibrant Little Italy neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area opens onto a spacious combined living and dining area flooded with afternoon sun. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. The 3 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. The deep lot provides ample space for gardening, play, or future expansion. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Fenced yard ideal for children and pets",
+    "Renovated galley kitchen with breakfast bar",
+    "Minutes to parks, shops, and restaurants",
+    "Two-car attached garage",
+    "Open-concept living and dining area",
+    "Integrated single-car garage"
+  ],
+  "listedDate": "2026-04-03"
+}

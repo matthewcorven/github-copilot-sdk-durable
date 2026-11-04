@@ -1,0 +1,31 @@
+{
+  "id": 51,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 797000,
+  "currency": "CAD",
+  "address": {
+    "street": "5 Mariner Terrace, Unit 2901",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M5V 3V6",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 1,
+  "squareFootage": 846,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 1995,
+  "parkingSpaces": 1,
+  "shortDescription": "Bright 2-bedroom condo in Harbourfront with floor-to-ceiling windows and stunning city views.",
+  "fullDescription": "Welcome to 5 Mariner Terrace, Unit 2901 in the vibrant Harbourfront neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen is a chef’s dream with quartz countertops, a large island, and high-end stainless-steel appliances. The 2 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. Additional highlights include in-suite laundry, ample storage, and energy-efficient mechanicals. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Cosy living room with gas fireplace",
+    "Built-in bookshelves in den",
+    "Juliet balcony off primary bedroom",
+    "Laneway parking for two vehicles",
+    "Walking distance to top-rated schools",
+    "Walk-in closet in primary bedroom"
+  ],
+  "listedDate": "2026-04-30"
+}

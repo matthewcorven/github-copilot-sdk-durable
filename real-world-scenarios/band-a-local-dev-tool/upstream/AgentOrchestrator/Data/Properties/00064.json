@@ -1,0 +1,31 @@
+{
+  "id": 64,
+  "type": "Semi-Detached",
+  "status": "For Sale",
+  "price": 1419000,
+  "currency": "CAD",
+  "address": {
+    "street": "166 Cowan Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6K 2N6",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 2,
+  "squareFootage": 1276,
+  "lotSizeSquareFootage": 3500,
+  "yearBuilt": 1970,
+  "parkingSpaces": 1,
+  "shortDescription": "Stylish 2-bedroom semi-detached in South Parkdale blending Victorian charm with contemporary living.",
+  "fullDescription": "Welcome to 166 Cowan Avenue in the vibrant South Parkdale neighbourhood. This charming semi-detached home seamlessly blends period character with modern comfort. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen is a chef’s dream with quartz countertops, a large island, and high-end stainless-steel appliances. The 2 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. Additional highlights include in-suite laundry, ample storage, and energy-efficient mechanicals. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Minutes to parks, shops, and restaurants",
+    "Two-car attached garage",
+    "Walk-in closet in primary bedroom",
+    "Cosy living room with gas fireplace",
+    "Renovated galley kitchen with breakfast bar",
+    "Underground parking spot included"
+  ],
+  "listedDate": "2026-04-24"
+}

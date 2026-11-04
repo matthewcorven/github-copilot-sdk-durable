@@ -1,0 +1,31 @@
+{
+  "id": 80,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 2312000,
+  "currency": "CAD",
+  "address": {
+    "street": "45 Tichester Road",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M5P 1K9",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 3,
+  "squareFootage": 3042,
+  "lotSizeSquareFootage": 5538,
+  "yearBuilt": 2003,
+  "parkingSpaces": 2,
+  "shortDescription": "Character-filled 3-bedroom detached residence in Cedarvale featuring original details and modern upgrades.",
+  "fullDescription": "Welcome to 45 Tichester Road in the vibrant Cedarvale neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area showcases original architectural details alongside tasteful modern updates. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. The 3 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. The deep lot provides ample space for gardening, play, or future expansion. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Walk score over 90",
+    "Private south-facing backyard with patio",
+    "Two-car attached garage",
+    "Cosy living room with gas fireplace",
+    "24-hour concierge and security",
+    "Minutes to parks, shops, and restaurants"
+  ],
+  "listedDate": "2026-03-25"
+}

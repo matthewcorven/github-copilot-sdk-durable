@@ -1,0 +1,31 @@
+{
+  "id": 12,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 744000,
+  "currency": "CAD",
+  "address": {
+    "street": "55 Bloor Street West, Unit 1406",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4W 1A5",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 1,
+  "squareFootage": 878,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2023,
+  "parkingSpaces": 1,
+  "shortDescription": "Spacious 2-bedroom condo in Yorkville with open layout, balcony, and underground parking.",
+  "fullDescription": "Welcome to 55 Bloor Street West, Unit 1406 in the vibrant Yorkville neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area features gleaming hardwood floors and an abundance of natural light from oversized windows. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. The 2 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. The finished lower level adds valuable living space with a recreation room, extra bathroom, and storage. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Steps to TTC subway and streetcar",
+    "Modern eat-in kitchen with stainless steel appliances",
+    "Juliet balcony off primary bedroom",
+    "Crown mouldings and wainscotting",
+    "Smart home wiring throughout",
+    "Updated kitchen with quartz counters and soft-close cabinetry"
+  ],
+  "listedDate": "2026-03-18"
+}

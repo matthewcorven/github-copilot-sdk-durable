@@ -1,0 +1,31 @@
+{
+  "id": 11,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 2546000,
+  "currency": "CAD",
+  "address": {
+    "street": "234 Roncesvalles Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6R 2L7",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 2,
+  "squareFootage": 2763,
+  "lotSizeSquareFootage": 6334,
+  "yearBuilt": 1892,
+  "parkingSpaces": 2,
+  "shortDescription": "Spacious 2-bedroom detached home on a quiet street in Roncesvalles with mature trees and a private backyard.",
+  "fullDescription": "Welcome to 234 Roncesvalles Avenue in the vibrant Roncesvalles neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area opens onto a spacious combined living and dining area flooded with afternoon sun. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. The sleeping quarters comprise 2 comfortable bedrooms, the largest enjoying a private ensuite bathroom. Building amenities include a fitness centre, rooftop terrace, party room, and 24-hour concierge. The location is unbeatable: steps to TTC transit, acclaimed restaurants, and everyday shopping.",
+  "keyFeatures": [
+    "In-suite laundry with full-size washer and dryer",
+    "Walking distance to top-rated schools",
+    "Large balcony overlooking parkland",
+    "Private driveway with detached garage",
+    "Exposed brick accent wall",
+    "Spacious kitchen with marble backsplash and gas range"
+  ],
+  "listedDate": "2026-04-28"
+}

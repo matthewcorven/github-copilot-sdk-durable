@@ -1,0 +1,31 @@
+{
+  "id": 72,
+  "type": "Duplex",
+  "status": "For Sale",
+  "price": 1922000,
+  "currency": "CAD",
+  "address": {
+    "street": "22 Nassau Street",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M5T 1M4",
+    "country": "Canada"
+  },
+  "bedrooms": 5,
+  "bathrooms": 3,
+  "squareFootage": 2512,
+  "lotSizeSquareFootage": 2713,
+  "yearBuilt": 1930,
+  "parkingSpaces": 2,
+  "shortDescription": "Income-generating duplex in Kensington Market with 5 bedrooms across two self-contained units.",
+  "fullDescription": "Welcome to 22 Nassau Street in the vibrant Kensington Market neighbourhood. This income-producing duplex features two self-contained units, each with its own entrance and utilities. The main living area showcases original architectural details alongside tasteful modern updates. The kitchen is a chef’s dream with quartz countertops, a large island, and high-end stainless-steel appliances. All 5 bedrooms are generously sized, and the primary offers a spa-inspired four-piece ensuite. Smart-home features, updated plumbing, and a newer roof provide peace of mind for years to come. The location is unbeatable: steps to TTC transit, acclaimed restaurants, and everyday shopping.",
+  "keyFeatures": [
+    "Energy-efficient windows and furnace",
+    "Walking distance to top-rated schools",
+    "Open kitchen with waterfall island and pot lights",
+    "Cosy living room with gas fireplace",
+    "Laneway parking for two vehicles",
+    "Updated kitchen with quartz counters and soft-close cabinetry"
+  ],
+  "listedDate": "2026-04-10"
+}

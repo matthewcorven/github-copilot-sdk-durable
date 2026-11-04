@@ -1,0 +1,30 @@
+{
+  "id": 61,
+  "type": "Duplex",
+  "status": "For Sale",
+  "price": 1904000,
+  "currency": "CAD",
+  "address": {
+    "street": "165 Jameson Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6K 2Y3",
+    "country": "Canada"
+  },
+  "bedrooms": 5,
+  "bathrooms": 2,
+  "squareFootage": 2371,
+  "lotSizeSquareFootage": 3086,
+  "yearBuilt": 1942,
+  "parkingSpaces": 2,
+  "shortDescription": "Income-generating duplex in Parkdale with 5 bedrooms across two self-contained units.",
+  "fullDescription": "Welcome to 165 Jameson Avenue in the vibrant Parkdale neighbourhood. This income-producing duplex features two self-contained units, each with its own entrance and utilities. The main living area opens onto a spacious combined living and dining area flooded with afternoon sun. The kitchen is a chef’s dream with quartz countertops, a large island, and high-end stainless-steel appliances. The sleeping quarters comprise 5 comfortable bedrooms, the largest enjoying a private ensuite bathroom. The finished lower level adds valuable living space with a recreation room, extra bathroom, and storage. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Floor-to-ceiling windows with city views",
+    "Open kitchen with waterfall island and pot lights",
+    "Minutes to parks, shops, and restaurants",
+    "Landscaped front and rear gardens",
+    "Private driveway with detached garage"
+  ],
+  "listedDate": "2026-03-22"
+}

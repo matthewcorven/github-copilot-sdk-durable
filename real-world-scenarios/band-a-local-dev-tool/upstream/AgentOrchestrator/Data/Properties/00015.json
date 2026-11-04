@@ -1,0 +1,31 @@
+{
+  "id": 15,
+  "type": "Townhouse",
+  "status": "For Sale",
+  "price": 995000,
+  "currency": "CAD",
+  "address": {
+    "street": "92 Dovercourt Road",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6J 3C3",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 2,
+  "squareFootage": 1533,
+  "lotSizeSquareFootage": 1641,
+  "yearBuilt": 2023,
+  "parkingSpaces": 1,
+  "shortDescription": "Stylish 3-bedroom freehold townhouse in Dovercourt Village with three levels of living space.",
+  "fullDescription": "Welcome to 92 Dovercourt Road in the vibrant Dovercourt Village neighbourhood. This stylish multi-level townhouse provides the space of a house with the convenience of condo living. The main living area boasts an open-concept design with pot lights and a cosy gas fireplace. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. All 3 bedrooms are generously sized, and the primary offers a spa-inspired four-piece ensuite. Smart-home features, updated plumbing, and a newer roof provide peace of mind for years to come. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "In-suite laundry with full-size washer and dryer",
+    "Updated kitchen with quartz counters and soft-close cabinetry",
+    "Walk score over 90",
+    "Soaring nine-foot ceilings",
+    "Wraparound porch with heritage details",
+    "Private driveway with detached garage"
+  ],
+  "listedDate": "2026-03-10"
+}

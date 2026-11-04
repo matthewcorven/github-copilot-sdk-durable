@@ -1,0 +1,31 @@
+{
+  "id": 19,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 1685000,
+  "currency": "CAD",
+  "address": {
+    "street": "350 Danforth Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4K 1N8",
+    "country": "Canada"
+  },
+  "bedrooms": 4,
+  "bathrooms": 1,
+  "squareFootage": 1500,
+  "lotSizeSquareFootage": 6904,
+  "yearBuilt": 2019,
+  "parkingSpaces": 1,
+  "shortDescription": "Character-filled 4-bedroom detached residence in Greektown featuring original details and modern upgrades.",
+  "fullDescription": "Welcome to 350 Danforth Avenue in the vibrant Greektown neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area features gleaming hardwood floors and an abundance of natural light from oversized windows. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. The sleeping quarters comprise 4 comfortable bedrooms, the largest enjoying a private ensuite bathroom. A private outdoor space — perfect for morning coffee or summer entertaining — completes the package. The location is unbeatable: steps to TTC transit, acclaimed restaurants, and everyday shopping.",
+  "keyFeatures": [
+    "Rooftop terrace with skyline views",
+    "Open kitchen with waterfall island and pot lights",
+    "Crown mouldings and wainscotting",
+    "Integrated single-car garage",
+    "Building gym and party room",
+    "Spacious kitchen with marble backsplash and gas range"
+  ],
+  "listedDate": "2026-03-15"
+}

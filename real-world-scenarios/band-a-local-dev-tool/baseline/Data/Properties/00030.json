@@ -1,0 +1,31 @@
+{
+  "id": 30,
+  "type": "Bungalow",
+  "status": "For Sale",
+  "price": 1392000,
+  "currency": "CAD",
+  "address": {
+    "street": "120 Tenth Street",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M8V 3G2",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 2,
+  "squareFootage": 1244,
+  "lotSizeSquareFootage": 5739,
+  "yearBuilt": 1965,
+  "parkingSpaces": 2,
+  "shortDescription": "Updated 2-bedroom bungalow in New Toronto offering single-level living and a finished basement.",
+  "fullDescription": "Welcome to 120 Tenth Street in the vibrant New Toronto neighbourhood. This inviting bungalow offers the ease of single-level living with a generous lot and private garden. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. The sleeping quarters comprise 2 comfortable bedrooms, the largest enjoying a private ensuite bathroom. Additional highlights include in-suite laundry, ample storage, and energy-efficient mechanicals. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Open-concept living and dining area",
+    "Surrounded by cafes, galleries, and boutiques",
+    "Open kitchen with waterfall island and pot lights",
+    "Energy-efficient windows and furnace",
+    "Laneway parking for two vehicles",
+    "Hardwood floors throughout main level"
+  ],
+  "listedDate": "2026-04-05"
+}

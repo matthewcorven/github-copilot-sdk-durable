@@ -1,0 +1,31 @@
+{
+  "id": 92,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 935000,
+  "currency": "CAD",
+  "address": {
+    "street": "2125 Lake Shore Boulevard East, Unit 406",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4E 1E3",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 2,
+  "squareFootage": 1146,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2014,
+  "parkingSpaces": 1,
+  "shortDescription": "Bright 2-bedroom condo in The Beaches with floor-to-ceiling windows and stunning city views.",
+  "fullDescription": "Welcome to 2125 Lake Shore Boulevard East, Unit 406 in the vibrant The Beaches neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area opens onto a spacious combined living and dining area flooded with afternoon sun. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. The sleeping quarters comprise 2 comfortable bedrooms, the largest enjoying a private ensuite bathroom. A private outdoor space — perfect for morning coffee or summer entertaining — completes the package. The location is unbeatable: steps to TTC transit, acclaimed restaurants, and everyday shopping.",
+  "keyFeatures": [
+    "Crown mouldings and wainscotting",
+    "Fenced yard ideal for children and pets",
+    "Walk score over 90",
+    "Spacious kitchen with marble backsplash and gas range",
+    "24-hour concierge and security",
+    "Large balcony overlooking parkland"
+  ],
+  "listedDate": "2026-04-24"
+}

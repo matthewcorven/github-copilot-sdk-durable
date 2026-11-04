@@ -1,0 +1,31 @@
+{
+  "id": 50,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 2013000,
+  "currency": "CAD",
+  "address": {
+    "street": "250 Lonsdale Road",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4V 1W6",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 3,
+  "squareFootage": 2411,
+  "lotSizeSquareFootage": 4918,
+  "yearBuilt": 1991,
+  "parkingSpaces": 1,
+  "shortDescription": "Spacious 3-bedroom detached home on a quiet street in Forest Hill South with mature trees and a private backyard.",
+  "fullDescription": "Welcome to 250 Lonsdale Road in the vibrant Forest Hill South neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area features gleaming hardwood floors and an abundance of natural light from oversized windows. The kitchen is a chef’s dream with quartz countertops, a large island, and high-end stainless-steel appliances. Upstairs, 3 bright bedrooms include a primary retreat with ensuite and double closets. A private outdoor space — perfect for morning coffee or summer entertaining — completes the package. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Close to waterfront trails and cycling paths",
+    "Modern eat-in kitchen with stainless steel appliances",
+    "Private driveway with detached garage",
+    "Soaring nine-foot ceilings",
+    "Pet-friendly building",
+    "Fenced yard ideal for children and pets"
+  ],
+  "listedDate": "2026-03-05"
+}

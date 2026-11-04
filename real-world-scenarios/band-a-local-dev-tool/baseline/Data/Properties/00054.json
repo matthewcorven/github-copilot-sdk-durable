@@ -1,0 +1,31 @@
+{
+  "id": 54,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 519000,
+  "currency": "CAD",
+  "address": {
+    "street": "15 Fort York Boulevard, Unit 1105",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M5V 3Y4",
+    "country": "Canada"
+  },
+  "bedrooms": 1,
+  "bathrooms": 1,
+  "squareFootage": 656,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2006,
+  "parkingSpaces": 0,
+  "shortDescription": "Modern 1-bedroom suite in Fort York with premium finishes and full building amenities.",
+  "fullDescription": "Welcome to 15 Fort York Boulevard, Unit 1105 in the vibrant Fort York neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area features gleaming hardwood floors and an abundance of natural light from oversized windows. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. The sleeping quarters comprise 1 comfortable bedrooms, the largest enjoying a private ensuite bathroom. A private outdoor space — perfect for morning coffee or summer entertaining — completes the package. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Updated kitchen with quartz counters and soft-close cabinetry",
+    "Juliet balcony off primary bedroom",
+    "Pot lights and designer fixtures throughout",
+    "Two-car attached garage",
+    "Surrounded by cafes, galleries, and boutiques",
+    "Wraparound porch with heritage details"
+  ],
+  "listedDate": "2026-03-15"
+}

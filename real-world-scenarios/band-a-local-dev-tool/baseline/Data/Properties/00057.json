@@ -1,0 +1,31 @@
+{
+  "id": 57,
+  "type": "Semi-Detached",
+  "status": "For Sale",
+  "price": 1510000,
+  "currency": "CAD",
+  "address": {
+    "street": "33 Windermere Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6S 3J4",
+    "country": "Canada"
+  },
+  "bedrooms": 4,
+  "bathrooms": 2,
+  "squareFootage": 1377,
+  "lotSizeSquareFootage": 3500,
+  "yearBuilt": 2007,
+  "parkingSpaces": 2,
+  "shortDescription": "Well-maintained 4-bedroom semi in Swansea with updated kitchen and south-facing garden.",
+  "fullDescription": "Welcome to 33 Windermere Avenue in the vibrant Swansea neighbourhood. This charming semi-detached home seamlessly blends period character with modern comfort. The main living area boasts an open-concept design with pot lights and a cosy gas fireplace. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. The 4 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. Building amenities include a fitness centre, rooftop terrace, party room, and 24-hour concierge. This coveted pocket puts you within walking distance of top schools, green spaces, and vibrant dining.",
+  "keyFeatures": [
+    "Open kitchen with waterfall island and pot lights",
+    "Laneway parking for two vehicles",
+    "Steps to TTC subway and streetcar",
+    "Open-concept living and dining area",
+    "Walk-in closet in primary bedroom",
+    "Walk score over 90"
+  ],
+  "listedDate": "2026-04-10"
+}

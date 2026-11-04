@@ -1,0 +1,31 @@
+{
+  "id": 69,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 441000,
+  "currency": "CAD",
+  "address": {
+    "street": "33 Sheppard Avenue East, Unit 1510",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M2N 7B3",
+    "country": "Canada"
+  },
+  "bedrooms": 1,
+  "bathrooms": 1,
+  "squareFootage": 635,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2012,
+  "parkingSpaces": 0,
+  "shortDescription": "Modern 1-bedroom suite in North York with premium finishes and full building amenities.",
+  "fullDescription": "Welcome to 33 Sheppard Avenue East, Unit 1510 in the vibrant North York neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. The 1 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. The finished lower level adds valuable living space with a recreation room, extra bathroom, and storage. This coveted pocket puts you within walking distance of top schools, green spaces, and vibrant dining.",
+  "keyFeatures": [
+    "Landscaped front and rear gardens",
+    "Integrated single-car garage",
+    "Floor-to-ceiling windows with city views",
+    "Walk-in closet in primary bedroom",
+    "Updated kitchen with quartz counters and soft-close cabinetry",
+    "Building gym and party room"
+  ],
+  "listedDate": "2026-04-03"
+}

@@ -1,0 +1,32 @@
+{
+  "id": 2,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 749900,
+  "currency": "CAD",
+  "address": {
+    "street": "8 The Esplanade, Unit 2706",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M5E 0A6",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 2,
+  "squareFootage": 1050,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2018,
+  "parkingSpaces": 1,
+  "shortDescription": "Bright corner-unit condo in the heart of the St. Lawrence Market district with panoramic city and lake views from the 27th floor.",
+  "fullDescription": "Experience urban living at its finest in this stunning 27th-floor corner suite. Floor-to-ceiling windows flood the space with natural light and offer breathtaking views of Lake Ontario and the Toronto skyline. The modern open-concept layout features a sleek kitchen with integrated appliances and waterfall island, a generous living and dining area, and two well-proportioned bedrooms each with its own bathroom. The primary bedroom includes a walk-in closet and spa-inspired ensuite. Building amenities include a rooftop terrace, fitness centre, party room, and 24-hour concierge. Steps to the St. Lawrence Market, Union Station, and the waterfront.",
+  "keyFeatures": [
+    "27th-floor corner unit with panoramic views",
+    "Floor-to-ceiling windows throughout",
+    "Modern kitchen with waterfall island",
+    "Two full bathrooms including spa-inspired ensuite",
+    "One underground parking spot and locker included",
+    "24-hour concierge and full building amenities",
+    "Walk score of 98 — steps to transit and shops"
+  ],
+  "listedDate": "2026-04-25"
+}

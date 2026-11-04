@@ -1,0 +1,31 @@
+{
+  "id": 91,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 1368000,
+  "currency": "CAD",
+  "address": {
+    "street": "287 Kingston Road",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4L 1T8",
+    "country": "Canada"
+  },
+  "bedrooms": 5,
+  "bathrooms": 2,
+  "squareFootage": 1329,
+  "lotSizeSquareFootage": 3400,
+  "yearBuilt": 1894,
+  "parkingSpaces": 1,
+  "shortDescription": "Elegant 5-bedroom detached family home in Upper Beaches with a wraparound porch and updated interior.",
+  "fullDescription": "Welcome to 287 Kingston Road in the vibrant Upper Beaches neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. The sleeping quarters comprise 5 comfortable bedrooms, the largest enjoying a private ensuite bathroom. A private outdoor space — perfect for morning coffee or summer entertaining — completes the package. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Laneway parking for two vehicles",
+    "Exposed brick accent wall",
+    "Finished basement with recreation room",
+    "Fenced yard ideal for children and pets",
+    "Updated kitchen with quartz counters and soft-close cabinetry",
+    "Walk score over 90"
+  ],
+  "listedDate": "2026-04-15"
+}

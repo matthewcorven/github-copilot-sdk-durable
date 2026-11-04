@@ -1,0 +1,31 @@
+{
+  "id": 75,
+  "type": "Semi-Detached",
+  "status": "For Sale",
+  "price": 2138000,
+  "currency": "CAD",
+  "address": {
+    "street": "43 Bellevue Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M5T 2N4",
+    "country": "Canada"
+  },
+  "bedrooms": 4,
+  "bathrooms": 1,
+  "squareFootage": 2500,
+  "lotSizeSquareFootage": 3500,
+  "yearBuilt": 1937,
+  "parkingSpaces": 2,
+  "shortDescription": "Renovated 4-bedroom semi-detached in Kensington with open-concept layout and finished lower level.",
+  "fullDescription": "Welcome to 43 Bellevue Avenue in the vibrant Kensington neighbourhood. This charming semi-detached home seamlessly blends period character with modern comfort. The main living area showcases original architectural details alongside tasteful modern updates. The kitchen is a chef’s dream with quartz countertops, a large island, and high-end stainless-steel appliances. The 4 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. A private outdoor space — perfect for morning coffee or summer entertaining — completes the package. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Open kitchen with waterfall island and pot lights",
+    "Minutes to parks, shops, and restaurants",
+    "Private south-facing backyard with patio",
+    "Ensuite bathroom with heated floors",
+    "Underground parking spot included",
+    "Fenced yard ideal for children and pets"
+  ],
+  "listedDate": "2026-05-02"
+}

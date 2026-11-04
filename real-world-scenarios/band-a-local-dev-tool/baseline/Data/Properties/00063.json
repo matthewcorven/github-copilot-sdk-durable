@@ -1,0 +1,31 @@
+{
+  "id": 63,
+  "type": "Townhouse",
+  "status": "For Sale",
+  "price": 825000,
+  "currency": "CAD",
+  "address": {
+    "street": "68 Gladstone Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6J 3L5",
+    "country": "Canada"
+  },
+  "bedrooms": 4,
+  "bathrooms": 1,
+  "squareFootage": 1107,
+  "lotSizeSquareFootage": 1218,
+  "yearBuilt": 2006,
+  "parkingSpaces": 1,
+  "shortDescription": "Family-friendly 4-bedroom townhouse in Dufferin Grove with open-plan living and private patio.",
+  "fullDescription": "Welcome to 68 Gladstone Avenue in the vibrant Dufferin Grove neighbourhood. This stylish multi-level townhouse provides the space of a house with the convenience of condo living. The main living area opens onto a spacious combined living and dining area flooded with afternoon sun. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. Upstairs, 4 bright bedrooms include a primary retreat with ensuite and double closets. The finished lower level adds valuable living space with a recreation room, extra bathroom, and storage. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Fenced yard ideal for children and pets",
+    "Ensuite bathroom with heated floors",
+    "Updated kitchen with quartz counters and soft-close cabinetry",
+    "Private driveway with detached garage",
+    "Floor-to-ceiling windows with city views",
+    "Surrounded by cafes, galleries, and boutiques"
+  ],
+  "listedDate": "2026-05-02"
+}

@@ -1,0 +1,31 @@
+{
+  "id": 25,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 489000,
+  "currency": "CAD",
+  "address": {
+    "street": "38 Grenville Street, Unit 905",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4Y 1A5",
+    "country": "Canada"
+  },
+  "bedrooms": 1,
+  "bathrooms": 1,
+  "squareFootage": 599,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2017,
+  "parkingSpaces": 1,
+  "shortDescription": "Spacious 1-bedroom condo in Church-Wellesley with open layout, balcony, and underground parking.",
+  "fullDescription": "Welcome to 38 Grenville Street, Unit 905 in the vibrant Church-Wellesley neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. The sleeping quarters comprise 1 comfortable bedrooms, the largest enjoying a private ensuite bathroom. Smart-home features, updated plumbing, and a newer roof provide peace of mind for years to come. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Built-in bookshelves in den",
+    "Crown mouldings and wainscotting",
+    "Rooftop terrace with skyline views",
+    "Minutes to parks, shops, and restaurants",
+    "Renovated galley kitchen with breakfast bar",
+    "Surrounded by cafes, galleries, and boutiques"
+  ],
+  "listedDate": "2026-04-20"
+}
