@@ -34,6 +34,31 @@ jobs:
           path: tests/Durable.Tests/TestResults/host-smoke.trx
           if-no-files-found: error
 
+  # Advisory: prints the platform, the backend the runtime reports, and each sandbox
+  # example's `run mode:` line on every runner. It is continue-on-error because a
+  # platform gap must degrade an assertion set, never fail a pull request, and because
+  # CI has no Copilot sign-in: the examples run against the recorded runtime, so every
+  # line reads `Replayed`. That proves policy propagation, not OS enforcement — see
+  # docs/SANDBOX_CI.md. It is deliberately not in any `needs:` chain and is not required.
+  sandbox-advisory:
+    name: Sandbox advisory (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Report detected backend and platform per sandbox example
+        shell: bash
+        run: ./scripts/sandbox-advisory.sh
+
   build:
     runs-on: ubuntu-latest
     steps:

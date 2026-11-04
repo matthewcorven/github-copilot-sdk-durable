@@ -65,6 +65,8 @@ In-depth technical reports, design notes, and audits are available in [`docs/`](
 - [**Example Suite Fidelity Audit**](docs/EXAMPLES_AUDIT.md): Strict code audit of examples `00` through `33`, verifying that each runs against real engine components rather than shortcuts.
 - [**Copilot SDK Notes & Gotchas**](docs/COPILOT_SDK_NOTES.md): SDK behaviors, tool authoring pitfalls (silent tool shadowing, serialization limits, async deadlocks), and model billing pricing tables.
 - [**Architecture Design Document**](docs/DESIGN.md): The foundational specification and concept mapping between Pi Durable and the GitHub Copilot SDK (.NET).
+- [**Sandbox Capability Matrix**](docs/SANDBOX_MATRIX.md): What the durable sandbox policy can express and what each host's backend enforces.
+- [**Sandbox CI**](docs/SANDBOX_CI.md): The advisory sandbox job's platform matrix, what each CI level proves, and the degrade-don't-fail rule.
 
 ---
 
@@ -251,6 +253,25 @@ against the recorded runtime in `tools/ReplayRuntime/`. See
 | [35](examples/35-sandbox-sdk-observability-bypass.cs) | Sandbox observability and bypass | Enforcement rather than configuration: a blocked call, the denial it produced, and the bypass, working-directory-trust and keychain settings around it. |
 | [36](examples/36-durable-client-builder.cs) | The durable client builder | One call assembles a host and connects to nothing: `Build()` validates the description, the first operation initializes once, ownership decides what disposal releases, and one store takes one runtime. |
 | [37](examples/37-ef-core-store.cs) | The EF Core store | The store's state written through a relational schema instead of a JSONL file. The SQLite connection-string convention, the provider selected by name and by factory, the migration's tables, a reopen that reads the state back, and the four-provider matrix. No server needed. |
+
+### Sandbox examples: what offline mode proves
+
+The three sandbox examples (`33`, `34`, `35`) have two halves. The **policy half** builds the
+`DurableSandboxPolicy`, expands the `{workspace}` token, and asserts the wire mapping
+field-for-field. The **enforcement half** asserts what the operating system actually did — that
+a denied write was refused, that a masked credential never reached the shell.
+
+Offline mode (the recorded runtime, `ReplayRuntime` with `DURABLE_RUNTIME_PATH` set) proves
+**policy propagation, not OS enforcement**. In that mode `SandboxReport.Resolve()` reports
+`SandboxRunMode.Replayed`, the runtime reports backend `unsupported` on platform `other`, and no
+enforcement assertion runs. The three-part enforcement proof — the permission layer did not deny
+the call, the sandbox did deny it, and the two layers did their separate jobs — is verified only
+in `Enforced` mode, on a signed-in host where a real backend engaged.
+
+The `sandbox-advisory` CI job runs the three examples on `ubuntu-latest` (Bubblewrap),
+`macos-latest` (Seatbelt) and `windows-latest` (ProcessContainer) and prints the reported backend
+and platform per example. It is `continue-on-error: true`: a platform gap degrades an assertion
+set rather than failing a pull request. See [`docs/SANDBOX_CI.md`](docs/SANDBOX_CI.md).
 
 ---
 
