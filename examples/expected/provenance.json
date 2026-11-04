@@ -12,7 +12,8 @@
         "examples/00-conversation.cs",
         "--verbosity",
         "quiet",
-        "-p:NoWarn=GHCP001%3BCA2266"
+        "-p:NoWarn=GHCP001%3BCA2266",
+        "-p:NuGetAudit=false"
       ],
       "source": "examples/00-conversation.cs",
       "sourceSha256": "052f28976786878194bd06610ce761843d205d95fd976e1ebe39763bd78af8d1",
@@ -25,7 +26,8 @@
         "examples/01-documents.cs",
         "--verbosity",
         "quiet",
-        "-p:NoWarn=GHCP001%3BCA2266"
+        "-p:NoWarn=GHCP001%3BCA2266",
+        "-p:NuGetAudit=false"
       ],
       "source": "examples/01-documents.cs",
       "sourceSha256": "0744690b6425c9588625d2642739e10f07aecfca88c63600009a90461abe16bb",
@@ -38,7 +40,8 @@
         "examples/03-owned-conversations.cs",
         "--verbosity",
         "quiet",
-        "-p:NoWarn=GHCP001%3BCA2266"
+        "-p:NoWarn=GHCP001%3BCA2266",
+        "-p:NuGetAudit=false"
       ],
       "source": "examples/03-owned-conversations.cs",
       "sourceSha256": "a4ddfdd58c28975002db28c354c2a110b93a27bb87f6b020b324a9c6e78b3078",
@@ -51,7 +54,8 @@
         "examples/04-watches.cs",
         "--verbosity",
         "quiet",
-        "-p:NoWarn=GHCP001%3BCA2266"
+        "-p:NoWarn=GHCP001%3BCA2266",
+        "-p:NuGetAudit=false"
       ],
       "source": "examples/04-watches.cs",
       "sourceSha256": "d4774227586360ed63ab80a821c216384a4082fa5865daa7c08f6b71f98f3473",

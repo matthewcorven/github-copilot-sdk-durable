@@ -58,8 +58,11 @@ def main():
         expected_dir.mkdir(exist_ok=True)
     for identifier in REFERENCE_IDS:
         source, = (ROOT / "examples").glob(f"{identifier}-*.cs")
+        # NuGet restore advisories (e.g. NU1903) are build noise, not example stdout: dotnet run
+        # writes them to stdout, so the clean-output guard below would reject them. Suppress
+        # them in the invocation rather than weakening the guard.
         command = ["dotnet", "run", str(source.relative_to(ROOT)), "--verbosity", "quiet",
-                   "-p:NoWarn=GHCP001%3BCA2266"]
+                   "-p:NoWarn=GHCP001%3BCA2266", "-p:NuGetAudit=false"]
         result = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
         if result.returncode:
             raise RuntimeError(f"{source.name} failed:\n{result.stdout}\n{result.stderr}")
