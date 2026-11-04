@@ -1101,6 +1101,11 @@ recompiled differently, and no example knows which runtime it is talking to.
   the Copilot SDK (`lib/py/.venv`, or the package installed into `python3`) and `node_modules`
   under both `lib/ts` and `examples/ts`; the script names whichever is missing and fails the run
   rather than skipping the suite. `SKIP_TESTS=1` skips these along with the test projects.
+- The sandbox examples (`33`, `34`, `35`) assert that the host's sandbox enforced
+  something at the OS level, so they need a sandbox backend. `SKIP_SANDBOX=1` skips them on a
+  machine that has none, and each one is reported as skipped with that reason rather than
+  dropped from the output. `SKIP_LIVE=1` skips them too, since they are a subset of the live
+  examples.
 
 **The effective model.** A session-opening example prints the model the runtime reported for
 its session, read from `DurableConversation.EffectiveModel` — never from the harness's
