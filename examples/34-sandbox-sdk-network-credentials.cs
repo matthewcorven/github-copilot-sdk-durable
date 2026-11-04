@@ -278,6 +278,21 @@ Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}"
 
 var ran = new List<string>();
 
+// ─── What the runtime reported ──────────────────────────────────────────────
+//
+// Printed before the assertions that need an on-disk effect, so the run mode, backend and
+// platform always reach the output. A host with no backend answers from the recording, so no
+// tool call runs and the masking loop below stops the example; the report above is what a CI
+// advisory job reads, and it must not be the thing that is lost. Resolving here returns the
+// same values as resolving later: SandboxSupport.Resolve reads only the first policy_resolved
+// and the first enforcement_state, so decisions recorded after this point cannot change them.
+// Its position relative to the masking loop is therefore not load-bearing.
+var lockedReport = SandboxSupport.Resolve(locked.SandboxDecisions);
+var permissiveReport = SandboxSupport.Resolve(permissive.SandboxDecisions);
+
+Console.WriteLine(lockedReport.Describe());
+Console.WriteLine(permissiveReport.Describe());
+
 // ─── Credential masking, in both sessions ───────────────────────────────────
 //
 // The proof needs no network fetch. The shell runs inside the sandbox and reports a digest and
@@ -319,12 +334,6 @@ foreach (var (label, conversation) in new[] { ("locked", locked), ("permissive",
 // because nothing was enforced, not because the policy was right.
 static string Curl(string url) =>
     $"curl -sS -m 8 -o /dev/null -w '%{{http_code}}' '{url}' || true";
-
-var lockedReport = SandboxSupport.Resolve(locked.SandboxDecisions);
-var permissiveReport = SandboxSupport.Resolve(permissive.SandboxDecisions);
-
-Console.WriteLine(lockedReport.Describe());
-Console.WriteLine(permissiveReport.Describe());
 
 if (lockedReport.Engaged)
 {
