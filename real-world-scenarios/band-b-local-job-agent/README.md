@@ -1,4 +1,4 @@
-# Band B — the Ralph Loop baseline
+# Band B — the Ralph Loop baseline, and its Durable variant
 
 A port of the vendored Ralph Loop recipe (`upstream/`) to C#, against the plain
 GitHub Copilot SDK. The loop reads a plan file, sends a prompt to a fresh session, lets the
@@ -6,14 +6,18 @@ agent edit files in a scratch directory, re-reads the plan, and repeats until th
 reports complete.
 
 **What it is not:** durable. The loop's position is a local variable in a running process.
-Nothing in this tree imports, references, or asserts on the Durable library.
+Nothing in `baseline/` imports, references, or asserts on the Durable library.
 **If you kill the process mid-iteration, there is no record of which step was running.** The
 plan file may have been half-updated; recovery is re-reading the markdown and hoping the last
 edit was consistent. That is the property Band B exists to measure — issue #148.
 
-Everything under `baseline/` is one file-based .NET app plus a shell runner. Nothing here
+Everything under `baseline/` is one file-based .NET app plus a shell runner. Nothing there
 references `lib/Durable.cs`; there is no store, no checkpoint, no task, no admission, and no
 conversation document.
+
+`durable/` is the other half of the comparison: the same job, the same prompt, the same
+`baseline/verify.sh`, with the loop position in a Durable task instead of a local variable. A
+killed run resumes at the next iteration (issue #150). Run both with the commands below.
 
 ---
 
@@ -140,17 +144,81 @@ leaves the loop visible.
 ```
 real-world-scenarios/band-b-local-job-agent/
 ├── README.md              # this file
-├── run.sh                 # one run against a fresh scratch target
+├── run.sh                 # one baseline run against a fresh scratch target
 ├── baseline/
 │   ├── ralph-loop.cs      # the port
-│   ├── verify.sh          # checks the target after the run
-│   └── target/            # the template copied into the scratch target
+│   ├── verify.sh          # checks the target after a run — used by both variants
+│   └── target/            # the template copied into either scratch target
+├── durable/
+│   ├── ralph-loop-durable.cs   # the resumable variant, over lib/Durable.cs
+│   ├── run.sh             # process 1: create the run and iterate
+│   └── resume.sh          # later processes: reopen the store and continue
+├── evidence/
+│   └── durable-kill-and-resume.md  # captured kill/resume, idempotency diff, cap, divergence
 └── upstream/
     ├── LICENSE            # MIT, github/awesome-copilot
     ├── PROVENANCE.md      # repo, commit, paths, hashes
     ├── ralph-loop.md
     └── ralph-loop.ts
 ```
+
+## Running both variants
+
+Both variants do the same job against the same template and are checked by the same verifier,
+`baseline/verify.sh`. The baseline keeps its position in a local variable; the Durable variant
+keeps it in a Durable store, so a second process can continue the first one's run.
+
+```bash
+# Baseline: one process, no resume. Killed mid-run it starts over.
+./real-world-scenarios/band-b-local-job-agent/run.sh
+
+# Durable: one process, resumable. run.sh and resume.sh remove the scratch directory
+# on exit unless KEEP=1, so a two-process sequence keeps it across both.
+KEEP=1 ./real-world-scenarios/band-b-local-job-agent/durable/run.sh
+KEEP=1 ./real-world-scenarios/band-b-local-job-agent/durable/resume.sh   # only after a stop
+```
+
+### The Durable variant's runs
+
+| Command | What it does |
+| --- | --- |
+| `durable/run.sh` | Fresh scratch target, iterate to the cap or completion, verify |
+| `durable/run.sh 3` | Same, with 3 as this run's cap |
+| `KEEP=1 durable/run.sh` | Keep the scratch directory |
+| `STOP_AFTER_ITERATION=2 durable/run.sh 10` | Commit iteration 2, then stop — the killed-run seam |
+| `STOP_AFTER_ITERATION=2 STOP_BEFORE_MEMO=1 durable/run.sh 10` | Stop between a turn's commit and its step memo |
+| `KEEP=1 durable/resume.sh` | Reopen the store and continue where the last process stopped |
+| `RUN_DIR=/path durable/run.sh` | Put the scratch area somewhere other than `.scratch/band-b-durable/` |
+
+`resume.sh` takes no cap and no iteration number. Both come from the run's stored input and
+checkpoint, which is what makes a resumed run continue rather than restart. `KEEP=1` on the first
+process is required — the default removes the scratch directory on exit.
+
+The scratch area is `.scratch/band-b-durable/` in the worktree root (the baseline uses
+`.scratch/band-b-target/`), so the two variants never share a directory or a store.
+
+### What the Durable variant adds, and its cost
+
+- **One iteration = one checkpoint.** The task's checkpoint records the completed iteration index,
+  the plan digest, and the outcomes of the iteration's steps.
+- **A memo per step.** `step/{iteration}/agent-turn` and `step/{iteration}/reconcile` guard the
+  effects; a resume that finds them does not repeat the step.
+- **The cap is part of the run.** It is written to the task's input once, so a resumed process
+  cannot grant itself more iterations.
+- **The plan file stays the input.** A resume reads its position from the store and the work list
+  from the file, and corrects a hand-ticked item whose change is not on disk.
+
+Cost, measured: `durable/ralph-loop-durable.cs` is 570 code lines, of which 201 exist only for
+durability. `baseline/ralph-loop.cs` has 0. The counting rule and the per-region table are in
+`evidence/durable-kill-and-resume.md` §6.
+
+The honest limit: the memo boundary is the *turn*, not the tool call inside it. A process that dies
+mid-turn leaves no memo, so the variant detects that state and fails the run instead of replaying a
+turn that may have already written files. §3 of the evidence covers both the recoverable case and
+that one.
+
+Full transcript with diffs, the cap demonstration, and the plan-divergence demonstration:
+`evidence/durable-kill-and-resume.md`.
 
 ## Upstream
 
