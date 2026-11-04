@@ -547,7 +547,7 @@ COMPILE_ONLY=1 ./scripts/validate.sh
 ./scripts/validate.sh --deterministic
 
 # A few specific examples.
-./scripts/validate.sh 00 05 12
+./scripts/validate.sh 00-conversation 05-harness 12-recovery
 ```
 
 The script reports `PASS`/`FAIL` per example and prints the output of each one. Every

@@ -4,12 +4,22 @@
 #
 # Usage:
 #   scripts/validate.sh                 # validate every example
-#   scripts/validate.sh 00 05 12        # validate only the listed example numbers
+#   scripts/validate.sh 00-conversation 05-harness
+#                                       # validate only the named examples
 #   scripts/validate.sh --deterministic # run the deterministic (credential-free) suite
+#
+# An argument names an example by its file name without the .cs suffix, so
+# `scripts/validate.sh 33-sandbox-sdk-filesystem` runs
+# examples/33-sandbox-sdk-filesystem.cs.
 #
 # Examples that need a signed-in Copilot CLI take 30-90 seconds each. Set
 # SKIP_LIVE=1 to skip them, or COMPILE_ONLY=1 to build every example without
 # running it.
+#
+# The sandbox examples (33, 34, 35) assert that the host's sandbox enforced
+# something at the OS level. Set SKIP_SANDBOX=1 to skip them on a machine with no
+# sandbox backend; each one is reported as skipped, with the reason, rather than
+# dropped from the output.
 #
 # The deterministic mode is described in docs/DESIGN.md section 6. It runs the
 # examples and suites that need no Copilot sign-in, against the recorded runtime
@@ -30,6 +40,12 @@ EXAMPLES="$ROOT/examples"
 # they set a reasoning effort, which makes the harness query models.list to confirm the
 # model supports one.
 LIVE_EXAMPLES=(07 08 10 13 15 16 17 18 19 20 21 22 24 25 26 27 28 29 30 31 33 34 35)
+
+# Examples that assert the host's sandbox enforced something at the OS level: a write that
+# must be refused, a credential that must be masked, a bypass that must be approved. They
+# need a sandbox backend, so SKIP_SANDBOX=1 skips them on a machine that has none. They are
+# a subset of LIVE_EXAMPLES, so SKIP_LIVE=1 skips them too.
+SANDBOX_EXAMPLES=(33 34 35)
 
 # Examples that run with no Copilot sign-in against the recorded runtime. Three of them
 # (32-jsonl-store, 36-durable-client-builder, 37-ef-core-store) exercise the durable store and
@@ -114,7 +130,7 @@ REPLAY_PROBE="$ROOT/tools/polyglot-attach/python/attach.py"
 BANNED_TERMS=("mo""ck" "fa""ke" "st""ub" "sim""ulat")
 
 usage() {
-  sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 deterministic=0
@@ -129,7 +145,7 @@ for argument in "$@"; do
 done
 
 if [[ $deterministic -eq 1 && ${#positional[@]} -gt 0 ]]; then
-  echo "validate.sh: --deterministic runs the whole deterministic suite; drop the example numbers." >&2
+  echo "validate.sh: --deterministic runs the whole deterministic suite; drop the example arguments." >&2
   exit 2
 fi
 
@@ -403,7 +419,7 @@ run_deterministic() {
   # The deterministic examples. Each one runs against the recorded runtime; a session the
   # fixture does not record is served from the recording and marked as synthesised, so a
   # pass that proves less than a recorded transcript says so on its own PASS line.
-  local name file output status marker_file markers ran=0 synthesised=0
+  local name file output status marker_file markers ran=0 synthesised=0 sandbox_skipped=0
   local expected_model model_failures=0
   expected_model="$(recorded_model 2>/dev/null)"
   if [[ -z "$expected_model" ]]; then
@@ -415,6 +431,12 @@ run_deterministic() {
     if [[ ! -f "$file" ]]; then
       echo "MISSING  $name.cs"
       failures=$((failures + 1))
+      continue
+    fi
+
+    if [[ "${SKIP_SANDBOX:-0}" == "1" ]] && is_sandbox "${name%%-*}"; then
+      echo "SKIP     $name.cs (needs a sandbox backend; SKIP_SANDBOX=1)"
+      sandbox_skipped=$((sandbox_skipped + 1))
       continue
     fi
 
@@ -504,6 +526,12 @@ run_deterministic() {
       continue
     fi
 
+    if [[ "${SKIP_SANDBOX:-0}" == "1" ]] && is_sandbox "${name%%-*}"; then
+      printf 'SKIP     %-34s %s\n' "$name.cs" "needs a sandbox backend; SKIP_SANDBOX=1"
+      skipped=$((skipped + 1))
+      continue
+    fi
+
     local skip_reason
     skip_reason="$(determinism_exclusion_reason "$name")"
     if [[ -n "$skip_reason" ]]; then
@@ -541,6 +569,10 @@ run_deterministic() {
   excluded=$((total - ran))
 
   echo "Deterministic: $ran of $total examples ran; $excluded excluded."
+  if [[ $sandbox_skipped -gt 0 ]]; then
+    echo "  $sandbox_skipped skipped by SKIP_SANDBOX=1: they assert the host's sandbox enforced"
+    echo "  something at the OS level, which needs a sandbox backend this machine does not have."
+  fi
   if [[ $synthesised -gt 0 ]]; then
     echo "  $synthesised of the $ran ran on a synthesised session: the fixture does not record"
     echo "  the session the example asked for, so the runtime served it from the recording."
@@ -562,7 +594,7 @@ run_deterministic() {
   done
   echo
   echo "  Run the excluded examples with scripts/validate.sh (or SKIP_LIVE=1 to compile"
-  echo "  the live ones without running them)."
+  echo "  the live ones without running them, or SKIP_SANDBOX=1 to skip the sandbox ones)."
   echo
 
   if [[ $missing -gt 0 ]]; then
@@ -577,6 +609,22 @@ run_deterministic() {
   fi
 
   return $((failures > 0))
+}
+
+is_live() {
+  local number="$1"
+  for live in "${LIVE_EXAMPLES[@]}"; do
+    [[ "$live" == "$number" ]] && return 0
+  done
+  return 1
+}
+
+is_sandbox() {
+  local number="$1"
+  for sandbox in "${SANDBOX_EXAMPLES[@]}"; do
+    [[ "$sandbox" == "$number" ]] && return 0
+  done
+  return 1
 }
 
 if [[ $deterministic -eq 1 ]]; then
@@ -604,14 +652,6 @@ if [[ -d "$TESTS_DIR" && "${SKIP_TESTS:-0}" != "1" ]]; then
   echo
 fi
 
-is_live() {
-  local number="$1"
-  for live in "${LIVE_EXAMPLES[@]}"; do
-    [[ "$live" == "$number" ]] && return 0
-  done
-  return 1
-}
-
 # bash 3.2 treats an empty array as unbound under `set -u`, so expand it only when set.
 selected=()
 if [[ ${#positional[@]} -gt 0 ]]; then
@@ -635,6 +675,11 @@ for name in "${selected[@]}"; do
   fi
 
   number="${name%%-*}"
+  if [[ "${SKIP_SANDBOX:-0}" == "1" ]] && is_sandbox "$number"; then
+    echo "SKIP     $name.cs (needs a sandbox backend; SKIP_SANDBOX=1)"
+    continue
+  fi
+
   if [[ "${SKIP_LIVE:-0}" == "1" ]] && is_live "$number"; then
     echo "SKIP     $name.cs (needs Copilot auth)"
     continue
