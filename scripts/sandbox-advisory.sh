@@ -15,14 +15,10 @@
 # the report did not reach its summary. The examples' own exit statuses are reported, never
 # propagated.
 #
-# `set +e` is deliberate and required. The workflow step is `shell: bash`, which GitHub runs
-# as `/usr/bin/bash --noprofile --norc -e -o pipefail {0}`. The inherited `-e` would abort
-# the script at the first non-zero example — before `status=$?` is read and before the
-# summary prints — and the job's `continue-on-error` would then show a green check with a
-# truncated report. `set +e` restores the error handling this script was written for.
-set +e
-set -uo pipefail
-set +e
+# `set +e` keeps the contract below explicit: a non-zero example is reported, never fatal.
+# The shebang already starts a fresh non-errexit shell, so this is belt-and-braces against
+# someone invoking the file with `bash -e`, not a fix for CI behaviour.
+set +e; set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 project="$root/tools/ReplayRuntime/ReplayRuntime.csproj"
@@ -115,7 +111,7 @@ for name in "${examples[@]}"; do
   echo "=== $name.cs ==="
   echo "platform: $platform"
   # Allowed to fail: a Replayed example stops at an on-disk assertion the recording cannot
-  # satisfy. `set +e` above is what keeps the assignment from aborting the script.
+  # satisfy, so it is allowed to fail.
   output="$(cd "$root/examples" && DURABLE_RUNTIME_PATH="$runtime" dotnet run "$name.cs" 2>&1)"
   status=$?
 

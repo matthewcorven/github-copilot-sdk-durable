@@ -35,15 +35,18 @@ jobs:
           if-no-files-found: error
 
   # Advisory: prints the platform, the backend the runtime reports, and each sandbox
-  # example's `run mode:` line on every runner. It is continue-on-error because a
-  # platform gap must degrade an assertion set, never fail a pull request, and because
-  # CI has no Copilot sign-in: the examples run against the recorded runtime, so every
-  # line reads `Replayed`. That proves policy propagation, not OS enforcement — see
-  # docs/SANDBOX_CI.md. It is deliberately not in any `needs:` chain and is not required.
+  # example's `run mode:` line on every runner. CI has no Copilot sign-in, so the examples
+  # run against the recorded runtime and every line reads `Replayed`: that proves policy
+  # propagation, not OS enforcement — see docs/SANDBOX_CI.md.
+  #
+  # `continue-on-error` is on the reporting step, not the job. A platform gap is a property
+  # of the machine, never of the change under review, so it must not fail a pull request;
+  # but a script that produces no report is a defect, and job-level continue-on-error would
+  # rewrite even that to a green check. Splitting the two keeps the gap tolerated and the
+  # defect visible. This job is not in any `needs:` chain and is not required.
   sandbox-advisory:
     name: Sandbox advisory (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    continue-on-error: true
     permissions:
       contents: read
     strategy:
@@ -55,11 +58,13 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+      # A backend difference is a property of the machine, never of the change under
+      # review, so this step alone tolerates a non-zero exit.
       - name: Report detected backend and platform per sandbox example
+        continue-on-error: true
         shell: bash
         run: ./scripts/sandbox-advisory.sh | tee sandbox-advisory.log
-        # A platform gap is tolerated by this job's `continue-on-error`. A script that dies
-        # before printing its report is not a gap, and must not look like a green check.
+      # A missing report is a script defect, not a platform gap, so this one is not tolerated.
       - name: Assert the report completed
         if: always()
         shell: bash

@@ -85,19 +85,19 @@ run mode: Replayed (backend: unsupported, platform: other, outcome: inactive)
 job supplies. The platform the *runner* is on is printed separately, and the backend that
 platform would report is printed as an expectation and labelled as one.
 
-The examples then fail at their on-disk assertion, which is why the job reports each example's
-exit status and its policy half separately. A failing example exit is expected here and is
-never propagated: `continue-on-error` tolerates the platform difference, and the report-complete
-assertion in `.github/workflows/build.yml` still fails the job if the report itself is truncated.
+The examples then fail at their on-disk assertion, so the job reports each example's exit
+status and its policy half separately. A failing example exit is expected here and is never
+propagated: `continue-on-error` is on the reporting step, so a platform difference fails
+nothing, while the report-complete assertion is not tolerated — a script that produces no
+report turns the check red.
 
-Exit codes differ by shell, not by outcome: macOS and Linux report `134` for the same abort
-that Windows' Git Bash reports as `127`. A `127` here is not "binary not found" — the policy
-lines printed above it show the example ran — so read the exit status alongside the output
-rather than treating it as a missing tool.
+The reported exit code is shell-dependent and is not a diagnostic on its own: the same abort
+that macOS and Linux report as `134` can appear under a different code on Windows. Read it
+alongside the output, which names the failed assertion.
 
 ## 4. Degrade, do not fail
 
-The job is `continue-on-error: true`, and that is the rule, not a workaround:
+The reporting step is `continue-on-error: true`, and that is the rule, not a workaround:
 
 > A platform gap degrades an assertion set; it never fails a build.
 
@@ -107,6 +107,12 @@ forbid the backend entirely. In every one of those cases the policy mapping is s
 worth exercising, and a pull request that touches nothing in `lib/` should not turn red because
 one runner's kernel cannot start a sandbox. Failing the build would also teach reviewers to
 ignore the job, which is worse than not having it.
+
+The tolerance is deliberately narrow: it is on the reporting step, not on the job. A platform
+gap is tolerated; a report that never reaches its summary is not. Job-level
+`continue-on-error` would rewrite even a broken script to a green check, which is why it is not
+used here. The second step greps the captured log for `advisory-report: complete` and fails
+when it is absent.
 
 The corollary is that a green advisory job is not enforcement proof. Read the log: a line that
 says `Replayed` means the policy half ran and no backend engaged. Only `Enforced` means the OS

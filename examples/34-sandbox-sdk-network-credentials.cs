@@ -283,9 +283,10 @@ var ran = new List<string>();
 // Printed before the assertions that need an on-disk effect, so the run mode, backend and
 // platform always reach the output. A host with no backend answers from the recording, so no
 // tool call runs and the masking loop below stops the example; the report above is what a CI
-// advisory job reads, and it must not be the thing that is lost. The report is resolved from
-// the decisions observed so far, which include the spawn and the enforcement state — the
-// events that say whether a backend engaged at all.
+// advisory job reads, and it must not be the thing that is lost. Resolving here returns the
+// same values as resolving later: SandboxSupport.Resolve reads only the first policy_resolved
+// and the first enforcement_state, both of which are already in the stream, so its position
+// relative to the masking loop is not load-bearing.
 var lockedReport = SandboxSupport.Resolve(locked.SandboxDecisions);
 var permissiveReport = SandboxSupport.Resolve(permissive.SandboxDecisions);
 

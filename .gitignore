@@ -5,6 +5,9 @@
 # Marker files the deterministic run writes to tell a synthesised session from a recorded one.
 .replay-markers-*.txt
 
+# The advisory sandbox job's captured log; the workflow writes it beside the checkout.
+sandbox-advisory.log
+
 # .NET build artifacts from file-based apps.
 bin/
 obj/
