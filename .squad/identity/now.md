@@ -1,9 +1,21 @@
 ---
-updated_at: 2026-11-03T15:10:00Z
-updated_by: coordinator (Ralph round 16)
-focus_area: #137 landed; epic #19's three remaining sub-issues plus #141 are the startable work
-active_issues: [5, 6, 19, 134, 135, 136, 141]
+updated_at: 2026-11-03T21:55:00Z
+updated_by: coordinator (program planning)
+focus_area: real-world scenario program (#142) filed — 40 issues, 7 bands, 70 dependency edges
+active_issues: [5, 6, 19, 134, 135, 136, 141, 142, 143, 148, 153, 158, 164, 170, 175]
 ---
+
+
+## Real-world scenario program filed (2026-11-03)
+
+#142 is the program epic: seven band epics, 29 work issues, matrix (#180) and TL;DR (#181). Every work issue
+carries `model:high` or `model:low` with a rationale; 70 native `blocked by` edges verified.
+
+**Startable now:** A1 #144, B1 #149, C1 #154, D1 #159, E1 #165, F1 #171, G1 #176.
+**Riskiest:** Band E (#164) — five `high` issues, MAUI deviation, Kotlin AAR with no .NET binding, and a
+reconciliation model with no first-party precedent.
+**Expect ties:** Band G (#175) and Band F (#170) baselines already checkpoint/resume. Their READMEs must say so.
+**Do not pre-file releases.** Band issues file their own release issue when a gap is proven.
 
 # Now
 
