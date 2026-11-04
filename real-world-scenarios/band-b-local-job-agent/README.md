@@ -27,6 +27,16 @@ conversation document.
 `run.sh` prefers `/opt/homebrew/bin/dotnet`, then whatever `dotnet` is first on `PATH`. Set
 `DOTNET` to override.
 
+The loop pins **`gpt-5.1-codex-mini`** — the model `upstream/ralph-loop.ts` pins. Set
+`RALPH_MODEL` to run it against another model:
+
+```bash
+RALPH_MODEL=gpt-6-luna ./real-world-scenarios/band-b-local-job-agent/run.sh
+```
+
+The run header prints the model it will use and whether the pinned default or `RALPH_MODEL`
+supplied it.
+
 ## One command
 
 ```bash
@@ -96,6 +106,10 @@ Exit statuses:
 | 1 | The target does not match the plan (from `run.sh`) |
 | 2 | No `PLAN.md` in the working directory |
 | 3 | Iteration cap reached with the plan still open |
+
+`RALPH_MODEL` is passed straight to the session. The loop does not check it against the
+account's model list, so a model the CLI rejects fails that iteration; this CLI (1.0.105)
+accepted an unknown name and ran on its default, without saying so.
 
 ## The loop shape
 

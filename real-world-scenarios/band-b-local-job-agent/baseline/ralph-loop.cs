@@ -21,6 +21,9 @@ using GitHub.Copilot;
 
 const int MaxIterations = 10;
 const string PlanFile = "PLAN.md";
+// The model `upstream/ralph-loop.ts` pins:
+//     model: "gpt-5.1-codex-mini",
+const string PinnedModel = "gpt-5.1-codex-mini";
 
 var exitCode = await RalphLoopAsync(args);
 return exitCode;
@@ -50,7 +53,13 @@ static async Task<int> RalphLoopAsync(string[] args)
     // The prompt is fixed for the whole run; only the plan changes between iterations.
     var prompt = File.ReadAllText(promptPath);
 
+    // RALPH_MODEL overrides the pinned model. Unset means the pinned model.
+    var model = Environment.GetEnvironmentVariable("RALPH_MODEL") is { Length: > 0 } overridden
+        ? overridden
+        : PinnedModel;
+
     Console.WriteLine($"target:    {target}");
+    Console.WriteLine($"model:     {model}{(model == PinnedModel ? " (pinned)" : " (RALPH_MODEL)")}");
     Console.WriteLine($"plan:      {planPath}");
     Console.WriteLine($"prompt:    {promptPath}");
     Console.WriteLine($"max:       {maxIterations} iterations");
@@ -88,7 +97,7 @@ static async Task<int> RalphLoopAsync(string[] args)
 
             // A fresh session per iteration: context isolation is the point, and the plan
             // file is the hand-off. Nothing is resumed.
-            await RunOneIterationAsync(client, target, iteration, prompt);
+            await RunOneIterationAsync(client, target, model, iteration, prompt);
         }
     }
     finally
@@ -101,12 +110,12 @@ static async Task<int> RalphLoopAsync(string[] args)
 //
 // Everything that knows about the Copilot SDK lives here. A port to another language
 // replaces this method; the loop above it is the same shape.
-static async Task RunOneIterationAsync(CopilotClient client, string target, int iteration, string prompt)
+static async Task RunOneIterationAsync(
+    CopilotClient client, string target, string model, int iteration, string prompt)
 {
     await using var session = await client.CreateSessionAsync(new SessionConfig
     {
-        // The model the vendored recipe pins.
-        Model = "gpt-5.1-codex-mini",
+        Model = model,
         WorkingDirectory = target,
         // Unattended: the agent edits the target files and the plan without a prompt.
         OnPermissionRequest = PermissionHandler.ApproveAll,

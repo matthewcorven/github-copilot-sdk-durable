@@ -7,7 +7,8 @@
 #
 # The target is created fresh under .scratch/ next to this script. It is never the repo.
 #
-# Set RALPH_MODEL to override the model the loop pins.
+# RALPH_MODEL=<model> overrides the pinned model (gpt-5.1-codex-mini). The loop reads it;
+# run.sh only passes it through.
 
 set -uo pipefail
 
