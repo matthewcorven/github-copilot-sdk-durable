@@ -37,7 +37,7 @@ proof.
 
 | Level | Mode | What it proves | Where it runs |
 |---|---|---|---|
-| `build` job, `Validate examples` | live, recorded runtime | Every example compiles; the deterministic set runs against the recording. The sandbox examples are skipped (`SKIP_LIVE=1`). | `ubuntu-latest` only, required. |
+| `build` job, `Validate examples` | live, recorded runtime | The deterministic set runs against the recording. Examples that need sign-in are skipped before they are compiled, so this step neither compiles nor runs 33/34/35 (`SKIP_LIVE=1`); the `build` step above it compiles `lib/` and the tests, and `dotnet test` compiles the test projects. | `ubuntu-latest` only, required. |
 | `build` job, `Validate examples (deterministic)` | `Replayed` | Policy propagation: the sandbox policy is built, the `{workspace}` token expands, and the wire mapping is field-for-field. Policy assertions only. | `ubuntu-latest` only, required. |
 | `sandbox-advisory` job | `Replayed` | The same policy propagation, on three platforms, plus the runtime's reported backend and platform per example. Advisory only. | All three runners, `continue-on-error: true`. |
 | A signed-in developer host with a real backend | `Enforced` | The three-part enforcement proof: the permission layer did not deny the call, the sandbox did deny it, and the durable layer and the sandbox did their separate jobs. | Not in CI. |
@@ -69,12 +69,31 @@ because they touch a live model or a real sandbox in the live path. That script 
 by this job; the advisory job drives the examples directly.
 
 In `Replayed` mode the recording answers the model's side of the conversation, so no tool call
-runs. Examples `33` and `34` assert an on-disk effect in that window (a written file, a masked
-value seen by a shell), so they stop before printing their `run mode:` line. The job reports
-that outcome as `run mode: not reported` with the exit status rather than as a pass, and still
-prints the platform. Example `35` prints its `run mode:` line because its policy half completes
-before any on-disk assertion. All three print their resolved policy, which is the half the job
-exists to show.
+runs. All three examples print their `run mode:` line before the assertions that need an
+on-disk effect (a written file, a masked value seen by a shell), because in that window those
+assertions stop the example and the report must not be what is lost. The ordering changes
+nothing about what is asserted: the on-disk assertions still run, in the same order, on every
+host, and a `Replayed` run still skips every enforcement assertion.
+
+What each example prints in `Replayed` mode is therefore identical in shape:
+
+```
+run mode: Replayed (backend: unsupported, platform: other, outcome: inactive)
+```
+
+`unsupported` and `other` are the runtime's own answer — no backend engaged — not a value this
+job supplies. The platform the *runner* is on is printed separately, and the backend that
+platform would report is printed as an expectation and labelled as one.
+
+The examples then fail at their on-disk assertion, which is why the job reports each example's
+exit status and its policy half separately. A failing example exit is expected here and is
+never propagated: `continue-on-error` tolerates the platform difference, and the report-complete
+assertion in `.github/workflows/build.yml` still fails the job if the report itself is truncated.
+
+Exit codes differ by shell, not by outcome: macOS and Linux report `134` for the same abort
+that Windows' Git Bash reports as `127`. A `127` here is not "binary not found" — the policy
+lines printed above it show the example ran — so read the exit status alongside the output
+rather than treating it as a missing tool.
 
 ## 4. Degrade, do not fail
 

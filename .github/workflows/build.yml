@@ -57,7 +57,17 @@ jobs:
           dotnet-version: '10.0.x'
       - name: Report detected backend and platform per sandbox example
         shell: bash
-        run: ./scripts/sandbox-advisory.sh
+        run: ./scripts/sandbox-advisory.sh | tee sandbox-advisory.log
+        # A platform gap is tolerated by this job's `continue-on-error`. A script that dies
+        # before printing its report is not a gap, and must not look like a green check.
+      - name: Assert the report completed
+        if: always()
+        shell: bash
+        run: |
+          if ! grep -q '^advisory-report: complete$' sandbox-advisory.log; then
+            echo "::error::the advisory report did not reach its summary; see the step log above"
+            exit 1
+          fi
 
   build:
     runs-on: ubuntu-latest

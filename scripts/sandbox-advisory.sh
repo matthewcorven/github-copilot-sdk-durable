@@ -11,11 +11,18 @@
 # platform `other` because no backend engaged. That is the policy half only: it proves
 # policy propagation, never OS enforcement. A Replayed line is NOT enforcement proof.
 #
-# Exit status: 0 once the report is printed, 1 only if the recorded runtime did not build.
-# The examples' own exit statuses are reported, never propagated: examples 33 and 34 assert
-# an on-disk effect the recording cannot produce, so they stop before their run-mode report
-# and that is expected here.
+# Exit status: 0 once the report is printed, 1 only if the recorded runtime did not build or
+# the report did not reach its summary. The examples' own exit statuses are reported, never
+# propagated.
+#
+# `set +e` is deliberate and required. The workflow step is `shell: bash`, which GitHub runs
+# as `/usr/bin/bash --noprofile --norc -e -o pipefail {0}`. The inherited `-e` would abort
+# the script at the first non-zero example — before `status=$?` is read and before the
+# summary prints — and the job's `continue-on-error` would then show a green check with a
+# truncated report. `set +e` restores the error handling this script was written for.
+set +e
 set -uo pipefail
+set +e
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 project="$root/tools/ReplayRuntime/ReplayRuntime.csproj"
@@ -45,6 +52,8 @@ detect_platform() {
     return
   fi
 
+  # Local runs only. In CI RUNNER_OS is always set, so the Windows branches below exist for a
+  # developer running this from Git Bash on Windows, not for the workflow.
   case "$(uname -s)" in
     Linux) echo "linux" ;;
     Darwin) echo "macos" ;;
@@ -88,6 +97,9 @@ if ! dotnet build "$project" --nologo -v q; then
   exit 1
 fi
 
+# The recorded runtime is built as a framework-dependent single file, so the binary is the
+# extension-less `ReplayRuntime` on every OS. Windows still resolves `ReplayRuntime.exe`, so
+# prefer that name when it is the one that exists.
 if [[ -f "$runtime.exe" ]]; then
   runtime="$runtime.exe"
 fi
@@ -97,17 +109,19 @@ if [[ ! -f "$runtime" ]]; then
 fi
 
 ran_policy=0
-reported_backend=""
-reported_platform=""
 printed_mode=0
+engaged_note=""
 for name in "${examples[@]}"; do
   echo "=== $name.cs ==="
   echo "platform: $platform"
+  # Allowed to fail: a Replayed example stops at an on-disk assertion the recording cannot
+  # satisfy. `set +e` above is what keeps the assignment from aborting the script.
   output="$(cd "$root/examples" && DURABLE_RUNTIME_PATH="$runtime" dotnet run "$name.cs" 2>&1)"
   status=$?
 
-  # The example's own lines, with compiler warnings filtered so the log reads as output.
-  printf '%s\n' "$output" | grep -v 'warning [A-Z]\+[0-9]\+' | head -40 | sed 's/^/  /'
+  # The example's own lines, with compiler warnings filtered so the log reads as output. The
+  # full output is kept: the report line is the point of the job, so nothing is truncated.
+  printf '%s\n' "$output" | grep -v 'warning [A-Z]\+[0-9]\+' | sed 's/^/  /'
 
   # The policy half prints its resolved policy before any enforcement assertion, so its
   # presence shows the mapping was built and asserted even when enforcement was not.
@@ -125,6 +139,9 @@ for name in "${examples[@]}"; do
     echo "DETECTED $name.cs: $line"
     echo "  backend: $reported_backend (reported by the runtime)"
     echo "  platform: $reported_platform (reported by the runtime)"
+    if [[ "$reported_backend" != "unsupported" && "$reported_backend" != "none" ]]; then
+      engaged_note="$engaged_note $name=$reported_backend"
+    fi
     printed_mode=$((printed_mode + 1))
   else
     echo "DETECTED $name.cs: run mode: not reported (exit $status)"
@@ -140,8 +157,14 @@ echo "=== Summary ==="
 echo "platform reported by the job: $platform"
 echo "examples that printed a run mode: $printed_mode of ${#examples[@]}"
 echo "examples whose policy half ran: $ran_policy of ${#examples[@]}"
+if [[ -n "$engaged_note" ]]; then
+  echo "note: a backend engaged for:$engaged_note — read that example's enforcement assertions"
+  echo "      as enforcement evidence; the rest are Replayed and prove the policy only."
+fi
 echo "mode: Replayed (no Copilot sign-in in CI). This is the policy half only: policy"
 echo "      propagation, never OS enforcement. The three-part enforcement proof is verified"
 echo "      only in Enforced mode, on a signed-in host with a real backend."
 
+# The workflow greps for this marker to tell a completed report from a script that died.
+echo "advisory-report: complete"
 exit 0

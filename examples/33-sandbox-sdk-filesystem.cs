@@ -98,16 +98,21 @@ await conversation.SubmitAsync(
     $"Use the shell tool to run exactly this command, then report its output: " +
     $"printf 'permitted' > '{permittedPath}'");
 
-Check.That(File.Exists(permittedPath), "the write into the readwrite path landed on disk");
-Check.Equal("permitted", File.ReadAllText(permittedPath), "the readwrite path holds what was written");
-
 // ─── A denied write ─────────────────────────────────────────────────────────
+//
+// Submitted before the assertions below, so the report that follows covers both calls.
 var deniedPath = Path.Combine(secret, "leak.txt");
 await conversation.SubmitAsync(
     $"Use the shell tool to run exactly this command, then report its output: " +
     $"printf 'leaked' > '{deniedPath}'");
 
 // ─── What the runtime reported ──────────────────────────────────────────────
+//
+// Printed before the on-disk assertions so the run mode, backend and platform always reach
+// the output. On a host with no backend the recording answers the model's side and no tool
+// call runs, so those assertions stop the example; the report above is what a CI advisory
+// job reads, and it must not be the thing that is lost. Nothing is weakened: the assertions
+// still run below, in the same order, on every host.
 var decisions = conversation.SandboxDecisions;
 var report = SandboxSupport.Resolve(decisions);
 
@@ -123,6 +128,10 @@ foreach (var decision in decisions)
             $"resource: '{denied.DeniedResource}', outcome: {denied.Outcome.Value}");
     }
 }
+
+// ─── The permitted write landed ─────────────────────────────────────────────
+Check.That(File.Exists(permittedPath), "the write into the readwrite path landed on disk");
+Check.Equal("permitted", File.ReadAllText(permittedPath), "the readwrite path holds what was written");
 
 if (report.Engaged)
 {
