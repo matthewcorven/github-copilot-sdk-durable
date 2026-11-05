@@ -320,3 +320,35 @@ These are observations from building and running the port, not criticisms of the
   during that turn; it does not prove which checkpoint the *next* turn started from.
 - **There is no retry, timeout or backoff around the model calls.** A transient provider error fails
   the process and leaves the last checkpoint as the restart point.
+
+## The Durable variant
+
+`durable/` is the sibling of `baseline/`: the same four agents and the same three tools with the same
+result strings, with the delegation moved out of a framework executor's position and into a durable
+task's checkpoint. The scripted user is close to, but not the same as, the baseline's — the opening
+greeting is dropped and the closing line folded into a request, both because a turn this coordinator
+cannot delegate is a turn it cannot serve. `durable/README.md` names both changes. Both variants run
+from this folder.
+
+```bash
+./run.sh                                  # baseline; needs OPENAI_API_KEY (see Prerequisites)
+(cd durable && ./run.sh)                  # Durable variant; needs nothing for the scripted stages
+(cd durable && ./evidence.sh)             # every claim it makes, with its controls
+(cd durable && LIVE=1 ./evidence.sh)      # the same, plus a live-model stage
+```
+
+The Durable variant has its own `durable/README.md` with the checkpoint design, the evidence, and the
+two honest-comparison paragraphs. Three things are worth knowing before reading the code:
+
+- **`durable/` references `lib/Durable.cs`** through a project reference
+  (`../../../lib/Copilot.Durable.csproj`). No part of the store is copied into the scenario.
+- **`durable/evidence/run-stdout.txt`** is one full run of `durable/evidence.sh`, pasted unedited —
+  including the stage whose deliberate control fails `verify`. It is captured output, not a
+  description of what the code should do.
+- **The Durable variant is not a faster horse for the sample.** The vendored `handoff_simple.py` has
+  no checkpoint manager; everything the variant demonstrates about kill and resume was added by this
+  project, first in the port above and then here. `durable/README.md` says which claim is earned
+  against which piece of work rather than against the reference.
+
+`baseline/` is unmodified by this work. Its port's checkpointing and its control-transfer log are its
+own additions, and the variant's README treats them as such.
