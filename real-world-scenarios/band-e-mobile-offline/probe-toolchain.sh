@@ -4,8 +4,11 @@
 # Writes nothing into this repository: the scaffold project lands under a scratch
 # directory that is removed on exit. Run from this directory.
 #
-#   ./probe-toolchain.sh            # print the report to stdout
+#   ./probe-toolchain.sh            # print the report to stdout; exits with the build status
 #   ./probe-toolchain.sh > evidence/maui-toolchain-probe.txt
+#
+# Exit status is 0 only when the MAUI Android build succeeded, so this can gate work: a
+# machine without the Android SDK leaves the build at `error XA5300` and this exits 1.
 set -u
 
 say() { printf '\n=== %s ===\n' "$*"; }
@@ -55,8 +58,14 @@ if dotnet new maui -n BandEProbe -o "$scratch/BandEProbe" >/dev/null 2>&1; then
     cd "$scratch/BandEProbe" &&
     dotnet build -f net10.0-android 2>&1
   )
-  printf '\nexit=%s\n' "$?"
+  status=$?
+  printf '\nexit=%s\n' "$status"
 else
   say "dotnet new maui"
   echo "template 'maui' unavailable; see 'dotnet new list maui' above"
+  status=1
 fi
+
+# The report is worthless if a reader cannot branch on it: a run whose build says
+# "Build FAILED." but exits 0 would read as healthy to any script that follows the README.
+exit "$status"

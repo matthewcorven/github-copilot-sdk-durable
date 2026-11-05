@@ -22,7 +22,10 @@ exact failure.
 
 ## What is blocked, and by what
 
-`evidence/maui-toolchain-probe.txt` is the whole story. In short:
+`evidence/maui-toolchain-probe.txt` is the whole story — it is the stdout of
+`./probe-toolchain.sh` captured after the workload was installed, so it shows the state the build
+fails in rather than the install history that led there. The history is in the subsection below, and
+is labelled as recollected. In short:
 
 | Layer | State | Result |
 | --- | --- | --- |
@@ -44,8 +47,16 @@ platform image are separate downloads, and the workload install on its own does 
 
 ### Installing the workload is not straightforward on this machine
 
-Recorded because the next person will hit it. `dotnet workload install maui-android` reports success
-**twice over**, and the first success is a lie:
+> **Provenance of this subsection.** The reports below are **recollected from the session that
+> produced this directory, not captured at the time** — the commands were run before anyone thought
+> to save their output. `evidence/maui-toolchain-probe.txt`'s "Retrospective captures" section has
+> what can still be replayed on this machine (a second install run's garbage collection, the
+> template package version, free space, and that `dotnet new maui` is no longer reproachable here
+> because the templates are now installed), and says which parts are not replayable. Treat the
+> rest as a narrative to verify, not as a log.
+
+`dotnet workload install maui-android` reports success **twice over**, and the first success is a
+lie:
 
 1. First invocation: printed `Successfully installed workload(s) maui-android.`, then — in the same
    run — `Garbage collecting for SDK feature band(s) 10.0.400` uninstalled every pack it had just
@@ -61,13 +72,14 @@ template exit code 103 even with the workload present.
 
 `probe-toolchain.sh` installs nothing — it reports, it does not mutate the machine. The two
 install commands above are the ones that have to be run by hand first, and they are why the workload
-column in the table reads "now installed" rather than "absent".
+column in the table reads "now installed" rather than "absent". It exits non-zero when the build
+fails, so `./probe-toolchain.sh` can be used as a gate.
 
-Disk: the packs land under `~/.dotnet/packs`; the machine that produced the probe had 583 GB free
-throughout, so disk was not the limiting factor there — the Android SDK is what is missing. The
-repo's own environment notes (`.squad/ralph-instructions.md`, "Environment prerequisites") record
-this volume filling before, so re-check free space before adding several GB of Android SDK on top of
-these packs.
+Disk: the packs land under `~/.dotnet/packs` (3.2 GB as measured in the probe evidence). The machine
+that produced the probe had roughly 557–583 GB free throughout, so disk was not the limiting factor
+there — the Android SDK is what is missing. The repo's own environment notes
+(`.squad/ralph-instructions.md`, "Environment prerequisites") record this volume filling before, so
+re-check free space before adding several GB of Android SDK on top of these packs.
 
 ## Prerequisites for unblocking it
 

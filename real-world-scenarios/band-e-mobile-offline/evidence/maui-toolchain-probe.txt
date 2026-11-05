@@ -136,3 +136,49 @@ Build FAILED.
 Time Elapsed 00:00:00.21
 
 exit=1
+
+
+=== RETROSPECTIVE CAPTURES (2026-11-05, added after review of #196) ===
+The report above is a post-install state dump. The workload-install history the README
+narrates happened BEFORE it and was not captured at the time. Everything below was
+captured now, on the same machine, and says exactly how much of it is replayable.
+
+=== 1. The workload-install garbage collection, live ===
+$ dotnet workload install maui-android    # re-run with the workload already installed
+
+Checking for updated workload version.
+Skipping NuGet package signature verification.
+No workload update found.
+Workload(s) 'maui-android' are already installed.
+Garbage collecting for SDK feature band(s) 10.0.400...
+
+Successfully installed workload(s) .
+
+This reproduces the observable shape of the report: a run that says "Successfully
+installed workload(s)" and then garbage-collects the 10.0.400 feature band anyway.
+It is NOT the original failure: the packs are already present, so nothing is removed
+and NETSDK1147 does not recur. The first-run transcript is recollected, not captured.
+
+=== 2. `dotnet new maui` exit 103 ===
+NOT re-runnable here: Microsoft.Maui.Templates.net10 is now installed, so the template
+resolves. 103 is the documented TemplateNotFound code:
+https://aka.ms/templating-exit-codes#103
+
+=== 3. Template package state, live ===
+$ dotnet new details Microsoft.Maui.Templates.net10
+Microsoft.Maui.Templates.net10
+   Package version: 10.0.120
+   Reserved: True
+
+$ dotnet new install Microsoft.Maui.Templates.net10    # idempotent re-check
+The following template package(s) are already available:
+   Microsoft.Maui.Templates.net10@10.0.110
+For details on the exit code, refer to https://aka.ms/templating-exit-codes#106
+
+=== 4. Free space, live ===
+$ df -h /System/Volumes/Data
+Filesystem      Size    Used   Avail Capacity iused ifree %iused  Mounted on
+/dev/disk3s5   1.8Ti   1.2Ti   557Gi    70%    4.8M  5.8G    0%   /System/Volumes/Data
+
+$ du -sh ~/.dotnet/packs
+3.2G	/Users/core/.dotnet/packs
