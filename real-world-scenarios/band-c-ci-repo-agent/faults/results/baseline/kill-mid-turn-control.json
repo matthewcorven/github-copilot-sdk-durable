@@ -2,13 +2,13 @@
   "variant": "baseline",
   "fault": "kill-mid-turn-control",
   "outcome": "control: completed",
-  "phase": "7 of 13 comments posted, uninterrupted (the control)",
+  "phase": "a clean run to completion, threshold 7 not used (the control)",
   "detail": "Control: the same first run, with nothing killed (it exited 0), then a second process over the same repository at the same clock. The first run posted its comments and committed the state, so the second reads that state back and stops at the run gate: 0 comment(s) posted by the second run, 0 of them duplicates. Both runs finished because neither was killed; that is what makes the fault run's cold start and its re-posted comments attributable to the kill.",
-  "evidence": "kill point: 13 comment file(s) on disk; classification lines in the log=13; kill pid=none; first exit=0; first comments posted=13; first state=done (the state snapshot only exists once Phase 8 has committed); first task=n/a; second exit=0; second cold start=0 resumed=0; second comments posted=0; second duplicates=[] (0); second output dir=/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-156-work/.scratch/band-c-faults/baseline/kill-mid-turn-control/outputs/second; committed triaged=[101,102,103,104,105,106,107,109,111,112,113,114,115]; second run says:   run gate:   would have triaged 13 PR(s); no comments, no labels, no report, no state write.",
+  "evidence": "kill point: 13 comment file(s) on disk (threshold 7); classification lines in the log=13; kill pid=none; first exit=0; first comments posted=13; first state=done (the state snapshot only exists once Phase 8 has committed); first task=n/a; second exit=0; second cold start=0 resumed=0; second comments posted=0; second duplicates=[] (0); second output dir=/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-156-work/.scratch/band-c-faults/baseline/kill-mid-turn-control/outputs/second; committed triaged=[101,102,103,104,105,106,107,109,111,112,113,114,115]; second run says:   run gate:   would have triaged 13 PR(s); no comments, no labels, no report, no state write.",
   "harness": {
     "dotnet": "dotnet",
     "runtime": "none (Band C has no model and no recorded runtime)",
     "command": "./faults/kill-mid-turn.sh --variant baseline --fault-not-injected"
   },
-  "recordedAt": "2026-11-05T18:00:03.064174+00:00"
+  "recordedAt": "2026-11-05T18:04:07.850355+00:00"
 }

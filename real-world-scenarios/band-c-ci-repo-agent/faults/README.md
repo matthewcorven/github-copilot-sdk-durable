@@ -116,7 +116,7 @@ any memo. That is recorded there and is not re-measured here.
 
 | Fault | Injection | What it shows | What it does **not** show |
 | --- | --- | --- | --- |
-| `kill-mid-turn` | `kill -9` of the real PID with 7 comment files on disk, confirmed gone, then a new process | baseline: cold start, all 13 comments posted, 13 of them byte-identical duplicates. Durable: resumed at `comment`, wrote the remaining 4 with 0 duplicates | nothing about a *clean* stop — that is the next row. The fault is deliberately *not* "mid-classification": the baseline's buffered stdout cannot bound a kill to Phase 2 (see §"The injection point") |
+| `kill-mid-turn` | `kill -9` of the real PID once at least 7 comment files exist, confirmed gone, then a new process | baseline: cold start, all 13 comments posted, 13 of them byte-identical duplicates. Durable: resumed at `comment`, wrote the remaining 4 with 0 duplicates | nothing about a *clean* stop — that is the next row. The fault is deliberately *not* "mid-classification": the baseline's buffered stdout cannot bound a kill to Phase 2 (see §"The injection point") |
 | `restart-after-checkpoint` | `SIGTERM` (baseline) / its own seam (durable) after Phase 5's `labels.json`, then a restart | baseline has no checkpoint at all, so the restart is a cold start. Durable resumed at `comment` and posted 13 — the work the stop left undone — with 0 re-posted | that the durable resume posts nothing. It posts what was *not* done; it adopts what was |
 | `duplicate-delivery` | two live processes over one repository, first held at Phase 7, second run through | baseline: both posted 13, both exited 0, no conflict was ever detected. Durable: second refused at the store open (exit 3) | that the Durable refusal is per *repository* — it is per store file (see the variant's stage 5b control) |
 | `concurrent-clients` | first held with `SIGSTOP` at a phase, second runs to completion, first released | baseline: same doubling and no conflict detection as above. Durable: refused while the first is merely paused between phases | that either variant is safe under a *crash* mid-write — that is `store-outage` |
@@ -175,7 +175,7 @@ produced and then acts:
 
 | What the script waits for | Why that artefact |
 | --- | --- |
-| **7** `comments/pr-NNN.md` files on disk | the Phase 6 effect has happened 7 times — `kill-mid-turn` |
+| at least **7** `comments/pr-NNN.md` files on disk | the Phase 6 effect has happened — `kill-mid-turn` (the threshold is a floor; the count observed at the kill is what the result records) |
 | `wrote:      labels.json` in the log | Phase 5 has finished — `restart-after-checkpoint` |
 | `outputs/<run>/labels.json` on disk | Phase 5 has finished, without depending on a stdout flush — `concurrent-clients`, `store-outage` |
 | `outputs/<run>/triage-report.md` on disk | Phase 7 has finished and Phase 8 has not — `duplicate-delivery` |
@@ -193,8 +193,16 @@ supposed to bound the kill to Phase 2. A probe of 12 runs killed on that trigger
 bounded: **4 of 12 landed with `phase 3/8` already printed** and 13 classification lines in the log,
 because the trigger fired on a flushed chunk rather than a phase boundary — and phases 3, 4 and 5 print
 in the same `  #NNN …` shape, so the "classification lines" count was really four phases' worth of
-lines. The injection was moved to a comment count, which is an artefact the harness sets: 12 of 12
-probe runs were caught at exactly 7 comment files, for both variants.
+lines. The injection was moved to a comment count, which is an artefact the harness can see: a 12/12
+probe, and five further runs of each variant, were all caught with comments on disk and none later than
+the comment phase.
+
+The count observed at the kill is reported, not assumed. The poll loop can see one or two more files
+than the threshold — a writer does not pause for the harness — and the baseline regularly reaches all
+thirteen in the time the loop takes to act, which the result's `phase` states ("13 of 13 … threshold
+7"). Forcing an exact seven with `SIGSTOP` was tried and rejected: it made the durable resume's
+memo-versus-ledger race surface as an occasional one-comment duplicate, which is a real property the
+variant's own `evidence.sh` 4c measures and this harness should not manufacture.
 
 `kill-mid-turn` therefore kills with comments already on disk, not "during classification" as the issue
 first described. The question it answers is the one that matters for the band — does the resumed run
@@ -208,7 +216,7 @@ itself is the second process.
 
 | Fault | The operating-system act |
 | --- | --- |
-| `kill-mid-turn` | `kill -9 <pid>` once 7 comment files exist, then a poll until `kill -0` fails. The PID is the program's own — the starter `exec`s, so the shell's `$!` *is* the process |
+| `kill-mid-turn` | `kill -9 <pid>` once at least 7 comment files exist, then a poll until `kill -0` fails. The PID is the program's own — the starter `exec`s, so the shell's `$!` *is* the process |
 | `restart-after-checkpoint` | `kill -TERM <pid>`, then a poll (baseline); the Durable variant's seam is `Environment.Exit(42)` inside the program, which is the variant's own seam, not a harness fabrication |
 | `duplicate-delivery` | two real processes; `kill -STOP`/`kill -CONT` on the first |
 | `concurrent-clients` | `SIGSTOP` on the first process, confirmed by `ps -o state=` reading `T`, then released |

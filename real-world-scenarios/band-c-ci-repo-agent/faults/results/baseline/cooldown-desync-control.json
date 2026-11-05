@@ -10,7 +10,7 @@
     "runtime": "none (Band C has no model and no recorded runtime)",
     "command": "./faults/cooldown-desync.sh --variant baseline --fault-not-injected"
   },
-  "recordedAt": "2026-11-05T18:00:15.330565+00:00",
+  "recordedAt": "2026-11-05T18:04:20.882063+00:00",
   "observations": {
     "run2_comments_posted": 13,
     "run3_comments_posted": 13,

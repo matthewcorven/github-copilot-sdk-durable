@@ -2,13 +2,13 @@
   "variant": "durable",
   "fault": "kill-mid-turn",
   "outcome": "resumed",
-  "phase": "7 of 13 comments posted, the run record not yet committed",
-  "detail": "The run was killed with kill -9 (pid 40650, confirmed gone) with 7 comment(s) on disk. The committed run record named phase 'comment' (id=t2 status=1 phase=comment attempts=1 commented=0 memos=7 outcome=None), so the new process resumed at 'comment' — the phase the kill cut short — and finished with the run at 'save'. It wrote 6 comment(s) of which 0 were already on disk: the 7 posted before the kill were adopted from their memos, not re-posted, and the remaining ones were posted for the first time.",
-  "evidence": "kill point: 7 comment file(s) on disk; classification lines in the log=13; kill pid=40650; first exit=137; first comments posted=6; first state=comment; first task=id=t2 status=1 phase=comment attempts=1 commented=0 memos=7 outcome=None; second exit=0; second cold start=0 resumed=1 at phase=comment; second comments posted=6; second duplicates=[] (0); second output dir=/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-156-work/.scratch/band-c-faults/durable/kill-mid-turn/outputs/second; committed triaged=[101,102,103,104,105,106,107,109,111,112,113,114,115]; second run says: run:        completed — 13 triaged, 13 commented, 2 in cooldown, 1 not ours, 1 not open",
+  "phase": "9 of 13 comment file(s) on disk when the kill was sent (threshold 7), the run record not yet committed",
+  "detail": "The run was killed with kill -9 (pid 72295, confirmed gone) with 9 comment(s) on disk. The committed run record named phase 'comment' (id=t2 status=1 phase=comment attempts=1 commented=0 memos=9 outcome=None), so the new process resumed at 'comment' — the phase the kill cut short — and finished with the run at 'save'. It wrote 4 comment(s) of which 0 were already on disk: the 9 posted before the kill were adopted from their memos, not re-posted, and the remaining ones were posted for the first time.",
+  "evidence": "kill point: 9 comment file(s) on disk (threshold 7); classification lines in the log=13; kill pid=72295; first exit=137; first comments posted=8; first state=comment; first task=id=t2 status=1 phase=comment attempts=1 commented=0 memos=9 outcome=None; second exit=0; second cold start=0 resumed=1 at phase=comment; second comments posted=4; second duplicates=[] (0); second output dir=/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-156-work/.scratch/band-c-faults/durable/kill-mid-turn/outputs/second; committed triaged=[101,102,103,104,105,106,107,109,111,112,113,114,115]; second run says: run:        completed — 13 triaged, 13 commented, 2 in cooldown, 1 not ours, 1 not open",
   "harness": {
     "dotnet": "dotnet",
     "runtime": "none (Band C has no model and no recorded runtime)",
     "command": "./faults/kill-mid-turn.sh --variant durable"
   },
-  "recordedAt": "2026-11-05T18:00:18.416489+00:00"
+  "recordedAt": "2026-11-05T18:04:24.297299+00:00"
 }

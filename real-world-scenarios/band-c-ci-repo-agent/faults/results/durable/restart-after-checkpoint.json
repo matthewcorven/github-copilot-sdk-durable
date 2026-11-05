@@ -10,5 +10,5 @@
     "runtime": "none (Band C has no model and no recorded runtime)",
     "command": "./faults/restart-after-checkpoint.sh --variant durable"
   },
-  "recordedAt": "2026-11-05T18:00:24.848702+00:00"
+  "recordedAt": "2026-11-05T18:04:30.953418+00:00"
 }

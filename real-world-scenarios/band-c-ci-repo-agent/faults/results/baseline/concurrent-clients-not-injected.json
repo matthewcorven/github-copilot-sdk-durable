@@ -10,5 +10,5 @@
     "runtime": "none (Band C has no model and no recorded runtime)",
     "command": "./faults/concurrent-clients.sh --variant baseline --fault-not-injected"
   },
-  "recordedAt": "2026-11-05T18:00:09.927646+00:00"
+  "recordedAt": "2026-11-05T18:04:15.017047+00:00"
 }

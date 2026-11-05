@@ -10,5 +10,5 @@
     "runtime": "none (Band C has no model and no recorded runtime)",
     "command": "./faults/duplicate-delivery.sh --variant baseline"
   },
-  "recordedAt": "2026-11-05T18:00:06.739689+00:00"
+  "recordedAt": "2026-11-05T18:04:11.539630+00:00"
 }

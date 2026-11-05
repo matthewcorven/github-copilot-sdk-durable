@@ -64,12 +64,11 @@ prepare_variant "$VARIANT" "$RUN_DIR/app" || exit 1
 
 FIRST="$RUN_DIR/first.log"
 SECOND="$RUN_DIR/second.log"
+# The injection point is "at least this many comment files exist". The *observed* count is recorded in
+# `phase` and `evidence` after the run: the poll loop can see one or two more files than the threshold
+# by the time it acts, because the writer does not pause for the harness. The threshold is a floor, not
+# an equality, and the result says which it got.
 KILL_AFTER_COMMENTS="${KILL_AFTER_COMMENTS:-7}"
-if [ "$INJECT" = "1" ]; then
-  PHASE="$KILL_AFTER_COMMENTS of 13 comments posted, the run record not yet committed"
-else
-  PHASE="$KILL_AFTER_COMMENTS of 13 comments posted, uninterrupted (the control)"
-fi
 
 # ── The interrupted (or, for the control, uninterrupted) run ─────────────────────────────────────
 if [ "$VARIANT" = "baseline" ]; then
@@ -181,7 +180,13 @@ else
   fi
 fi
 
-EVIDENCE="kill point: $POSTED_AT_KILL comment file(s) on disk; classification lines in the log=$CLASSIFIED; kill pid=${KILL_PID:-none}; first exit=$FIRST_STATUS; first comments posted=$FIRST_COMMENTS; first state=${FIRST_STATE:-none}; first task=${FIRST_TASK:-n/a}; second exit=$SECOND_STATUS; second cold start=$COLD_START resumed=$RESUMED${RESUME_PHASE:+ at phase=$RESUME_PHASE}; second comments posted=$SECOND_COMMENTS; second duplicates=[$SECOND_DUPES] ($SECOND_DUPES_COUNT); second output dir=${SECOND_OUT:-n/a}; committed triaged=[$TRIAGED]; second run says: ${DONE_LINE:-none}"
+if [ "$INJECT" = "1" ]; then
+  PHASE="$POSTED_AT_KILL of 13 comment file(s) on disk when the kill was sent (threshold $KILL_AFTER_COMMENTS), the run record not yet committed"
+else
+  PHASE="a clean run to completion, threshold $KILL_AFTER_COMMENTS not used (the control)"
+fi
+
+EVIDENCE="kill point: $POSTED_AT_KILL comment file(s) on disk (threshold $KILL_AFTER_COMMENTS); classification lines in the log=$CLASSIFIED; kill pid=${KILL_PID:-none}; first exit=$FIRST_STATUS; first comments posted=$FIRST_COMMENTS; first state=${FIRST_STATE:-none}; first task=${FIRST_TASK:-n/a}; second exit=$SECOND_STATUS; second cold start=$COLD_START resumed=$RESUMED${RESUME_PHASE:+ at phase=$RESUME_PHASE}; second comments posted=$SECOND_COMMENTS; second duplicates=[$SECOND_DUPES] ($SECOND_DUPES_COUNT); second output dir=${SECOND_OUT:-n/a}; committed triaged=[$TRIAGED]; second run says: ${DONE_LINE:-none}"
 
 record_result "$VARIANT" "$FAULT" "$OUTCOME" "$PHASE" "$DETAIL" "$EVIDENCE"
 exit 0
