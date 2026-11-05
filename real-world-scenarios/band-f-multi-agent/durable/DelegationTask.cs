@@ -296,11 +296,6 @@ internal sealed class DelegationTask
 
         _log.Line($"[control] {holder}'s output for turn {turn} committed");
 
-        if (await ShouldKillAsync(runtime, "producing", turn))
-        {
-            KillPoint($"turn {turn}'s specialist output is committed; the turn is not settled");
-        }
-
         return advanced;
     }
 
@@ -338,8 +333,10 @@ internal sealed class DelegationTask
                 {
                     Reason = "all-turns-served",
                     Turns = input.Turns.Count,
+                    // Both delegation events: a resumed turn records "delegated-from-memo", and a
+                    // filter on the bare name would silently drop exactly the turns a resume served.
                     Holders = new RunView(_harness.Store).Wire()
-                        .Where(revision => revision.Record.Event == "delegated")
+                        .Where(revision => revision.Record.Event.StartsWith("delegated", StringComparison.Ordinal))
                         .Select(revision => revision.Record.Agent)
                         .ToList(),
                 })));
@@ -380,7 +377,6 @@ internal sealed class DelegationTask
         {
             "routing" => _input.KillAfterRouting.Contains(turn),
             "delegating" => _input.KillAfterDelegating.Contains(turn),
-            "producing" => _input.KillAfterProducing.Contains(turn),
             "in-turn" => _input.KillInTurn.Contains(turn),
             _ => false,
         };

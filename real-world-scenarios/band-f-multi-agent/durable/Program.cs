@@ -56,7 +56,6 @@ internal static class Program
           --kill-after-routing <turn>[,<turn>...]     after that turn's routing decision commits,
                                                       announce a pid and wait to be killed
           --kill-after-delegating <turn>[,<turn>...]  the same, after the delegation commits
-          --kill-after-producing <turn>[,<turn>...]   the same, after the output commits
           --kill-in-turn <turn>[,<turn>...]           the same, inside a specialist's turn: the attempt
                                                       is committed and the model has not been asked
 
@@ -127,7 +126,6 @@ internal static class Program
                 Routing = requestedRouting,
                 KillAfterRouting = TurnsFrom(options, "--kill-after-routing"),
                 KillAfterDelegating = TurnsFrom(options, "--kill-after-delegating"),
-                KillAfterProducing = TurnsFrom(options, "--kill-after-producing"),
                 KillInTurn = TurnsFrom(options, "--kill-in-turn"),
             }
             : view.Input ?? new DelegationInput { Turns = Script.Turns, Routing = requestedRouting };
@@ -224,11 +222,6 @@ internal static class Program
         foreach (var turn in input.KillAfterDelegating)
         {
             yield return $"after turn {turn}'s delegation commits";
-        }
-
-        foreach (var turn in input.KillAfterProducing)
-        {
-            yield return $"after turn {turn}'s specialist output commits";
         }
 
         foreach (var turn in input.KillInTurn)
@@ -356,19 +349,27 @@ internal static class Program
             Check($"turn {turn}: the routing decision was written once", writes == 1, $"written {writes} time(s)");
         }
 
-        // 2. The specialist that produced a turn is the specialist the routing decision named.
+        // 2. Every turn that was delegated has a specialist output, and the specialist that produced
+        //    it is the one the routing decision named. A missing output is a failure, not a skip: the
+        //    claim is that the store cannot hold a delegation without the output that discharges it,
+        //    and a check that skips the absent case can never fail on it.
         foreach (var turn in turns)
         {
             var decision = view.Document(Docs.Routing, turn);
             var output = view.Document(Docs.Output, turn);
-            if (output is null || decision is null)
+
+            if (output is null)
             {
+                Check($"turn {turn}: no output for a committed delegation", false,
+                    "the store holds no band-f.specialist-output value for this turn");
                 continue;
             }
 
             Check($"turn {turn}: {output.Specialist} produced the turn it was routed",
-                output.Specialist == decision.Specialist,
-                $"routed {decision.Specialist}, produced by {output.Specialist}");
+                decision is not null && output.Specialist == decision.Specialist,
+                decision is null
+                    ? $"produced by {output.Specialist}, but no routing decision is stored"
+                    : $"routed {decision.Specialist}, produced by {output.Specialist}");
         }
 
         // 3. Every delegation names the routing decision it was made from, and that decision is in
@@ -383,10 +384,9 @@ internal static class Program
                 $"delegation names {delegation.Record?.RoutingEntry ?? "(none)"}, store holds {routing?.EntryId ?? "(none)"}");
         }
 
-        // 3b. Every delegation was made from the memo, not from a fresh answer. A delegation that
-        //     re-routed carries the event name "reused-routing" (its decision existed) or
-        //     "delegated" (nothing existed yet); a second "delegated" for the same turn is a memo
-        //     miss, and that is what the control in evidence.sh stage 3c produces.
+        // 3b. Control moved once per turn. The record is "delegated" when no decision existed yet and
+        //     "delegated-from-memo" when this process read one; a second delegation for the same turn
+        //     is a memo miss, and that is what the control in evidence.sh stage 3c produces.
         foreach (var turn in turns)
         {
             var delegations = wire.Where(revision => revision.Record.Turn == turn
@@ -399,20 +399,53 @@ internal static class Program
                 + string.Join(", ", delegations.Select(revision => revision.Record.Event)));
         }
 
-        // 4. The specialist's output and the fact that it was produced share an entry.
+        // 4. The specialist's output and the fact that it was produced share an entry. A missing
+        //    `produced` record is a failure for the same reason as a missing output: the record is
+        //    what says the output exists, and its absence is the half-written state this claim rules
+        //    out.
         foreach (var turn in turns)
         {
             var produced = wire.LastOrDefault(revision => revision.Record.Turn == turn && revision.Record.Event == "produced");
+            var output = view.Store.Document(Docs.Output.Kind, RunView.OwnerFor(turn))?.Versions.LastOrDefault();
+
             if (produced.Record is null)
             {
+                Check($"turn {turn}: no output for a committed delegation", false,
+                    "the store holds no produced record for this turn");
                 continue;
             }
 
-            var output = view.Store.Document(Docs.Output.Kind, RunView.OwnerFor(turn))?.Versions.LastOrDefault();
             Check($"turn {turn}: the output shares its entry with the record that says it exists",
                 output is not null && produced.EntryId == output.EntryId,
                 $"produced {produced.EntryId}, output {output?.EntryId ?? "(none)"}");
         }
+
+        // 4b. The run's closing `holders` list names every delegation the store holds. A filter on
+        //     the bare event name would drop every turn a resume served, because those record
+        //     "delegated-from-memo" — a bug that is invisible in the store and visible only in the
+        //     summary, which is exactly the sort of thing a claim has to catch.
+        // The task's outcome is the layer's TaskOutcome wrapper; the run's own result is its
+        // `Result`, and a store whose outcome is not shaped like that is a failure to report rather
+        // than an exception to throw out of a verifier.
+        var task = view.Task!;
+        IReadOnlyList<string> reported = [];
+        if (task.Outcome is { } outcome && outcome.ValueKind == JsonValueKind.Object)
+        {
+            var wrapped = outcome.Deserialize<global::Durable.TaskOutcome>(DurableJson.Options);
+            if (wrapped?.Result is { ValueKind: JsonValueKind.Object } result)
+            {
+                reported = result.Deserialize<DelegationResult>(DurableJson.Options)?.Holders ?? [];
+            }
+        }
+        var delegated = wire
+            .Where(revision => revision.Record.Event.StartsWith("delegated", StringComparison.Ordinal))
+            .Select(revision => revision.Record.Agent)
+            .ToList();
+        Check("the reported holders name every delegation in the store",
+            reported.SequenceEqual(delegated),
+            reported.Count == 0 && delegated.Count == 0
+                ? "the run has not finished and reports no holders"
+                : $"reported [{string.Join(", ", reported)}], store [{string.Join(", ", delegated)}]");
 
         // 5. Every turn in the run's script reached the store.
         var scriptTurns = view.Input?.Turns.Count ?? 0;

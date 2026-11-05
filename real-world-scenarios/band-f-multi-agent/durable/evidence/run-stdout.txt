@@ -79,8 +79,10 @@ PASS  turn 0: the output shares its entry with the record that says it exists �
 PASS  turn 1: the output shares its entry with the record that says it exists — produced e68, output e68
 PASS  turn 2: the output shares its entry with the record that says it exists — produced e101, output e101
 PASS  turn 3: the output shares its entry with the record that says it exists — produced e134, output e134
+PASS  the reported holders name every delegation in the store — reported [return_agent, refund_agent, order_agent, return_agent], store [return_agent, refund_agent, order_agent, return_agent]
 PASS  the run served all 4 turn(s) in its script — store holds 4 turn(s)
 verify: every claim held
+verify exit: 0
 
 ############ 1. SIGKILL after turn 0's delegation commits ############
 run dir:   <scratch>/kill-delegation
@@ -98,10 +100,10 @@ kill:      after turn 0's delegation commits
 [control] triage_agent routes turn 0 to return_agent (scripted)
 [control] routing decision for turn 0 committed at e9: return_agent (scripted)
 [control] delegation committed at e13: triage_agent -> return_agent holds turn 0 (routing decision e9)
-[seam] ready-to-kill pid=66254 — turn 0's delegation is committed; return_agent holds control and has produced nothing
+[seam] ready-to-kill pid=59420 — turn 0's delegation is committed; return_agent holds control and has produced nothing
 [seam] the store holds the commits above; this process will not exit on its own
 
-killed pid 66254 with SIGKILL
+killed pid 59420 with SIGKILL
 
 --- what the store held at the kill: the checkpoint names the holder ---
 {"turn":0,"event":"delegated","agent":"return_agent","request":"start the return: My order 1234 arrived damaged and the packaging was destroyed. I\u0027d like to return it.","routingEntry":"e9","entry":"e13","seq":15}
@@ -184,11 +186,13 @@ PASS  turn 0: the output shares its entry with the record that says it exists �
 PASS  turn 1: the output shares its entry with the record that says it exists — produced e68, output e68
 PASS  turn 2: the output shares its entry with the record that says it exists — produced e101, output e101
 PASS  turn 3: the output shares its entry with the record that says it exists — produced e134, output e134
+PASS  the reported holders name every delegation in the store — reported [return_agent, refund_agent, order_agent, return_agent], store [return_agent, refund_agent, order_agent, return_agent]
 PASS  the run served all 4 turn(s) in its script — store holds 4 turn(s)
 verify: every claim held
+verify exit: 0
 
 ############ 1c. control: a checkpoint that names the COORDINATOR resumes at the coordinator ############
-killed pid 69065 with SIGKILL
+killed pid 62342 with SIGKILL
 
 run dir:   <scratch>/kill-before-delegation
 dotnet:    /opt/homebrew/bin/dotnet (10.0.402)
@@ -224,10 +228,10 @@ kill:      after turn 1's routing decision commits (from the run's stored input)
 
 === turn 3 — return_agent holds control ===
 [control] return_agent holds control (delegated at e112, attempt 1)
-[seam] ready-to-kill pid=72814 — turn 3's specialist turn has been entered (attempt 1) and the model has not been asked; the store records the attempt and nothing it produced
+[seam] ready-to-kill pid=64455 — turn 3's specialist turn has been entered (attempt 1) and the model has not been asked; the store records the attempt and nothing it produced
 [seam] the store holds the commits above; this process will not exit on its own
 
-killed pid 72814 with SIGKILL
+killed pid 64455 with SIGKILL
 
 --- what the store held at the kill: the attempt, and no output for turn 3 ---
 {"turn":2,"event":"produced","agent":"order_agent","request":"look up the order: One more thing: what is the status of order 1234?","detail":"check_order_status","entry":"e101","seq":104}
@@ -281,29 +285,71 @@ PASS  turn 0: the output shares its entry with the record that says it exists �
 PASS  turn 1: the output shares its entry with the record that says it exists — produced e68, output e68
 PASS  turn 2: the output shares its entry with the record that says it exists — produced e101, output e101
 PASS  turn 3: the output shares its entry with the record that says it exists — produced e134, output e134
+PASS  the reported holders name every delegation in the store — reported [return_agent, refund_agent, order_agent, return_agent], store [return_agent, refund_agent, order_agent, return_agent]
 PASS  the run served all 4 turn(s) in its script — store holds 4 turn(s)
 verify: every claim held
+verify exit: 0
 
 --- turn 3, the resumed turn: the routing decision was written once and the output is the specialist's ---
 turn 3
   user:     Thanks for resolving this. One last thing: can you confirm the return for order 1234 is still open?
   routing:  return_agent for: start the return: Thanks for resolving this. One last thing: can you confirm the return for order 1234 is still open?
             written 1 time(s), source scripted
-  output:   Return initiated successfully for order 1234. You’ll receive return instructions via email.
-            return_agent, 2 model turn(s), pid 75733, tool process_return -> Return initiated successfully for order 1234. You will receive return instructions via email.
+  output:   The return for order 1234 was initiated successfully. Return instructions will be sent by email; the result doesn’t confirm whether the return is still open.
+            return_agent, 2 model turn(s), pid 66124, tool process_return -> Return initiated successfully for order 1234. You will receive return instructions via email.
 
 ############ 2c. the domain output survives a restart without re-running the specialist ############
 turn 3
   user:     Thanks for resolving this. One last thing: can you confirm the return for order 1234 is still open?
   routing:  return_agent for: start the return: Thanks for resolving this. One last thing: can you confirm the return for order 1234 is still open?
             written 1 time(s), source scripted
-  output:   Return initiated successfully for order 1234. You’ll receive return instructions via email.
-            return_agent, 2 model turn(s), pid 75733, tool process_return -> Return initiated successfully for order 1234. You will receive return instructions via email.
+  output:   The return for order 1234 was initiated successfully. Return instructions will be sent by email; the result doesn’t confirm whether the return is still open.
+            return_agent, 2 model turn(s), pid 66124, tool process_return -> Return initiated successfully for order 1234. You will receive return instructions via email.
 
 --- the process that produced it is gone; the output is still a value read by a new one ---
 
+############ 2d. control: a store with the output removed must FAIL verify ############
+forged: removed turn 3's specialist output and its produced record
+  entry e134: {'document-version': 1, 'entry-record': 1, 'entry': 1}
+  produced control records removed: 1
+  records: 223 -> 219
+
+--- show: the same fact, stated the other way ---
+turn 3
+  user:     Thanks for resolving this. One last thing: can you confirm the return for order 1234 is still open?
+  routing:  return_agent for: start the return: Thanks for resolving this. One last thing: can you confirm the return for order 1234 is still open?
+            written 1 time(s), source scripted
+  output:   (none)
+
+--- verify: this must FAIL ---
+PASS  turn 0: the routing decision was written once — written 1 time(s)
+PASS  turn 1: the routing decision was written once — written 1 time(s)
+PASS  turn 2: the routing decision was written once — written 1 time(s)
+PASS  turn 3: the routing decision was written once — written 1 time(s)
+PASS  turn 0: return_agent produced the turn it was routed — routed return_agent, produced by return_agent
+PASS  turn 1: refund_agent produced the turn it was routed — routed refund_agent, produced by refund_agent
+PASS  turn 2: order_agent produced the turn it was routed — routed order_agent, produced by order_agent
+FAIL  turn 3: no output for a committed delegation — the store holds no band-f.specialist-output value for this turn
+PASS  turn 0: the delegation names the routing decision it was made from — delegation names e9, store holds e9
+PASS  turn 1: the delegation names the routing decision it was made from — delegation names e42, store holds e42
+PASS  turn 2: the delegation names the routing decision it was made from — delegation names e75, store holds e75
+PASS  turn 3: the delegation names the routing decision it was made from — delegation names e108, store holds e108
+PASS  turn 0: control moved once from the committed decision — 1 delegation record(s): delegated
+PASS  turn 1: control moved once from the committed decision — 1 delegation record(s): delegated
+PASS  turn 2: control moved once from the committed decision — 1 delegation record(s): delegated
+PASS  turn 3: control moved once from the committed decision — 1 delegation record(s): delegated
+PASS  turn 0: the output shares its entry with the record that says it exists — produced e35, output e35
+PASS  turn 1: the output shares its entry with the record that says it exists — produced e68, output e68
+PASS  turn 2: the output shares its entry with the record that says it exists — produced e101, output e101
+FAIL  turn 3: no output for a committed delegation — the store holds no produced record for this turn
+PASS  the reported holders name every delegation in the store — reported [return_agent, refund_agent, order_agent, return_agent], store [return_agent, refund_agent, order_agent, return_agent]
+PASS  the run served all 4 turn(s) in its script — store holds 4 turn(s)
+verify: 2 claim(s) did not hold
+verify exit: 1
+the missing output is visible to verify, as it must be
+
 ############ 3. the routing memo: a resume that answers differently reuses the decision ############
-killed pid 77346 with SIGKILL
+killed pid 66841 with SIGKILL
 
 --- the store at the kill: turn 2 is routed, and no delegation has moved control yet ---
 {"turn":1,"event":"delegated","agent":"refund_agent","request":"process the refund: Please also process a refund for order 1234.","routingEntry":"e42","entry":"e46","seq":48}
@@ -328,7 +374,7 @@ turn 2
   routing:  order_agent for: look up the order: One more thing: what is the status of order 1234?
             written 1 time(s), source scripted
   output:   Order 1234 is being processed and is expected to ship in 2 business days.
-            order_agent, 2 model turn(s), pid 80015, tool check_order_status -> Order 1234 is currently being processed and will ship in 2 business days.
+            order_agent, 2 model turn(s), pid 67717, tool check_order_status -> Order 1234 is currently being processed and will ship in 2 business days.
 turn 3
 
 ############ 3c. control: bypass the memo, and the same resume diverges ############
@@ -341,20 +387,20 @@ turn 3
 [control] refund_agent holds control (delegated at e83, attempt 1)
 === turn 3 — triage_agent holds control ===
 [control] triage_agent routes turn 3 to order_agent (scripted)
-[control] delegation committed at e116: triage_agent -> order_agent holds turn 3 (routing decision e112)
+[control] delegation committed at e113: triage_agent -> order_agent holds turn 3 (routing decision e109)
 === turn 3 — order_agent holds control ===
-[control] order_agent holds control (delegated at e116, attempt 1)
+[control] order_agent holds control (delegated at e113, attempt 1)
 
 --- the store: turn 2's routing decision now has two versions, and the run reports the divergence ---
 turn 2
   user:     One more thing: what is the status of order 1234?
   routing:  refund_agent for: a second, different answer: One more thing: what is the status of order 1234?
             written 2 time(s), source scripted
-  output:   The tool returned: “Refund processed successfully for order 1234.”
-            refund_agent, 2 model turn(s), pid 81461, tool process_refund -> Refund processed successfully for order 1234.
+  output:   Order 1234’s refund was already processed successfully. I didn’t run the refund again, since that could duplicate the transaction; the earlier result was: “Refund processed successfully for order 1234.”
+            refund_agent, 1 model turn(s), pid 68621, tool process_refund -> (not called)
 turn 3
 
---- verify the forced run: this is the check the memo exists to keep passing ---
+--- verify the forced run: this must FAIL, and that is the check the memo exists to keep passing ---
 PASS  turn 0: the routing decision was written once — written 1 time(s)
 PASS  turn 1: the routing decision was written once — written 1 time(s)
 FAIL  turn 2: the routing decision was written once — written 2 time(s)
@@ -366,18 +412,20 @@ PASS  turn 3: order_agent produced the turn it was routed — routed order_agent
 PASS  turn 0: the delegation names the routing decision it was made from — delegation names e9, store holds e9
 PASS  turn 1: the delegation names the routing decision it was made from — delegation names e42, store holds e42
 PASS  turn 2: the delegation names the routing decision it was made from — delegation names e79, store holds e79
-PASS  turn 3: the delegation names the routing decision it was made from — delegation names e112, store holds e112
+PASS  turn 3: the delegation names the routing decision it was made from — delegation names e109, store holds e109
 PASS  turn 0: control moved once from the committed decision — 1 delegation record(s): delegated
 PASS  turn 1: control moved once from the committed decision — 1 delegation record(s): delegated
 PASS  turn 2: control moved once from the committed decision — 1 delegation record(s): delegated
 PASS  turn 3: control moved once from the committed decision — 1 delegation record(s): delegated
 PASS  turn 0: the output shares its entry with the record that says it exists — produced e35, output e35
 PASS  turn 1: the output shares its entry with the record that says it exists — produced e68, output e68
-PASS  turn 2: the output shares its entry with the record that says it exists — produced e105, output e105
-PASS  turn 3: the output shares its entry with the record that says it exists — produced e138, output e138
+PASS  turn 2: the output shares its entry with the record that says it exists — produced e102, output e102
+PASS  turn 3: the output shares its entry with the record that says it exists — produced e135, output e135
+PASS  the reported holders name every delegation in the store — reported [return_agent, refund_agent, refund_agent, order_agent], store [return_agent, refund_agent, refund_agent, order_agent]
 PASS  the run served all 4 turn(s) in its script — store holds 4 turn(s)
 verify: 1 claim(s) did not hold
-verify exited 1
+verify exit: 1
+the divergence is visible to verify, as it must be
 
 ############ 4. the live model: every routing decision made by the coordinator agent ############
 run dir:   <scratch>/live
@@ -460,35 +508,38 @@ PASS  turn 0: the output shares its entry with the record that says it exists �
 PASS  turn 1: the output shares its entry with the record that says it exists — produced e118, output e118
 PASS  turn 2: the output shares its entry with the record that says it exists — produced e176, output e176
 PASS  turn 3: the output shares its entry with the record that says it exists — produced e234, output e234
+PASS  the reported holders name every delegation in the store — reported [return_agent, refund_agent, order_agent, return_agent], store [return_agent, refund_agent, order_agent, return_agent]
 PASS  the run served all 4 turn(s) in its script — store holds 4 turn(s)
 verify: every claim held
+verify exit: 0
 
 --- show: the decisions, and the specialist that produced each turn ---
 turn 0
   user:     My order 1234 arrived damaged and the packaging was destroyed. I'd like to return it.
-  routing:  return_agent for: Customer's order 1234 arrived damaged with destroyed packaging; they want to initiate a return.
+  routing:  return_agent for: Customer's order 1234 arrived damaged with destroyed packaging. They want to initiate a return.
             written 1 time(s), source model, model claude-sonnet-5
-  output:   Your return for order 1234 has been initiated due to the damaged, destroyed packaging on arrival. You'll receive return instructions via email shortly — let me know if you need anything else.
-            return_agent, 3 model turn(s), pid 83107, tool process_return -> Return initiated successfully for order 1234. You will receive return instructions via email.
+  output:   Good news — I've initiated a return for order **1234** due to arriving damaged with destroyed packaging. Return instructions will be emailed to you shortly. Let me know if you need anything else!
+            return_agent, 3 model turn(s), pid 70242, tool process_return -> Return initiated successfully for order 1234. You will receive return instructions via email.
 turn 1
   user:     Please also process a refund for order 1234.
   routing:  refund_agent for: Customer requests a refund for order 1234.
             written 1 time(s), source model, model claude-sonnet-5
   output:   Your refund for order 1234 has been processed successfully.
-            refund_agent, 3 model turn(s), pid 83107, tool process_refund -> Refund processed successfully for order 1234.
+            refund_agent, 3 model turn(s), pid 70242, tool process_refund -> Refund processed successfully for order 1234.
 turn 2
   user:     One more thing: what is the status of order 1234?
-  routing:  order_agent for: Customer wants to know the status of order 1234.
+  routing:  order_agent for: Customer wants to know the status of order 1234, including shipping status.
             written 1 time(s), source model, model claude-sonnet-5
-  output:   Order 1234 is currently being processed and will ship in 2 business days.
-            order_agent, 3 model turn(s), pid 83107, tool check_order_status -> Order 1234 is currently being processed and will ship in 2 business days.
+  output:   Order 1234 is currently being processed and is expected to ship in 2 business days. It hasn't shipped yet, so no tracking info is available at this time.
+            order_agent, 3 model turn(s), pid 70242, tool check_order_status -> Order 1234 is currently being processed and will ship in 2 business days.
 turn 3
   user:     Thanks for resolving this. One last thing: can you confirm the return for order 1234 is still open?
   routing:  return_agent for: Customer wants to confirm whether the return for order 1234 is still open.
             written 1 time(s), source model, model claude-sonnet-5
-  output:   Yes, your return for order 1234 is confirmed and still open — it was successfully initiated, and return instructions will be sent to your email shortly. Let me know if you need anything else!
-            return_agent, 3 model turn(s), pid 83107, tool process_return -> Return initiated successfully for order 1234. You will receive return instructions via email.
+  output:   Checked on order **1234** — yes, the return is still open and active. The system confirms it was initiated successfully, and you'll receive (or should already have received) return instructions via email. Let me know if you need anything else!
+            return_agent, 3 model turn(s), pid 70242, tool process_return -> Return initiated successfully for order 1234. You will receive return instructions via email.
 
 ############ done ############
+every stage met its expectation, including the two controls that must fail verify
 
 scratch kept: <scratch>

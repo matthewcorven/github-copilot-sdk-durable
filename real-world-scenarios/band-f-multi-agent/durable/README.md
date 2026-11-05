@@ -39,7 +39,7 @@ Two commits, deliberately separate:
 
 | Commit | Writes | Checkpoint after |
 | --- | --- | --- |
-| routing | the `band-f.routing` document, the `band-f.user-turn` document, one `delegated` control record | unchanged — the coordinator still holds the turn |
+| routing | the `band-f.routing` document and the `band-f.user-turn` document, sharing one entry id. **No control record**: nothing moved | unchanged — the coordinator still holds the turn |
 | delegation | one `delegated`/`delegated-from-memo` control record naming the routing entry it was made from | `holder` = the specialist, `phase` = `specialist` |
 | production | the `band-f.specialist-output` document and one `produced` control record, sharing one entry id | `phase` = `settle`, holder unchanged |
 | settle | one `settled` control record | `holder` = `triage_agent`, `turn` = next, or the run completes |
@@ -109,14 +109,38 @@ The record carries the tool's own result beside the agent's prose
 (`tool process_return -> Return initiated successfully for order 1234. …`), so the claim can be
 checked against the tool rather than against the model's summary of it.
 
+**Control for this claim (stage 2d).** `verify`'s whole value is that it fails on a store the claim
+rules out, so the evidence forges one: a completed run with turn 3's `band-f.specialist-output`
+version and its `produced` record removed. `show` says `output: (none)`, and `verify` exits 1 with
+*two* failures rather than skipping the turn:
+
+```
+FAIL  turn 3: no output for a committed delegation — the store holds no band-f.specialist-output value for this turn
+FAIL  turn 3: no output for a committed delegation — the store holds no produced record for this turn
+verify: 2 claim(s) did not hold
+```
+
+**The limitation, stated where the claim is made.** "A resumed agent produces" means the specialist
+is handed its own prior output and asked to finish its task. It does **not** mean a half-finished
+model turn is resumed: this layer cannot continue one, the SDK is never asked to, and the resume
+re-enters the specialist's phase as a fresh turn. What survives is the delegation, the routing
+decision and whatever the specialist had already committed — not the in-flight call. Stage 2 is the
+demonstration, and stage 2d is the check on the other half of the claim: a delegation with no output
+must fail `verify`, not be skipped by it.
+
 ### 4. The routing decision is memoized
 
 The decision is a document, read before any model call. Stage 3 kills after turn 2's decision commits
-and resumes with `BAND_F_FLIP=1`, which makes the scenario answer with a *different* specialist:
+and resumes with `BAND_F_FLIP=1` set, which would make the scenario answer with a *different*
+specialist — and the resume never gets that far:
 
 ```
 [control] routing: turn 2 was already routed to order_agent (scripted) — reusing the committed decision, not asking again
 ```
+
+`BAND_F_FLIP` is set here to label the answer that was **not** asked for. It is unreachable on this
+resume because the memo returns before `DecideAsync` is called, which is the short-circuit working.
+The flip only becomes observable in stage 3c, where the read is skipped.
 
 **Control for this claim (stage 3c).** The same killed store, resumed with the memo read skipped
 (`BAND_F_FORCE_REROUTE=1`), diverges — and `verify` fails:
@@ -178,16 +202,23 @@ full run of it, from a clean scratch directory to the live-model stage, pasted u
 | 1c | The control: a checkpoint naming the coordinator resumes at the coordinator. | That the program picks holders at random — it does not; the difference is the store. |
 | 2 | `SIGKILL` inside a specialist's turn: the store holds the attempt and no output; the resume re-enters the specialist, hands it its earlier output, and produces once. | That the interrupted model call was *resumed*: it was not. The attempt was re-entered, and the SDK was never asked to continue a half-finished turn. |
 | 2c | The output survives with no process running. | That a second process could not have produced the same answer; only that it did not need to. |
-| 3 | A resume with a different answer reuses the committed decision. | That a real model would answer differently — `BAND_F_FLIP=1` makes the scripted path do so deterministically, which is a stronger claim, not a weaker one. |
+| 2d | The control for point 3's other half: a store with a turn's output and its `produced` record removed must *fail* `verify`. | That the forgery is a state the layer could produce by crashing; it is a state the variant claims it cannot produce, and the forgery is how the claim is tested. |
+| 3 | A resume that *would* answer differently reuses the committed decision. | That a real model would answer differently: `BAND_F_FLIP=1` is a controlled stand-in for model non-determinism, not evidence of it. On this stage the flip is also unreachable — the memo short-circuits before `DecideAsync` is called at all — so what the stage shows is the short-circuit, and the flip only labels the answer that was not asked for. |
 | 3c | Bypassing the memo makes the decision diverge, and `verify` catches it. | That the divergence would be silent otherwise; it is not silent, which is the point. |
 | 4 | A live model makes all four routing decisions through the tool, and `verify` holds. | Nothing about model determinism, and nothing about a kill against a live model: stage 4 is not killed. |
 
 ### The kill is a real kill, and it is not a crash-mid-write test
 
-Each killed stage starts `run.sh` in the background, reads the pid the scenario prints after the
+Each killed stage starts `run.sh` in the background, reads the pid **the app** prints after the
 commit it is stopping at returns, and sends `SIGKILL` to that pid. Nothing runs in the process
 afterwards: no `finally`, no flush, no disposal. `evidence.sh` then checks that the pid is gone and
 continues only if it is.
+
+The pid matters, and getting it wrong is a mistake this script made first. `run.sh` is a wrapper
+that starts the app and waits for it, so killing the wrapper leaves the app running and reparented to
+`pid 1`, where nothing the script holds can reach it and where it keeps the store lock. Each stage
+therefore registers both pids: the wrapper as a last resort, and the app — read from the app's own
+line — as the one that is killed and the one the exit trap can reach.
 
 That distinguishes two claims the band must not merge:
 
@@ -210,10 +241,12 @@ decision differs, and every record says which path produced it (`source: scripte
 model`).
 
 What it does **not** prove: that a model, asked twice, would answer differently and that the memo
-would catch it. `BAND_F_FLIP=1` makes the *scenario* answer differently, which exercises the same
-code path a divergent model would, but it is a stand-in for model non-determinism, not evidence of
-it. Stage 4 is the live-model evidence — every decision was made by `claude-sonnet-5` through the
-delegation tool — and stage 4 is not killed.
+would catch it. `BAND_F_FLIP=1` makes the *scenario* answer differently; it is a controlled stand-in
+for model non-determinism, not evidence of it, and on stage 3 it is not even reached — the memo
+returns before `DecideAsync` runs, so the flip labels an answer the process never asked for. What
+stage 3 shows is the short-circuit; what stage 3c shows is what the short-circuit prevents. Stage 4
+is the live-model evidence — every decision was made by `claude-sonnet-5` through the delegation
+tool — and stage 4 is not killed.
 
 The routing mode is part of the run's input, written once. A run that decided with a model cannot
 start deciding with keywords three turns later because a resume did not inherit an environment
@@ -229,9 +262,14 @@ PASS  turn 0: return_agent produced the turn it was routed — routed return_age
 PASS  turn 0: the delegation names the routing decision it was made from — delegation names e9, store holds e9
 PASS  turn 0: control moved once from the committed decision — 1 delegation record(s): delegated
 PASS  turn 0: the output shares its entry with the record that says it exists — produced e35, output e35
+PASS  the reported holders name every delegation in the store — reported [return_agent, refund_agent, order_agent, return_agent], store [return_agent, refund_agent, order_agent, return_agent]
 PASS  the run served all 4 turn(s) in its script — store holds 4 turn(s)
 verify: every claim held
 ```
+
+Every check that names a turn is a check that can *fail* on that turn. A missing output is a failure
+in both claims that inspect one, not a turn that is skipped: a verifier that skips the absent case
+passes exactly the store this variant exists to rule out, which is what stage 2d demonstrates.
 
 It exits 1 if any claim fails, and stage 3c is the run where one does. This is the difference between
 "the program printed that the delegation committed" and "the delegation is in the store".
@@ -248,24 +286,35 @@ The scenario talks to the SDK's bundled runtime through `DurableHarness`, so it 
 authentication. `BAND_F_MODEL` selects the model (default: the harness's `gpt-6-luna`); the captured
 live evidence used `claude-sonnet-5`.
 
-## The script, and the one turn that is not the sample's
+## The script, and what is not the sample's
 
 | # | Message | Source |
 | --- | --- | --- |
+| — | ~~`Hello, I need assistance with my recent purchase.`~~ | the sample's **opening message, not used** — see below |
 | 0 | `My order 1234 arrived damaged and the packaging was destroyed. I'd like to return it.` | the sample, response 1 |
 | 1 | `Please also process a refund for order 1234.` | the sample, response 2 |
 | 2 | `One more thing: what is the status of order 1234?` | **added by the F1 port** |
-| 3 | `Thanks for resolving this. One last thing: can you confirm the return for order 1234 is still open?` | **added here**, with the sample's response 3 folded in |
+| 3 | `Thanks for resolving this. One last thing: can you confirm the return for order 1234 is still open?` | the sample's response 3, with **this variant's addition folded in** |
 
-Turn 3 exists because design point 3 needs a turn that returns to a specialist that has already
-produced something: `return_agent` answers turn 0, and turn 3 asks it to continue. The sample's
-closing `Thanks for resolving this.` is folded into it, and that is a real behavioural difference
-worth naming: the coordinator here has exactly one capability, so a turn it cannot delegate is a turn
-it cannot serve. The first version of this script used the sample's closing line unmodified, and the
-live run failed on it — correctly, with *"the coordinator answered without calling
-delegate_to_specialist"* — rather than inventing a holder. Widening the coordinator's authority to
-keep a courtesy line was the alternative, and it would have cost the fail-closed property the routing
-guard is for.
+Two turns differ from the sample's script, and both differ for the same reason.
+
+**The opening greeting is dropped.** `Hello, I need assistance with my recent purchase.` names no
+order and no problem, so no specialist owns it: routing it would mean picking an agent at random, and
+the guard refuses that rather than inventing a holder. The script starts where the requests start.
+
+**The closing line is folded into a request.** `Thanks for resolving this.` stood alone when this
+script was written that way first, and the live run failed on it — correctly, with *"the coordinator
+answered without calling delegate_to_specialist"*. In the sample the triage agent is an ordinary chat
+agent and can simply reply; here routing **is** the coordinator's job, so a turn with nothing to
+route is outside it. Widening the coordinator's authority to keep a courtesy line was the alternative,
+and it would have cost the fail-closed property the routing guard exists for.
+
+Turn 3 also does work design point 3 needs: `return_agent` answers turn 0, so turn 3 is a turn that
+returns to a specialist that has already produced something and can be handed its own prior output.
+
+So "the same scripted user" is true of turns 0, 1 and 3's opening line, not of the script as a whole.
+The earlier claim that this was "the baseline's scripted user, verbatim" was wrong at turn 0 and is
+corrected here.
 
 The run stops on its own turn count, not on a phrase. The sample's `"welcome"` predicate only governs
 autonomous continuation in the .NET port anyway (see the baseline README's "What it does not do").

@@ -97,9 +97,6 @@ internal sealed record DelegationInput
     /// <summary>Turn indexes at which the process waits to be killed once the delegation commits.</summary>
     public List<int> KillAfterDelegating { get; init; } = [];
 
-    /// <summary>Turn indexes at which the process waits to be killed once the specialist output commits.</summary>
-    public List<int> KillAfterProducing { get; init; } = [];
-
     /// <summary>
     /// Turn indexes at which the process waits to be killed <i>inside</i> the specialist's turn: after
     /// the attempt is committed and before the model is called.
@@ -181,7 +178,11 @@ internal sealed record WireRecord
 {
     public required int Turn { get; init; }
 
-    /// <summary><c>routed</c>, <c>reused</c>, <c>delegated</c>, <c>produced</c> or <c>settled</c>.</summary>
+    /// <summary>
+    /// One of the four events the code emits: <c>delegated</c> (no decision existed),
+    /// <c>delegated-from-memo</c> (control moved from a decision already in the store),
+    /// <c>produced</c> (the specialist's output committed) or <c>settled</c> (the turn closed).
+    /// </summary>
     public required string Event { get; init; }
 
     /// <summary>The agent the record is about: the holder, or the agent that produced.</summary>

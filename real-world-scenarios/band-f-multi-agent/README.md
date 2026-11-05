@@ -323,9 +323,12 @@ These are observations from building and running the port, not criticisms of the
 
 ## The Durable variant
 
-`durable/` is the sibling of `baseline/`: the same four agents, the same three tools with the same
-result strings, and the same scripted user, with the delegation moved out of a framework executor's
-position and into a durable task's checkpoint. Both variants run from this folder.
+`durable/` is the sibling of `baseline/`: the same four agents and the same three tools with the same
+result strings, with the delegation moved out of a framework executor's position and into a durable
+task's checkpoint. The scripted user is close to, but not the same as, the baseline's — the opening
+greeting is dropped and the closing line folded into a request, both because a turn this coordinator
+cannot delegate is a turn it cannot serve. `durable/README.md` names both changes. Both variants run
+from this folder.
 
 ```bash
 ./run.sh                                  # baseline; needs OPENAI_API_KEY (see Prerequisites)
