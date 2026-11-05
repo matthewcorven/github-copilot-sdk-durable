@@ -1,0 +1,184 @@
+
+=== uname / date ===
+Darwin arm64
+2026-11-05T12:02:40Z
+
+=== dotnet --version ===
+10.0.402
+
+=== dotnet --info (SDK, workloads, base path) ===
+.NET SDK:
+ Version:           10.0.402
+ Commit:            a8dd0577c5
+ Workload version:  10.0.403
+ MSBuild version:   18.9.15+a8dd0577c
+
+Runtime Environment:
+ OS Name:     Mac OS X
+ OS Version:  26.5
+ OS Platform: Darwin
+ RID:         osx-arm64
+ Base Path:   /opt/homebrew/Cellar/dotnet/10.0.402/libexec/sdk/10.0.402/
+
+.NET workloads installed:
+ [maui-android]
+   Installation Source: SDK 10.0.400
+   Manifest Version:    10.0.110/10.0.100
+   Manifest Path:       /Users/core/.dotnet/sdk-manifests/10.0.100/microsoft.net.sdk.maui/10.0.110/WorkloadManifest.json
+   Install Type:        FileBased
+
+Configured to use workload sets when installing new manifests.
+
+Host:
+  Version:      10.0.13
+  Architecture: arm64
+  Commit:       4099f83977
+
+.NET SDKs installed:
+  10.0.402 [/opt/homebrew/Cellar/dotnet/10.0.402/libexec/sdk]
+
+.NET runtimes installed:
+  Microsoft.AspNetCore.App 10.0.13 [/opt/homebrew/Cellar/dotnet/10.0.402/libexec/shared/Microsoft.AspNetCore.App]
+  Microsoft.NETCore.App 10.0.13 [/opt/homebrew/Cellar/dotnet/10.0.402/libexec/shared/Microsoft.NETCore.App]
+
+Other architectures found:
+  None
+
+Environment variables:
+  DOTNET_CLI_TELEMETRY_OPTOUT              [1]
+  DOTNET_ROOT                              [/opt/homebrew/Cellar/dotnet/10.0.402/libexec]
+
+global.json file:
+  Not found
+
+Learn more:
+  https://aka.ms/dotnet/info
+
+Download .NET:
+  https://aka.ms/dotnet/download
+
+=== dotnet workload list ===
+
+Workload version: 10.0.403
+
+Installed Workload Id      Manifest Version       Installation Source
+---------------------------------------------------------------------
+maui-android               10.0.110/10.0.100      SDK 10.0.400       
+
+Use `dotnet workload search` to find additional workloads to install.
+
+
+=== dotnet workload search maui ===
+
+Workload ID           Description                    
+-----------------------------------------------------
+maui                  .NET MAUI SDK for all platforms
+maui-android          .NET MAUI SDK for Android      
+maui-desktop          .NET MAUI SDK for Desktop      
+maui-ios              .NET MAUI SDK for iOS          
+maui-maccatalyst      .NET MAUI SDK for Mac Catalyst 
+maui-mobile           .NET MAUI SDK for Mobile       
+maui-tizen            .NET MAUI SDK for Tizen        
+maui-windows          .NET MAUI SDK for Windows      
+
+
+=== dotnet new list maui ===
+These templates matched your input: 'maui'
+
+Template Name                             Short Name                   Language  Tags                                                                          
+----------------------------------------  ---------------------------  --------  ------------------------------------------------------------------------------
+.NET MAUI App                             maui                         [C#]      MAUI/Android/iOS/macOS/Mac Catalyst/Windows/Mobile/Tizen                      
+.NET MAUI Blazor Hybrid and Web App       maui-blazor-web              [C#]      MAUI/Android/iOS/macOS/Mac Catalyst/Windows/Blazor/Blazor Hybrid/Mobile/Tizen 
+.NET MAUI Blazor Hybrid App               maui-blazor                  [C#]      MAUI/Android/iOS/macOS/Mac Catalyst/Windows/Blazor/Blazor Hybrid/Mobile/Tizen 
+.NET MAUI Class Library                   mauilib                      [C#]      MAUI/Android/iOS/macOS/Mac Catalyst/Windows/Mobile/Tizen                      
+.NET MAUI ContentPage (C#)                maui-page-csharp             [C#]      MAUI/Android/iOS/macOS/Mac Catalyst/WinUI/Xaml/Code/Tizen                     
+.NET MAUI ContentPage (XAML)              maui-page-xaml               [C#]      MAUI/Android/iOS/macOS/Mac Catalyst/WinUI/Xaml/Code/Tizen                     
+.NET MAUI ContentView (C#)                maui-view-csharp             [C#]      MAUI/Android/iOS/macOS/Mac Catalyst/WinUI/Xaml/Code/Tizen                     
+.NET MAUI ContentView (XAML)              maui-view-xaml               [C#]      MAUI/Android/iOS/macOS/Mac Catalyst/WinUI/Xaml/Code/Tizen                     
+.NET MAUI Fluent Blazor Hybrid and We...  fluentmaui-blazor-web        [C#]      MAUI/Android/iOS/macOS/Mac Catalyst/Windows/Blazor/Blazor Hybrid/Mobile/Fluent
+.NET MAUI for Aspire Service Defaults     maui-aspire-servicedefaults  [C#]      MAUI/Aspire/Cloud/Web/Web API/API/Service                                     
+.NET MAUI Multi-Project App               maui-multiproject            [C#]      MAUI/Android/iOS/macOS/Mac Catalyst/Windows/Mobile                            
+.NET MAUI ResourceDictionary (XAML)       maui-dict-xaml               [C#]      MAUI/Android/iOS/macOS/Mac Catalyst/WinUI/Xaml/Code                           
+.NET MAUI Window (C#)                     maui-window-csharp           [C#]      MAUI/Android/iOS/macOS/Mac Catalyst/WinUI/Xaml/Code/Tizen                     
+.NET MAUI Window (XAML)                   maui-window-xaml             [C#]      MAUI/Android/iOS/macOS/Mac Catalyst/WinUI/Xaml/Code/Tizen                     
+
+
+=== Android SDK environment ===
+ANDROID_HOME=<unset>
+ANDROID_SDK_ROOT=<unset>
+ls: /Users/core/Library/Android/sdk: No such file or directory
+adb/emulator/sdkmanager: not on PATH
+
+=== Java runtime ===
+/usr/bin/java
+/usr/bin/javac
+The operation couldn’t be completed. Unable to locate a Java Runtime.
+Please visit http://www.java.com for information on installing Java.
+
+
+=== dotnet build -f net10.0-android (android-only MAUI app) ===
+  Determining projects to restore...
+  Restored /private/var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-e-probe.OMWuh8/BandEProbe/BandEProbe.csproj (in 230 ms).
+/Users/core/.dotnet/packs/Microsoft.Android.Sdk.Darwin/36.1.118/tools/Xamarin.Android.Tooling.targets(58,5): warning : An exception occurred while reading the output of '/usr/libexec/java_home -X'. Exception: Root element is missing. [/private/var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-e-probe.OMWuh8/BandEProbe/BandEProbe.csproj::TargetFramework=net10.0-android]
+/Users/core/.dotnet/packs/Microsoft.Android.Sdk.Darwin/36.1.118/tools/Xamarin.Android.Tooling.targets(58,5): warning XA5300: An exception occurred while reading the output of '/usr/libexec/java_home -X'. Exception: Root element is missing. [/private/var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-e-probe.OMWuh8/BandEProbe/BandEProbe.csproj::TargetFramework=net10.0-android]
+/Users/core/.dotnet/packs/Microsoft.Android.Sdk.Darwin/36.1.118/tools/Xamarin.Android.Tooling.targets(58,5): error XA5300: The Android SDK directory could not be found. Install the Android SDK by following the instructions at: https://aka.ms/dotnet-android-install-sdk [/private/var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-e-probe.OMWuh8/BandEProbe/BandEProbe.csproj::TargetFramework=net10.0-android]
+/Users/core/.dotnet/packs/Microsoft.Android.Sdk.Darwin/36.1.118/tools/Xamarin.Android.Tooling.targets(58,5): error XA5300: To use a custom SDK path for a command line build, set the 'AndroidSdkDirectory' MSBuild property to the custom path. [/private/var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-e-probe.OMWuh8/BandEProbe/BandEProbe.csproj::TargetFramework=net10.0-android]
+
+Build FAILED.
+
+/Users/core/.dotnet/packs/Microsoft.Android.Sdk.Darwin/36.1.118/tools/Xamarin.Android.Tooling.targets(58,5): warning : An exception occurred while reading the output of '/usr/libexec/java_home -X'. Exception: Root element is missing. [/private/var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-e-probe.OMWuh8/BandEProbe/BandEProbe.csproj::TargetFramework=net10.0-android]
+/Users/core/.dotnet/packs/Microsoft.Android.Sdk.Darwin/36.1.118/tools/Xamarin.Android.Tooling.targets(58,5): warning XA5300: An exception occurred while reading the output of '/usr/libexec/java_home -X'. Exception: Root element is missing. [/private/var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-e-probe.OMWuh8/BandEProbe/BandEProbe.csproj::TargetFramework=net10.0-android]
+/Users/core/.dotnet/packs/Microsoft.Android.Sdk.Darwin/36.1.118/tools/Xamarin.Android.Tooling.targets(58,5): error XA5300: The Android SDK directory could not be found. Install the Android SDK by following the instructions at: https://aka.ms/dotnet-android-install-sdk [/private/var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-e-probe.OMWuh8/BandEProbe/BandEProbe.csproj::TargetFramework=net10.0-android]
+/Users/core/.dotnet/packs/Microsoft.Android.Sdk.Darwin/36.1.118/tools/Xamarin.Android.Tooling.targets(58,5): error XA5300: To use a custom SDK path for a command line build, set the 'AndroidSdkDirectory' MSBuild property to the custom path. [/private/var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-e-probe.OMWuh8/BandEProbe/BandEProbe.csproj::TargetFramework=net10.0-android]
+    2 Warning(s)
+    1 Error(s)
+
+Time Elapsed 00:00:00.21
+
+exit=1
+
+
+=== RETROSPECTIVE CAPTURES (2026-11-05, added after review of #196) ===
+The report above is a post-install state dump. The workload-install history the README
+narrates happened BEFORE it and was not captured at the time. Everything below was
+captured now, on the same machine, and says exactly how much of it is replayable.
+
+=== 1. The workload-install garbage collection, live ===
+$ dotnet workload install maui-android    # re-run with the workload already installed
+
+Checking for updated workload version.
+Skipping NuGet package signature verification.
+No workload update found.
+Workload(s) 'maui-android' are already installed.
+Garbage collecting for SDK feature band(s) 10.0.400...
+
+Successfully installed workload(s) .
+
+This reproduces the observable shape of the report: a run that says "Successfully
+installed workload(s)" and then garbage-collects the 10.0.400 feature band anyway.
+It is NOT the original failure: the packs are already present, so nothing is removed
+and NETSDK1147 does not recur. The first-run transcript is recollected, not captured.
+
+=== 2. `dotnet new maui` exit 103 ===
+NOT re-runnable here: Microsoft.Maui.Templates.net10 is now installed, so the template
+resolves. 103 is the documented TemplateNotFound code:
+https://aka.ms/templating-exit-codes#103
+
+=== 3. Template package state, live ===
+$ dotnet new details Microsoft.Maui.Templates.net10
+Microsoft.Maui.Templates.net10
+   Package version: 10.0.120
+   Reserved: True
+
+$ dotnet new install Microsoft.Maui.Templates.net10    # idempotent re-check
+The following template package(s) are already available:
+   Microsoft.Maui.Templates.net10@10.0.110
+For details on the exit code, refer to https://aka.ms/templating-exit-codes#106
+
+=== 4. Free space, live ===
+$ df -h /System/Volumes/Data
+Filesystem      Size    Used   Avail Capacity iused ifree %iused  Mounted on
+/dev/disk3s5   1.8Ti   1.2Ti   557Gi    70%    4.8M  5.8G    0%   /System/Volumes/Data
+
+$ du -sh ~/.dotnet/packs
+3.2G	/Users/core/.dotnet/packs

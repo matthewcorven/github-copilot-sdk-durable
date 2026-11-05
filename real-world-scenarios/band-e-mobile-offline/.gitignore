@@ -1,0 +1,8 @@
+# The Foundry Local AAR is fetched, never committed: its license forbids redistribution.
+# See DECISION-bridge.md §5 and fetch-aar.sh.
+libs/
+*.aar
+
+# Any MAUI/Android head added here follows the other bands.
+bin/
+obj/
