@@ -77,8 +77,10 @@ public sealed class EnquiryStore : IAsyncDisposable
         // The task closes over the conversation lookup, so it is built before the registry is
         // populated. The only durable input is the store; the session is this process's.
         EnquiryStore? self = null;
-        var definition = EnquiryDurable.Task(store, (input, prompt, token) =>
-            self!.SendAsync(input.ConversationId, prompt, token));
+        var definition = EnquiryDurable.Task(
+            store,
+            (input, prompt, token) => self!.SendAsync(input.ConversationId, prompt, token),
+            conversationId => self!.LastCheckpoint(conversationId));
 
         var harness = await DurableHarness.OpenAsync(store, registry, options, cancellationToken);
         self = new EnquiryStore(harness, definition);
@@ -232,6 +234,23 @@ public sealed class EnquiryStore : IAsyncDisposable
         var message = await conversation.SubmitAsync(prompt, cancellationToken);
         return message?.Data.Content ?? string.Empty;
     }
+
+    /// <summary>
+    /// The conversation's most recent checkpoint, read from the durable store.
+    /// </summary>
+    /// <remarks>
+    /// This is the layer's own record of what the model did last — a <c>turn:&lt;messageId&gt;</c>
+    /// entry when an answer committed — and it is the only evidence that separates a turn that
+    /// finished from one that had just been sent. It is read from the store rather than from a live
+    /// session so a resumed task can consult it before it has reconnected to anything.
+    /// </remarks>
+    public ConversationCheckpoint? LastCheckpoint(string conversationId) =>
+        Store.Document(CheckpointKind, conversationId)?.Latest is { } latest
+            ? latest.Deserialize<ConversationCheckpoint>(DurableJson.Options)
+            : null;
+
+    /// <summary>The document kind the durable layer commits a conversation's checkpoints under.</summary>
+    private const string CheckpointKind = "durable.checkpoint";
 
     /// <summary>Waits for an enquiry's task to finish and returns what it committed.</summary>
     public Task<TaskOutcome> WaitAsync(string taskId, CancellationToken cancellationToken = default) =>

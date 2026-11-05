@@ -43,6 +43,10 @@ public static class EnquiryDurable
     /// a task restored in a new process reaches its session through this delegate, which is the
     /// process that resumed it.
     /// </param>
+    /// <param name="conversationCheckpoint">
+    /// Reads the conversation's latest checkpoint, or null when there is none. It is what lets a
+    /// resumed turn tell "finished" from "started"; see <see cref="EnquiryTask.Run"/>.
+    /// </param>
     /// <returns>The task definition to register.</returns>
     /// <remarks>
     /// The definition is built per process rather than once, because the closure is the whole
@@ -51,11 +55,14 @@ public static class EnquiryDurable
     /// </remarks>
     public static DurableTaskDefinition Task(
         DurableStore store,
-        Func<EnquiryInput, string, CancellationToken, Task<string>> send) =>
+        Func<EnquiryInput, string, CancellationToken, Task<string>> send,
+        Func<string, ConversationCheckpoint?>? conversationCheckpoint = null) =>
         DurableTask.Define<EnquiryInput, EnquiryCheckpoint, EnquiryOutcome>(
             TaskName,
             () => new EnquiryCheckpoint { Phase = EnquiryPhases.Run, EnquiryPhase = EnquiryPhases.Queued },
-            (input, checkpoint, runtime) => EnquiryTask.Run(store, send, input, checkpoint, runtime),
+            (input, checkpoint, runtime) =>
+                EnquiryTask.Run(store, send, input, checkpoint, runtime,
+                    conversationCheckpoint is null ? null : () => conversationCheckpoint(input.ConversationId)),
             (_, checkpoint, runtime) => runtime.CommitAsync(() => TaskCommit.Aborted()));
 
     /// <summary>

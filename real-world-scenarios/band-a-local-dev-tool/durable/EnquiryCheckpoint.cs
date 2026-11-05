@@ -35,14 +35,14 @@ public sealed class EnquiryCheckpoint
     public int Turns { get; set; }
 
     /// <summary>
-    /// The answer the turn in flight produced, so an interrupted process does not lose it.
+    /// The conversation's checkpoint identity as it stood when this turn's prompt was sent.
     /// </summary>
     /// <remarks>
-    /// A model that reports <c>done</c> through its phase tool ends the enquiry before its answer
-    /// is committed. If the process dies between those two commits, the answer exists nowhere
-    /// else: the document is already terminal and the transcript entry never landed. Carrying it
-    /// on the checkpoint is what closes that window — the resumed task attaches it as the report
-    /// instead of finishing with <c>report: null</c>.
+    /// The durable layer commits a <c>turn:&lt;messageId&gt;</c> checkpoint when a turn's answer
+    /// lands (<see cref="DurableConversation.Checkpoint"/>). Recording what it was <em>before</em>
+    /// the prompt goes out is what lets a resume answer the one question the turn count cannot:
+    /// did that turn finish? A different checkpoint afterwards means it did, and its content is
+    /// the answer — so the turn is not sent a second time.
     /// </remarks>
-    public string? Answer { get; set; }
+    public string? SeenCheckpoint { get; set; }
 }

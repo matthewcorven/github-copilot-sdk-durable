@@ -45,15 +45,35 @@ the task is the writer — the task checkpoint. A process that dies *between* tw
 therefore restarts at the transition after the last one that committed; it cannot restart on a
 half-written document.
 
-**A process that dies inside a model turn re-runs that turn on resume, so the turn's tool calls
-happen again.** The checkpoint boundary is the turn, not the tool call inside it. Nothing in the
-store records "this turn's answer was committed": the turn's tool calls are committed as they
-happen, the answer is not, and a restart has no way to tell a turn that finished from a turn that
-had just started. Stage 6 of `evidence.sh` measures the cost on the recorded runtime — a kill after
-`writing_report` resumes to **12** transcript entries where an uninterrupted run of the same
-fixture ends at **9** — and stage 6b prints the duplicated `intent`/`tool` lines that make up the
-difference. This is a documented limit, not a guarantee: a real system would reconcile the
-interrupted turn against the native session instead of re-sending it.
+**A process that dies inside a model turn re-runs that turn on resume if the turn's answer never
+committed.** The checkpoint boundary is the turn, not the tool call inside it: the turn's tool calls
+are committed as they happen, the answer is not, and a process killed in between leaves a document
+whose phase has moved but whose answer is missing. What happens next depends on whether the answer
+made it:
+
+- **The answer committed.** `EnquiryTask.SettledTurnAnswer` compares the conversation's
+  `turn:<messageId>` checkpoint against the one the task recorded before sending. A different,
+  non-null checkpoint means the turn finished, so the resume writes that answer to the transcript
+  and continues *without sending the prompt again*. Stage 6e/6f exercise this: the resume ends at
+  the clean run's 9 entries plus one recovery note, with one `intent` line.
+- **The answer did not commit.** Nothing durable says the turn ran, so it is sent again and its
+  effects happen twice. Stage 6 measures this on the recorded runtime.
+
+That second case is where the reported numbers need care. Stage 6's resume reaches **12** entries
+against a clean run's **9**, but that surplus is **not** the interrupted turn alone: the resumed
+process reconnects to a session the recorded runtime serves from its first turn (announced on
+`REPLAY_MARKER_PATH` as `synthesised session`), so every earlier turn is sent and committed again.
+Same effect as stage 2, which also ends one entry above its clean run. `12 - 9` is therefore a
+recorded-runtime **upper bound** on the boundary cost, not a measurement of it; only a live CLI,
+where a resumed session continues rather than restarts, can separate the two. The evidence file says
+this in "What stage 6 does and does not measure" rather than subtracting the two numbers.
+
+Where the reconciliation lives is a deliberate choice. The durable layer persists and exposes the
+turn checkpoints (`DurableConversation.Checkpoint()`), so a variant *can* read them — this one does.
+The cleaner home for it is the layer itself, which knows the native transcript and could make a
+resume see the true prior turn; the variant reads the checkpoint document instead because that is
+the only handle it has. That is a workaround for a missing layer affordance, not a property of the
+design.
 
 Where the boundary sits was the design decision, and it is not the obvious one. The baseline's
 unit of work is a whole enquiry: one Copilot session, one run loop, one dictionary entry. Here the
@@ -260,12 +280,20 @@ Not executed:
   fail the enquiry, and it does not silently discard anything; it costs duplicate transcript
   entries. Reconciling the interrupted turn against the native session is what a real system would
   do instead, and `lib/Durable.cs` does not expose the native transcript to make that possible.
-- **A `done` enquiry whose report never committed is recovered with one extra turn.** A process
-  killed between the model reporting `done` and the answer committing leaves a terminal document
-  with `report: null`. Resuming it asks the model for the report once, recorded in the task's memo
-  so it happens at most once, and marks the transcript with a `note` either way. Stage 3d/3e show
-   the window and the recovery. It costs one extra model turn in exactly that crash window, and the
-  report text is the model's second answer, not the lost first one.
+- **A `done` enquiry whose answer never committed loses that answer, and the recovery replaces it.**
+  A process killed between the model reporting `done` and the answer committing leaves a terminal
+  document with `report: null`. Resuming asks the model once more, guarded by a task memo so it
+  happens at most once, and marks the transcript with a `note`. **The user's original text is
+  gone**; what the enquiry ends up holding is a second answer. On the recorded runtime the two are
+  byte-identical because the same turn is replayed, which makes the recovery look lossless when the
+  evidence cannot show that — stage 3e is the re-prompt path and stage 3f/3g the path where the
+  answer survived, and only the stage-3g run attaches text that was really there. Cost: one extra
+  model turn in exactly that crash window, plus the original answer.
+  The distinction is real in the store even though the text is not, and the prompt counts show it:
+  an uninterrupted run admits **2** prompts; stage 3g's kill-then-resume admits **2** as well,
+  because the answer had already committed and the recovery attaches it, and its note reads `the
+  report was recovered from the answer already committed`; stage 3e's resume needs a **third**
+  prompt, and its note says `asking for it again`.
 - **The card hides, the record does not.** A rejected enquiry carries a committed `hideAt` fifteen
   seconds after the rejection, and `Home.razor`'s `Hidden` predicate filters the card out once that
   time has passed. The *predicate* flips at fifteen seconds; the *render* does not necessarily. The

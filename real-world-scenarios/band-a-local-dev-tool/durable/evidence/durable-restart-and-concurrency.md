@@ -1,6 +1,6 @@
 # Band A Durable variant — captured restart, terminal-state, concurrency, and recovery evidence
 
-Everything below was produced on 2026-11-04 on macOS arm64 with .NET SDK 10.0.402 at
+Everything below was produced on 2026-11-05 on macOS arm64 with .NET SDK 10.0.402 at
 `/opt/homebrew/bin/dotnet`, by running `durable/evidence.sh`. The blocks are the programs' own
 stdout, filtered only to drop the NuGet advisory the build prints (NU1903 for
 `SQLitePCLRaw.lib.e_sqlite3`) and the EF Core model-validation warning. Nothing else is edited:
@@ -13,74 +13,134 @@ cd durable
 ./evidence.sh          # every stage below
 ```
 
-Every stage here runs against `tools/ReplayRuntime` with the fixtures in `fixtures/`, so it needs
-no Copilot sign-in, no model and no network. The one stage that cannot use the recorded runtime is
-stage 4's *live* mode: the recorded runtime returns the whole recorded session when the client
-names a session of its own, so it cannot give two customers two different transcripts.
-`LIVE=1 ./evidence.sh` runs stage 4 against the signed-in `copilot` executable instead; the run
-below is the recorded one.
+**Every stage here runs against the recorded runtime** (`tools/ReplayRuntime`) with the fixtures in
+`fixtures/`, so it needs no Copilot sign-in, no model and no network. That is also this file's most
+important caveat, and it is why the counts below are attributed rather than subtracted — see
+"What stage 6 does and does not measure".
 
-The kill point is `BAND_A_EXIT_AFTER_PHASE=<phase>`: the process exits the moment that phase is
-committed, on the commit path, so the store is guaranteed to hold the phase the process died
-after. It is not a timer and not a race.
+`LIVE=1 ./evidence.sh` runs stage 4 against the signed-in `copilot` executable instead. Stage 4 is
+the only stage with a live mode; stages 6e/6f and 3f/3g are recorded-runtime too, and a live session
+would answer them differently in one respect noted below.
+
+The kill points are environment variables, and they fire inside the process:
+
+| Variable | Fires |
+| --- | --- |
+| `BAND_A_EXIT_AFTER_PHASE=<phase>` | after that phase commits, before anything else |
+| `BAND_A_EXIT_AFTER_ANSWER=<phase>` | after that phase's turn **answer** commits, before the task boundary |
+| `BAND_A_EXIT_BEFORE_ANSWER=<phase>` | after the turn returns, before its answer is committed |
+
+All three are real `Environment.Exit` calls on the commit path, so the store is guaranteed to hold
+whatever the process died after — there is no timer and no window to miss.
 
 ## The stages, and what each proves
 
 | Stage | Proves |
 | --- | --- |
+| 0 | The uninterrupted run every later stage is compared against: 9 entries, 2 prompts. |
 | 1 | A mid-enquiry process death is reproducible on purpose: exit 42 immediately after `searching` commits. |
-| 2 | A new process resumes the same enquiry at `searching` and finishes it — requirement 2. |
+| 2 | A new process resumes the same enquiry at `searching` and finishes it — requirement 2, and one entry above stage 0 because the recorded runtime replays a turn. |
 | 3 | A rejected enquiry is terminal: four phase wakeups, two tool writes and a report attach are all refused — requirement 3. |
 | 3b | The same, with a fixture whose rejection turn also calls `report_intent` and `search_properties`. |
 | 3c | The rejection survives a restart. The baseline deletes it after fifteen seconds; this cannot. |
-| 3d | A kill after the model reports `done` leaves a terminal document with no report. |
-| 3e | Resuming that store recovers the report instead of committing `report: null`. |
+| 3d | A kill after the model reports `done`, **before** its answer commits, leaves a terminal document with no report. |
+| 3e | Resuming that store recovers the report by asking the model once — 3 prompts against stage 0's 2. |
+| 3f | The same window killed **after** the answer commits. |
+| 3g | Resuming *that* store recovers the report from the committed answer with **no extra prompt** — 2 prompts, like stage 0. |
 | 4 | Two enquiries for two customers complete with disjoint transcripts and tasks — requirement 4. |
 | 5 | Two races at one document: the rank rule landing once, and the commit gate landing twice from two targets. |
-| 6 | A kill **inside** a turn re-runs that turn on resume, and the transcript shows the duplication. |
-| 6b/6c/6d | The size of that re-run, measured against an uninterrupted run of the same fixture. |
+| 6 | Kill inside a turn whose answer never committed; the resumed process replays the session. |
+| 6b–6d | What that resume costs, and how much of it the recorded runtime contributes. |
+| 6e | A kill after a **finished** turn's answer commits. |
+| 6f | Resuming that store does not re-send the turn — the reconciliation works, and is asserted. |
 
-## What the evidence shows about checkpoint boundaries
+## What the runs show about checkpoint boundaries
 
-Two facts about the boundary are visible in these stages and are worth stating before the output:
+Two facts about the boundary are visible in these stages, and neither is a claim that the recorded
+runtime can prove on its own.
 
-1. **A kill at a transition resumes without repeating work.** Stage 1 kills after `searching` is
-   committed; stage 2 resumes and finishes at 10 entries, which is the same count an uninterrupted
-   run of that fixture produces.
-2. **A kill inside a turn is a different thing.** Stage 6 kills after the transition to
-   `writing_report`, inside the turn that follows it — after the model has already committed its
-   tool calls. Stage 6b resumes and the transcript grows to **12**: the turn is re-sent, and the
-   intent and tool entries it had already committed are recorded a second time. Stage 6c is the
-   same fixture with no kill, which ends at **9**, and stage 6d subtracts the two.
+1. **A kill at a transition resumes, and the resume is not free.** Stage 1 kills after `searching`
+   is committed and stage 2 finishes the enquiry — but at **10** entries where stage 0's
+   uninterrupted run of the same fixture produces **9**, and the transcript shows
+   `intent: Validate home enquiry` twice. The extra entry is replayed work, not a re-render: the
+   resumed process reconnects to a session the recorded runtime serves from its first turn, so the
+   earlier turn is sent and committed again. Same mechanism as stage 6, same cause. **Stage 2's 10
+   does not mean "nothing repeated"; it means "the enquiry finished, with one turn replayed by the
+   recorded runtime".**
+2. **A kill inside a turn is worse, and the size of the difference is not all the turn.** Stage 6
+   kills with the phase at `writing_report` and the pre-answer tool calls already committed; the
+   interrupted turn produced no answer, so the platform has no record that it ran. Stage 6b resumes,
+   reconnects, and is served the recording from its first turn: the intent lines and the tool line
+   are committed a second time and the transcript reaches **12** against stage 0's **9**.
 
-So the checkpoint boundary is the **turn**, not the tool call inside it. A process that dies
-between two transitions resumes at a transition. A process that dies within a turn re-runs that
-turn, and the turn's effects happen again. That is a real limit of this design, it is measured
-here rather than asserted, and `README.md` documents it.
+The other side of the coin is stages 6e/6f, and it *is* a boundary result the recorded runtime can
+settle: when the turn's answer and its `turn:<messageId>` checkpoint both committed before the
+kill, the resume recognises the turn as finished and does not send it again — 9 transcript entries
+plus one recovery note, one `intent` line, one `tool` line.
 
-## What stage 5 is, and is not
+## What stage 6 does and does not measure
 
-Stage 5 runs two separate races, because the first one alone cannot distinguish a correct gate from
-a correct rank comparison:
+Stage 6d reports the two totals and the duplicated intent count, and it deliberately does **not**
+call the surplus "the interrupted turn". Two effects are folded into it:
 
-- **One target, eight writers.** `1 of 8` lands. Any implementation that refuses a move to a phase
-  the document has already passed produces this, including a single-threaded loop. It is a
-  demonstration of the forward-only rule.
-- **Two forward targets, eight writers.** Four write to `writing_report` and four to `done`. `2 of
-  8` lands — one per target — and the transcript gains exactly two entries. This one is decided by
-  serialization, not by rank: both targets are forward of `validating` and neither is invalidated
-  by the other, so a rank comparison would let all eight through.
+- **Session replay.** The resumed process reconnects and `SessionCreate` serves it
+  `_fixture.Sessions[0]` from turn 0 (announced on `REPLAY_MARKER_PATH` as `synthesised session`).
+  Every turn before the interruption is sent and committed again. This is the same recorded-runtime
+  behaviour the README names as stage 4's limitation, and it contributes the duplicated
+  `intent: Validate home enquiry`, which appears in every resumed run including stage 1's.
+- **The interrupted turn.** The part the checkpoint boundary is actually responsible for. The
+  duplicated `tool: 1 match(es)` is the entry unambiguously traceable to it.
+
+The recorded runtime cannot separate the two, so the `12 - 9` difference **overstates** the boundary
+effect and this file does not present it as a boundary measurement. The true boundary cost can only
+be measured against a live CLI, where a resumed session continues instead of restarting from turn 0;
+stage 6's number is a recorded-runtime **upper bound**.
 
 ## Captured output
 
 ```
+############ 0. an uninterrupted run of the fixture, for every comparison below ############
+PropertyDatabase: seeded 100 properties from /private/var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-a-durable-evidence.Rvi7IM/app/Data/Properties
+store:          <scratch>/clean.jsonl
+store persists: True
+conversations:  0
+tasks:          0
+created enquiry 0dac6584
+submitted 1 enquiry
+waiting on task t11 (checkpoint at start: queued/0)
+enquiry 0dac6584 settled at done
+task t11 finished: completed
+  store record: t11 Terminal enquiryPhase=queued turns=1
+
+enquiry 0dac6584 [c1]
+  phase:    done
+  intent:   Searching listings
+  restarts: 0
+  task:     t11 Terminal
+  entries:  9
+    phase:
+    intent: Validate home enquiry
+    phase:
+    intent: Searching listings
+    tool: 1 match(es)
+    phase:
+    phase:
+    answer: The report is written and the enquiry is done.
+    report: The report is written and the enquiry is done.
+  report:   The report is written and the enquiry is done.
+
+task records in the store:
+  t11 band-a.enquiry Terminal enquiryPhase=queued turns=1 restarts=0
+disposing store…
+disposed.
+entries: 9, prompts admitted: 2
+
 ############ 1. restart mid-enquiry: exit after the 'searching' phase commits ############
-PropertyDatabase: seeded 100 properties from /private/var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-a-durable-evidence.8xA6RT/app/Data/Properties
 store:          <scratch>/restart.jsonl
 store persists: True
 conversations:  0
 tasks:          0
-created enquiry 403e9579
+created enquiry 07fd16c0
 submitted 1 enquiry
 waiting on task t11 (checkpoint at start: queued/0)
 BAND_A_EXIT_AFTER_PHASE=searching: committed, exiting the process mid-enquiry (exit code 42)
@@ -94,9 +154,10 @@ tasks:          1
 resumed 1 unfinished enquiry
 resumed tasks:  1
   t11 resumes: the enquiry is committed at phase searching, after 0 completed pass(es)
+enquiry 07fd16c0 settled at done
   t11 finished: completed
 
-enquiry 403e9579 [c1]
+enquiry 07fd16c0 [c1]
   phase:    done
   intent:   Searching listings
   restarts: 1
@@ -116,7 +177,7 @@ enquiry 403e9579 [c1]
 submitted 0 enquiries, all before any was awaited
 
 task records in the store:
-  t11 band-a.enquiry Terminal enquiryPhase=searching turns=1 restarts=0
+  t11 band-a.enquiry Terminal enquiryPhase=searching turns=1 restarts=1
 disposing store…
 disposed.
 
@@ -125,7 +186,7 @@ store:          <scratch>/rejected.jsonl
 store persists: True
 conversations:  0
 tasks:          0
-created enquiry 77298c56
+created enquiry b365e3e1
 submitted 1 enquiry
 waiting on task t11 (checkpoint at start: queued/0)
 task t11 finished: completed
@@ -136,13 +197,13 @@ late wakeup: the enquiry is committed at rejected_garbage
   wakeup validating         (a resumed task restarting the pipeline) -> refused; enquiry stays rejected_garbage
   wakeup searching          (a stale phase report) -> refused; enquiry stays rejected_garbage
   wakeup writing_report     (a driver transition) -> refused; enquiry stays rejected_garbage
-enquiry 77298c56 settled at rejected_garbage
+enquiry b365e3e1 settled at rejected_garbage
   wakeup tool search_properties (a search that finished after the rejection) -> refused; tool answered "refused by the terminal guard:…", entries 4
   wakeup tool report_intent    (an intent reported after the rejection) -> refused; tool answered "refused by the terminal guard:…", entries 4
   wakeup attach-report       -> refused; report unchanged
   final phase: rejected_garbage, entries unchanged at 4: the terminal state held
 
-enquiry 77298c56 [c1]
+enquiry b365e3e1 [c1]
   phase:    rejected_garbage
   intent:   Checking enquiry
   restarts: 0
@@ -163,10 +224,10 @@ store:          <scratch>/rejected-tool.jsonl
 store persists: True
 conversations:  0
 tasks:          0
-created enquiry c09de438
+created enquiry 98b3bf81
 submitted 1 enquiry
 waiting on task t11 (checkpoint at start: queued/0)
-enquiry c09de438 settled at rejected_garbage
+enquiry 98b3bf81 settled at rejected_garbage
 task t11 finished: completed
   store record: t11 Terminal enquiryPhase=queued turns=1
 
@@ -182,7 +243,7 @@ late wakeup: the enquiry is committed at rejected_garbage
   wakeup attach-report       -> refused; report unchanged
   final phase: rejected_garbage, entries unchanged at 4: the terminal state held
 
-enquiry c09de438 [c1]
+enquiry 98b3bf81 [c1]
   phase:    rejected_garbage
   intent:   Checking enquiry
   restarts: 0
@@ -216,14 +277,14 @@ store:          <scratch>/done.jsonl
 store persists: True
 conversations:  0
 tasks:          0
-created enquiry d18beada
+created enquiry 8625382c
 submitted 1 enquiry
 waiting on task t11 (checkpoint at start: queued/0)
-enquiry d18beada settled at done
 BAND_A_EXIT_AFTER_PHASE=done: committed, exiting the process mid-enquiry (exit code 42)
+enquiry 8625382c settled at done
 exit code: 42  (42 is the seam: the model has reported done and the process is gone)
 
-############ 3e. resume that store: the deliverable is recovered, not dropped ############
+############ 3e. resume that store: the deliverable is recovered by asking again ############
 store:          <scratch>/done.jsonl
 store persists: True
 conversations:  1
@@ -231,10 +292,10 @@ tasks:          1
 resumed 1 unfinished enquiry
 resumed tasks:  1
   t11 resumes: the enquiry is committed at phase done, after 0 completed pass(es)
-enquiry d18beada settled at done
+enquiry 8625382c settled at done
   t11 finished: completed
 
-enquiry d18beada [c1]
+enquiry 8625382c [c1]
   phase:    done
   intent:   Searching listings
   restarts: 1
@@ -254,9 +315,59 @@ enquiry d18beada [c1]
 submitted 0 enquiries, all before any was awaited
 
 task records in the store:
-  t11 band-a.enquiry Terminal enquiryPhase=queued turns=0 restarts=0
+  t11 band-a.enquiry Terminal enquiryPhase=queued turns=0 restarts=1
 disposing store…
 disposed.
+prompts admitted for this enquiry: 3 (this is the re-ask path; stage 3g, where the answer survived, admits one fewer)
+
+############ 3f. the same window, killed AFTER the answer committed: recovered from it ############
+exit code: 42  (42 is the seam: the answer is committed and the task boundary is not)
+store:          <scratch>/done-answer.jsonl
+store persists: True
+conversations:  0
+tasks:          0
+created enquiry da811d3e
+submitted 1 enquiry
+waiting on task t11 (checkpoint at start: queued/0)
+enquiry da811d3e settled at done
+BAND_A_EXIT_AFTER_ANSWER=queued: the answer is committed and the process exits before the task boundary (exit code 42)
+
+############ 3g. resume it: the committed answer becomes the report, with no second prompt ############
+store:          <scratch>/done-answer.jsonl
+store persists: True
+conversations:  1
+tasks:          1
+resumed 1 unfinished enquiry
+resumed tasks:  1
+  t11 resumes: the enquiry is committed at phase done, after 0 completed pass(es)
+  t11 finished: completed
+enquiry da811d3e settled at done
+
+enquiry da811d3e [c1]
+  phase:    done
+  intent:   Searching listings
+  restarts: 1
+  task:     t11 Terminal
+  entries:  10
+    phase:
+    intent: Validate home enquiry
+    phase:
+    intent: Searching listings
+    tool: 1 match(es)
+    phase:
+    phase:
+    answer: The report is written and the enquiry is done.
+    report: The report is written and the enquiry is done.
+    note: the report was recovered from the answer already committed
+  report:   The report is written and the enquiry is done.
+submitted 0 enquiries, all before any was awaited
+
+task records in the store:
+  t11 band-a.enquiry Terminal enquiryPhase=queued turns=0 restarts=1
+disposing store…
+disposed.
+prompts admitted for this enquiry: 2 (an uninterrupted run of the same fixture admits 2)
+the recovery did not re-ask: the answer it attached is the one the killed turn committed
 
 ############ 4. concurrency: two enquiries for two customers, submitted together ############
 # recorded runtime: both pinned sessions are served from the first recording, so
@@ -265,11 +376,10 @@ store:          <scratch>/concurrent.jsonl
 store persists: True
 conversations:  0
 tasks:          0
-created enquiry 2e44894e
-created enquiry 8fd70a9f
+created enquiry adaadd49
+created enquiry 13e7cb3d
 submitted 2 enquiries, all before any was awaited
 waiting on task t11 (checkpoint at start: queued/0)
-enquiry 8fd70a9f settled at done
 task t11 finished: completed
   store record: t11 Terminal enquiryPhase=queued turns=1
 waiting on task t34 (checkpoint at start: queued/1)
@@ -282,7 +392,7 @@ isolation: 2 documents checked
   entry ids are disjoint, every entry belongs to its own conversation,
   and no two documents share an enquiry or a task: no cross-talk
 
-enquiry 2e44894e [c1]
+enquiry adaadd49 [c1]
   phase:    done
   intent:   Checking customer one
   restarts: 0
@@ -298,7 +408,7 @@ enquiry 2e44894e [c1]
     report: Customer one is done.
   report:   Customer one is done.
 
-enquiry 8fd70a9f [c18]
+enquiry 13e7cb3d [c18]
   phase:    done
   intent:   Checking customer one
   restarts: 0
@@ -325,9 +435,10 @@ store:          <scratch>/contend.jsonl
 store persists: True
 conversations:  0
 tasks:          0
-created enquiry 254d9e67
+created enquiry 8372376c
 submitted 1 enquiry
 waiting on task t11 (checkpoint at start: queued/0)
+enquiry 8372376c settled at done
 task t11 finished: completed
   store record: t11 Terminal enquiryPhase=queued turns=1
 
@@ -345,7 +456,7 @@ contention: 8 writers raced c1 — commit gate: half the writers aim at writing_
   phase after:        done
   transcript gained:  2 entr(ies)
 
-enquiry 254d9e67 [c1]
+enquiry 8372376c [c1]
   phase:    done
   intent:   Searching listings
   restarts: 0
@@ -369,18 +480,19 @@ task records in the store:
 disposing store…
 disposed.
 
-############ 6. the mid-turn kill: a resumed turn re-runs, and the transcript shows it ############
+############ 6. kill inside an unfinished turn: the resumed process replays the session ############
 store:          <scratch>/midturn.jsonl
 store persists: True
 conversations:  0
 tasks:          0
-created enquiry 1365560b
+created enquiry 4a2c537d
 submitted 1 enquiry
 waiting on task t11 (checkpoint at start: queued/0)
 BAND_A_EXIT_AFTER_PHASE=writing_report: committed, exiting the process mid-enquiry (exit code 42)
-exit code: 42  (42 is the seam)
+exit code: 42  (42 is the seam: the phase is committed and the process is gone)
+entries committed before the kill: 6
 
-############ 6b. resume it: the interrupted turn runs again and duplicates its tool calls ############
+############ 6b. resume it: the reconnected session is served from its first recorded turn ############
 store:          <scratch>/midturn.jsonl
 store persists: True
 conversations:  1
@@ -388,10 +500,10 @@ tasks:          1
 resumed 1 unfinished enquiry
 resumed tasks:  1
   t11 resumes: the enquiry is committed at phase writing_report, after 0 completed pass(es)
-enquiry 1365560b settled at done
+enquiry 4a2c537d settled at done
   t11 finished: completed
 
-enquiry 1365560b [c1]
+enquiry 4a2c537d [c1]
   phase:    done
   intent:   Searching listings
   restarts: 1
@@ -413,27 +525,50 @@ enquiry 1365560b [c1]
 submitted 0 enquiries, all before any was awaited
 
 task records in the store:
-  t11 band-a.enquiry Terminal enquiryPhase=writing_report turns=1 restarts=0
+  t11 band-a.enquiry Terminal enquiryPhase=writing_report turns=1 restarts=1
 disposing store…
 disposed.
 
-############ 6c. a clean run of the same fixture, for the entry count to compare against ############
-store:          <scratch>/clean.jsonl
+############ 6d. the count, and what it does and does not attribute ############
+clean run:                          9 entries
+killed at writing_report, resumed:  12 entries
+duplicated "intent: Validate home enquiry" lines in the resumed run: 2 (1 in the clean run)
+
+The surplus is NOT attributable to the interrupted turn alone. The resumed process reconnects
+to a session the recorded runtime serves from its first recording (REPLAY_MARKER_PATH says
+'synthesised session'), so the earlier turns are sent and committed a second time. What the
+surplus measures is: session replay + the interrupted turn, and the recorded runtime cannot
+separate them. The duplicated tool line is the part traceable to the interrupted turn.
+
+############ 6e. a FINISHED turn killed after its answer: the resume must not re-send it ############
+exit code: 42  (42 is the seam: the answer is committed, the task boundary is not)
+store:          <scratch>/settled.jsonl
 store persists: True
 conversations:  0
 tasks:          0
-created enquiry 366b36cf
+created enquiry 3616c27d
 submitted 1 enquiry
 waiting on task t11 (checkpoint at start: queued/0)
-task t11 finished: completed
-  store record: t11 Terminal enquiryPhase=queued turns=1
+enquiry 3616c27d settled at done
+BAND_A_EXIT_AFTER_ANSWER=queued: the answer is committed and the process exits before the task boundary (exit code 42)
 
-enquiry 366b36cf [c1]
+############ 6f. resume that store: no prompt is sent for a turn that already finished ############
+store:          <scratch>/settled.jsonl
+store persists: True
+conversations:  1
+tasks:          1
+resumed 1 unfinished enquiry
+resumed tasks:  1
+  t11 resumes: the enquiry is committed at phase done, after 0 completed pass(es)
+  t11 finished: completed
+enquiry 3616c27d settled at done
+
+enquiry 3616c27d [c1]
   phase:    done
   intent:   Searching listings
-  restarts: 0
+  restarts: 1
   task:     t11 Terminal
-  entries:  9
+  entries:  10
     phase:
     intent: Validate home enquiry
     phase:
@@ -443,15 +578,16 @@ enquiry 366b36cf [c1]
     phase:
     answer: The report is written and the enquiry is done.
     report: The report is written and the enquiry is done.
+    note: the report was recovered from the answer already committed
   report:   The report is written and the enquiry is done.
+submitted 0 enquiries, all before any was awaited
 
 task records in the store:
-  t11 band-a.enquiry Terminal enquiryPhase=queued turns=1 restarts=0
+  t11 band-a.enquiry Terminal enquiryPhase=queued turns=0 restarts=1
 disposing store…
 disposed.
-
-############ 6d. the count: what the mid-turn kill cost ############
-clean run:                        9 entries
-killed at writing_report, resumed: 12 entries
-the 12 - 9 surplus is the interrupted turn's tool calls, run a second time
+clean run:                          9 entries
+settled-turn resume:                10 entries (the clean run's 9 plus one recovery note)
+duplicated "intent: Validate home enquiry": 1 in the resume, 1 in the clean run
+6f held: the finished turn was not re-sent; only the recovery note was added
 ```
