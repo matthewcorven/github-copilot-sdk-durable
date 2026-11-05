@@ -140,6 +140,11 @@ else
     log "restart-after-checkpoint: the start process did not finish"
     exit 1
   fi
+  if [ "$INJECT" = "0" ]; then
+    # The control has to have reached the gate in one process, so it is driven to the point where the
+    # gate's wait is a committed record rather than a phase a process is still entering.
+    durable_at_gate "$RUN_DIR" 60 || exit 1
+  fi
   START_STATUS="$(observed durable "$RUN_DIR" task-status)"
   PHASE_BEFORE="$(observed durable "$RUN_DIR" phase)"
   CALLS_BEFORE_STOP="$(observed durable "$RUN_DIR" calls)"

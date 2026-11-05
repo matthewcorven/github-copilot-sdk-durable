@@ -118,6 +118,8 @@ else
     log "kill-during-wait: the run is '$TASK_BEFORE' after start, not waiting at the gate"
     exit 1
   fi
+  durable_at_gate "$RUN_DIR" 60 || exit 1
+  GATE_PHASE_BEFORE="$(observed durable "$RUN_DIR" gate-phase)"
 
   PAUSE_ON="" start_durable_bg "$RUN_DIR" wait wait --timeout 90
   wait_pid="$APP_PID"

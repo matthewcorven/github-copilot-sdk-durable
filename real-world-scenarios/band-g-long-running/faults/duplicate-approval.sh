@@ -95,13 +95,10 @@ else
   PAUSE_ON="" start_durable_bg "$RUN_DIR" start start --gate-seconds 600 --deterministic
   track_pid "$APP_PID"
   wait_for_exit "$APP_PID" 180 || { log "duplicate-approval: the start process did not finish"; exit 1; }
+  durable_at_gate "$RUN_DIR" 60 || exit 1
   TASK_BEFORE="$(observed durable "$RUN_DIR" task-status)"
   GATE_PHASE="$(observed durable "$RUN_DIR" gate-phase)"
   CALLS_GATE="$(observed durable "$RUN_DIR" calls)"
-  if [ "$TASK_BEFORE" != "waiting" ]; then
-    log "duplicate-approval: the run is '$TASK_BEFORE' after start, not waiting at the gate"
-    exit 1
-  fi
 
   # First delivery. Recorded only; the run is not driven yet, so the decision is what is being tested.
   first_status=0

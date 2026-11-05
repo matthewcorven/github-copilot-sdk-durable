@@ -96,8 +96,12 @@ else
   PAUSE_ON="" start_durable_bg "$RUN_DIR" start start --gate-seconds "$window" --deterministic
   track_pid "$APP_PID"
   wait_for_exit "$APP_PID" 180 || { log "late-approval: the start process did not finish"; exit 1; }
+  # The gate is what this fault is about, and the deadline it records is the thing the late approval is
+  # measured against, so the run is brought to the state where that deadline exists before anything else.
+  durable_at_gate "$RUN_DIR" 60 || exit 1
   TASK_AT_GATE="$(observed durable "$RUN_DIR" task-status)"
   DEADLINE="$(observed durable "$RUN_DIR" gate-deadline)"
+  assert_observed "the gate recorded no deadline, so there is nothing for the approval to be late against" "$DEADLINE" || { KEEP=1; exit 1; }
   CALLS_AT_GATE="$(observed durable "$RUN_DIR" calls)"
 
   if [ "$INJECT" = "1" ]; then

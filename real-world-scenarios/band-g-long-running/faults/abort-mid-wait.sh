@@ -63,6 +63,8 @@ TASK_BEFORE="$(observed durable "$RUN_DIR" task-status)"
 GATE_STATUS_BEFORE="$(observed durable "$RUN_DIR" gate-status)"
 GATE_PHASE_BEFORE="$(observed durable "$RUN_DIR" gate-phase)"
 CALLS_BEFORE="$(observed durable "$RUN_DIR" calls)"
+durable_at_gate "$RUN_DIR" 60 || exit 1
+GATE_PHASE_BEFORE="$(observed durable "$RUN_DIR" gate-phase)"
 if [ "$TASK_BEFORE" != "waiting" ] || [ "$GATE_PHASE_BEFORE" != "wait" ]; then
   log "abort-mid-wait: the run is not waiting at its gate before the abort ($TASK_BEFORE / $GATE_PHASE_BEFORE)"
   exit 1
@@ -92,6 +94,12 @@ VERDICT_FINAL="$(observed durable "$RUN_DIR" verdict)"
 # the parent's handler ran" is not.
 if ! assert_observed "the parent recorded nothing about its children" "$OBSERVED_CHILDREN"; then
   log "abort-mid-wait: the run was aborted but the handler observed no child; nothing shows the cascade"
+  # Keep what the failure needs: the abort's own output, the log that says whether the abort process
+  # actually finished, and the store as it was. A failure that deletes its evidence cannot be fixed.
+  KEEP=1
+  log "abort-mid-wait: the run directory is kept at $RUN_DIR"
+  log "abort-mid-wait: abort exit $abort_status; task $TASK_AFTER; gate $GATE_STATUS_AFTER"
+  tail -6 "$RUN_DIR/abort.log" >&2
   exit 1
 fi
 CHILD_ALREADY_TERMINAL=0

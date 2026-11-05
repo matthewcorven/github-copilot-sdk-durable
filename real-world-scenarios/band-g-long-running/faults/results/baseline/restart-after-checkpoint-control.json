@@ -3,8 +3,8 @@
   "fault": "restart-after-checkpoint-control",
   "outcome": "resumed, uninterrupted",
   "phase": "uninterrupted (the control)",
-  "detail": "Control: the same two processes with no stop. The first process exited 0 after 2 model call(s), wrote checkpoint 619674c192de40c18f335ffebcbb4f78, and a second process started from that checkpoint issued 2 model call(s) and left the run completed. This is what the fault result is measured against: the interrupted run differs from it only by the stop.",
-  "evidence": "process 1: 2 model call(s); gate checkpoint f16fb71cecfa4fbcbad7598d2790daef\nstopped pid none at: the resumed process, uninterrupted; 2 model call(s) served to it\nsecond process (fresh resume, exit 0): 2 model call(s), shapes: system:687ce436|user:3c4e51a2|assistant:2f3d15ab|user:3bdbfc18|assistant:6010ea3c|user:314f85c5|user:a6ad27be system:687ce436|user:3c4e51a2|assistant:2f3d15ab|user:3bdbfc18|assistant:6010ea3c|user:314f85c5|user:0bb64012\nlatest checkpoint: 619674c192de40c18f335ffebcbb4f78; approved checkpoint present: yes; checkpoints on disk: 3",
+  "detail": "Control: the same two processes with no stop. The first process exited 0 after 2 model call(s), wrote checkpoint a3358a3e9f8446c9aa64643e20b1287e, and a second process started from that checkpoint issued 2 model call(s) and left the run completed. This is what the fault result is measured against: the interrupted run differs from it only by the stop.",
+  "evidence": "process 1: 2 model call(s); gate checkpoint d9d0d2497dba4847979c05ca8f0dd20e\nstopped pid none at: the resumed process, uninterrupted; 2 model call(s) served to it\nsecond process (fresh resume, exit 0): 2 model call(s), shapes: system:687ce436|user:3c4e51a2|assistant:2f3d15ab|user:3bdbfc18|assistant:6010ea3c|user:314f85c5|user:a6ad27be system:687ce436|user:3c4e51a2|assistant:2f3d15ab|user:3bdbfc18|assistant:6010ea3c|user:314f85c5|user:0bb64012\nlatest checkpoint: a3358a3e9f8446c9aa64643e20b1287e; approved checkpoint present: yes; checkpoints on disk: 3",
   "measurements": {
     "model_calls_process_1": 2,
     "model_calls_stopped_process": 2,
@@ -14,8 +14,8 @@
     "dotnet": "10.0.402",
     "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
     "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
-    "commit": "54ad46156242b6475af4415b98b88554152574e1",
+    "commit": "1248b281f843f32002b29a949b3f5d2b92f0b555",
     "command": "./faults/restart-after-checkpoint.sh --variant baseline --fault-not-injected"
   },
-  "recordedAt": "2026-11-05T17:49:54.390135+00:00"
+  "recordedAt": "2026-11-05T18:32:23.415709+00:00"
 }

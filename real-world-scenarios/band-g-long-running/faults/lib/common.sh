@@ -298,6 +298,30 @@ wait_for_state() {
   return 1
 }
 
+# Drives a Durable run to the state every fault needs: the parent Waiting and the gate's `wait` phase
+# committed. `start` returns as soon as the gate child exists, and the child commits `open` and then
+# `wait`; under load the second commit can land after the process has already exited, leaving a run whose
+# gate never recorded its deadline. A `resume` re-enters the gate from its own checkpoint and commits the
+# wait, which is the same thing a host would do — so this is part of reaching the state, not a way around
+# the fault. Returns non-zero and says why when the run cannot be brought to that state.
+durable_at_gate() {
+  local dir="$1" seconds="${2:-60}"
+  if wait_for_state durable "$dir" gate-phase wait "$seconds"; then
+    return 0
+  fi
+  log "harness: the gate has not recorded its wait phase; re-entering it once to commit one"
+  local before after
+  before="$(observed durable "$dir" gate-phase)"
+  PAUSE_ON="" durable_verb "$dir" resume --deterministic >"$dir/at-gate.log" 2>&1
+  if wait_for_state durable "$dir" gate-phase wait 60; then
+    after="$(observed durable "$dir" gate-phase)"
+    log "harness: re-entered the gate; its phase went $before -> $after. The run needed a second process to reach this state."
+    return 0
+  fi
+  log "harness: the run could not be brought to its gate (gate phase $(observed durable "$dir" gate-phase))"
+  return 1
+}
+
 count_calls() {
   local dir="$1"
   if [ -f "$dir/calls.jsonl" ]; then

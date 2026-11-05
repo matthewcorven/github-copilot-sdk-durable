@@ -3,8 +3,8 @@
   "fault": "duplicate-approval",
   "outcome": "doubled",
   "phase": "two resume processes against one gate checkpoint",
-  "detail": "The first resume approved and exited 0 (2 model call(s)). The second resume approved the re-emitted request again — it printed 'Approving plan' — and exited 0 after 2 model call(s), leaving the latest checkpoint at 73f444ce80a84142a16d46da8b9ee3f1 (3 file(s)). The approval applied twice.",
-  "evidence": "gate checkpoint: 60967473caf94128b8d3e6e694706a9d; calls before the first delivery: 2\nfirst delivery (exit 0): checkpoint 89452635b0e04b2da17d41cd22349207, 2 file(s), 2 model call(s), approved checkpoint present: yes\nsecond delivery: 73f444ce80a84142a16d46da8b9ee3f1\nsecond delivery (exit 0): checkpoint 73f444ce80a84142a16d46da8b9ee3f1, 3 file(s), 2 model call(s), 'Approving plan' printed 1 time(s)",
+  "detail": "The first resume approved and exited 0 (2 model call(s)). The second resume approved the re-emitted request again — it printed 'Approving plan' — and exited 0 after 2 model call(s), leaving the latest checkpoint at a80440ef6b8d44d3a181bc77e4d78d6a (3 file(s)). The approval applied twice.",
+  "evidence": "gate checkpoint: 34ce26a2bc244425b1eb2b702c679c88; calls before the first delivery: 2\nfirst delivery (exit 0): checkpoint f3973d89fbc0401391deb14e44e25a07, 2 file(s), 2 model call(s), approved checkpoint present: yes\nsecond delivery: a80440ef6b8d44d3a181bc77e4d78d6a\nsecond delivery (exit 0): checkpoint a80440ef6b8d44d3a181bc77e4d78d6a, 3 file(s), 2 model call(s), 'Approving plan' printed 1 time(s)",
   "measurements": {
     "model_calls_at_gate": 2,
     "checkpoints_after_first": "2",
@@ -17,8 +17,8 @@
     "dotnet": "10.0.402",
     "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
     "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
-    "commit": "54ad46156242b6475af4415b98b88554152574e1",
+    "commit": "1248b281f843f32002b29a949b3f5d2b92f0b555",
     "command": "./faults/duplicate-approval.sh --variant baseline"
   },
-  "recordedAt": "2026-11-05T17:49:57.037780+00:00"
+  "recordedAt": "2026-11-05T18:32:26.116498+00:00"
 }

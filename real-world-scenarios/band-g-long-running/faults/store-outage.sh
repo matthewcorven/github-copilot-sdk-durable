@@ -115,6 +115,7 @@ else
   PAUSE_ON="" start_durable_bg "$RUN_DIR" start start --gate-seconds 600 --deterministic
   track_pid "$APP_PID"
   wait_for_exit "$APP_PID" 180 || { log "store-outage: the start process did not finish"; exit 1; }
+  durable_at_gate "$RUN_DIR" 60 || exit 1
   TASK_AT_GATE="$(observed durable "$RUN_DIR" task-status)"
   CALLS_AT_GATE="$(observed durable "$RUN_DIR" calls)"
   if [ "$TASK_AT_GATE" != "waiting" ]; then
