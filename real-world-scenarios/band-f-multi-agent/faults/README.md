@@ -257,10 +257,29 @@ Each control is the same script with the injection removed. What the pair is for
   turn. The two rows land at two different holders, which is what shows the restart reads the commit
   rather than assuming a holder. (For the baseline, both rows fail, and the *holders* still differ:
   the fault stops after the delegation and the control before it.)
-- `duplicate-delivery` control delivers once: one tool result per specialist. The fault's multiset has
-  one entry twice.
+- `duplicate-delivery` control delivers once: turn 3 commits **one** output. The fault's per-turn count
+  is what the pair turns on — a second output version for the re-delivered turn, or a reuse record,
+  would mean the tool ran twice for it. The whole-run multiset is recorded but decides nothing:
+  `return_agent` answers turn 0 as well, so its result appears twice in the control too.
 - `competing-managers` control starts one manager, so the refusal belongs to the second.
 - `store-outage` control moves nothing, so the split store belongs to the outage.
+
+### `durable / duplicate-delivery`: what the row is, and what it is not
+
+The row reads **not doubled**, and that verdict rests entirely on the per-turn count: turn 3 committed
+one output version and nothing was reused, so the tool did not run a second time for the re-delivered
+turn.
+
+It is **not a durability win.** What stopped the second run was finding the turn's output already
+committed — not an identity for the request. This variant memoizes a routing decision it has not yet
+acted on; it has no memo for an output a process has already consumed, and nothing in this run showed
+it would deduplicate a delivery it had no record of. The per-turn count says the work happened once
+here; it does not say the variant can tell that a request is a repeat.
+
+The script also delivers the request a third time, to the finished run. That attempt is recorded, and it
+is evidence of one thing only: **a finished run is a no-op.** It is not the deduplication finding. The
+finding is the per-turn count above; the third delivery is a separate observation about a run that had
+already ended, and a reader who takes it as the claim has read it backwards.
 
 `lib/summarise.py` flags any pair whose outcome *and* holder match, because such a control proves
 nothing. Where it does — the durable `restart-after-checkpoint` pair, both landing at `refund_agent` —

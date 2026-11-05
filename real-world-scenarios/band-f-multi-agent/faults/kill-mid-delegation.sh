@@ -134,7 +134,7 @@ fi
 EVIDENCE="at the kill (pid $killed, SIGKILL, confirmed gone): holder $AT_KILL_HOLDER, fingerprint $(snap "$FROZEN" fingerprint), specialist tool results $FROZEN_COUNTS; after recovery the state moved: $MOVED; first action after recovery: $FIRST_DESC; recovery ran $RECOVERY_ATTEMPTS process(es)${RECOVERY_ERRORS:+ ($RECOVERY_ERRORS)}; port-reported resume: ${REPORTED:-(none)}; $VERIFY_NOTE${HOLDERS:+; holders across the run: $HOLDERS}"
 
 if [ "$VARIANT" = "durable" ]; then
-  DETAIL="The process was killed with SIGKILL while $AT_KILL_HOLDER held control, delegated to with nothing produced. A new process reopened the same store and gave control to $RECOVERED_HOLDER — not back to the coordinator — and its first committed action was $FIRST_DESC. Control after recovery was $RECOVERED_HOLDER. The run then served every turn and ended with $END_HOLDER holding control, which is the settle step handing the turn back and not this fault's answer. $VERIFY_NOTE."
+  DETAIL="The process was killed with SIGKILL while $AT_KILL_HOLDER held control, delegated to with nothing produced. A new process reopened the same store and gave control to $RECOVERED_HOLDER — not back to the coordinator — and its first committed action was $FIRST_DESC. Control after recovery was $RECOVERED_HOLDER. After that the run served its remaining turns; its newest checkpoint names $END_HOLDER, which is the specialist that produced the last turn — the settle that finishes a run completes the task without writing a checkpoint, so no coordinator takes control in the store and $END_HOLDER is not this fault's answer. $VERIFY_NOTE."
 else
   if [ "$RESUME_STATUS" = "0" ]; then
     RECOVERY_NOTE="The recovery completed in $RECOVERY_ATTEMPTS process(es)."

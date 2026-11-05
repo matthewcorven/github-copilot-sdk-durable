@@ -186,12 +186,12 @@ else
 fi
 
 if [ "$OUTCOME" = "doubled" ]; then
-  MECHANISM="The second process found the delegation committed, its own checkpoint still naming $AFTER_HOLDER, and no output for the turn — so it produced. This variant has no identity for a delivery that a second process could deduplicate against."
+  MECHANISM="The second process found the delegation committed, its own checkpoint still naming $AFTER_HOLDER, and no output for the turn — so it produced. That is not a durability win: the variant has no memo for an output a process has already consumed, only one for a routing decision it has not yet acted on, so a second process after a kill produces again."
 else
-  MECHANISM="The second process produced nothing for the turn: the first had already committed it and the store answered for it, so the request was delivered twice and the tool ran once."
+  MECHANISM="The second process produced nothing for the turn: the first had already committed it and the store answered for it, so the request was delivered twice and the tool ran once. What stopped the second run was the committed output, not an identity for the request — a delivery the variant has no record of would not have been deduplicated."
 fi
 
-DETAIL="The closing request was delivered three times in total: the first process was killed with SIGKILL while $BEFORE_HOLDER held turn 3 with nothing produced, a second process resumed the same store (exit $DELIVERY_STATUS), and then the same request was delivered again to the now-complete run (exit ${REDELIVERY_STATUS:-?}). $DOUBLED_VERDICT. Control after recovery was $AFTER_HOLDER. $MECHANISM ${REDELIVERY_NOTE:+The third delivery said: \"$REDELIVERY_NOTE\". }$VERIFY_NOTE."
+DETAIL="The first process was killed with SIGKILL while $BEFORE_HOLDER held turn 3 with nothing produced, and a second process resumed the same store (exit $DELIVERY_STATUS), so the request was delivered twice. On the per-turn count — how many outputs turn 3 committed, which is the finding — $DOUBLED_VERDICT. Control after recovery was $AFTER_HOLDER. $MECHANISM A third delivery to the now-finished run (exit ${REDELIVERY_STATUS:-?}) is recorded only as the separate fact that ${REDELIVERY_NOTE:-it was handled}; it is not part of this claim, because a finished run being a no-op says nothing about whether the variant could deduplicate a request. $VERIFY_NOTE."
 
 EVIDENCE="frozen after the first delivery (pid $killed, SIGKILL, confirmed gone) with holder $BEFORE_HOLDER and $TURNS_BEFORE completed turn(s); output versions for the re-delivered turn 3: 0 before, $VERSIONS_FOR_TURN after, $REUSED reuse record(s); third delivery exit ${REDELIVERY_STATUS:-?}: ${REDELIVERY_NOTE:-no refusal line}; whole-run specialist results before: $COUNTS_BEFORE, after: $SNAP_AFTER_COUNTS (delta $DOUBLED — reported, not decisive: return_agent answers turn 0 too, so its result appears twice in a no-fault run); completed turns: $TURNS_BEFORE then $TURNS_AFTER; second delivery exit: $DELIVERY_STATUS; holder after: $AFTER_HOLDER; $VERIFY_NOTE; holders across the run: $HOLDERS"
 
