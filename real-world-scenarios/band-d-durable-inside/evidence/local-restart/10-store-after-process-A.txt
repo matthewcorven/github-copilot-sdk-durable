@@ -1,0 +1,1 @@
+2f34698f2c1688edff5c11da7fdee2c5aca941ca4925abc4b49b6de3602a8f5b  <scratch>/working-state.jsonl

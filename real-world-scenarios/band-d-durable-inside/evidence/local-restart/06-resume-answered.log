@@ -1,0 +1,58 @@
+-- 06-resume-answered
+{
+ "approval": {
+  "deadline": 1793984801.926668,
+  "deadlineIso": "2026-11-06T17:06:41Z",
+  "decision": "approved",
+  "reason": "criteria met",
+  "requestId": "LOCAL-1",
+  "requestedAt": 1793898401.926668,
+  "reviewer": "Dr Okoro",
+  "state": "answered",
+  "task": {
+   "checkpoint": {
+    "deadline": 1793984801.926668,
+    "phase": "await",
+    "requestId": "LOCAL-1",
+    "requestedAt": 1793898401.926668
+   },
+   "id": "t4",
+   "memos": {
+    "external-event": {
+     "decision": "approved",
+     "reason": "criteria met",
+     "reviewer": "Dr Okoro"
+    }
+   },
+   "name": "d2.approval-task",
+   "outcome": {
+    "error": null,
+    "result": {
+     "decision": "approved",
+     "reason": "criteria met",
+     "reviewer": "Dr Okoro"
+    },
+    "status": "completed"
+   },
+   "restarts": 1,
+   "status": "TERMINAL",
+   "waitingOn": []
+  }
+ },
+ "decidedBy": "Dr Okoro",
+ "decision": "approved",
+ "phase": "decided",
+ "requestId": "LOCAL-1",
+ "resumedCount": 2,
+ "settled": {
+  "error": null,
+  "result": {
+   "decision": "approved",
+   "reason": "criteria met",
+   "reviewer": "Dr Okoro"
+  },
+  "status": "completed",
+  "taskId": "t4"
+ },
+ "storePath": "<scratch>/working-state.jsonl"
+}

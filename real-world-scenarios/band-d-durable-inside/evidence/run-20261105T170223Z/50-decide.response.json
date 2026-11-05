@@ -1,0 +1,104 @@
+{
+  "agent_reference": {
+    "name": "durable-inside-agent",
+    "type": "agent_reference",
+    "version": "1"
+  },
+  "agent_session_id": "8c508ac2e432d512ca5b6002a9a35b4384d69046f95a5eef66dba8372b05579",
+  "background": false,
+  "completed_at": 1793898211,
+  "created_at": 1793898203,
+  "id": "caresp_00004be1211fcdf100peuLAR8PihdO5OaR3OmdPKLX3G38tn0D",
+  "model": "",
+  "object": "response",
+  "output": [
+    {
+      "agent_reference": null,
+      "arguments": "{\"request_id\":\"PA-D2-0001\",\"decision\":\"approved\",\"reviewer\":\"Dr. Chen\",\"reason\":\"coverage criteria met; PET-avid nodule meets imaging criteria\"}{\"request_id\":\"PA-D2-0001\",\"decision\":\"approved\",\"reviewer\":\"Dr. Chen\",\"reason\":\"coverage criteria met; PET-avid nodule meets imaging criteria\"}",
+      "call_id": "call_L37tll7J9SuaCKufcJ4jBkEp",
+      "id": "fc_00004be1211fcdf100HHRkEScWKwgka7Ef6MthKWVhfiRIwzE4",
+      "name": "record_approval",
+      "response_id": "caresp_00004be1211fcdf100peuLAR8PihdO5OaR3OmdPKLX3G38tn0D",
+      "status": "completed",
+      "type": "function_call"
+    },
+    {
+      "agent_reference": null,
+      "call_id": "call_L37tll7J9SuaCKufcJ4jBkEp",
+      "id": "fco_00004be1211fcdf100gH8xwMQQdET048VsSu2TWr67XZ8vEVi6",
+      "output": "{\n \"finalPhase\": \"decided\",\n \"note\": \"the task resumed at the step after the approval\",\n \"requestId\": \"PA-D2-0001\",\n \"settled\": {\n  \"error\": null,\n  \"result\": {\n   \"decision\": \"approved\",\n   \"reason\": \"coverage criteria met; PET-avid nodule meets imaging criteria\",\n   \"reviewer\": \"Dr. Chen\"\n  },\n  \"status\": \"completed\",\n  \"taskId\": \"t4\"\n },\n \"wokenTasks\": [\n  \"t4\"\n ]\n}",
+      "response_id": "caresp_00004be1211fcdf100peuLAR8PihdO5OaR3OmdPKLX3G38tn0D",
+      "status": "completed",
+      "type": "function_call_output"
+    },
+    {
+      "agent_reference": null,
+      "arguments": "{\"request_id\":\"PA-D2-0001\"}{\"request_id\":\"PA-D2-0001\"}",
+      "call_id": "call_ernLs3xwNs2iUNatHrAWwKfZ",
+      "id": "fc_00004be1211fcdf100kJBF3sw1ZppSLF9fKpf695ieR9EE6496",
+      "name": "working_state",
+      "response_id": "caresp_00004be1211fcdf100peuLAR8PihdO5OaR3OmdPKLX3G38tn0D",
+      "status": "completed",
+      "type": "function_call"
+    },
+    {
+      "agent_reference": null,
+      "arguments": "{}{}",
+      "call_id": "call_qw4ypnV4qrDRL9k4QFxRbhMj",
+      "id": "fc_00004be1211fcdf100m5fDDfLYxCz3Kz97t8TPBM5muzbdK4F4",
+      "name": "store_report",
+      "response_id": "caresp_00004be1211fcdf100peuLAR8PihdO5OaR3OmdPKLX3G38tn0D",
+      "status": "completed",
+      "type": "function_call"
+    },
+    {
+      "agent_reference": null,
+      "call_id": "call_ernLs3xwNs2iUNatHrAWwKfZ",
+      "id": "fco_00004be1211fcdf100RpgFY3bw0navisDqNTawJ5J35ExGGzsA",
+      "output": "{\n \"approval\": {\n  \"deadline\": 1793984575.504916,\n  \"decision\": \"approved\",\n  \"reviewer\": \"Dr. Chen\",\n  \"state\": \"answered\"\n },\n \"approvalTask\": {\n  \"checkpoint\": {\n   \"deadline\": 1793984575.504916,\n   \"phase\": \"await\",\n   \"requestId\": \"PA-D2-0001\",\n   \"requestedAt\": 1793898175.504916\n  },\n  \"id\": \"t4\",\n  \"restarts\": 1,\n  \"status\": \"TERMINAL\",\n  \"waitingOn\": []\n },\n \"assessment\": \"Coverage criteria are met.\",\n \"decidedAt\": \"2026-11-05T17:03:24Z\",\n \"decidedBy\": \"Dr. Chen\",\n \"decision\": \"approved\",\n \"phase\": \"decided\",\n \"requestId\": \"PA-D2-0001\",\n \"resumedCount\": 1,\n \"storePath\": \"/home/session/durable/working-state.jsonl\"\n}",
+      "response_id": "caresp_00004be1211fcdf100peuLAR8PihdO5OaR3OmdPKLX3G38tn0D",
+      "status": "completed",
+      "type": "function_call_output"
+    },
+    {
+      "agent_reference": null,
+      "call_id": "call_qw4ypnV4qrDRL9k4QFxRbhMj",
+      "id": "fco_00004be1211fcdf100aPBbeH4txou3GWbjpjVK5BH4XhdjTI5r",
+      "output": "{\n \"bytes\": 5886,\n \"container\": {\n  \"/\": {\n   \"exists\": true,\n   \"writable\": true\n  },\n  \"/app\": {\n   \"exists\": true,\n   \"writable\": true\n  },\n  \"/files\": {\n   \"exists\": false\n  },\n  \"/home/session\": {\n   \"exists\": true,\n   \"writable\": true\n  },\n  \"/tmp\": {\n   \"exists\": true,\n   \"writable\": true\n  },\n  \"home\": \"/home/session\",\n  \"markerPath\": \"/home/session/d2-marker\",\n  \"storePath\": \"/home/session/durable/working-state.jsonl\",\n  \"userId\": 0\n },\n \"documents\": [\n  {\n   \"kind\": \"d2.work-state\",\n   \"latest\": {\n    \"approvalTaskId\": \"t4\",\n    \"assessment\": \"Coverage criteria are met.\",\n    \"decidedAt\": \"2026-11-05T17:03:24Z\",\n    \"decidedBy\": \"Dr. Chen\",\n    \"decision\": \"approved\",\n    \"phase\": \"decided\",\n    \"requestId\": \"PA-D2-0001\",\n    \"resumedCount\": 1\n   },\n   \"ownerId\": \"PA-D2-0001\",\n   \"versions\": 4\n  },\n  {\n   \"kind\": \"d2.approval\",\n   \"latest\": {\n    \"deadline\": 1793984575.504916,\n    \"decision\": \"approved\",\n    \"reason\": \"coverage criteria met; PET-avid nodule meets imaging criteria\",\n    \"requestId\": \"PA-D2-0001\",\n    \"requestedAt\": 1793898175.504916,\n    \"reviewer\": \"Dr. Chen\",\n    \"state\": \"answered\"\n   },\n   \"ownerId\": \"PA-D2-0001\",\n   \"versions\": 2\n  }\n ],\n \"files\": {\n  \"directory\": \"/home/session/durable\",\n  \"files\": [\n   {\n    \"bytes\": 5886,\n    \"mtime\": \"2026-11-05T17:03:24Z\",\n    \"name\": \"working-state.jsonl\"\n   },\n   {\n    \"bytes\": 38,\n    \"mtime\": \"2026-11-05T17:03:15Z\",\n    \"name\": \"working-state.jsonl.lock\"\n   }\n  ],\n  \"pid\": 6\n },\n \"raw\": \"{\\\"v\\\":1,\\\"seq\\\":3,\\\"type\\\":\\\"entry\\\",\\\"payload\\\":{\\\"conversationId\\\":\\\"PA-D2-0001\\\",\\\"entryId\\\":\\\"e1\\\"}}\\n{\\\"v\\\":1,\\\"seq\\\":3,\\\"type\\\":\\\"entry-record\\\",\\\"payload\\\":{\\\"id\\\":\\\"e1\\\",\\\"conversationId\\\":\\\"PA-D2-0001\\\",\\\"kind\\\":\\\"entry\\\",\\\"sequence\\\":2}}\\n{\\\"v\\\":1,\\\"seq\\\":3,\\\"type\\\":\\\"document\\\",\\\"payload\\\":{\\\"kind\\\":\\\"d2.work-state\\\",\\\"ownerId\\\":\\\"PA-D2-0001\\\",\\\"fork\\\":1,\\\"initial\\\":{\\\"requestId\\\":\\\"\\\",\\\"phase\\\":\\\"intake\\\",\\\"assessment\\\":\\\"\\\",\\\"decision\\\":\\\"\\\",\\\"decidedBy\\\":\\\"\\\",\\\"decidedAt\\\":\\\"\\\",\\\"resumedCount\\\":0,\\\"approvalTaskId\\\":\\\"\\\"}}}\\n{\\\"v\\\":1,\\\"seq\\\":3,\\\"type\\\":\\\"document-version\\\",\\\"payload\\\":{\\\"kind\\\":\\\"d2.work-state\\\",\\\"ownerId\\\":\\\"PA-D2-0001\\\",\\\"fork\\\":1,\\\"entryId\\\":\\\"e1\\\",\\\"sequence\\\":3,\\\"value\\\":{\\\"requestId\\\":\\\"PA-D2-0001\\\",\\\"phase\\\":\\\"awaiting-approval\\\",\\\"assessment\\\":\\\"Coverage criteria are met.\\\",\\\"decision\\\":\\\"\\\",\\\"decidedBy\\\":\\\"\\\",\\\"decidedAt\\\":\\\"\\\",\\\"resumedCount\\\":0,\\\"approvalTaskId\\\":\\\"\\\"}}}\\n{\\\"v\\\":1,\\\"seq\\\":4,\\\"type\\\":\\\"task\\\",\\\"payload\\\":{\\\"id\\\":\\\"t4\\\",\\\"name\\\":\\\"d2.approval-task\\\",\\\"input\\\":{\\\"requestId\\\":\\\"PA-D2-0001\\\"},\\\"checkpoint\\\":{\\\"phase\\\":\\\"park\\\"},\\\"status\\\":0,\\\"restarts\\\":0,\\\"ownerConversationId\\\":\\\"PA-D2-0001\\\",\\\"background\\\":false,\\\"waitingOn\\\":[],\\\"memos\\\":{}}}\\n{\\\"v\\\":1,\\\"seq\\\":7,\\\"type\\\":\\\"entry\\\",\\\"payload\\\":{\\\"conversationId\\\":\\\"PA-D2-0001\\\",\\\"entryId\\\":\\\"e5\\\"}}\\n{\\\"v\\\":1,\\\"seq\\\":7,\\\"type\\\":\\\"entry-record\\\",\\\"payload\\\":{\\\"id\\\":\\\"e5\\\",\\\"conversationId\\\":\\\"PA-D2-0001\\\",\\\"kind\\\":\\\"entry\\\",\\\"sequence\\\":6}}\\n{\\\"v\\\":1,\\\"seq\\\":7,\\\"type\\\":\\\"document\\\",\\\"payload\\\":{\\\"kind\\\":\\\"d2.approval\\\",\\\"ownerId\\\":\\\"PA-D2-0001\\\",\\\"fork\\\":1,\\\"initial\\\":{\\\"requestId\\\":\\\"\\\",\\\"state\\\":\\\"pending\\\",\\\"deadline\\\":0.0,\\\"requestedAt\\\":0.0,\\\"decision\\\":\\\"\\\",\\\"reviewer\\\":\\\"\\\",\\\"reason\\\":\\\"\\\"}}}\\n{\\\"v\\\":1,\\\"seq\\\":7,\\\"type\\\":\\\"document-version\\\",\\\"payload\\\":{\\\"kind\\\":\\\"d2.approval\\\",\\\"ownerId\\\":\\\"PA-D2-0001\\\",\\\"fork\\\":1,\\\"entryId\\\":\\\"e5\\\",\\\"sequence\\\":7,\\\"value\\\":{\\\"requestId\\\":\\\"PA-D2-0001\\\",\\\"state\\\":\\\"pending\\\",\\\"deadline\\\":1793984575.504916,\\\"requestedAt\\\":1793898175.504916,\\\"decision\\\":\\\"\\\",\\\"reviewer\\\":\\\"\\\",\\\"reason\\\":\\\"\\\"}}}\\n{\\\"v\\\":1,\\\"seq\\\":10,\\\"type\\\":\\\"entry\\\",\\\"payload\\\":{\\\"conversationId\\\":\\\"PA-D2-0001\\\",\\\"entryId\\\":\\\"e8\\\"}}\\n{\\\"v\\\":1,\\\"seq\\\":10,\\\"type\\\":\\\"entry-record\\\",\\\"payload\\\":{\\\"id\\\":\\\"e8\\\",\\\"conversationId\\\":\\\"PA-D2-0001\\\",\\\"kind\\\":\\\"entry\\\",\\\"sequence\\\":9}}\\n{\\\"v\\\":1,\\\"seq\\\":10,\\\"type\\\":\\\"document-version\\\",\\\"payload\\\":{\\\"kind\\\":\\\"d2.work-state\\\",\\\"ownerId\\\":\\\"PA-D2-0001\\\",\\\"fork\\\":1,\\\"entryId\\\":\\\"e8\\\",\\\"sequence\\\":10,\\\"value\\\":{\\\"requestId\\\":\\\"PA-D2-0001\\\",\\\"phase\\\":\\\"awaiting-approval\\\",\\\"assessment\\\":\\\"Coverage criteria are met.\\\",\\\"decision\\\":\\\"\\\",\\\"decidedBy\\\":\\\"\\\",\\\"decidedAt\\\":\\\"\\\",\\\"resumedCount\\\":0,\\\"approvalTaskId\\\":\\\"t4\\\"}}}\\n{\\\"v\\\":1,\\\"seq\\\":10,\\\"type\\\":\\\"task\\\",\\\"payload\\\":{\\\"id\\\":\\\"t4\\\",\\\"name\\\":\\\"d2.approval-task\\\",\\\"input\\\":{\\\"requestId\\\":\\\"PA-D2-0001\\\"},\\\"checkpoint\\\":{\\\"phase\\\":\\\"await\\\",\\\"requestId\\\":\\\"PA-D2-0001\\\",\\\"deadline\\\":1793984575.504916,\\\"requestedAt\\\":1793898175.504916},\\\"status\\\":2,\\\"restarts\\\":0,\\\"ownerConversationId\\\":\\\"PA-D2-0001\\\",\\\"background\\\":false,\\\"waitingOn\\\":[\\\"external:approval/PA-D2-0001\\\"],\\\"memos\\\":{}}}\\n{\\\"v\\\":1,\\\"seq\\\":13,\\\"type\\\":\\\"entry\\\",\\\"payload\\\":{\\\"conversationId\\\":\\\"PA-D2-0001\\\",\\\"entryId\\\":\\\"e11\\\"}}\\n{\\\"v\\\":1,\\\"seq\\\":13,\\\"type\\\":\\\"entry-record\\\",\\\"payload\\\":{\\\"id\\\":\\\"e11\\\",\\\"conversationId\\\":\\\"PA-D2-0001\\\",\\\"kind\\\":\\\"entry\\\",\\\"sequence\\\":12}}\\n{\\\"v\\\":1,\\\"seq\\\":13,\\\"type\\\":\\\"document-version\\\",\\\"payload\\\":{\\\"kind\\\":\\\"d2.work-state\\\",\\\"ownerId\\\":\\\"PA-D2-0001\\\",\\\"fork\\\":1,\\\"entryId\\\":\\\"e11\\\",\\\"sequence\\\":13,\\\"value\\\":{\\\"requestId\\\":\\\"PA-D2-0001\\\",\\\"phase\\\":\\\"awaiting-approval\\\",\\\"assessment\\\":\\\"Coverage criteria are met.\\\",\\\"decision\\\":\\\"\\\",\\\"decidedBy\\\":\\\"\\\",\\\"decidedAt\\\":\\\"\\\",\\\"resumedCount\\\":1,\\\"approvalTaskId\\\":\\\"t4\\\"}}}\\n{\\\"v\\\":1,\\\"seq\\\":13,\\\"type\\\":\\\"task\\\",\\\"payload\\\":{\\\"id\\\":\\\"t4\\\",\\\"name\\\":\\\"d2.approval-task\\\",\\\"input\\\":{\\\"requestId\\\":\\\"PA-D2-0001\\\"},\\\"checkpoint\\\":{\\\"phase\\\":\\\"await\\\",\\\"requestId\\\":\\\"PA-D2-0001\\\",\\\"deadline\\\":1793984575.504916,\\\"requestedAt\\\":1793898175.504916},\\\"status\\\":1,\\\"restarts\\\":0,\\\"ownerConversationId\\\":\\\"PA-D2-0001\\\",\\\"background\\\":false,\\\"waitingOn\\\":[],\\\"memos\\\":{\\\"external-event\\\":{\\\"decision\\\":\\\"approved\\\",\\\"reviewer\\\":\\\"Dr. Chen\\\",\\\"reason\\\":\\\"coverage criteria met; PET-avid nodule meets imaging criteria\\\"}}}}\\n{\\\"v\\\":1,\\\"seq\\\":13,\\\"type\\\":\\\"task\\\",\\\"payload\\\":{\\\"id\\\":\\\"t4\\\",\\\"name\\\":\\\"d2.approval-task\\\",\\\"input\\\":{\\\"requestId\\\":\\\"PA-D2-0001\\\"},\\\"checkpoint\\\":{\\\"phase\\\":\\\"await\\\",\\\"requestId\\\":\\\"PA-D2-0001\\\",\\\"deadline\\\":1793984575.504916,\\\"requestedAt\\\":1793898175.504916},\\\"status\\\":1,\\\"restarts\\\":1,\\\"ownerConversationId\\\":\\\"PA-D2-0001\\\",\\\"background\\\":false,\\\"waitingOn\\\":[],\\\"memos\\\":{\\\"external-event\\\":{\\\"decision\\\":\\\"approved\\\",\\\"reviewer\\\":\\\"Dr. Chen\\\",\\\"reason\\\":\\\"coverage criteria met; PET-avid nodule meets imaging criteria\\\"}}}}\\n{\\\"v\\\":1,\\\"seq\\\":19,\\\"type\\\":\\\"entry\\\",\\\"payload\\\":{\\\"conversationId\\\":\\\"PA-D2-0001\\\",\\\"entryId\\\":\\\"e14\\\"}}\\n{\\\"v\\\":1,\\\"seq\\\":19,\\\"type\\\":\\\"entry-record\\\",\\\"payload\\\":{\\\"id\\\":\\\"e14\\\",\\\"conversationId\\\":\\\"PA-D2-0001\\\",\\\"kind\\\":\\\"entry\\\",\\\"sequence\\\":15}}\\n{\\\"v\\\":1,\\\"seq\\\":19,\\\"type\\\":\\\"entry\\\",\\\"payload\\\":{\\\"conversationId\\\":\\\"PA-D2-0001\\\",\\\"entryId\\\":\\\"e17\\\"}}\\n{\\\"v\\\":1,\\\"seq\\\":19,\\\"type\\\":\\\"entry-record\\\",\\\"payload\\\":{\\\"id\\\":\\\"e17\\\",\\\"conversationId\\\":\\\"PA-D2-0001\\\",\\\"kind\\\":\\\"entry\\\",\\\"sequence\\\":18}}\\n{\\\"v\\\":1,\\\"seq\\\":19,\\\"type\\\":\\\"document-version\\\",\\\"payload\\\":{\\\"kind\\\":\\\"d2.work-state\\\",\\\"ownerId\\\":\\\"PA-D2-0001\\\",\\\"fork\\\":1,\\\"entryId\\\":\\\"e17\\\",\\\"sequence\\\":19,\\\"value\\\":{\\\"requestId\\\":\\\"PA-D2-0001\\\",\\\"phase\\\":\\\"decided\\\",\\\"assessment\\\":\\\"Coverage criteria are met.\\\",\\\"decision\\\":\\\"approved\\\",\\\"decidedBy\\\":\\\"Dr. Chen\\\",\\\"decidedAt\\\":\\\"2026-11-05T17:03:24Z\\\",\\\"resumedCount\\\":1,\\\"approvalTaskId\\\":\\\"t4\\\"}}}\\n{\\\"v\\\":1,\\\"seq\\\":19,\\\"type\\\":\\\"document-version\\\",\\\"payload\\\":{\\\"kind\\\":\\\"d2.approval\\\",\\\"ownerId\\\":\\\"PA-D2-0001\\\",\\\"fork\\\":1,\\\"entryId\\\":\\\"e14\\\",\\\"sequence\\\":16,\\\"value\\\":{\\\"requestId\\\":\\\"PA-D2-0001\\\",\\\"state\\\":\\\"answered\\\",\\\"deadline\\\":1793984575.504916,\\\"requestedAt\\\":1793898175.504916,\\\"decision\\\":\\\"approved\\\",\\\"reviewer\\\":\\\"Dr. Chen\\\",\\\"reason\\\":\\\"coverage criteria met; PET-avid nodule meets imaging criteria\\\"}}}\\n{\\\"v\\\":1,\\\"seq\\\":19,\\\"type\\\":\\\"task\\\",\\\"payload\\\":{\\\"id\\\":\\\"t4\\\",\\\"name\\\":\\\"d2.approval-task\\\",\\\"input\\\":{\\\"requestId\\\":\\\"PA-D2-0001\\\"},\\\"checkpoint\\\":{\\\"phase\\\":\\\"await\\\",\\\"requestId\\\":\\\"PA-D2-0001\\\",\\\"deadline\\\":1793984575.504916,\\\"requestedAt\\\":1793898175.504916},\\\"status\\\":4,\\\"outcome\\\":{\\\"status\\\":\\\"completed\\\",\\\"result\\\":{\\\"decision\\\":\\\"approved\\\",\\\"reviewer\\\":\\\"Dr. Chen\\\",\\\"reason\\\":\\\"coverage criteria met; PET-avid nodule meets imaging criteria\\\"}},\\\"restarts\\\":1,\\\"ownerConversationId\\\":\\\"PA-D2-0001\\\",\\\"background\\\":false,\\\"waitingOn\\\":[],\\\"memos\\\":{\\\"external-event\\\":{\\\"decision\\\":\\\"approved\\\",\\\"reviewer\\\":\\\"Dr. Chen\\\",\\\"reason\\\":\\\"coverage criteria met; PET-avid nodule meets imaging criteria\\\"}}}}\\n\",\n \"sha256\": \"ebc8735d09bd0fe9fe48c52c52e9025b36d00cefee369d120733375694fb0888\",\n \"storePath\": \"/home/session/durable/working-state.jsonl\",\n \"tasks\": [\n  {\n   \"checkpoint\": {\n    \"deadline\": 1793984575.504916,\n    \"phase\": \"await\",\n    \"requestId\": \"PA-D2-0001\",\n    \"requestedAt\": 1793898175.504916\n   },\n   \"id\": \"t4\",\n   \"memos\": {\n    \"external-event\": {\n     \"decision\": \"approved\",\n     \"reason\": \"coverage criteria met; PET-avid nodule meets imaging criteria\",\n     \"reviewer\": \"Dr. Chen\"\n    }\n   },\n   \"name\": \"d2.approval-task\",\n   \"outcome\": {\n    \"error\": null,\n    \"status\": \"completed\"\n   },\n   \"restarts\": 1,\n   \"status\": \"TERMINAL\",\n   \"waitingOn\": []\n  }\n ]\n}",
+      "response_id": "caresp_00004be1211fcdf100peuLAR8PihdO5OaR3OmdPKLX3G38tn0D",
+      "status": "completed",
+      "type": "function_call_output"
+    },
+    {
+      "agent_reference": null,
+      "content": [
+        {
+          "annotations": [],
+          "logprobs": [],
+          "text": "Done.\n\nQuoted tool returns:\n\n`record_approval` returned:\n```json\n{\n  \"finalPhase\": \"decided\",\n  \"note\": \"the task resumed at the step after the approval\",\n  \"requestId\": \"PA-D2-0001\",\n  \"settled\": {\n    \"error\": null,\n    \"result\": {\n      \"decision\": \"approved\",\n      \"reason\": \"coverage criteria met; PET-avid nodule meets imaging criteria\",\n      \"reviewer\": \"Dr. Chen\"\n    },\n    \"status\": \"completed\",\n    \"taskId\": \"t4\"\n  },\n  \"wokenTasks\": [\n    \"t4\"\n  ]\n}\n```\n\n`working_state` returned:\n```json\n{\n  \"approval\": {\n    \"deadline\": 1793984575.504916,\n    \"decision\": \"approved\",\n    \"reviewer\": \"Dr. Chen\",\n    \"state\": \"answered\"\n  },\n  \"approvalTask\": {\n    \"checkpoint\": {\n      \"deadline\": 1793984575.504916,\n      \"phase\": \"await\",\n      \"requestId\": \"PA-D2-0001\",\n      \"requestedAt\": 1793898175.504916\n    },\n    \"id\": \"t4\",\n    \"restarts\": 1,\n    \"status\": \"TERMINAL\",\n    \"waitingOn\": []\n  },\n  \"assessment\": \"Coverage criteria are met.\",\n  \"decidedAt\": \"2026-11-05T17:03:24Z\",\n  \"decidedBy\": \"Dr. Chen\",\n  \"decision\": \"approved\",\n  \"phase\": \"decided\",\n  \"requestId\": \"PA-D2-0001\",\n  \"resumedCount\": 1,\n  \"storePath\": \"/home/session/durable/working-state.jsonl\"\n}\n```\n\n`store_report` included this task entry:\n```json\n{\n  \"checkpoint\": {\n    \"deadline\": 1793984575.504916,\n    \"phase\": \"await\",\n    \"requestId\": \"PA-D2-0001\",\n    \"requestedAt\": 1793898175.504916\n  },\n  \"id\": \"t4\",\n  \"memos\": {\n    \"external-event\": {\n      \"decision\": \"approved\",\n      \"reason\": \"coverage criteria met; PET-avid nodule meets imaging criteria\",\n      \"reviewer\": \"Dr. Chen\"\n    }\n  },\n  \"name\": \"d2.approval-task\",\n  \"outcome\": {\n    \"error\": null,\n    \"status\": \"completed\"\n  },\n  \"restarts\": 1,\n  \"status\": \"TERMINAL\",\n  \"waitingOn\": []\n}\n```\n\nFinal requested fields:\n- Final phase: `\"decided\"`\n- Decision: `\"approved\"`\n- Reviewer: `\"Dr. Chen\"`\n- Approval task status: `\"TERMINAL\"`\n- Approval task checkpoint phase: `\"await\"`",
+          "type": "output_text"
+        }
+      ],
+      "id": "msg_00004be1211fcdf1009oqFWYqrjeqE0LuxkQ61tFndqc3MoflC",
+      "response_id": "caresp_00004be1211fcdf100peuLAR8PihdO5OaR3OmdPKLX3G38tn0D",
+      "role": "assistant",
+      "status": "completed",
+      "type": "message"
+    }
+  ],
+  "parallel_tool_calls": false,
+  "response_id": "caresp_00004be1211fcdf100peuLAR8PihdO5OaR3OmdPKLX3G38tn0D",
+  "status": "completed",
+  "usage": {
+    "input_tokens": 6629,
+    "input_tokens_details": {
+      "cache_write_tokens": 0,
+      "cached_tokens": 0
+    },
+    "output_tokens": 881,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 7510
+  }
+}

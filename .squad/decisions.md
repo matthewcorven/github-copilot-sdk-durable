@@ -936,3 +936,61 @@ rollback must put back both, and the test must fail the transaction **twice**. A
 proves the record and says nothing about the bookkeeping. Check every port: a divergence here is invisible
 until someone's store corrupts.
 
+### 2026-11-05T17:30:00Z: D2 — a task that parks on an external event, and the three defects proving it exposed
+
+**By:** core-engineer (Band D, #160)
+**What:** `lib/Durable.cs` gained an external-event park (`TaskCommit.WaitingForEvent`,
+`DurableStore.RaiseEventAsync`, `ExternalEventMemoKey`), ported to TypeScript and Python in the same
+commit. Three defects were found while building the scenario and fixed with tests that fail without
+them: the non-transaction commit arm dropped `WaitingOn`; the runner cached one completion per task id
+so a woken task handed its waiter the previous run's outcome; and a run that ended at a park settled as
+`failed` instead of `pending`. Evidence: `real-world-scenarios/band-d-durable-inside/durable/GAP.md`.
+
+**Why:**
+#### Position
+
+`TaskStatus.Waiting` existed, but its `WaitingOn` list means **child task ids** — the runner resolves
+each one with `WaitForTaskAsync`. A human approval waits for something that is not in the store at all,
+so the scenario had no way to express "park until a person answers" without either a `while` loop
+(which cannot survive a restart and holds a billed container) or a lie about the shape.
+
+The park is a **commit**, not a status: the checkpoint carries the deadline, the name carries the
+event, and the run ends. Delivery is one transaction that writes the payload as a memo and clears the
+name, so a reader cannot see an answer for a task that is still waiting, and a redelivery wakes nobody
+and never overwrites the first answer.
+
+#### The two defects that were *already there*
+
+Both are reachable without external events, and both are silent:
+
+1. **`CommitTaskAsync(id, Func<TaskCommit>)` never wrote `WaitingOn`.** Only the transaction overload
+   did. A `waiting` commit through the direct arm was stored as a running task — no child, no resumer,
+   nothing in the store to say what it waited for. The TypeScript and Python arms were ported from it
+   and had the same hole.
+2. **One completion per task id, never cleared.** A task that ran twice handed its second waiter the
+   first run's outcome. A task only runs twice when something outside the process woke it, so the bug
+   was invisible until this band needed exactly that.
+
+**Rule:** a status without its supporting state is not a status. When a commit arm and its overload
+sibling share a record, diff what each writes — the divergence is the bug, and it shows up only on the
+path the examples never take.
+
+#### Why `pending`, not `failed`
+
+A run that ends at a park has nowhere to continue *in this process*, which is not the same as a task
+that cannot continue. `failed` is the store's word for a task with no outcome and no resume; `pending`
+is what `outcomes_async` already reports for a child with no outcome. Using `failed` would make a host
+retry a task that is waiting by design.
+
+#### Compatibility
+
+Additive. No public signature changed; the event namespace is a prefix inside the list that already
+existed, so a store written before this change (every name in it a child task id) reads back unchanged.
+The only behaviour change for existing callers is defect 2's fix, and that is a bug fix: a second run
+now settles with the second run's outcome.
+
+#### Landing order
+
+The scenario PR carries the layer change as its own commit and pins to the layer's source tree, per
+`.github/copilot-instructions.md`'s development rule. It does not land until a release PR publishes the
+version the scenario will pin; `durable/PROVENANCE.md` states that sequence rather than implying it.

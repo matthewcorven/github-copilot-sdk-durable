@@ -1,0 +1,52 @@
+-- tool calls and their outputs, in order --
+CALL working_state {"request_id":"PA-D2-0001"}{"request_id":"PA-D2-0001"}
+OUTPUT call_TVpdX4ehKdigEFG8X1ZgACsr
+{
+ "approval": {
+  "deadline": 1793984575.504916,
+  "decision": "",
+  "reviewer": "",
+  "state": "pending"
+ },
+ "approvalTask": {
+  "checkpoint": {
+   "deadline": 1793984575.504916,
+   "phase": "await",
+   "requestId": "PA-D2-0001",
+   "requestedAt": 1793898175.504916
+  },
+  "id": "t4",
+  "restarts": 0,
+  "status": "WAITING",
+  "waitingOn": [
+   "external:approval/PA-D2-0001"
+  ]
+ },
+ "assessment": "Coverage criteria are met.",
+ "decidedAt": "",
+ "decidedBy": "",
+ "decision": "",
+ "phase": "awaiting-approval",
+ "requestId": "PA-D2-0001",
+ "resumedCount": 0,
+ "storePath": "/home/session/durable/working-state.jsonl"
+}
+CALL resume_work {"request_id":"PA-D2-0001"}{"request_id":"PA-D2-0001"}
+OUTPUT call_kE94m3vO6sF8IQINaaOXtotk
+{
+ "approval": {
+  "decision": "",
+  "reviewer": "",
+  "state": "pending"
+ },
+ "decision": "",
+ "phase": "awaiting-approval",
+ "requestId": "PA-D2-0001",
+ "resumedCount": 1,
+ "settled": {
+  "error": null,
+  "result": null,
+  "status": "pending",
+  "taskId": "t4"
+ }
+}

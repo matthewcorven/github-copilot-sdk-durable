@@ -1,0 +1,30 @@
+# Band D (D2) - the Durable hosted agent's dependencies.
+#
+# Two families, and the split is the design:
+#
+#   1. the hosting stack D1 proved works in this preview (agent-framework-* and
+#      azure-ai-agentserver-core, with the same two dependency-range corrections
+#      D1 recorded in ../band-d-hosted-foundry-agent/agent/PATCHES.md - the old
+#      ranges resolve to a `mcp` that agent-framework-core cannot import);
+#   2. the Durable layer, consumed as the package that lib/ builds and publishes.
+#
+# The Durable layer is installed from lib/py by the Dockerfile, never copied into the
+# scenario: .github/copilot-instructions.md names a private copy inside a scenario as
+# the failure mode this program exists to prevent. It is a separate install line
+# rather than an entry here because lib/py is a source tree, not an index package;
+# lib/py/pyproject.toml is the version this scenario was proven against, recorded in
+# ../durable/PROVENANCE.md.
+agent-framework-core>=1.13.0,<2
+agent-framework-foundry>=1.10.4,<2
+# The hosting build in the old range declares `mcp<2`; the core it resolves against
+# imports `mcp.Client`, which mcp 1.x does not export. Same correction as D1.
+agent-framework-foundry-hosting>=1.0.0b261030,<2
+azure-ai-agentserver-core>=2.0.0,<3
+azure-identity>=1.15.0,<2
+mcp>=2.2.0,<3
+python-dotenv>=1.0.0,<2
+azure-monitor-opentelemetry>=1.6.0,<2
+# Installed from lib/py by the Dockerfile, so it is not resolved from an index here.
+# The Durable layer imports the Copilot SDK (durable.py: `from copilot import ...`), so the
+# SDK the layer is proven against is pinned here as well as being pulled transitively.
+github-copilot-sdk==1.0.28

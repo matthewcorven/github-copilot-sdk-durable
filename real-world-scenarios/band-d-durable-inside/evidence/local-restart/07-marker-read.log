@@ -1,0 +1,37 @@
+-- 07-marker-read
+{
+ "/": {
+  "error": "OSError: [Errno 30] Read-only file system: '/.d2-write-probe-59326'",
+  "exists": true,
+  "writable": false
+ },
+ "/app": {
+  "exists": false
+ },
+ "/files": {
+  "exists": false
+ },
+ "/home/session": {
+  "exists": false
+ },
+ "/tmp": {
+  "exists": true,
+  "writable": true
+ },
+ "home": "/Users/core",
+ "markerPath": "<scratch>/survival-marker.json",
+ "markerRead": {
+  "documents": [
+   "d2.work-state@LOCAL-1",
+   "d2.approval@LOCAL-1"
+  ],
+  "storePath": "<scratch>/working-state.jsonl",
+  "tasks": [
+   "t4"
+  ],
+  "writtenAt": "2026-11-05T17:06:42Z",
+  "writtenByPid": 59155
+ },
+ "storePath": "<scratch>/working-state.jsonl",
+ "userId": 501
+}

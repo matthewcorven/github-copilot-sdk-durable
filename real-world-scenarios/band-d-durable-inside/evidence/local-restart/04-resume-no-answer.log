@@ -1,0 +1,42 @@
+-- 04-resume-no-answer
+{
+ "approval": {
+  "deadline": 1793984801.926668,
+  "deadlineIso": "2026-11-06T17:06:41Z",
+  "decision": "",
+  "reason": "",
+  "requestId": "LOCAL-1",
+  "requestedAt": 1793898401.926668,
+  "reviewer": "",
+  "state": "pending",
+  "task": {
+   "checkpoint": {
+    "deadline": 1793984801.926668,
+    "phase": "await",
+    "requestId": "LOCAL-1",
+    "requestedAt": 1793898401.926668
+   },
+   "id": "t4",
+   "memos": {},
+   "name": "d2.approval-task",
+   "outcome": null,
+   "restarts": 0,
+   "status": "WAITING",
+   "waitingOn": [
+    "external:approval/LOCAL-1"
+   ]
+  }
+ },
+ "decidedBy": "",
+ "decision": "",
+ "phase": "awaiting-approval",
+ "requestId": "LOCAL-1",
+ "resumedCount": 1,
+ "settled": {
+  "error": null,
+  "result": null,
+  "status": "pending",
+  "taskId": "t4"
+ },
+ "storePath": "<scratch>/working-state.jsonl"
+}

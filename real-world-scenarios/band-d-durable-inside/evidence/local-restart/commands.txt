@@ -1,0 +1,15 @@
+store: <scratch>/working-state.jsonl
+python: <repo>/.scratch/agentvenv/bin/python
+$ <repo>/.scratch/agentvenv/bin/python d2_tool.py assess --request LOCAL-1 --text criteria met
+$ <repo>/.scratch/agentvenv/bin/python d2_tool.py probe --mark
+$ <repo>/.scratch/agentvenv/bin/python d2_tool.py state --request LOCAL-1
+$ <repo>/.scratch/agentvenv/bin/python d2_tool.py resume --request LOCAL-1
+$ <repo>/.scratch/agentvenv/bin/python -c 
+import json
+from durable_state import Workspace
+workspace = Workspace.open()
+print(json.dumps({'woken': workspace.deliver('LOCAL-1', {'decision': 'approved', 'reviewer': 'Dr Okoro', 'reason': 'criteria met'})}, indent=1))
+workspace.close()
+
+$ <repo>/.scratch/agentvenv/bin/python d2_tool.py resume --request LOCAL-1
+$ <repo>/.scratch/agentvenv/bin/python d2_tool.py probe --read
