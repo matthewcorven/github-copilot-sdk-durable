@@ -76,12 +76,13 @@ Variants:
 ```bash
 KEEP=1 ./run.sh                    # keep the scratch directory for inspection
 RUN2_AFTER_MINUTES=61 ./run.sh     # put run 2 an hour past run 1: it triages again and writes a second commit
-NOW=2026-11-05T14:00:00Z ./run.sh  # move run 1's clock
+NOW=2026-11-05T14:00:00Z ./run.sh  # move the base clock both runs start from
 ```
 
 The fixture's dates are expressed as `openedMinutesAgo` / `updatedMinutesAgo`, so the run reproduces
 on any date. `NOW` defaults to the fixture's own `capturedAt`, which makes two separate runs of
-`run.sh` produce byte-identical stdout.
+`run.sh` produce byte-identical stdout. `NOW` and `RUN2_AFTER_MINUTES` combine: run 1 starts at
+`NOW`, run 2 at `NOW + RUN2_AFTER_MINUTES`.
 
 ### What a run writes
 
@@ -98,7 +99,7 @@ did not write.
 | `run-1/triage-report.md` | Phase 7's report issue, `###`/`####` headings, long lists in `<details>` |
 | `run-1/triage-data.json` | Phase 7's `data` safe output: the four fields per PR the workflow declares |
 | `run-2/` | Empty except for whatever run 2 wrote, which is nothing when it is skipped |
-| `run-2.log` | Run 2's stdout, captured by `run.sh` so it can check the cooldown |
+| `run-2.log` | Run 2's stdout, captured while `run.sh` checks the cooldown, then deleted. `KEEP=1` keeps the scratch tree but does not keep this file — re-run without `KEEP` and tee the output if you need it |
 
 The state file itself is not a file on disk: it is a blob on the branch. Read it with
 

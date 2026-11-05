@@ -104,7 +104,10 @@ them. None is fixed in `baseline/` — fixing them is the thing under test.
   branch deleted by a cleanup job is a silent reset to cold start. The code cannot tell "no branch"
   from "branch lost".
 - **A malformed file fails the run.** Phase 1 parses `pr-triage-latest.json`; if a previous writer
-  left invalid JSON there, the next run exits 1. There is no previous-commit fallback.
+  left invalid JSON there, the next run reports `state on refs/heads/memory/pr-triage is not valid
+  JSON` plus the parse position, and exits 1. It does not fall back to a previous commit, and it
+  does not treat the branch as absent: a branch that exists but cannot be read is a failure, not a
+  cold start.
 
 `--dry-run` on the C# driver writes the state objects without moving the branch. That exists to make
 the crash-in-Phase-8 seam reproducible; it is a diagnostic, not a behaviour of the workflow.
