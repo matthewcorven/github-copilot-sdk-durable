@@ -3,12 +3,12 @@
   "fault": "store-outage",
   "outcome": "failed safely, with a split store",
   "phase": "in flight (Phase 1 committed, Phase 2 running); the store file moved aside",
-  "detail": "The store file was moved aside while the run held its handle. The process did not fail: exit 0, final phase 'save run state', 13 comment(s) posted, and it recreated the path, so the live store now holds 'save' with its own history while the moved file still holds the committed prefix it had at the outage ('classify', 7667 bytes, 1 generation(s) of state, triage list []). Nothing that was committed was lost — every record in the moved file is readable and the run record it holds is the one that was committed — but the state is now in two files, and an operator reading the live path is reading a history that never existed while the run was alive. The application fails safe in the sense that it reports no corruption and keeps running; it does not fail loudly, and it does not tell anyone the file it was writing had gone.",
-  "evidence": "outage=yes; path recreated during the move=1; before: state=classify 2240 bytes; moved: exists=yes 7667 bytes state=classify history=1; live path exists=1 state=save; run exit=0 last phase=save run state posted=13; triage list found in the moved state=[]",
+  "detail": "The store file was moved aside while the run held its handle. The process did not fail: exit 0, final phase 'save run state', 13 comment(s) posted, and it recreated the path, so the live store now holds 'save' with its own history while the moved file still holds the committed prefix it had at the outage ('classify', 9997 bytes, 1 generation(s) of state, triage list []). Nothing that was committed was lost — every record in the moved file is readable and the run record it holds is the one that was committed — but the state is now in two files, and an operator reading the live path is reading a history that never existed while the run was alive. The application fails safe in the sense that it reports no corruption and keeps running; it does not fail loudly, and it does not tell anyone the file it was writing had gone.",
+  "evidence": "outage=yes; path recreated during the move=1; before: state=classify 4556 bytes; moved: exists=yes 9997 bytes state=classify history=1; live path exists=1 state=save; run exit=0 last phase=save run state posted=13; triage list found in the moved state=[]",
   "harness": {
     "dotnet": "dotnet",
     "runtime": "none (Band C has no model and no recorded runtime)",
     "command": "./faults/store-outage.sh --variant durable"
   },
-  "recordedAt": "2026-11-05T17:12:47.097706+00:00"
+  "recordedAt": "2026-11-05T18:00:42.257754+00:00"
 }

@@ -65,18 +65,15 @@ FAULT_COMMAND="./faults/cooldown-desync.sh --variant $VARIANT$( [ "$INJECT" = "1
 export FAULT_COMMAND
 
 require_tools || exit 1
+# The result this run replaces is removed before anything else happens, so a run that fails before
+# recording leaves *no* file rather than a stale one that the summary would render as its result.
+begin_result "$VARIANT" "$FAULT"
 
 RUN_DIR="$(new_run_dir "$VARIANT" "$FAULT")"
 track_dir "$RUN_DIR"
 prepare_variant "$VARIANT" "$RUN_DIR/app" || exit 1
 
 if [ "$VARIANT" = "baseline" ]; then STATE_HINT="$RUN_DIR/repo.git"; else STATE_HINT="$RUN_DIR/store.jsonl"; fi
-
-if [ "$INJECT" = "1" ]; then
-  PHASE="run 2 stopped between posting its comments and committing its state; run 3, 61m later, over the same state"
-else
-  PHASE="run 2 completes and commits its state; run 3, 61m later, over the same state (the control)"
-fi
 
 # The clocks are instants, not sleeps: run 3 is past the cooldown because a later scheduled run is.
 #
@@ -86,7 +83,33 @@ fi
 # needs, and both are only true if each run's fixture is captured at that run's instant — so each run
 # gets a copy of the fixture whose `capturedAt` is its own clock (`lib/fresh_fixture.py`, a one-field
 # copy, not a change to the scenario's fixture).
-RUN3_CLOCK="${FAULTS_CLOCK:-2026-11-05T13:31:00Z}"
+# The clock ladder, derived from one base so the gaps are arithmetic rather than three independent
+# defaults that can drift apart:
+#
+#   run 1 = base            (12:00Z)  — a run that finished, so run 2 has a previous run to read
+#   run 2 = base + 90 min   (13:30Z)  — the faulting run; every PR is inside the per-PR cooldown and
+#                                       run 1 is outside the run gate, so run 2 posts its comments
+#   run 3 = run 2 + 61 min  (14:31Z)  — one minute past the run gate that run 2's timestamp would have
+#                                       set, and still inside every PR's cooldown
+#
+# The gaps are computed, not written down twice. An earlier version of this script defaulted run 3
+# independently and run 3 landed *before* run 2; the result said "61 minutes later" about a run that was
+# 22 hours earlier. The numbers in the result are now derived from these two offsets.
+RUN1_CLOCK="${FAULTS_CLOCK:-2026-11-05T12:00:00Z}"
+RUN2_AFTER_MINUTES=90
+RUN3_AFTER_RUN2_MINUTES=61
+shift_clock() {
+  "$PYTHON" -c 'import datetime,sys; t=datetime.datetime.fromisoformat(sys.argv[1].replace("Z","+00:00")); print((t+datetime.timedelta(minutes=int(sys.argv[2]))).strftime("%Y-%m-%dT%H:%M:%SZ"))' "$1" "$2"
+}
+CLOCK="$RUN1_CLOCK"
+RUN2_CLOCK="$(shift_clock "$RUN1_CLOCK" "$RUN2_AFTER_MINUTES")"
+RUN3_CLOCK="$(shift_clock "$RUN2_CLOCK" "$RUN3_AFTER_RUN2_MINUTES")"
+
+if [ "$INJECT" = "1" ]; then
+  PHASE="run 2 stopped between posting its comments and committing its state; run 3, ${RUN3_AFTER_RUN2_MINUTES}m after run 2, over the same state"
+else
+  PHASE="run 2 completes and commits its state; run 3, ${RUN3_AFTER_RUN2_MINUTES}m after run 2, over the same state (the control)"
+fi
 
 # ── Run 1: a run that finished, one hour before the faulting one ─────────────────────────────────
 #
@@ -96,11 +119,9 @@ RUN3_CLOCK="${FAULTS_CLOCK:-2026-11-05T13:31:00Z}"
 # to post the comments the fault is about. That was a real harness defect, found by running it.
 # Run 2 is 90 minutes after run 1, on an unchanged fixture: every PR is inside the per-PR cooldown by
 # then (the declared ages are 300 minutes and up), so run 2 posts comments and the fault is about its
-# state write. Run 3 is one minute past that — outside the run gate — and still inside every PR's
-# cooldown, which is what makes its second posting the cooldown's doing rather than a re-triage of
-# changed PRs.
-RUN2_CLOCK="${CLOCK:-2026-11-05T12:00:00Z}"
-RUN2_CLOCK="$("$PYTHON" -c 'import datetime,sys; t=datetime.datetime.fromisoformat(sys.argv[1].replace("Z","+00:00")); print((t+datetime.timedelta(minutes=90)).strftime("%Y-%m-%dT%H:%M:%SZ"))' "$RUN2_CLOCK")"
+# state write. Run 3 is 61 minutes past run 2 — outside the run gate that run 2's timestamp would have
+# set — and still inside every PR's cooldown, which is what makes its second posting the cooldown's
+# doing rather than a re-triage of changed PRs.
 FIXTURE_SAVED="$FIXTURE"
 "$PYTHON" "$HARNESS_DIR/lib/fresh_fixture.py" "$FIXTURE_SAVED" "$CLOCK" "$RUN_DIR/fixture-run1.json" || exit 1
 "$PYTHON" "$HARNESS_DIR/lib/fresh_fixture.py" "$FIXTURE_SAVED" "$RUN2_CLOCK" "$RUN_DIR/fixture-run2.json" || exit 1
@@ -161,15 +182,26 @@ fi
 # The baseline's comment files live in its own output directory; the duplex check is against those.
 RUN2_DIR="$(output_dir "$RUN_DIR/run2.log")"
 
+# The bytes of every comment on disk before run 3. A duplicate is "run 3 wrote pr-N and pr-N already
+# held exactly that content" — a fact about appends, which a count of files cannot see.
+COMMENT_DIR_FOR_RUN3="$(output_dir "$RUN_DIR/run2.log")"
+[ -n "$COMMENT_DIR_FOR_RUN3" ] || COMMENT_DIR_FOR_RUN3="$RUN_DIR/outputs/run2"
+snapshot_comments "$COMMENT_DIR_FOR_RUN3" "$RUN_DIR/comments-before-run3.json"
+
 # ── Run 3: 61 minutes later, over the same state ─────────────────────────────────────────────────
-# A separate clock, and the reason it is 61: the baseline's run gate refuses a run within 60 minutes of
-# the previous one, so a run 10 minutes later would be skipped by a rule that is working. Past the
-# hour, the gate cannot be what stops it and a second triage is the run's own decision.
+# The clock is derived from run 2 (`RUN3_CLOCK = RUN2_CLOCK + 61m`), not written down separately: the
+# baseline's run gate refuses a run within 60 minutes of the previous one, so a run this soon would be
+# skipped by a rule that is working, and 61 is the smallest gap that puts the gate out of the way.
 CLOCK_SAVED="$CLOCK"
 CLOCK="$RUN3_CLOCK"
 FIXTURE="$RUN_DIR/fixture-run3.json"
 if [ "$VARIANT" = "baseline" ]; then
   start_baseline "$RUN_DIR" "$STATE_HINT" run3
+elif [ "$INJECT" = "1" ] && [ "${GUARD_DISABLED:-0}" = "1" ]; then
+  # The guard-disabled arm: the variant's own `BAND_C_NO_IDEMPOTENCY_GUARD=1` removes the memo and the
+  # ledger read, so the same resume posts everything again. It is the measurement that gives the fault
+  # row's `not doubled` its teeth: the same three runs, the same seam, with the guard taken out.
+  BAND_C_NO_IDEMPOTENCY_GUARD=1 start_durable "$RUN_DIR" "$STATE_HINT" run3
 else
   start_durable "$RUN_DIR" "$STATE_HINT" run3
 fi
@@ -191,6 +223,12 @@ RUN3_RESUME=0
 grep -q "resuming durable task" "$RUN_DIR/run3.log" 2>/dev/null && RUN3_RESUME=1
 RUN3_RESUME_PHASE="$(grep -o "at phase '[a-z_]*'" "$RUN_DIR/run3.log" 2>/dev/null | head -1 | sed "s/at phase '//; s/'//" || true)"
 RUN3_DIR="$(output_dir "$RUN_DIR/run3.log")"
+[ -n "$RUN3_DIR" ] || RUN3_DIR="$RUN_DIR/outputs/run3"
+# The duplicates run 3 actually cost: PRs it wrote whose bytes were already on disk.
+RUN3_DUPES="$(dup_list "$RUN_DIR/comments-before-run3.json" "$RUN_DIR/run3.log" "$RUN3_DIR")" ||
+  { log "cooldown-desync: could not measure run 3's duplicates"; exit 1; }
+RUN3_DUPES_COUNT="$(dup_count "$RUN_DIR/comments-before-run3.json" "$RUN_DIR/run3.log" "$RUN3_DIR")" ||
+  { log "cooldown-desync: could not measure run 3's duplicates"; exit 1; }
 STATE_AFTER3="$(state_field "$VARIANT" "$STATE_HINT" phase)"
 REF_STATE="$(grep -o 'state:      [a-z][^.]*' "$RUN_DIR/run3.log" 2>/dev/null | head -1 | sed 's/state:      //' || true)"
 PRIOR_RUN="$(grep -o 'prior run:  [^ ]* triaged [0-9]* PR(s)' "$RUN_DIR/run3.log" 2>/dev/null | head -1 || true)"
@@ -205,14 +243,66 @@ if [ "$VARIANT" = "baseline" ] && [ -n "$RUN2_DIR" ] && [ -n "$RUN3_DIR" ]; then
 fi
 DUPES_COUNT=0
 [ -n "$BASELINE_DUPES" ] && DUPES_COUNT="$(printf '%s' "$BASELINE_DUPES" | tr ',' '\n' | grep -c . || true)"
+# The byte-level measure, which is the one the verdict branches on: PRs run 3 wrote whose content the
+# directory already held. `RUN3_DUPES` is that list for both variants.
+DUPES_COUNT="${RUN3_DUPES_COUNT:-0}"
+DUPES_LIST="${RUN3_DUPES:-$BASELINE_DUPES}"
 
 DONE3="$(grep -E 'completed — |triaged [0-9]+ PR' "$RUN_DIR/run3.log" 2>/dev/null | tail -1)"
+
+# ── The guard-disabled arm: the same resume with the guard taken out ─────────────────────────────
+#
+# Run 3 above is the fault row. This arm replays the *same* three runs from the same post-run-2 store,
+# with `BAND_C_NO_IDEMPOTENCY_GUARD=1` on run 3. If run 3's zero duplicates were a coincidence rather
+# than the guard working, this arm posts them all again. The copy is deliberate: the fault row's store is
+# left exactly as the fault left it, and the arm is reproducible on its own.
+GUARD_POSTED=0
+GUARD_DUPES_COUNT=""
+GUARD_DUPES=""
+GUARD_RAN=0
+if [ "$VARIANT" = "durable" ] && [ "$INJECT" = "1" ]; then
+  GUARD_DIR="$RUN_DIR/guard-disabled"
+  mkdir -p "$GUARD_DIR"
+  # The starter runs the program from <rundir>/app; a second run directory needs its own.
+  ln -s "$RUN_DIR/app" "$GUARD_DIR/app"
+  cp -R "$STATE_HINT" "$GUARD_DIR/store.jsonl"
+  rm -f "$GUARD_DIR/store.jsonl.lock" "$GUARD_DIR/store.jsonl.lock.owner"
+  cp -R "${COMMENT_DIR_FOR_RUN3:-$RUN_DIR/outputs/run2}" "$GUARD_DIR/comments-before"
+  cp "$RUN_DIR/comments-before-run3.json" "$GUARD_DIR/comments-before.json"
+  CLOCK_SAVED_3="$CLOCK"
+  CLOCK="$RUN3_CLOCK"
+  FIXTURE="$RUN_DIR/fixture-run3.json"
+  BAND_C_NO_IDEMPOTENCY_GUARD=1 start_durable "$GUARD_DIR" "$GUARD_DIR/store.jsonl" run3-guard-off
+  GUARD_PID="$STARTED_PID"
+  track_pid "$GUARD_PID"
+  wait_for_exit "$GUARD_PID" 240 || { log "cooldown-desync: the guard-disabled run did not finish"; exit 1; }
+  GUARD_STATUS="$WAIT_STATUS"
+  CLOCK="$CLOCK_SAVED_3"
+  FIXTURE="$FIXTURE_SAVED"
+  GUARD_LOG="$GUARD_DIR/run3-guard-off.log"
+  GUARD_POSTED="$(wrote_count "$GUARD_LOG")"
+  GUARD_DIR_OUT="$GUARD_DIR/outputs/run3-guard-off"
+  GUARD_DUPES="$(dup_list "$GUARD_DIR/comments-before.json" "$GUARD_LOG" "$GUARD_DIR/comments-before" "$GUARD_DIR_OUT")" ||
+    { log "cooldown-desync: could not measure the guard-disabled arm's duplicates"; exit 1; }
+  GUARD_DUPES_COUNT="$(dup_count "$GUARD_DIR/comments-before.json" "$GUARD_LOG" "$GUARD_DIR/comments-before" "$GUARD_DIR_OUT")" ||
+    { log "cooldown-desync: could not measure the guard-disabled arm's duplicates"; exit 1; }
+  GUARD_RAN=1
+  if [ "${GUARD_STATUS:-1}" != "0" ]; then
+    log "cooldown-desync: the guard-disabled arm exited $GUARD_STATUS; it is not a measurement"
+    exit 1
+  fi
+  log "cooldown-desync: guard-disabled arm exited $GUARD_STATUS, posted $GUARD_POSTED comment(s), $GUARD_DUPES_COUNT duplicate(s)"
+fi
+GUARD_TEXT=""
+if [ "$GUARD_RAN" = "1" ]; then
+  GUARD_TEXT=" The control: the same three runs from the same post-run-2 store with BAND_C_NO_IDEMPOTENCY_GUARD=1 posted $GUARD_POSTED comment(s), $GUARD_DUPES_COUNT of them duplicates ($GUARD_DUPES) — so the zero above is the guard working, not a coincidence of the run."
+fi
 
 # ── Run 4: the same store, once more ─────────────────────────────────────────────────────────────
 # A new generation of a *finished* task is the shape a later scheduled run has. It asks whether
 # whatever run 3 used to avoid the duplicate outlived run 3: a per-task memo does not, a ledger does.
 # For the baseline it asks the same question of the second run's state, and reports what it does.
-RUN4_CLOCK="${RUN3_CLOCK}"
+RUN4_CLOCK="$RUN3_CLOCK"
 RUN4_POSTED=0
 RUN4_SKIPPED=0
 RUN4_DIR=""
@@ -229,6 +319,12 @@ if [ "$VARIANT" = "durable" ]; then
   RUN4_POSTED="$(wrote_count "$RUN_DIR/run4.log")"
   RUN4_SKIPPED="$(skipped_count "$RUN_DIR/run4.log")"
   RUN4_DIR="$(output_dir "$RUN_DIR/run4.log")"
+  [ -n "$RUN4_DIR" ] || RUN4_DIR="$RUN_DIR/outputs/run4"
+  snapshot_comments "$RUN4_DIR" "$RUN_DIR/comments-before-run4.json"
+  RUN4_DUPES="$(dup_list "$RUN_DIR/comments-before-run4.json" "$RUN_DIR/run4.log" "$RUN4_DIR")" ||
+    { log "cooldown-desync: could not measure run 4's duplicates"; exit 1; }
+  RUN4_DUPES_COUNT="$(dup_count "$RUN_DIR/comments-before-run4.json" "$RUN_DIR/run4.log" "$RUN4_DIR")" ||
+    { log "cooldown-desync: could not measure run 4's duplicates"; exit 1; }
 fi
 
 # ── The verdict ──────────────────────────────────────────────────────────────────────────────────
@@ -236,36 +332,42 @@ if [ "$INJECT" = "1" ]; then
   if [ "$VARIANT" = "baseline" ]; then
     if [ "$DUPES_COUNT" -ge 1 ] 2>/dev/null; then
       OUTCOME="doubled"
-      DETAIL="Run 2 posted $RUN2_POSTED comment(s) and its state write did not happen ($RUN2_STATE; memory/pr-triage was left where run 1 put it), so run 3 — 61 minutes later, past the cooldown — read the state run 1 wrote ($PRIOR_RUN), decided the previous run was old enough to triage again, and posted the same $RUN3_POSTED comment(s) a second time: $DUPES_COUNT PR(s) hold two comments, posted by two runs, with nothing in the state recording that the first posting happened. There is no duplicate detection to fail: the baseline has no record of a comment at all, and the run gate it does have is driven by a timestamp the failed run never wrote."
+      DETAIL="Run 2 posted $RUN2_POSTED comment(s) and its state write did not happen (no memory/pr-triage ref was moved, so the branch was left where run 1 put it), so run 3 — ${RUN3_AFTER_RUN2_MINUTES} minutes after run 2, at $RUN3_CLOCK — read the state run 1 wrote ($PRIOR_RUN), decided the previous run was old enough to triage again, and posted the same comments a second time: $DUPES_COUNT of run 3's $RUN3_POSTED written comment(s) were byte-for-byte what was already on disk ($DUPES_LIST), so those PRs hold two copies. Nothing in the state records that the first posting happened: the baseline has no record of a comment at all, and the run gate it does have is driven by a timestamp the failed run never wrote."
     else
       OUTCOME="not doubled"
-      DETAIL="Run 2 posted $RUN2_POSTED comment(s) and its state write did not happen, but run 3 posted $RUN3_POSTED comment(s) and $DUPES_COUNT PR(s) were found to hold two comments. The expected double comment did not appear; this row reports that rather than the expectation."
+      DETAIL="Run 2 posted $RUN2_POSTED comment(s) and its state write did not happen, but run 3 posted $RUN3_POSTED comment(s) and $DUPES_COUNT of them were content already on disk. The expected double comment did not appear; this row reports the measurement rather than the expectation."
     fi
-  elif [ "$RUN3_RESUME" = "1" ] && [ "$RUN3_POSTED" = "0" ] && [ "$RUN4_POSTED" = "0" ]; then
-    OUTCOME="not doubled"
-    DETAIL="Run 2 posted $RUN2_POSTED comment(s) and stopped before the phase committed ($TASK_AFTER_RUN2; the comment ledger held $LEDGER_AFTER_RUN2 entries). Run 3 resumed the same task at '$RUN3_RESUME_PHASE' rather than starting cold, found the comments already recorded, and posted $RUN3_POSTED new one(s) while adopting $RUN3_SKIPPED: the run record is what did not commit, and it did not need to — each comment was memoized as it was made, and the ledger outlived the process that made it. Run 3 finished the run at '$STATE_AFTER3'. Run 4, a new generation of the finished task (what a later scheduled run is), posted $RUN4_POSTED and adopted $RUN4_SKIPPED: the guard outlived the task, not just the process."
-  else
+  elif [ "$DUPES_COUNT" -ge 1 ] 2>/dev/null; then
+    # The residue case: the resume ran but still re-posted something (the window a memo cannot close).
+    # This is a *partial* adoption and is filed as a duplicate, not as the opposite finding.
     OUTCOME="doubled"
-    DETAIL="Run 2 posted $RUN2_POSTED comment(s); run 3 resumed=$RUN3_RESUME and posted $RUN3_POSTED more with $RUN3_SKIPPED adopted. The memo did not survive the missing run-record commit, which is the opposite of the expected behaviour and is reported as the finding."
+    DETAIL="Run 2 posted $RUN2_POSTED comment(s) and stopped before the phase committed ($TASK_AFTER_RUN2; ledger $LEDGER_AFTER_RUN2). Run 3 resumed at '$RUN3_RESUME_PHASE' and adopted $RUN3_SKIPPED, but $DUPES_COUNT of its $RUN3_POSTED written comment(s) were content already on disk ($DUPES_LIST): the resume did not prevent every duplicate. This is the partial-adoption case — a duplicate measured byte for byte, not inferred from a count."
+  elif [ "$RUN3_RESUME" = "1" ] && [ "$RUN4_DUPES_COUNT" -eq 0 ] 2>/dev/null; then
+    OUTCOME="not doubled"
+    DETAIL="Run 2 posted $RUN2_POSTED comment(s) and stopped before the phase committed ($TASK_AFTER_RUN2; the comment ledger held $LEDGER_AFTER_RUN2 entries). Run 3 resumed the same task at '$RUN3_RESUME_PHASE' rather than starting cold. It adopted $RUN3_SKIPPED comment(s) already recorded, wrote $RUN3_POSTED new one(s), and $DUPES_COUNT of everything it wrote was content already on disk. The run record is what did not commit, and it did not need to — each comment was memoized as it was made, and the ledger outlived the process that made it. Run 3 finished the run at '$STATE_AFTER3'. Run 4, a new generation of the finished task (what a later scheduled run is), wrote $RUN4_POSTED with $RUN4_DUPES_COUNT duplicates and adopted $RUN4_SKIPPED: the guard outlived the task, not just the process.${GUARD_TEXT}"
+  else
+    OUTCOME="not doubled, resume unproven"
+    DETAIL="Run 3 reported resumed=$RUN3_RESUME and wrote $RUN3_POSTED comment(s) with $DUPES_COUNT duplicates, and run 4 wrote $RUN4_POSTED with $RUN4_DUPES_COUNT duplicates. Neither 'the resume prevented it' nor 'the ledger prevented it' is established by these numbers, so the row says so rather than asserting the expected behaviour."
   fi
 else
   if [ "$VARIANT" = "baseline" ]; then
-    OUTCOME="control: not doubled"
-    DETAIL="Control: the same three runs with the Phase 8 seam removed — run 2 committed its state (memory/pr-triage at '$RUN2_STATE'). Run 3, 61 minutes later, therefore read run 2's state, found it past the cooldown and triaged again, posting $RUN3_POSTED comment(s): $DUPES_COUNT PR(s) hold two comments. The duplicate is still there — the baseline has no identity for a comment — and that is the honest reading: removing the missing state write does not remove the duplicate, it only moves which run is inside the cooldown. What the fault adds is that the failed run's own comments are attributable to nobody. The control proves the harness's three-run shape is not what produced the fault row's numbers; it does not prove the baseline is otherwise safe."
+    OUTCOME="control: doubled"
+    DETAIL="Control: the same three runs with the Phase 8 seam removed, so run 2 committed its state. Run 3, ${RUN3_AFTER_RUN2_MINUTES} minutes after run 2, read run 2's record, found it past the cooldown, and wrote $RUN3_POSTED comment(s) of which $DUPES_COUNT were content already on disk — the same $DUPES_COUNT PRs hold two copies as in the fault row. The control is a duplicate too, and stating that is the point: committing the state does not give the baseline an identity for a comment, so it cannot stop a re-post; what the missing state write costs is that the *triage* was redone from a stale view, and the comments were re-posted by a run that believed it had never run. This control does not flip, and the row says so instead of implying the baseline is safe when its state commits."
   else
     OUTCOME="control: not doubled"
-    DETAIL="Control: the same three runs with the seam removed — run 2 completed and committed ($STATE_AFTER3). Run 3 found a finished task and started a new generation, posting $RUN3_POSTED comment(s) and adopting $RUN3_SKIPPED from the ledger. Nothing doubled: the ledger is what makes an unchanged re-run a no-op, and it does not depend on the run record committing. The fault row's distinction is that the resume, not the ledger alone, is what finished the interrupted run."
+    DETAIL="Control: the same three runs with the seam removed — run 2 completed and committed ($STATE_AFTER3). Run 3 found a finished task and started a new generation, writing $RUN3_POSTED comment(s) with $DUPES_COUNT duplicates and adopting $RUN3_SKIPPED from the ledger. Nothing doubled: the ledger is what makes an unchanged re-run a no-op, and it does not depend on the run record committing. The fault row's distinction is that the resume, not the ledger alone, is what finished the interrupted run."
   fi
 fi
 
-OBS_JSON="$("$PYTHON" - "$RUN2_POSTED" "$RUN3_POSTED" "$RUN3_SKIPPED" "$DUPES_COUNT" "$BASELINE_DUPES" "$RUN3_COLD" "$RUN3_GATE" "$RUN3_RESUME" "${LEDGER_AFTER_RUN2:-0}" "$RUN4_POSTED" "$RUN4_SKIPPED" <<'PY'
+OBS_JSON="$("$PYTHON" - "$RUN2_POSTED" "$RUN3_POSTED" "$RUN3_SKIPPED" "$DUPES_COUNT" "$DUPES_LIST" "$RUN3_COLD" "$RUN3_GATE" "$RUN3_RESUME" "${LEDGER_AFTER_RUN2:-0}" "$RUN4_POSTED" "$RUN4_SKIPPED" "${RUN4_DUPES_COUNT:-0}" "${GUARD_POSTED:-0}" "${GUARD_DUPES_COUNT:-0}" <<'PY'
 import json, sys
 (run2_posted, run3_posted, run3_adopted, prs_with_two_comments, prs, cold, gate, resume, ledger,
- run4_posted, run4_adopted) = sys.argv[1:12]
+ run4_posted, run4_adopted, run4_duplicated) = sys.argv[1:13]
 print(json.dumps({
     "run2_comments_posted": int(run2_posted or 0),
     "run3_comments_posted": int(run3_posted or 0),
     "run3_comments_adopted": int(run3_adopted or 0),
+    "run3_comments_duplicated": int(prs_with_two_comments or 0),
     "prs_with_two_comments": int(prs_with_two_comments or 0),
     "prs_doubled": [int(n) for n in (prs or "").split(",") if n.strip()],
     "run3_cold_start": cold == "1",
@@ -274,11 +376,14 @@ print(json.dumps({
     "ledger_entries_before_run3": int(ledger or 0),
     "run4_comments_posted": int(run4_posted or 0),
     "run4_comments_adopted": int(run4_adopted or 0),
+    "run4_comments_duplicated": int(run4_duplicated or 0),
+    "guard_disabled_posted": int(sys.argv[13] or 0),
+    "guard_disabled_duplicated": int(sys.argv[14] or 0),
 }, indent=2))
 PY
 )"
 
-EVIDENCE="run1 exit=${RUN1_STATUS:-n/a} last phase=${RUN1_LAST_PHASE:-n/a} posted=$RUN1_POSTED state=${RUN1_STATE:-none}; run2 exit=$RUN2_STATUS last phase=$RUN2_LAST_PHASE posted=$RUN2_POSTED state after=${RUN2_STATE:-none}${TASK_AFTER_RUN2:+ task=$TASK_AFTER_RUN2}${LEDGER_AFTER_RUN2:+ ledger=$LEDGER_AFTER_RUN2}; run3 at $RUN3_CLOCK exit=$RUN3_STATUS cold start=$RUN3_COLD run gate=$RUN3_GATE resumed=$RUN3_RESUME${RUN3_RESUME_PHASE:+ at phase=$RUN3_RESUME_PHASE} posted=$RUN3_POSTED adopted=$RUN3_SKIPPED; state after run3=${STATE_AFTER3:-none}; run3 read: ${REF_STATE:-n/a} ${PRIOR_RUN:-n/a}; PRs with two comments=[${BASELINE_DUPES}]; run3 says: ${DONE3:-none}${RUN4_DIR:+; run4 exit=${RUN4_STATUS:-n/a} posted=$RUN4_POSTED adopted=$RUN4_SKIPPED}"
+EVIDENCE="run1 exit=${RUN1_STATUS:-n/a} last phase=${RUN1_LAST_PHASE:-n/a} posted=$RUN1_POSTED state=${RUN1_STATE:-none}; run2 exit=$RUN2_STATUS last phase=$RUN2_LAST_PHASE posted=$RUN2_POSTED state after=${RUN2_STATE:-none}${TASK_AFTER_RUN2:+ task=$TASK_AFTER_RUN2}${LEDGER_AFTER_RUN2:+ ledger=$LEDGER_AFTER_RUN2}; run3 at $RUN3_CLOCK exit=$RUN3_STATUS cold start=$RUN3_COLD run gate=$RUN3_GATE resumed=$RUN3_RESUME${RUN3_RESUME_PHASE:+ at phase=$RUN3_RESUME_PHASE} posted=$RUN3_POSTED adopted=$RUN3_SKIPPED; state after run3=${STATE_AFTER3:-none}; run3 read: ${REF_STATE:-n/a} ${PRIOR_RUN:-n/a}; duplicates written by run3=[${DUPES_LIST}] (${DUPES_COUNT}); run3 says: ${DONE3:-none}${RUN4_DIR:+; run4 exit=${RUN4_STATUS:-n/a} posted=$RUN4_POSTED adopted=$RUN4_SKIPPED duplicates=$RUN4_DUPES_COUNT}${GUARD_RAN:+; guard-disabled arm: posted=$GUARD_POSTED duplicates=$GUARD_DUPES_COUNT [$GUARD_DUPES]}"
 
 record_result "$VARIANT" "$FAULT" "$OUTCOME" "$PHASE" "$DETAIL" "$EVIDENCE" "$OBS_JSON"
 exit 0

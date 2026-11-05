@@ -4,11 +4,11 @@
   "outcome": "lost",
   "phase": "after Phase 5 (baseline: labels.json written, then SIGTERM; durable: committed at phase 'comment', then the seam's exit 42)",
   "detail": "The run was stopped with SIGTERM (confirmed gone) after Phase 5 had written labels.json and while Phase 6 was posting comments (13 posted before the signal). The restart over the same repository is a cold start: it loaded nothing, re-ran all eight phases and posted 13 comment(s). Nothing was resumed, because a whole-file snapshot written at the end of Phase 8 is the baseline's only state and this run never reached it. The restart is not exact — there was nothing to be exact about.",
-  "evidence": "first exit=143; first last phase=save run state; first posted=13 adopted=0; state before restart=none; task before restart=n/a; second exit=0; second cold start=1 resumed=0; second posted=13 adopted=0; second output dir=/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-156-work/.scratch/band-c-faults/baseline/restart-after-checkpoint/outputs/second; state after=done (the state snapshot only exists once Phase 8 has committed); second run says: triaged 13 PR(s): #101 auto_merge, #102 auto_merge, #103 auto_merge, #104 batch_review, #105 fast_track, #106 defer, #107 batch_review, #109 close, #111 auto_merge, #112 auto_merge, #113 defer, #114 batch_review, #115 batch_review",
+  "evidence": "first exit=143; first last phase=save run state; first posted=13 adopted=0; state before restart=none; task before restart=n/a; second exit=0; second cold start=1 resumed=0; second posted=13 adopted=0 duplicates=[101,102,103,104,105,106,107,109,111,112,113,114,115] (13); second output dir=/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-156-work/.scratch/band-c-faults/baseline/restart-after-checkpoint/outputs/second; state after=done (the state snapshot only exists once Phase 8 has committed); second run says: triaged 13 PR(s): #101 auto_merge, #102 auto_merge, #103 auto_merge, #104 batch_review, #105 fast_track, #106 defer, #107 batch_review, #109 close, #111 auto_merge, #112 auto_merge, #113 defer, #114 batch_review, #115 batch_review",
   "harness": {
     "dotnet": "dotnet",
     "runtime": "none (Band C has no model and no recorded runtime)",
     "command": "./faults/restart-after-checkpoint.sh --variant baseline"
   },
-  "recordedAt": "2026-11-05T17:12:09.979763+00:00"
+  "recordedAt": "2026-11-05T18:00:04.387690+00:00"
 }

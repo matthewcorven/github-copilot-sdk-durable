@@ -30,6 +30,11 @@ FAULTS=(kill-mid-turn restart-after-checkpoint duplicate-delivery concurrent-cli
 STATUS_FILE="$SCRATCH_ROOT/run-all.status"
 mkdir -p "$SCRATCH_ROOT"
 : > "$STATUS_FILE"
+# The suite's start, as an explicit first line. The summariser refuses a result recorded before it, so a
+# left-over file from an earlier run (a fault that failed before writing its result) cannot be rendered
+# as this run's. `started <iso8601>` is a line the summariser understands; everything else is
+# `<variant> <name> <exit>`.
+printf 'started %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$STATUS_FILE"
 
 require_tools || exit 1
 

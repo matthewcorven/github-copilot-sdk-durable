@@ -4,11 +4,11 @@
   "outcome": "completed",
   "phase": "in flight (Phase 1 committed, Phase 2 running); the store file left in place (the control)",
   "detail": "Control: nothing was moved. The run finished at 'save run state' (exit 0) with the state at 'save' and 13 comment(s) posted. This is what the outage run is compared against: the same run, the same store, the same length.",
-  "evidence": "outage=no; path recreated during the move=0; before: state=classify 6905 bytes; moved: exists=no 0 bytes state=none history=n/a; live path exists=1 state=save; run exit=0 last phase=save run state posted=13; triage list found in the moved state=[]",
+  "evidence": "outage=no; path recreated during the move=0; before: state=classify 3021 bytes; moved: exists=no 0 bytes state=none history=n/a; live path exists=1 state=save; run exit=0 last phase=save run state posted=13; triage list found in the moved state=[]",
   "harness": {
     "dotnet": "dotnet",
     "runtime": "none (Band C has no model and no recorded runtime)",
     "command": "./faults/store-outage.sh --variant durable --fault-not-injected"
   },
-  "recordedAt": "2026-11-05T17:12:49.781598+00:00"
+  "recordedAt": "2026-11-05T18:00:44.893414+00:00"
 }

@@ -2,19 +2,20 @@
   "variant": "durable",
   "fault": "cooldown-desync-control",
   "outcome": "control: not doubled",
-  "phase": "run 2 completes and commits its state; run 3, 61m later, over the same state (the control)",
-  "detail": "Control: the same three runs with the seam removed — run 2 completed and committed (save). Run 3 found a finished task and started a new generation, posting 0 comment(s) and adopting 13 from the ledger. Nothing doubled: the ledger is what makes an unchanged re-run a no-op, and it does not depend on the run record committing. The fault row's distinction is that the resume, not the ledger alone, is what finished the interrupted run.",
-  "evidence": "run1 exit=n/a last phase=n/a posted=0 state=none; run2 exit=0 last phase=save run state posted=13 state after=save task=id=t2 status=4 phase=save attempts=1 commented=13 memos=13 outcome=completed ledger=13; run3 at 2026-11-05T13:31:00Z exit=0 cold start=0 run gate=0 resumed=0 posted=0 adopted=13; state after run3=save; run3 read: no unfinished run record for this repository — a new generation n/a; PRs with two comments=[]; run3 says: run:        completed — 13 triaged, 13 commented, 2 in cooldown, 1 not ours, 1 not open; run4 exit=0 posted=0 adopted=13",
+  "phase": "run 2 completes and commits its state; run 3, 61m after run 2, over the same state (the control)",
+  "detail": "Control: the same three runs with the seam removed — run 2 completed and committed (save). Run 3 found a finished task and started a new generation, writing 0 comment(s) with 0 duplicates and adopting 13 from the ledger. Nothing doubled: the ledger is what makes an unchanged re-run a no-op, and it does not depend on the run record committing. The fault row's distinction is that the resume, not the ledger alone, is what finished the interrupted run.",
+  "evidence": "run1 exit=n/a last phase=n/a posted=0 state=none; run2 exit=0 last phase=save run state posted=13 state after=save task=id=t2 status=4 phase=save attempts=1 commented=13 memos=13 outcome=completed ledger=13; run3 at 2026-11-05T14:31:00Z exit=0 cold start=0 run gate=0 resumed=0 posted=0 adopted=13; state after run3=save; run3 read: no unfinished run record for this repository — a new generation n/a; duplicates written by run3=[] (0); run3 says: run:        completed — 13 triaged, 13 commented, 2 in cooldown, 1 not ours, 1 not open; run4 exit=0 posted=0 adopted=13 duplicates=0; guard-disabled arm: posted=0 duplicates= []",
   "harness": {
     "dotnet": "dotnet",
     "runtime": "none (Band C has no model and no recorded runtime)",
     "command": "./faults/cooldown-desync.sh --variant durable --fault-not-injected"
   },
-  "recordedAt": "2026-11-05T17:12:57.769773+00:00",
+  "recordedAt": "2026-11-05T18:00:53.813036+00:00",
   "observations": {
     "run2_comments_posted": 13,
     "run3_comments_posted": 0,
     "run3_comments_adopted": 13,
+    "run3_comments_duplicated": 0,
     "prs_with_two_comments": 0,
     "prs_doubled": [],
     "run3_cold_start": false,
@@ -22,6 +23,9 @@
     "run3_resumed": false,
     "ledger_entries_before_run3": 13,
     "run4_comments_posted": 0,
-    "run4_comments_adopted": 13
+    "run4_comments_adopted": 13,
+    "run4_comments_duplicated": 0,
+    "guard_disabled_posted": 0,
+    "guard_disabled_duplicated": 0
   }
 }

@@ -1,25 +1,37 @@
 #!/usr/bin/env bash
-# Fault: kill-mid-turn. A real SIGKILL of a real process, during classification.
+# Fault: kill-mid-turn. A real SIGKILL of a real process, mid-run.
 #
 #   ./faults/kill-mid-turn.sh --variant baseline|durable [--fault-not-injected]
 #
-# The injection point is the classifier: the process has printed `phase 2/8` and at least one PR's
-# classification line under it, so it is inside the phase and has done work, and the state write at
-# the end of the run is far away. The harness reads that from the process's own stdout (its log file,
-# not its pipe) and kills the PID the shell started with `kill -9`, then polls until the PID is gone.
-# Nothing about the kill is simulated in-process: there is no exception thrown to look like a crash.
+# The injection point is a *comment that has been posted*, not a log line: the harness waits until
+# `KILL_AFTER_COMMENTS` (default 7) comment files exist in the run's output directory, confirms the
+# process is alive, and sends `kill -9` to the PID the shell started. That is the moment the band is
+# about to be measured at: work with an external effect has happened, and the state that would record it
+# is a phase away.
+#
+# Why not "kill during classification", which is what the issue says? Because the baseline's stdout is
+# block-buffered and its log is the *only* observable for Phase 2, so no log-line trigger can bound the
+# kill to Phase 2. Measured before this change: of 12 kills triggered on the Phase 2 banner, 4 landed
+# with `phase 3/8` already printed and 13 classification lines in the log — the trigger was a 4 KB flush,
+# not a phase boundary. The probe is in the PR. A kill that lands wherever the buffer flushed is not a
+# fault anybody can point at, so the injection was moved to an artefact the harness *sets*: the comment
+# count, which is exact for both variants (12/12 runs caught at 7 files).
+#
+# Classification is still where the interrupted work sits for the durable variant — its seam-free
+# resume enters at whatever phase the record names — but the fault's question, "does a resumed run
+# re-comment?", is the one worth asking and the one this injection can answer exactly.
 #
 # Then a *new* process is started over the same state and the same clock, and the question is whether
-# anything continues the interrupted run:
+# anything continues the interrupted run without re-posting what it had already posted:
 #
 #   baseline — the only record is the state blob written at the end of Phase 8, and it was never
-#              written, so the second run is a cold start and re-does the classification from PR #101.
-#   durable  — the run record committed when Phase 1 finished names `classify`, and the task is
-#              unfinished, so the second process resumes at the phase the kill cut short and finishes.
+#              written, so the second run is a cold start and posts every comment again.
+#   durable  — the comment memos and ledger record the ones already posted, so the resume adopts them
+#              and posts only the remainder.
 #
-#   --fault-not-injected runs the same first process and lets it finish. That is the control: it shows
-#   what the two runs produce when nothing is killed, so a difference in the fault run is attributable
-#   to the kill rather than to the two-run shape.
+#   --fault-not-injected lets the same first process finish. That is the control: it shows what the two
+#   runs produce when nothing is killed, so a difference in the fault run is attributable to the kill
+#   rather than to the two-run shape.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
@@ -42,6 +54,9 @@ FAULT_COMMAND="./faults/kill-mid-turn.sh --variant $VARIANT$( [ "$INJECT" = "1" 
 export FAULT_COMMAND
 
 require_tools || exit 1
+# The result this run replaces is removed before anything else happens, so a run that fails before
+# recording leaves *no* file rather than a stale one that the summary would render as its result.
+begin_result "$VARIANT" "$FAULT"
 
 RUN_DIR="$(new_run_dir "$VARIANT" "$FAULT")"
 track_dir "$RUN_DIR"
@@ -49,10 +64,11 @@ prepare_variant "$VARIANT" "$RUN_DIR/app" || exit 1
 
 FIRST="$RUN_DIR/first.log"
 SECOND="$RUN_DIR/second.log"
+KILL_AFTER_COMMENTS="${KILL_AFTER_COMMENTS:-7}"
 if [ "$INJECT" = "1" ]; then
-  PHASE="inside phase 2 (classify), at least one PR classified, the state write 4 phases away"
+  PHASE="$KILL_AFTER_COMMENTS of 13 comments posted, the run record not yet committed"
 else
-  PHASE="inside phase 2 (classify), uninterrupted (the control)"
+  PHASE="$KILL_AFTER_COMMENTS of 13 comments posted, uninterrupted (the control)"
 fi
 
 # ── The interrupted (or, for the control, uninterrupted) run ─────────────────────────────────────
@@ -66,40 +82,42 @@ fi
 FIRST_PID="$STARTED_PID"
 track_pid "$FIRST_PID"
 
-# Two conditions, both from the process's own output: the phase header, and one classification line
-# under it. The second is what makes "inside the phase" true rather than "the header was printed and
-# the process is about to be scheduled out".
-wait_for_line "$FIRST" "phase 2/8" 120 || {
-  log "kill-mid-turn: the run never reached phase 2"
-  tail -20 "$FIRST" >&2
-  exit 1
-}
+# The comment count is an artefact, not a log line: both variants write `comments/pr-NNN.md` as the
+# Phase 6 effect, the file appears when the write happens, and the count cannot be inflated by a later
+# phase. 12/12 probe runs were caught at exactly the requested count.
+FIRST_COMMENT_DIR="$RUN_DIR/outputs/first"
 deadline=$((SECONDS + 120))
-while [ "$(awk '/phase 2\/8/{f=1;next} f && /^  #[0-9]+/{c++} END{print c+0}' "$FIRST" 2>/dev/null)" -lt 1 ]; do
-  [ "$SECONDS" -lt "$deadline" ] || { log "kill-mid-turn: no PR was classified"; exit 1; }
-  sleep 0.02
+while [ "$(comments_in "$RUN_DIR" first)" -lt "$KILL_AFTER_COMMENTS" ]; do
+  [ "$SECONDS" -lt "$deadline" ] || { log "kill-mid-turn: fewer than $KILL_AFTER_COMMENTS comments were posted"; exit 1; }
+  kill -0 "$FIRST_PID" 2>/dev/null || { log "kill-mid-turn: the process finished before the kill point"; exit 1; }
+  sleep 0.005
 done
-CLASSIFIED_AT_START="$(awk '/phase 2\/8/{f=1;next} f && /^  #[0-9]+/{c++} END{print c+0}' "$FIRST")"
+POSTED_AT_KILL="$(comments_in "$RUN_DIR" first)"
 
 KILL_PID=""
 if [ "$INJECT" = "1" ]; then
   kill -0 "$FIRST_PID" 2>/dev/null || { log "kill-mid-turn: the process exited before the kill"; exit 1; }
   kill_hard "$FIRST_PID" || { log "kill-mid-turn: the process survived kill -9"; exit 1; }
   KILL_PID="$FIRST_PID"
-  log "kill-mid-turn: kill -9 $FIRST_PID, confirmed gone; $CLASSIFIED_AT_START classification line(s) were in its log when the kill was sent"
-  wait "$FIRST_PID" 2>/dev/null
-  FIRST_STATUS=$?
+  log "kill-mid-turn: kill -9 $FIRST_PID, confirmed gone; $POSTED_AT_KILL comment file(s) existed when the kill was sent"
+  # Reads the observed status of the kill, not the status of the last command before it.
+  wait_for_exit "$FIRST_PID" 30 || true
+  FIRST_STATUS="$WAIT_STATUS"
 else
   wait_for_exit "$FIRST_PID" 240 || { log "kill-mid-turn: the control run did not finish"; exit 1; }
   FIRST_STATUS="$WAIT_STATUS"
 fi
 
-# What the kill left behind, read from the artefacts rather than from the process. `CLASSIFIED` is the
-# count of PRs Phase 2 had printed a line for by the moment a line existed — the kill lands somewhere
-# after that, which is why the observation is "classification was under way", not a fixed count. The
-# exact number is read from the log after the fact, where a first run that finished has all 13.
-CLASSIFIED="$(awk '/phase 2\/8/{f=1;next} f && /^  #[0-9]+/{c++} END{print c+0}' "$FIRST")"
+CLASSIFIED="$(grep -c 'risk=' "$FIRST" 2>/dev/null || true)"
 
+# The bytes on disk before the second process runs — *both* output directories, so a baseline whose two
+# runs write to two directories is judged as one repository. `dup_list` then answers the fault's
+# question byte for byte: which comments did the second run post that were already there?
+# Only the first run's directory: the second run's is cleared by the starter, and a cold-start baseline
+# writes *the same bytes* for the same PRs, so comparing against its own re-write would report every
+# comment as a duplicate. The fault's question is what the repository already held when the second
+# process started.
+snapshot_comments "$RUN_DIR/outputs/first" "$RUN_DIR/comments-before-second.json"
 FIRST_STATE="$(state_field "$VARIANT" "$STATE_HINT" phase)"
 FIRST_COMMENTS="$(wrote_count "$FIRST")"
 FIRST_TASK=""
@@ -123,29 +141,47 @@ RESUMED=0
 grep -q "resuming durable task" "$SECOND" 2>/dev/null && RESUMED=1
 RESUME_PHASE="$(grep -o "resuming durable task t[0-9]* at phase '[a-z_]*'" "$SECOND" 2>/dev/null | sed "s/.*at phase '//; s/'//" || true)"
 SECOND_COMMENTS="$(wrote_count "$SECOND")"
+SECOND_DUPES="$(dup_list "$RUN_DIR/comments-before-second.json" "$SECOND" "$RUN_DIR/outputs/first" "$RUN_DIR/outputs/second")" ||
+  { log "kill-mid-turn: could not measure the second run's duplicates"; exit 1; }
+SECOND_DUPES_COUNT="$(dup_count "$RUN_DIR/comments-before-second.json" "$SECOND" "$RUN_DIR/outputs/first" "$RUN_DIR/outputs/second")" ||
+  { log "kill-mid-turn: could not measure the second run's duplicates"; exit 1; }
+# Where the second run's comments landed: the Durable resume continues the first task, whose input names
+# the *first* run's output directory, so its adopted comments are rewrites there. The count above is
+# therefore over both directories, and the line below says which directory the run itself wrote into.
+SECOND_OUT="$(output_dir "$SECOND")"
 SECOND_STATE="$(state_field "$VARIANT" "$STATE_HINT" phase)"
 TRIAGED="$(run_ids "$VARIANT" "$STATE_HINT")"
 DONE_LINE="$(grep -E 'completed — |triaged [0-9]+ PR' "$SECOND" 2>/dev/null | tail -1)"
 
 if [ "$INJECT" = "1" ]; then
-  if [ "$VARIANT" = "baseline" ]; then
-    OUTCOME="lost"
-    DETAIL="The run was killed with kill -9 (pid $FIRST_PID, confirmed gone) inside Phase 2 (its log shows $CLASSIFIED classification line(s) by the time the kill was confirmed), and had posted $FIRST_COMMENTS comment(s) and written no state. A new process, same repository, same clock, is a cold start: it re-classified all 13 PRs from #101 and posted $SECOND_COMMENTS comment(s). Nothing continued the interrupted run, because the baseline has no record of one — its only state is the whole-file snapshot Phase 8 writes at the end, and the kill was four phases before that."
+  if [ "$SECOND_DUPES_COUNT" -gt 0 ] 2>/dev/null; then
+    if [ "$VARIANT" = "baseline" ]; then
+      OUTCOME="lost, and re-commented"
+      DETAIL="The run was killed with kill -9 (pid $FIRST_PID, confirmed gone) with $POSTED_AT_KILL comment(s) on disk and no state written — Phase 8 had not run. A new process, same repository, same clock, is a cold start: it re-classified every PR and posted all thirteen comments again, of which $SECOND_DUPES_COUNT were byte-for-byte what was already there ($SECOND_DUPES). Nothing continued the interrupted run: the baseline's only state is the whole-file snapshot Phase 8 writes at the end, so there was no record of the comments to adopt."
+    else
+      OUTCOME="resumed, with duplicates"
+      DETAIL="The run was killed with kill -9 (pid $FIRST_PID, confirmed gone) with $POSTED_AT_KILL comment(s) on disk. The committed run record named phase '$FIRST_STATE' and the new process resumed at '$RESUME_PHASE', but $SECOND_DUPES_COUNT of the $SECOND_COMMENTS comment(s) it wrote were already on disk ($SECOND_DUPES): the resume did not prevent every duplicate."
+    fi
   else
-    OUTCOME="resumed"
-    DETAIL="The run was killed with kill -9 (pid $FIRST_PID, confirmed gone) inside Phase 2. The committed run record named phase '$FIRST_STATE' and the task was unfinished ($FIRST_TASK), so the new process resumed at '$RESUME_PHASE' — the phase the kill cut short — and finished with $SECOND_COMMENTS comment(s) posted by the resume and the run at '$SECOND_STATE'. The classification done before the kill was read back from the committed PR documents; the phase was not re-run from the top."
+    if [ "$VARIANT" = "durable" ]; then
+      OUTCOME="resumed"
+      DETAIL="The run was killed with kill -9 (pid $FIRST_PID, confirmed gone) with $POSTED_AT_KILL comment(s) on disk. The committed run record named phase '$FIRST_STATE' ($FIRST_TASK), so the new process resumed at '$RESUME_PHASE' — the phase the kill cut short — and finished with the run at '$SECOND_STATE'. It wrote $SECOND_COMMENTS comment(s) of which $SECOND_DUPES_COUNT were already on disk: the $POSTED_AT_KILL posted before the kill were adopted from their memos, not re-posted, and the remaining ones were posted for the first time."
+    else
+      OUTCOME="lost"
+      DETAIL="The run was killed with kill -9 (pid $FIRST_PID, confirmed gone) with $POSTED_AT_KILL comment(s) on disk and no state written. The new process is a cold start, but its $SECOND_COMMENTS comment(s) were not duplicates of the killed run's — the observation is reported as measured rather than assumed."
+    fi
   fi
 else
   if [ "$VARIANT" = "baseline" ]; then
     OUTCOME="control: completed"
-    DETAIL="Control: the same first run, with nothing killed (it exited $FIRST_STATUS), then a second process over the same repository at the same clock. The first run posted its comments and committed the state, so the second reads that state back and stops at the run gate: $SECOND_COMMENTS comment(s) posted by the second run. Both runs finished because neither was killed; that is what makes the fault run's cold start and its 13 re-posted comments attributable to the kill."
+    DETAIL="Control: the same first run, with nothing killed (it exited $FIRST_STATUS), then a second process over the same repository at the same clock. The first run posted its comments and committed the state, so the second reads that state back and stops at the run gate: $SECOND_COMMENTS comment(s) posted by the second run, $SECOND_DUPES_COUNT of them duplicates. Both runs finished because neither was killed; that is what makes the fault run's cold start and its re-posted comments attributable to the kill."
   else
     OUTCOME="control: completed"
-    DETAIL="Control: the same first run, with nothing killed (it exited $FIRST_STATUS). It finished the triage, so the second process found a finished task and started a new generation, which posts nothing new ($SECOND_COMMENTS comment(s) posted by the second run). This is what the two runs produce unaided; the fault run's resume belongs to the kill and not to the two-run shape."
+    DETAIL="Control: the same first run, with nothing killed (it exited $FIRST_STATUS). It finished the triage, so the second process found a finished task and started a new generation: it wrote $SECOND_COMMENTS comment(s) with $SECOND_DUPES_COUNT duplicates and adopted the rest from the ledger. This is what the two runs produce unaided; the fault run's resume belongs to the kill and not to the two-run shape."
   fi
 fi
 
-EVIDENCE="classification lines at the first check=$CLASSIFIED_AT_START, in the log after the fault=$CLASSIFIED; kill pid=${KILL_PID:-none}; first exit=$FIRST_STATUS; first comments posted=$FIRST_COMMENTS; first state=${FIRST_STATE:-none}; first task=${FIRST_TASK:-n/a}; second exit=$SECOND_STATUS; second cold start=$COLD_START resumed=$RESUMED${RESUME_PHASE:+ at phase=$RESUME_PHASE}; second comments posted=$SECOND_COMMENTS; committed triaged=[$TRIAGED]; second run says: ${DONE_LINE:-none}"
+EVIDENCE="kill point: $POSTED_AT_KILL comment file(s) on disk; classification lines in the log=$CLASSIFIED; kill pid=${KILL_PID:-none}; first exit=$FIRST_STATUS; first comments posted=$FIRST_COMMENTS; first state=${FIRST_STATE:-none}; first task=${FIRST_TASK:-n/a}; second exit=$SECOND_STATUS; second cold start=$COLD_START resumed=$RESUMED${RESUME_PHASE:+ at phase=$RESUME_PHASE}; second comments posted=$SECOND_COMMENTS; second duplicates=[$SECOND_DUPES] ($SECOND_DUPES_COUNT); second output dir=${SECOND_OUT:-n/a}; committed triaged=[$TRIAGED]; second run says: ${DONE_LINE:-none}"
 
 record_result "$VARIANT" "$FAULT" "$OUTCOME" "$PHASE" "$DETAIL" "$EVIDENCE"
 exit 0

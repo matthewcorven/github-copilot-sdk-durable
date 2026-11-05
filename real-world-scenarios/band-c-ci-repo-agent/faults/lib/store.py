@@ -12,6 +12,12 @@ reader opens each one directly and answers the same questions of both:
     comments <dirname>                how many `pr-NNN.md` comment files a run directory holds
     wrote <run-log>                   the PR numbers a run's log says it wrote a comment for
     overlap <before-dir> <after-dir>  comments a second run wrote that the first had already written
+    snapshot <dir>... <out.json>      record each posted comment's bytes (a digest per PR); several
+                                      comment directories may be given and are merged, so a baseline
+                                      whose two runs use two output directories is still one view
+    duplicates <snapshot.json> <run-log> <comments-dir>
+                                      PRs this run wrote whose content the snapshot already held — the
+                                      same comment posted twice, byte for byte
 
 `path` is the bare repository for `baseline` and the store file for `durable`.
 
@@ -25,6 +31,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -145,16 +152,65 @@ def wrote(log_path: str) -> list[int]:
     file = pathlib.Path(log_path)
     if not file.exists():
         return []
+    # Matched by regex, not by a literal prefix: the column width is a formatting detail of the
+    # program under test, and a hard-coded run of spaces silently matched nothing when it changed.
+    # The size suffix is optional: the durable variant prints `(448 bytes)` and the baseline prints the
+    # path alone. Requiring it matched the baseline's whole log as zero comments, which is the same
+    # silent-zero failure as a wrong run of spaces — so it is optional and the PR number is what matters.
+    pattern = re.compile(r"^\s*wrote:\s+comments/pr-(\d+)\.md\b")
     numbers = []
-    marker = "wrote:      comments/pr-"
     for line in file.read_text(errors="replace").splitlines():
-        stripped = line.strip()
-        if stripped.startswith(marker) and stripped.endswith(".md"):
-            try:
-                numbers.append(int(stripped[len(marker):-3]))
-            except ValueError:
-                continue
+        match = pattern.match(line)
+        if match:
+            numbers.append(int(match.group(1)))
     return numbers
+
+
+def snapshot(*directories) -> dict[str, str]:
+    """A digest per posted comment, so a later write can be compared byte for byte.
+
+    Known limits of this measure, stated because a duplicate count that quietly misses cases is worse
+    than none:
+
+    * Only *file* comments are measured. A path that is a directory is a killed process's residue —
+      the open and the create are two syscalls, so a `kill -9` between them can leave a directory where
+      the file would be — and it is skipped, not counted.
+    * More than one directory may be given; later ones win on a collision. The baseline's two runs write
+      to two directories and a resume rewrites its original one, so the union is "what the repository
+      already had".
+    """
+    import hashlib
+
+    out: dict[str, str] = {}
+    for directory in directories:
+        comments = pathlib.Path(directory, "comments")
+        if not comments.is_dir():
+            continue
+        for path in sorted(comments.glob("pr-*.md")):
+            if not path.is_file():
+                continue
+            try:
+                number = int(path.stem.split("-", 1)[1])
+            except (IndexError, ValueError):
+                continue
+            out[str(number)] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return out
+
+
+def duplicates(before_path: str, log_path: str, *directories) -> list[int]:
+    """PRs a run wrote whose identical bytes were already on disk.
+
+    This is the "the same comment posted twice" measure, and it is deliberately stricter than a count of
+    files: a file is written once per PR and adopted files are rewritten with the same content, so a
+    file count cannot see a duplicate. What it asks is "did this run *write* pr-N, and is what it wrote
+    exactly what pr-N already held?" — which is true only when the comment was posted twice.
+    """
+    import json
+
+    before = json.loads(pathlib.Path(before_path).read_text()) if pathlib.Path(before_path).exists() else {}
+    after = snapshot(*[pathlib.Path(item) for item in directories])
+    written = set(wrote(log_path))
+    return sorted(n for n in written if str(n) in before and after.get(str(n)) == before[str(n)])
 
 
 # ─── One vocabulary over both ───────────────────────────────────────────────────────────────────
@@ -191,6 +247,24 @@ def main(argv: list[str]) -> int:
         after = comment_numbers(pathlib.Path(argv[3]))
         shared = [n for n in after if n in before]
         print(",".join(str(n) for n in shared))
+        return 0
+
+    if command == "snapshot":
+        if len(argv) < 4:
+            print("usage: store.py snapshot <dir>... <out.json>", file=sys.stderr)
+            return 2
+        import json
+
+        merged = snapshot(*[pathlib.Path(item) for item in argv[2:-1]])
+        pathlib.Path(argv[-1]).write_text(json.dumps(merged, indent=1) + "\n")
+        return 0
+
+    if command == "duplicates":
+        if len(argv) < 5:
+            print("usage: store.py duplicates <snapshot.json> <run-log> <comments-dir>...", file=sys.stderr)
+            return 2
+        for number in duplicates(argv[2], argv[3], *[pathlib.Path(item) for item in argv[4:]]):
+            print(number)
         return 0
 
     if command == "comments":

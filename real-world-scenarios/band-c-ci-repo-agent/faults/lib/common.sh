@@ -99,9 +99,15 @@ prepare_variant() {
 
 STARTED_PID=""
 
+# The output directory is removed before each start. A process that was `kill -9`'d can leave a
+# `comments/pr-NNN.md` *directory* on its way to writing a file — the open and the create are two
+# syscalls — and `Directory.CreateDirectory` (the durable variant) then throws on the path it wants to
+# own. That is the killed process's residue, not the fault, so the starter clears the directory it is
+# about to hand the run.
 start_baseline() {
   local rundir="$1" repo="$2" name="$3"
   shift 3
+  rm -rf "$rundir/outputs/$name"
   mkdir -p "$rundir/outputs/$name"
   (
     cd "$rundir/app" || exit 1
@@ -117,6 +123,7 @@ start_baseline() {
 start_durable() {
   local rundir="$1" store="$2" name="$3"
   shift 3
+  rm -rf "$rundir/outputs/$name"
   mkdir -p "$rundir/outputs/$name"
   (
     cd "$rundir/app" || exit 1
@@ -264,6 +271,44 @@ last_phase() {
 # where a resumed run's comment files actually landed instead of assuming it is its own --run-dir.
 output_dir() { grep -m1 '^output:     ' "$1" 2>/dev/null | sed 's/^output:     //' || true; }
 
+# The comment effect, measured as *duplicates* rather than as counts.
+#
+# A comment file is written once per PR and is rewritten (with identical bytes) when a run adopts it, so
+# counting files cannot see "the same comment posted twice"; counting `wrote:` lines can only see how
+# many times a process *said* it wrote, not whether the content was already there. `dup_count` asks the
+# stricter question: PRs this run wrote whose content was already on disk, byte for byte, when the run
+# started. That is true only for a genuine duplicate post.
+#
+# Usage: snapshot_comments <comments-dir> <state.json>   capture the bytes before the run
+#        dup_count <state.json> <log> <comments-dir>     PRs written whose bytes were already there
+#        dup_list  <state.json> <log> <comments-dir>     the same, comma separated
+snapshot_comments() {
+  "$PYTHON" "$HARNESS_DIR/lib/store.py" snapshot "$1" "$2"
+}
+
+# A reader that fails must not be read as "zero duplicates". The list is written to a temp file first and
+# the command's status is checked, so an error is a harness error rather than a silently empty answer —
+# which is exactly how a false "0" reaches a result string.
+dup_list() {
+  # dup_list <snapshot.json> <run-log> <comments-dir>...
+  local snapshot="$1" log="$2"
+  shift 2
+  local out status
+  out="$("$PYTHON" "$HARNESS_DIR/lib/store.py" duplicates "$snapshot" "$log" "$@" 2>&1)"
+  status=$?
+  if [ "$status" != "0" ]; then
+    log "harness: could not measure duplicates: $out"
+    return 1
+  fi
+  printf '%s' "$out" | paste -sd, -
+}
+
+dup_count() {
+  local list
+  list="$(dup_list "$@")" || return 1
+  if [ -z "$list" ]; then echo 0; else printf '%s' "$list" | tr ',' '\n' | grep -c .; fi
+}
+
 # state_field <variant> <path> <field> — one field of the committed state, or empty.
 state_field() {
   "$PYTHON" "$HARNESS_DIR/lib/store.py" state "$1" "$2" "$3" 2>/dev/null || true
@@ -277,6 +322,16 @@ run_ids() {
 # run_count <variant> <path> — how many runs the state remembers.
 run_count() {
   "$PYTHON" "$HARNESS_DIR/lib/store.py" runs "$1" "$2" 2>/dev/null || true
+}
+
+# Removes the result this run is about to replace, before the run starts.
+#
+# Every script writes into results/, and a harness-error path exits before record_result is reached. If
+# the previous file were left in place, a failed run would leave a stale document that summarise.py would
+# render as this run's result — a full matrix row describing a run that did not happen. Unlinking first
+# makes a failed run a *missing* result, which summarise.py reports and fails on.
+begin_result() {
+  rm -f "$RESULTS_DIR/$1/$2.json"
 }
 
 write_result() {

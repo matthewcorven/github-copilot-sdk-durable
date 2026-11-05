@@ -1,14 +1,14 @@
 {
   "variant": "baseline",
   "fault": "kill-mid-turn",
-  "outcome": "lost",
-  "phase": "inside phase 2 (classify), at least one PR classified, the state write 4 phases away",
-  "detail": "The run was killed with kill -9 (pid 88257, confirmed gone) inside Phase 2 (its log shows 52 classification line(s) by the time the kill was confirmed), and had posted 13 comment(s) and written no state. A new process, same repository, same clock, is a cold start: it re-classified all 13 PRs from #101 and posted 13 comment(s). Nothing continued the interrupted run, because the baseline has no record of one — its only state is the whole-file snapshot Phase 8 writes at the end, and the kill was four phases before that.",
-  "evidence": "classification lines at the first check=52, in the log after the fault=52; kill pid=88257; first exit=137; first comments posted=13; first state=none; first task=n/a; second exit=0; second cold start=1 resumed=0; second comments posted=13; committed triaged=[101,102,103,104,105,106,107,109,111,112,113,114,115]; second run says: triaged 13 PR(s): #101 auto_merge, #102 auto_merge, #103 auto_merge, #104 batch_review, #105 fast_track, #106 defer, #107 batch_review, #109 close, #111 auto_merge, #112 auto_merge, #113 defer, #114 batch_review, #115 batch_review",
+  "outcome": "lost, and re-commented",
+  "phase": "7 of 13 comments posted, the run record not yet committed",
+  "detail": "The run was killed with kill -9 (pid 38567, confirmed gone) with 13 comment(s) on disk and no state written — Phase 8 had not run. A new process, same repository, same clock, is a cold start: it re-classified every PR and posted all thirteen comments again, of which 13 were byte-for-byte what was already there (101,102,103,104,105,106,107,109,111,112,113,114,115). Nothing continued the interrupted run: the baseline's only state is the whole-file snapshot Phase 8 writes at the end, so there was no record of the comments to adopt.",
+  "evidence": "kill point: 13 comment file(s) on disk; classification lines in the log=13; kill pid=38567; first exit=137; first comments posted=13; first state=none; first task=n/a; second exit=0; second cold start=1 resumed=0; second comments posted=13; second duplicates=[101,102,103,104,105,106,107,109,111,112,113,114,115] (13); second output dir=/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-156-work/.scratch/band-c-faults/baseline/kill-mid-turn/outputs/second; committed triaged=[101,102,103,104,105,106,107,109,111,112,113,114,115]; second run says: triaged 13 PR(s): #101 auto_merge, #102 auto_merge, #103 auto_merge, #104 batch_review, #105 fast_track, #106 defer, #107 batch_review, #109 close, #111 auto_merge, #112 auto_merge, #113 defer, #114 batch_review, #115 batch_review",
   "harness": {
     "dotnet": "dotnet",
     "runtime": "none (Band C has no model and no recorded runtime)",
     "command": "./faults/kill-mid-turn.sh --variant baseline"
   },
-  "recordedAt": "2026-11-05T17:12:07.681475+00:00"
+  "recordedAt": "2026-11-05T18:00:01.641665+00:00"
 }

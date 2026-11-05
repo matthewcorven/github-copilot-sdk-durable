@@ -10,5 +10,5 @@
     "runtime": "none (Band C has no model and no recorded runtime)",
     "command": "./faults/duplicate-delivery.sh --variant durable"
   },
-  "recordedAt": "2026-11-05T17:12:35.886589+00:00"
+  "recordedAt": "2026-11-05T18:00:30.472472+00:00"
 }

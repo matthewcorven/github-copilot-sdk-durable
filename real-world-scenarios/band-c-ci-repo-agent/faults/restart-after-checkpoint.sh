@@ -46,6 +46,9 @@ FAULT_COMMAND="./faults/restart-after-checkpoint.sh --variant $VARIANT$( [ "$INJ
 export FAULT_COMMAND
 
 require_tools || exit 1
+# The result this run replaces is removed before anything else happens, so a run that fails before
+# recording leaves *no* file rather than a stale one that the summary would render as its result.
+begin_result "$VARIANT" "$FAULT"
 
 RUN_DIR="$(new_run_dir "$VARIANT" "$FAULT")"
 track_dir "$RUN_DIR"
@@ -59,7 +62,7 @@ if [ "$INJECT" = "1" ]; then
   PHASE="after Phase 5 (baseline: labels.json written, then SIGTERM; durable: committed at phase 'comment', then the seam's exit 42)"
 else
   if [ "$VARIANT" = "baseline" ]; then
-    PHASE="the control: the baseline is not stopped at all — it has no commit point to stop before or after"
+    PHASE="an earlier stop in the same run (SIGSTOP then SIGTERM before its first phase completed), then a restart — the control"
   else
     PHASE="the control: committed at phase 'classify', then the seam's exit 42, then restarted"
   fi
@@ -67,6 +70,7 @@ fi
 
 # ── The first run, stopped where the variant can be stopped ──────────────────────────────────────
 STOP_PID=""
+FIRST_SEAM_STATUS=""
 if [ "$VARIANT" = "durable" ]; then
   # The durable stop is the variant's own seam, reached through the environment it already reads:
   # `BAND_C_EXIT_AFTER_PHASE=<phase>` commits the run record at the *next* phase and then exits 42, so
@@ -83,6 +87,7 @@ if [ "$VARIANT" = "durable" ]; then
   STOP_PID="$STARTED_PID"
   track_pid "$STOP_PID"
   wait_for_exit "$STOP_PID" 120 || { log "restart-after-checkpoint: the seam did not fire"; exit 1; }
+  FIRST_SEAM_STATUS="$WAIT_STATUS"
 else
   start_baseline "$RUN_DIR" "$STATE_HINT" first
   STOP_PID="$STARTED_PID"
@@ -94,13 +99,32 @@ else
     }
     kill -0 "$STOP_PID" 2>/dev/null || { log "restart-after-checkpoint: the process exited before SIGTERM"; exit 1; }
     kill_soft "$STOP_PID" || { log "restart-after-checkpoint: the process ignored SIGTERM"; exit 1; }
+  else
+    # The control is an *earlier* stop in the same run, not no stop at all: the first run is sent SIGTERM
+    # as soon as its Phase 1 header appears, so the pair is "stopped after Phase 5" against "stopped
+    # before Phase 2". Both arms stop; the difference is where, which is the only way the baseline can be
+    # asked whether the *later* stop is worse than an earlier one. (It is not — neither is resumable —
+    # and the result says so rather than implying the baseline has a commit point to stop either side of.)
+    # Held before it can do anything observable. SIGSTOP is sent the instant the process exists, so the
+    # stop is deterministically earlier than the fault's — it cannot race a buffer, because the process
+    # is frozen before its first phase can complete. SIGTERM is sent while it is stopped (it stays
+    # pending) and SIGCONT lets it die, which is why the sequence is STOP → TERM → CONT and not TERM
+    # alone: a stopped process would keep the signal queued and the harness would wait 20 s for nothing.
+    kill -STOP "$STOP_PID" || { log "restart-after-checkpoint: could not hold the control run"; exit 1; }
+    kill -TERM "$STOP_PID" 2>/dev/null || { log "restart-after-checkpoint: could not signal the control run"; exit 1; }
+    kill -CONT "$STOP_PID" 2>/dev/null || { log "restart-after-checkpoint: could not release the control run"; exit 1; }
+    if [ "$(wrote_count "$FIRST")" -gt 0 ] || [ -f "$RUN_DIR/outputs/first/labels.json" ]; then
+      log "restart-after-checkpoint: the control's stop was not earlier than the fault's"
+      exit 1
+    fi
   fi
-  # The control does not stop the first run at all: it is allowed to finish. That is the only control
-  # the baseline can be given here, because stopping it at any phase produces the same result — there is
-  # no commit point to be before or after, which is the finding this fault records for the baseline.
-  wait "$STOP_PID" 2>/dev/null
+  # The status is the *observed* status of the stopped process, from wait_for_exit; a bare `wait` would
+  # give the status of the last command in this branch (a `grep` in the control arm), which is not the
+  # run's status at all.
+  wait_for_exit "$STOP_PID" 30 || true
+  FIRST_SEAM_STATUS="$WAIT_STATUS"
 fi
-FIRST_STATUS="$?"
+FIRST_STATUS="$FIRST_SEAM_STATUS"
 FIRST_PHASE="$(last_phase "$FIRST")"
 FIRST_WROTE="$(wrote_count "$FIRST")"
 FIRST_SKIPPED="$(skipped_count "$FIRST")"
@@ -125,6 +149,11 @@ RESUMED=0
 grep -q "resuming durable task" "$SECOND" 2>/dev/null && RESUMED=1
 RESUME_PHASE="$(grep -o "at phase '[a-z_]*'" "$SECOND" 2>/dev/null | head -1 | sed "s/at phase '//; s/'//" || true)"
 SECOND_WROTE="$(wrote_count "$SECOND")"
+snapshot_comments "$RUN_DIR/outputs/first" "$RUN_DIR/comments-before-second.json"
+SECOND_DUPES="$(dup_list "$RUN_DIR/comments-before-second.json" "$SECOND" "$RUN_DIR/outputs/first" "$RUN_DIR/outputs/second")" ||
+  { log "restart-after-checkpoint: could not measure the restart's duplicates"; exit 1; }
+SECOND_DUPES_COUNT="$(dup_count "$RUN_DIR/comments-before-second.json" "$SECOND" "$RUN_DIR/outputs/first" "$RUN_DIR/outputs/second")" ||
+  { log "restart-after-checkpoint: could not measure the restart's duplicates"; exit 1; }
 SECOND_SKIPPED="$(skipped_count "$SECOND")"
 SECOND_PHASE="$(last_phase "$SECOND")"
 STATE_AFTER="$(state_field "$VARIANT" "$STATE_HINT" phase)"
@@ -143,15 +172,15 @@ if [ "$INJECT" = "1" ]; then
   fi
 else
   if [ "$VARIANT" = "baseline" ]; then
-    OUTCOME="control: completed"
-    DETAIL="Control: the same two runs with nothing stopped — the first finished and committed its state ($FIRST_WROTE comment(s)), and the restart read that state and stopped at the run gate ($SECOND_WROTE comment(s) by the restart). This is the one control the baseline can be given: stopping it at any phase produces the same result, because it has no commit point to be before or after — and that absence is what the fault records. Against this pair, the fault run's cold start and its $SECOND_WROTE re-posted comment(s) are the cost of the stop the baseline cannot survive."
+    OUTCOME="control: lost"
+    DETAIL="Control: the same restart, with the stop taken earlier — the process was held with SIGSTOP the moment it started and SIGTERMed before its first phase completed, when it had posted $FIRST_WROTE comment(s) and written no state. The restart is a cold start: it posted $SECOND_WROTE comment(s), $SECOND_DUPES_COUNT of them duplicates (none, because the stopped run had posted nothing to duplicate). The *outcome word* is the same as the fault row's because the baseline cannot resume from either stop — that is the finding, and it is stated here rather than implied: the baseline has no commit point to be before or after, so the phase the stop lands in changes only *how much* work is lost, not whether any is. What the pair shows is that the fault row's cold start is the stop's doing and not the run's; what it does **not** show is that $FIRST_WROTE comments survive, because on this arm none were posted."
   else
     OUTCOME="control: resumed"
-    DETAIL="Control: the same seam earlier in the same run — the record committed at 'classify' ($TASK_BEFORE) — and the same restart. It resumed at '$RESUME_PHASE' and finished at '$SECOND_PHASE'. The pair is what shows the phase is read from the record and not assumed: the fault stopped later in the same run and the restart re-entered later."
+    DETAIL="Control: the same seam earlier in the same run — the record committed at 'classify' ($TASK_BEFORE) — and the same restart. It resumed at '$RESUME_PHASE' and finished at '$SECOND_PHASE', writing $SECOND_WROTE comment(s) with $SECOND_DUPES_COUNT duplicates. The pair is what shows the phase is read from the record and not assumed: the fault stopped later in the same run and the restart re-entered later."
   fi
 fi
 
-EVIDENCE="first exit=$FIRST_STATUS; first last phase=$FIRST_PHASE; first posted=$FIRST_WROTE adopted=$FIRST_SKIPPED; state before restart=${STATE_BEFORE:-none}; task before restart=${TASK_BEFORE:-n/a}; second exit=$SECOND_STATUS; second cold start=$COLD_START resumed=$RESUMED${RESUME_PHASE:+ at phase=$RESUME_PHASE}; second posted=$SECOND_WROTE adopted=$SECOND_SKIPPED; second output dir=${SECOND_OUT:-none}; state after=${STATE_AFTER:-none}; second run says: ${DONE_LINE:-none}"
+EVIDENCE="first exit=$FIRST_STATUS; first last phase=$FIRST_PHASE; first posted=$FIRST_WROTE adopted=$FIRST_SKIPPED; state before restart=${STATE_BEFORE:-none}; task before restart=${TASK_BEFORE:-n/a}; second exit=$SECOND_STATUS; second cold start=$COLD_START resumed=$RESUMED${RESUME_PHASE:+ at phase=$RESUME_PHASE}; second posted=$SECOND_WROTE adopted=$SECOND_SKIPPED duplicates=[$SECOND_DUPES] ($SECOND_DUPES_COUNT); second output dir=${SECOND_OUT:-none}; state after=${STATE_AFTER:-none}; second run says: ${DONE_LINE:-none}"
 
 record_result "$VARIANT" "$FAULT" "$OUTCOME" "$PHASE" "$DETAIL" "$EVIDENCE"
 exit 0

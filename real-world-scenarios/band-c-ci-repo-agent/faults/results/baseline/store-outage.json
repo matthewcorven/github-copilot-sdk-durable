@@ -3,12 +3,12 @@
   "fault": "store-outage",
   "outcome": "failed loudly, effects kept, state lost",
   "phase": "after Phase 7's outputs exist, before Phase 8 commits; repo.git moved aside",
-  "detail": "repo.git was moved aside after Phase 7 had written its outputs and while Phase 8 was about to commit. Phase 8's git call ran against a path that no longer named a repository and the run failed with exit 1 (baseline: git failed: git hash-object -w --stdin: fatal: not a git repository: '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-156-work/.scratch/band-c-faults/baseline/store-outage/repo.git' ). The effects are on disk — 13 comment(s), labels.json, the report — and the state is gone: no memory/pr-triage branch in the moved repository (0 commit(s) on it, state 'none'), and the path itself no longer exists. That is failing loudly and it is also the reason the baseline is in this band: the outage is discovered, but only after the comments were posted, and what it costs is exactly the cooldown-desync window.",
-  "evidence": "outage=yes; path recreated during the move=0; before: state=none 94208 bytes; moved: exists=yes 94208 bytes state=none history=0; live path exists=0 state=none; run exit=1 last phase=save run state posted=13; failure: baseline: git failed: git hash-object -w --stdin: fatal: not a git repository: '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-156-work/.scratch/band-c-faults/baseline/store-outage/repo.git' ; triage list found in the moved state=[]",
+  "detail": "repo.git was moved aside after Phase 7 had written its outputs and while Phase 8 was about to commit. Phase 8's git call ran against a path that no longer named a repository and the run failed with exit 1 (baseline: git failed: git hash-object -w --stdin: error: unable to create temporary file: No such file or directory ). The effects are on disk — 13 comment(s), labels.json, the report — and the state is gone: no memory/pr-triage branch in the moved repository (0 commit(s) on it, state 'none'), and the path itself no longer exists. That is failing loudly and it is also the reason the baseline is in this band: the outage is discovered, but only after the comments were posted, and what it costs is exactly the cooldown-desync window.",
+  "evidence": "outage=yes; path recreated during the move=0; before: state=none 94208 bytes; moved: exists=yes 94208 bytes state=none history=0; live path exists=0 state=none; run exit=1 last phase=save run state posted=13; failure: baseline: git failed: git hash-object -w --stdin: error: unable to create temporary file: No such file or directory ; triage list found in the moved state=[]",
   "harness": {
     "dotnet": "dotnet",
     "runtime": "none (Band C has no model and no recorded runtime)",
     "command": "./faults/store-outage.sh --variant baseline"
   },
-  "recordedAt": "2026-11-05T17:12:16.504274+00:00"
+  "recordedAt": "2026-11-05T18:00:10.893736+00:00"
 }

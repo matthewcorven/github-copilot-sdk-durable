@@ -3,12 +3,12 @@
   "fault": "restart-after-checkpoint-control",
   "outcome": "control: resumed",
   "phase": "the control: committed at phase 'classify', then the seam's exit 42, then restarted",
-  "detail": "Control: the same seam earlier in the same run — the record committed at 'classify' (id=t2 status=1 phase=classify attempts=1 commented=0 memos=0 outcome=None) — and the same restart. It resumed at 'classify' and finished at 'save run state'. The pair is what shows the phase is read from the record and not assumed: the fault stopped later in the same run and the restart re-entered later.",
-  "evidence": "first exit=0; first last phase=load state and collect pull requests; first posted=0 adopted=0; state before restart=classify; task before restart=id=t2 status=1 phase=classify attempts=1 commented=0 memos=0 outcome=None; second exit=0; second cold start=0 resumed=1 at phase=classify; second posted=13 adopted=0; second output dir=/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-156-work/.scratch/band-c-faults/durable/restart-after-checkpoint-control/outputs/second; state after=save; second run says: run:        completed — 13 triaged, 13 commented, 2 in cooldown, 1 not ours, 1 not open",
+  "detail": "Control: the same seam earlier in the same run — the record committed at 'classify' (id=t2 status=1 phase=classify attempts=1 commented=0 memos=0 outcome=None) — and the same restart. It resumed at 'classify' and finished at 'save run state', writing 13 comment(s) with 13 duplicates. The pair is what shows the phase is read from the record and not assumed: the fault stopped later in the same run and the restart re-entered later.",
+  "evidence": "first exit=42; first last phase=load state and collect pull requests; first posted=0 adopted=0; state before restart=classify; task before restart=id=t2 status=1 phase=classify attempts=1 commented=0 memos=0 outcome=None; second exit=0; second cold start=0 resumed=1 at phase=classify; second posted=13 adopted=0 duplicates=[101,102,103,104,105,106,107,109,111,112,113,114,115] (13); second output dir=/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-156-work/.scratch/band-c-faults/durable/restart-after-checkpoint-control/outputs/second; state after=save; second run says: run:        completed — 13 triaged, 13 commented, 2 in cooldown, 1 not ours, 1 not open",
   "harness": {
     "dotnet": "dotnet",
     "runtime": "none (Band C has no model and no recorded runtime)",
     "command": "./faults/restart-after-checkpoint.sh --variant durable --fault-not-injected"
   },
-  "recordedAt": "2026-11-05T17:12:33.219086+00:00"
+  "recordedAt": "2026-11-05T18:00:27.820192+00:00"
 }

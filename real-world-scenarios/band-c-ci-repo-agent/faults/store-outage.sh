@@ -46,6 +46,9 @@ FAULT_COMMAND="./faults/store-outage.sh --variant $VARIANT$( [ "$INJECT" = "1" ]
 export FAULT_COMMAND
 
 require_tools || exit 1
+# The result this run replaces is removed before anything else happens, so a run that fails before
+# recording leaves *no* file rather than a stale one that the summary would render as its result.
+begin_result "$VARIANT" "$FAULT"
 
 RUN_DIR="$(new_run_dir "$VARIANT" "$FAULT")"
 track_dir "$RUN_DIR"

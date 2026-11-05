@@ -15,6 +15,7 @@ cannot leave the README describing a result that no longer exists.
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import sys
@@ -43,6 +44,45 @@ def load(results_dir: str, variant: str, name: str):
         return None
 
 
+def run_started(status_file: str):
+    """When the suite that produced the status file started.
+
+    `run-all.sh` writes `started <iso8601>` as the status file's first line, and that is the reference. A
+    result whose `recordedAt` predates it is not from this run: it is a left-over the script has not
+    replaced yet, which would otherwise read as a full matrix row describing a run that did not happen.
+    Without the line (a hand-run single script, or an older status file) the file's mtime is used, which
+    is weaker but never *later* than the results it precedes.
+    """
+    try:
+        with open(status_file, encoding="utf-8") as handle:
+            first = handle.readline().split()
+        if len(first) == 2 and first[0] == "started":
+            return datetime.datetime.fromisoformat(first[1])
+    except (OSError, ValueError):
+        pass
+    try:
+        return datetime.datetime.fromtimestamp(os.path.getmtime(status_file), datetime.timezone.utc)
+    except OSError:
+        return None
+
+
+def stale(doc, started) -> str | None:
+    if doc is None or started is None:
+        return None
+    stamp = doc.get("recordedAt")
+    if not stamp:
+        return "no recordedAt"
+    try:
+        recorded = datetime.datetime.fromisoformat(stamp)
+    except ValueError:
+        return "unreadable recordedAt %r" % stamp
+    if recorded.tzinfo is None:
+        recorded = recorded.replace(tzinfo=datetime.timezone.utc)
+    if recorded < started:
+        return "recorded %s, before this suite started at %s" % (stamp, started.isoformat())
+    return None
+
+
 def short(value, limit=110):
     value = (value or "").replace("|", "\\|").replace("\n", " ")
     return value if len(value) <= limit else value[: limit - 1] + "…"
@@ -56,6 +96,20 @@ def label(outcome: str | None) -> str:
 def main() -> int:
     results_dir, status_file = sys.argv[1:3]
     problems: list[str] = []
+    started = run_started(status_file)
+    checked: dict[str, object] = {}
+
+    def check(doc, variant: str, name: str):
+        """A stale result is a problem, not a row: it describes a run that did not happen.
+
+        The same document is read by several sections, so the problem is recorded once.
+        """
+        note = stale(doc, started)
+        if note:
+            problem = f"{variant} / {name}: stale result — {note}"
+            if problem not in problems:
+                problems.append(problem)
+        return doc
 
     print("## Fault matrix — outcome per fault per variant")
     print()
@@ -64,7 +118,7 @@ def main() -> int:
     for fault in FAULTS:
         row = []
         for variant in VARIANTS:
-            doc = load(results_dir, variant, fault)
+            doc = check(load(results_dir, variant, fault), variant, fault)
             if doc is None:
                 problems.append(f"{variant} / {fault}: no result file")
                 row.append("**missing**")
@@ -75,29 +129,32 @@ def main() -> int:
 
     print("## The headline: `cooldown-desync` in numbers")
     print()
-    print("| Variant | run 2 comments | run 3 comments posted | run 3 comments adopted | PRs holding two comments | run 3 resumed |")
-    print("| --- | --- | --- | --- | --- | --- |")
+    print("| Variant | run 2 comments | run 3 posted | run 3 adopted | run 3 duplicated (byte-level) | run 3 resumed | guard-disabled arm: posted / duplicated |")
+    print("| --- | --- | --- | --- | --- | --- | --- |")
     for variant in VARIANTS:
-        doc = load(results_dir, variant, "cooldown-desync")
+        doc = check(load(results_dir, variant, "cooldown-desync"), variant, "cooldown-desync")
         if doc is None or "observations" not in doc:
             problems.append(f"{variant} / cooldown-desync: no observations")
             print(f"| {variant} | **missing** | | | | |")
             continue
         o = doc["observations"]
         print(
-            "| %s | %d | %d | %d | %d | %s |"
+            "| %s | %d | %d | %d | %d | %s | %s |"
             % (
                 variant,
                 o.get("run2_comments_posted", 0),
                 o.get("run3_comments_posted", 0),
                 o.get("run3_comments_adopted", 0),
-                o.get("prs_with_two_comments", 0),
+                o.get("run3_comments_duplicated", 0),
                 "yes" if o.get("run3_resumed") else "no",
+                "%d / %d" % (o.get("guard_disabled_posted", 0), o.get("guard_disabled_duplicated", 0))
+                if o.get("guard_disabled_posted") or o.get("guard_disabled_duplicated")
+                else "not run (baseline has no guard to disable)",
             )
         )
     print()
     for variant in VARIANTS:
-        doc = load(results_dir, variant, "cooldown-desync")
+        doc = check(load(results_dir, variant, "cooldown-desync"), variant, "cooldown-desync")
         if doc and doc.get("observations", {}).get("prs_doubled"):
             print(
                 "- %s, PRs with two comments: %s"
@@ -113,7 +170,7 @@ def main() -> int:
         print("| Variant | Outcome | Phase | Detail |")
         print("| --- | --- | --- | --- |")
         for variant in VARIANTS:
-            doc = load(results_dir, variant, fault)
+            doc = check(load(results_dir, variant, fault), variant, fault)
             if doc is None:
                 print(f"| {variant} | **missing** | | |")
                 continue
@@ -132,8 +189,8 @@ def main() -> int:
     print("| --- | --- | --- | --- | --- | --- |")
     for fault in FAULTS:
         for variant in VARIANTS:
-            doc = load(results_dir, variant, fault)
-            control = load(results_dir, variant, control_name(fault))
+            doc = check(load(results_dir, variant, fault), variant, fault)
+            control = check(load(results_dir, variant, control_name(fault)), variant, control_name(fault))
             if control is None:
                 problems.append(f"{variant} / {control_name(fault)}: no control result file")
             if doc is None or control is None:
@@ -156,6 +213,8 @@ def main() -> int:
     if os.path.exists(status_file):
         for line in open(status_file, encoding="utf-8"):
             parts = line.split()
+            if parts[:1] == ["started"]:
+                continue
             if len(parts) == 3:
                 variant, name, status = parts
                 print("- `%s` %s: exit %s%s" % (variant, name, status, "" if status == "0" else " — **harness error**"))
@@ -168,7 +227,7 @@ def main() -> int:
     any_missing = False
     for variant in VARIANTS:
         for fault in FAULTS:
-            doc = load(results_dir, variant, fault)
+            doc = check(load(results_dir, variant, fault), variant, fault)
             if doc and doc.get("outcome") == "not exercised":
                 any_missing = True
                 print("- `%s` / `%s`: %s" % (variant, fault, doc.get("detail")))
