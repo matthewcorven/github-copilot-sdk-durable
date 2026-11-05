@@ -870,3 +870,45 @@ the layer already does, and missed the thing it actually does not do.
 **Rule:** Before attributing a limitation to `lib/`, read the write path, not just the public
 surface. A public getter existing does not mean the data is committed at the moment you need it —
 and a record existing does not mean it can be replayed.
+
+### 2026-11-05T14:55:00Z: An idempotency API that hangs is worse than one that throws — `MemoAsync` took a gate it already held
+**By:** core-engineer (Band C, #155)
+**What:** Building the Band C Durable variant surfaced a layer defect with no issue filed against it: a
+phase handler that called `TaskRuntime.MemoAsync` from inside `CommitAsync` did not fail, it **stopped**.
+`CommitTaskAsync` holds `DurableStore._gate` for the whole callback (`lib/Durable.cs:2132`) and
+`MemoAsync` starts with `await _gate.WaitAsync()` (`lib:2241`); `SemaphoreSlim` is not reentrant, so
+the inner wait never returns and the outer call is awaiting it. The same shape exists in both ports
+(`withGate` chained on `gateTail` in `lib/ts/durable.ts`, the gate in `lib/py/durable.py`).
+**References:** #201, #155, `lib/Durable.cs`, `lib/ts/durable.ts`, `lib/py/durable.py`, `tests/Durable.Tests/TaskResumeTests.cs`, `real-world-scenarios/band-c-ci-repo-agent/durable/evidence/blocked-input.cs`
+**Why:**
+#### Position
+
+The shape it blocks is the one a durable host needs most: an external effect whose memo commits with
+the checkpoint, so a crash between the effect and its record leaves either both or neither. Without it
+a host has only two options, and both are wrong — commit the memo separately (a crash in between
+repeats the effect) or skip memos and keep its own record (which is what this variant does with its
+ledger, for a different and correct reason: the ledger is a cross-run fact).
+
+The fix is `Transaction.Memo(taskId, key, value)` in all three ports. The write lands in the task's
+memo map before the provider is told and before the commit, so it commits with the checkpoint and a
+rollback restores it through the existing `TaskStateSnapshot` path. The outside-a-transaction form is
+unchanged; both now say which one to use.
+
+#### Why the failure mode matters more than the missing feature
+
+A missing feature gets worked around and reported. **A hang looks like work in progress.** This one
+was found because the evidence run had a wall-clock budget; without it, the first symptom would have
+been a CI job timing out with no output, and the natural next hypothesis would have been the scenario's
+own logic. It is the third defect in this program whose failure was silence rather than an error
+(Band A's numeric-checkpoint hang, #193, is the same class), and it is worth a rule:
+**an API that takes an internal lock must either be safe to call from inside its own critical section
+or refuse loudly — never wait.**
+
+#### The before/after control
+
+`evidence/blocked-input.cs` uses only the pre-fix API, with a four-second watchdog, and exits 7. It is
+run by `evidence.sh` stage 8 and its exit code is asserted on every evidence run, so the claim cannot
+rot. `MemoAsyncInsideCommit_DoesNotReturn_BecauseTheGateIsNotReentrant` keeps the trap as a fixture in
+the test suite. The three replacement tests assert the memo commits with the transaction, reads back
+inside it, and is gone after a rollback — and they fail to compile against the unpatched library,
+which is the control that matters for the fix itself.
