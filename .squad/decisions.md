@@ -847,7 +847,7 @@ The real gap is narrower and has two parts, both now demonstrated rather than as
    `if (result is not null)`. Neither the `catch` (`lib:4251`) nor the `finally` (`lib:4259`) drains
    it. A cancelled or failed turn therefore commits **no** tool record — not a partial list — and
    the queue is discarded with the conversation. `STOP_MID_TURN=1` reproduces it end to end: the
-   dead conversation (`c46`) has one `durable.admission` at `admitted` and **no**
+   dead conversation (`c37`) has one `durable.admission` at `admitted` and **no**
    `durable.checkpoint` document at all, while every conversation whose turn returned ends its
    history at `turn`.
 2. **There is no replay.** The SDK will not continue a half-finished turn, and the layer offers no
