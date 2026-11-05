@@ -1,0 +1,14 @@
+{
+  "variant": "durable",
+  "fault": "concurrent-clients",
+  "outcome": "refused, not doubled",
+  "phase": "two writers overlapping: the first held after Phase 5, the second run to completion while it is held",
+  "detail": "The first process took the store's exclusive lock before it printed its first line and held it while it was paused at phase 2 (classify); the second was refused at the open (exit 3, 'cannot open the store') and did nothing at all — no read of the fixture, no comments. 13 comment(s) exist from the one run that proceeded. The refusal is what the band's requirement asks for, and it is a refusal rather than a queue: the second process does not wait for the lock and does not retry, so a caller that wants it to proceed has to start it again. The guarantee is per store file, not per repository; two different store paths would both proceed (that is the durable variant's own stage 5b control).",
+  "evidence": "held at=phase 2 (classify) stopped state=T; first exit=0 posted=13; second exit=3 posted=0 refused_at_store=1 gated_by_cooldown=0; state=save; commit(s)/generation=1",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "none (Band C has no model and no recorded runtime)",
+    "command": "./faults/concurrent-clients.sh --variant durable"
+  },
+  "recordedAt": "2026-11-05T18:04:43.153697+00:00"
+}

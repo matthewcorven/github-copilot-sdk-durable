@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Runs every Band C fault against both variants and writes the summary the band README quotes.
+#
+#   ./faults/run-all.sh              # six faults, both variants, controls included
+#   ./faults/run-all.sh durable      # one variant
+#   ./faults/run-all.sh --no-controls
+#
+# Each fault script is independent and re-runnable: it builds into its own run directory, starts its own
+# processes, and removes both on exit. This script only sequences them, records the exit status of each,
+# and renders the table from the results the scripts wrote and nothing else. A non-zero exit means a
+# harness error — a process that never came up, a seam that never fired, a fixture that never reached the
+# injection point — never that a scenario lost work.
+set -uo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+. "$HERE/lib/common.sh"
+
+VARIANTS=()
+CONTROLS=1
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-controls) CONTROLS=0; shift ;;
+    baseline|durable) VARIANTS+=("$1"); shift ;;
+    *) log "run-all: unknown argument '$1'"; exit 2 ;;
+  esac
+done
+if [ ${#VARIANTS[@]} -eq 0 ]; then VARIANTS=(baseline durable); fi
+
+FAULTS=(kill-mid-turn restart-after-checkpoint duplicate-delivery concurrent-clients store-outage cooldown-desync)
+STATUS_FILE="$SCRATCH_ROOT/run-all.status"
+mkdir -p "$SCRATCH_ROOT"
+: > "$STATUS_FILE"
+# The suite's start, as an explicit first line. The summariser refuses a result recorded before it, so a
+# left-over file from an earlier run (a fault that failed before writing its result) cannot be rendered
+# as this run's. `started <iso8601>` is a line the summariser understands; everything else is
+# `<variant> <name> <exit>`.
+printf 'started %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$STATUS_FILE"
+
+require_tools || exit 1
+
+FAILED=0
+for variant in "${VARIANTS[@]}"; do
+  for fault in "${FAULTS[@]}"; do
+    log "run-all: $variant / $fault"
+    "$HERE/$fault.sh" --variant "$variant" >/dev/null 2>&1
+    status=$?
+    printf '%s %s %s\n' "$variant" "$fault" "$status" >> "$STATUS_FILE"
+    [ "$status" = "0" ] || { log "run-all: $variant / $fault exited $status (harness error)"; FAILED=1; }
+    if [ "$CONTROLS" = "1" ]; then
+      log "run-all: $variant / $fault (control)"
+      "$HERE/$fault.sh" --variant "$variant" --fault-not-injected >/dev/null 2>&1
+      status=$?
+      printf "%s %s-control %s\n" "$variant" "$fault" "$status" >> "$STATUS_FILE"
+      [ "$status" = "0" ] || { log "run-all: $variant / $fault control exited $status (harness error)"; FAILED=1; }
+    fi
+  done
+done
+
+"$PYTHON" "$HERE/lib/summarise.py" "$HERE/results" "$STATUS_FILE" | tee "$HERE/results/summary.txt"
+summary=$?
+[ "$summary" = "0" ] || FAILED=1
+exit $FAILED

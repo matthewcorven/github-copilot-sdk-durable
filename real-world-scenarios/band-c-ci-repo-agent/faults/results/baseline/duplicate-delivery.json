@@ -1,0 +1,14 @@
+{
+  "variant": "baseline",
+  "fault": "duplicate-delivery",
+  "outcome": "doubled",
+  "phase": "the same triage run delivered twice: two live processes over one repository",
+  "detail": "Two live processes over one repository each read it as a cold start and each posted all thirteen comments: 13 from the first and 13 from the second, so thirteen PRs got two comments each. Both processes exited successfully (0 and 0) and memory/pr-triage now carries 2 commit(s): the second write used the parent it read at Phase 8, not at Phase 1, so the compare-and-swap never saw a conflict and neither run reports an error. The duplicate is entirely silent. Nothing in the baseline has an identity for a comment or a run, so the only record of the duplicate is the branch's history, which no next run reads.",
+  "evidence": "deliveries=2; first exit=0 posted=13; second exit=0 posted=13 refused_at_store=0 gated_by_cooldown=0 update_ref_failed=0; state=done (the state snapshot only exists once Phase 8 has committed); commit(s)/generation=2; triaged in the committed state=[101,102,103,104,105,106,107,109,111,112,113,114,115]",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "none (Band C has no model and no recorded runtime)",
+    "command": "./faults/duplicate-delivery.sh --variant baseline"
+  },
+  "recordedAt": "2026-11-05T18:04:11.539630+00:00"
+}

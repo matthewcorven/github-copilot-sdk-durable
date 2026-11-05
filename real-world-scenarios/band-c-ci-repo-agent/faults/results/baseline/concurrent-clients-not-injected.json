@@ -1,0 +1,14 @@
+{
+  "variant": "baseline",
+  "fault": "concurrent-clients-not-injected",
+  "outcome": "control: not doubled",
+  "phase": "the same two runs one after the other, no overlap (the control)",
+  "detail": "Control: the same signals and the same two runs, without overlap — the second started after the first had exited. The second read the committed state and stopped at the run gate (0 comment(s) posted): thirteen comments, one per PR, from one run. This is what the events look like when they do not overlap, so the fault run's duplication is the overlap's doing.",
+  "evidence": "held at=after Phase 5 (labels.json written) and before its Phase 8 state write stopped state=T; first exit=0 posted=13; second exit=0 posted=0 refused_at_store=0 gated_by_cooldown=1; state=done (the state snapshot only exists once Phase 8 has committed); commit(s)/generation=1",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "none (Band C has no model and no recorded runtime)",
+    "command": "./faults/concurrent-clients.sh --variant baseline --fault-not-injected"
+  },
+  "recordedAt": "2026-11-05T18:04:15.017047+00:00"
+}
