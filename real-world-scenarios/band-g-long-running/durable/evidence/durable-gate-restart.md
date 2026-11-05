@@ -29,7 +29,9 @@ in that path is the scenario's.
 
 **What the scenario supplies.** Only the assistant text. `--deterministic` replaces what the model
 said after the turn returns, so a run needs no endpoint and two runs of the same prompt are
-identical. A configured endpoint with `--live` changes which bytes come back and nothing else.
+identical. `--live` is its explicit counterpart: it takes whatever the configured runtime answered,
+so a run against a real model differs only in which bytes come back. Neither flag changes the turn,
+the memo, or the count.
 
 **So the counter proves** how many turns this run of the workflow issued, and — because the count and
 the memo commit together — that a resumed process issued none for a step whose memo the store already
@@ -41,10 +43,11 @@ unrepeatable rather than merely unproven.
 
 | Requirement | Where it is demonstrated |
 | --- | --- |
-| **1. The gate is a task waiting on an external event with a durable deadline, not a blocking read.** | §1. The workflow commits `TaskCommit.Waiting` on a child gate task and returns; the child commits its deadline once, at open. Process 1 exits while the parent is `Waiting` and the gate is `Running`, and process 2 drives both. §4 waits out the deadline after the decision landed, so the timer that would have fired has fired. |
+| **1. The gate is a task waiting on an external event with a durable deadline, not a blocking read.** | §1. The workflow commits `TaskCommit.Waiting` on a child gate task and returns; the child commits its deadline once, at open. Process 1 exits while the parent is `Waiting` and the gate is `Running`, and process 2 drives both. §4 leaves the run at its gate with a four-second window, then opens the store in a **fresh** process
+after that window has passed: the gate wakes at once, records a timeout, and the run ends on it. |
 | **2. Pre-gate work is memoized, proven by counting calls.** | §2 and §2a. The variant resumes without re-calling a step the store already held (`3 calls ..., 1 memo hits`), and the same flow with the memo bypassed re-calls it (`4 calls [plan, research, write, write], 0 memo hits`). Both halves are the same script. |
-| **3. A decision cannot be overwritten by a late wakeup or a duplicate approval.** | §3 shows a second approval refused with the first still on file. §4 shows an approval arriving after the run finished, with the verdict still the one that landed inside the window. |
-| **4. Aborting mid-wait cascades, and terminal state is final.** | §5. The parent is `Waiting` and its gate is `Running`; the abort leaves both terminal, the gate as `aborted` and the parent's verdict `aborted`, and an approval afterwards is refused. |
+| **3. A decision cannot be overwritten by a late wakeup or a duplicate approval.** | §3 approves a **live** gate twice and the second write is refused by the decision document's own first-writer-wins rule (`ignored: a decision is already on file`), with a `rejects` assertion that the refusal did **not** come from the terminal check. §4a leaves a gate to time out in a fresh process and shows a later approval cannot turn the timeout into an approval. §4b shows a decision arriving after the run finished refused as late — the same guard, a different route, and the capture says which. |
+| **4. Aborting mid-wait cascades, and terminal state is final.** | §5. The parent is `Waiting` and its gate is `Running`; the abort leaves both terminal. The ordering is recorded rather than inferred: the parent's abort handler reads its child at the moment it runs and the capture shows `t59 was Terminal (aborted) when the abort handler ran` — so the child was already settled, which "both ended terminal" alone would not establish. An approval afterwards is refused. |
 | **5. `lib/Durable.cs` is used, not copied.** | `durable/band-g-durable.cs` has `#:project ../../../lib/Copilot.Durable.csproj` and no store, task runner, or memo implementation of its own. The scenario's own code is the workflow definition, the gate, and the model ledger. |
 
 ## The layer change this needed, and its control
@@ -124,20 +127,18 @@ run:       .scratch/band-g-evidence/happy
 dotnet:    /opt/homebrew/bin/dotnet (10.0.402)
 
 decision:   recorded: alice approved the plan
-on file:    approved by alice at 2026-11-05T15:40:02.2221350+00:00
+on file:    approved by alice at 2026-11-05T16:22:18.4420260+00:00
+run:        Waiting
+
+task:       t1 (resuming)
+status:     Waiting, restarts before this process: 0
+gate:       t59 Running
 task:       t1 Terminal (restarts 0)
 gate:       t59 Terminal (approved)
 decision:   approved by alice: ship it
 model:      4 calls [plan, research, write, brief], 0 memo hits
 outcome:    completed
 verdict:    approved
-
-task:       t1 (resuming)
-status:     Terminal, restarts before this process: 0
-gate:       t59 Terminal (approved)
-resumed:    0 task(s) re-entered ()
-outcome:    completed
-model:      4 calls [plan, research, write, brief], 0 memo hits
 
 kept: .scratch/band-g-evidence/happy
 exit=0
@@ -214,20 +215,18 @@ run:       .scratch/band-g-evidence/memo
 dotnet:    /opt/homebrew/bin/dotnet (10.0.402)
 
 decision:   recorded: alice approved the plan
-on file:    approved by alice at 2026-11-05T15:40:13.3484320+00:00
+on file:    approved by alice at 2026-11-05T16:22:27.8193090+00:00
+run:        Waiting
+
+task:       t1 (resuming)
+status:     Waiting, restarts before this process: 1
+gate:       t62 Running
 task:       t1 Terminal (restarts 1)
 gate:       t62 Terminal (approved)
 decision:   approved by alice: approved after the restart
 model:      4 calls [plan, research, write, brief], 1 memo hits
 outcome:    completed
 verdict:    approved
-
-task:       t1 (resuming)
-status:     Terminal, restarts before this process: 1
-gate:       t62 Terminal (approved)
-resumed:    0 task(s) re-entered ()
-outcome:    completed
-model:      4 calls [plan, research, write, brief], 1 memo hits
 
 kept: .scratch/band-g-evidence/memo
 exit=0
@@ -292,20 +291,18 @@ run:       .scratch/band-g-evidence/memo-control
 dotnet:    /opt/homebrew/bin/dotnet (10.0.402)
 
 decision:   recorded: alice approved the plan
-on file:    approved by alice at 2026-11-05T15:40:23.4014410+00:00
+on file:    approved by alice at 2026-11-05T16:22:36.7619320+00:00
+run:        Waiting
+
+task:       t1 (resuming)
+status:     Waiting, restarts before this process: 1
+gate:       t78 Running
 task:       t1 Terminal (restarts 1)
 gate:       t78 Terminal (approved)
 decision:   approved by alice: approved after the restart
 model:      5 calls [plan, research, write, write, brief], 0 memo hits
 outcome:    completed
 verdict:    approved
-
-task:       t1 (resuming)
-status:     Terminal, restarts before this process: 1
-gate:       t78 Terminal (approved)
-resumed:    0 task(s) re-entered ()
-outcome:    completed
-model:      5 calls [plan, research, write, write, brief], 0 memo hits
 
 kept: .scratch/band-g-evidence/memo-control
 exit=0
@@ -336,27 +333,10 @@ exit=0
 **Process 2 — approve and finish.**
 
 ```console
-$ env RUN_DIR=.scratch/band-g-evidence/duplicate APPROVE=1 AS=alice COMMENT=first approval KEEP=1 real-world-scenarios/band-g-long-running/durable/resume.sh
-run:       .scratch/band-g-evidence/duplicate
-dotnet:    /opt/homebrew/bin/dotnet (10.0.402)
-
+$ drive .scratch/band-g-evidence/duplicate approve --deterministic --as alice --comment first approval
 decision:   recorded: alice approved the plan
-on file:    approved by alice at 2026-11-05T15:40:28.5557270+00:00
-task:       t1 Terminal (restarts 0)
-gate:       t59 Terminal (approved)
-decision:   approved by alice: first approval
-model:      4 calls [plan, research, write, brief], 0 memo hits
-outcome:    completed
-verdict:    approved
-
-task:       t1 (resuming)
-status:     Terminal, restarts before this process: 0
-gate:       t59 Terminal (approved)
-resumed:    0 task(s) re-entered ()
-outcome:    completed
-model:      4 calls [plan, research, write, brief], 0 memo hits
-
-kept: .scratch/band-g-evidence/duplicate
+on file:    approved by alice at 2026-11-05T16:22:41.3762230+00:00
+run:        Waiting
 exit=0
 ```
 
@@ -364,8 +344,9 @@ exit=0
 
 ```console
 $ drive .scratch/band-g-evidence/duplicate approve --deterministic --as mallory --comment second approval
-decision:   refused: the workflow is Terminal, so this decision is late
-on file:    approved by alice at 2026-11-05T15:40:28.5557270+00:00
+decision:   ignored: a decision is already on file (alice, approved)
+on file:    approved by alice at 2026-11-05T16:22:41.3762230+00:00
+run:        Waiting
 exit=4
 ```
 
@@ -384,16 +365,16 @@ exit=0
 
 ## 4. A late decision cannot overwrite a verdict
 
-**Process 1 — a six-second window.**
+**Process 1 — a four-second window, then exit at the gate.**
 
 ```console
-$ env RUN_DIR=.scratch/band-g-evidence/late GATE_SECONDS=6 KEEP=1 real-world-scenarios/band-g-long-running/durable/run.sh
+$ env RUN_DIR=.scratch/band-g-evidence/late GATE_SECONDS=4 KEEP=1 real-world-scenarios/band-g-long-running/durable/run.sh
 run:       .scratch/band-g-evidence/late
 store:     .scratch/band-g-evidence/late/store.jsonl
 dotnet:    /opt/homebrew/bin/dotnet (10.0.402)
 
 model:      deterministic (the scenario supplies each answer after its turn)
-task:       t1 (created, gate window 6s)
+task:       t1 (created, gate window 4s)
 outcome:    waiting at the gate (task t1 is Waiting on t59 Running)
 gate:       t59 Running
 model:      3 calls [plan, research, write], 0 memo hits
@@ -404,66 +385,66 @@ kept: .scratch/band-g-evidence/late
 exit=0
 ```
 
-**Process 2 — approve inside the window, and finish.**
+**Process 2 — started after the window has passed: the gate wakes at once and times out.**
 
 ```console
-$ env RUN_DIR=.scratch/band-g-evidence/late APPROVE=1 AS=alice COMMENT=approved inside the window KEEP=1 real-world-scenarios/band-g-long-running/durable/resume.sh
+$ env RUN_DIR=.scratch/band-g-evidence/late KEEP=1 real-world-scenarios/band-g-long-running/durable/resume.sh
 run:       .scratch/band-g-evidence/late
 dotnet:    /opt/homebrew/bin/dotnet (10.0.402)
 
-decision:   recorded: alice approved the plan
-on file:    approved by alice at 2026-11-05T15:40:36.6582080+00:00
-task:       t1 Terminal (restarts 0)
-gate:       t59 Terminal (approved)
-decision:   approved by alice: approved inside the window
-model:      4 calls [plan, research, write, brief], 0 memo hits
-outcome:    completed
-verdict:    approved
-
 task:       t1 (resuming)
-status:     Terminal, restarts before this process: 0
-gate:       t59 Terminal (approved)
-resumed:    0 task(s) re-entered ()
+status:     Waiting, restarts before this process: 0
+gate:       t59 Running
+resumed:    2 task(s) re-entered (failed, completed)
 outcome:    completed
-model:      4 calls [plan, research, write, brief], 0 memo hits
+model:      3 calls [plan, research, write], 0 memo hits
 
 kept: .scratch/band-g-evidence/late
 exit=0
 ```
 
-**Wait past the deadline the gate recorded.**
+**The store: a timeout, and a run that ended on it.**
 
 ```console
-$ env RUN_DIR=.scratch/band-g-evidence/late /opt/homebrew/bin/dotnet run real-world-scenarios/band-g-long-running/durable/band-g-durable.cs -p:CopilotSkipCliDownload=true -- --run .scratch/band-g-evidence/late wait --timeout 20
+$ drive .scratch/band-g-evidence/late inspect
 task:       t1 Terminal (restarts 0)
-gate:       t59 Terminal (approved)
-decision:   approved by alice: approved inside the window
-model:      4 calls [plan, research, write, brief], 0 memo hits
-outcome:    completed
-verdict:    approved
+gate:       t59 Terminal (timed-out)
+decision:   (none)
+model:      3 calls [plan, research, write], 0 memo hits
+outcome:    failed — the plan was not approved (timed-out): no decision before the gate's deadline
+exit=0
+```
+
+**An approval after the timeout.**
+
+```console
+$ drive .scratch/band-g-evidence/late approve --deterministic --as alice --comment approved too late
+decision:   refused: the workflow is Terminal, so this decision is late
+on file:    rejected by finished at 2026-11-05T16:22:58.1924280+00:00
+run:        Terminal
+exit=4
+```
+
+**The verdict is still the timeout.**
+
+```console
+$ drive .scratch/band-g-evidence/late inspect
+task:       t1 Terminal (restarts 0)
+gate:       t59 Terminal (timed-out)
+decision:   (none)
+model:      3 calls [plan, research, write], 0 memo hits
+outcome:    failed — the plan was not approved (timed-out): no decision before the gate's deadline
 exit=0
 ```
 
 **A decision after the run finished.**
 
 ```console
-$ drive .scratch/band-g-evidence/late approve --deterministic --as mallory --comment too late
+$ drive .scratch/band-g-evidence/late approve --deterministic --as mallory --comment after the run
 decision:   refused: the workflow is Terminal, so this decision is late
-on file:    approved by alice at 2026-11-05T15:40:36.6582080+00:00
+on file:    rejected by finished at 2026-11-05T16:23:02.1495810+00:00
+run:        Terminal
 exit=4
-```
-
-**The verdict is still the approval.**
-
-```console
-$ drive .scratch/band-g-evidence/late inspect
-task:       t1 Terminal (restarts 0)
-gate:       t59 Terminal (approved)
-decision:   approved by alice: approved inside the window
-model:      4 calls [plan, research, write, brief], 0 memo hits
-outcome:    completed
-verdict:    approved
-exit=0
 ```
 
 ## 5. Aborting mid-wait cascades to the children
@@ -510,6 +491,7 @@ decision:   (none)
 model:      3 calls [plan, research, write], 0 memo hits
 outcome:    completed
 verdict:    aborted
+observed:   t59 was Terminal (aborted) when the abort handler ran
 exit=0
 ```
 
@@ -523,6 +505,7 @@ decision:   (none)
 model:      3 calls [plan, research, write], 0 memo hits
 outcome:    completed
 verdict:    aborted
+observed:   t59 was Terminal (aborted) when the abort handler ran
 exit=0
 ```
 
@@ -531,13 +514,34 @@ exit=0
 ```console
 $ drive .scratch/band-g-evidence/abort approve --deterministic --as mallory --comment after the abort
 decision:   refused: the workflow is Terminal, so this decision is late
-on file:    rejected by finished at 2026-11-05T15:40:48.4120830+00:00
+on file:    rejected by finished at 2026-11-05T16:23:07.5239430+00:00
+run:        Terminal
 exit=4
 ```
 
 ## 6. The before/after control for the layer's re-entry wait
 
-**The control run: same flow, wait removed.**
+**Process 1 of the control: the same run, to the same gate.**
+
+```console
+$ env RUN_DIR=.scratch/band-g-evidence/control GATE_SECONDS=120 KEEP=1 real-world-scenarios/band-g-long-running/durable/run.sh
+run:       .scratch/band-g-evidence/control
+store:     .scratch/band-g-evidence/control/store.jsonl
+dotnet:    /opt/homebrew/bin/dotnet (10.0.402)
+
+model:      deterministic (the scenario supplies each answer after its turn)
+task:       t1 (created, gate window 120s)
+outcome:    waiting at the gate (task t1 is Waiting on t59 Running)
+gate:       t59 Running
+model:      3 calls [plan, research, write], 0 memo hits
+
+the run is at its gate; the directory holds it.
+approve it with: RUN_DIR=.scratch/band-g-evidence/control ./resume.sh
+kept: .scratch/band-g-evidence/control
+exit=0
+```
+
+**Process 2 of the control: approve — with the wait removed, the parent reads the gate early.**
 
 ```console
 $ env RUN_DIR=.scratch/band-g-evidence/control APPROVE=1 AS=alice COMMENT=approved KEEP=1 real-world-scenarios/band-g-long-running/durable/resume.sh
@@ -545,15 +549,13 @@ run:       .scratch/band-g-evidence/control
 dotnet:    /opt/homebrew/bin/dotnet (10.0.402)
 
 decision:   recorded: alice approved the plan
-on file:    approved by alice at 2026-11-05T15:40:52.1532000+00:00
-resumed:    2 task(s) re-entered (failed, completed)
-outcome:    completed
-model:      3 calls [plan, research, write], 0 memo hits
+on file:    approved by alice at 2026-11-05T16:23:10.9076350+00:00
+run:        Waiting
 
 task:       t1 (resuming)
-status:     Terminal, restarts before this process: 0
-gate:       t59 Terminal (approved)
-resumed:    0 task(s) re-entered ()
+status:     Waiting, restarts before this process: 0
+gate:       t59 Running
+resumed:    2 task(s) re-entered (failed, completed)
 outcome:    completed
 model:      3 calls [plan, research, write], 0 memo hits
 
@@ -561,7 +563,7 @@ kept: .scratch/band-g-evidence/control
 exit=0
 ```
 
-**The control's store: the gate finished, and the parent failed anyway.**
+**The control's store: the gate finished approved, and the parent failed anyway.**
 
 ```console
 $ drive .scratch/band-g-evidence/control inspect

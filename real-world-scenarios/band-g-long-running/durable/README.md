@@ -59,19 +59,39 @@ All five are exercised by `./evidence.sh`; the captured output is in
    `3 calls [plan, research, write], 1 memo hits`, so the resume added **no** call. §2a is the same
    script with the memo bypassed, and it reads `4 calls [plan, research, write, write], 0 memo hits` —
    the resume re-called a step the store already held. The difference between the two runs is the
-   memo's whole contribution, stated as a number.
+   memo's whole contribution, stated as a number. **Scope, stated plainly:** the kill point is *before*
+   the gate, which is the case the baseline also avoids by not having run those steps yet — so this
+   measures the memo **within this variant**, not against the baseline. The baseline-relative claim is
+   in the three-way table, and it is marked as likely rather than measured.
 3. **A decision cannot be overwritten by a late wakeup or a duplicate approval.** The decision is a
    durable document and the first write wins: a second caller finds the first and returns it
-   (`Gate.cs`, `GateCommands.RecordAsync`). §3 shows a second approval from a different reviewer
-   refused with the first still on file. §4 approves inside a six-second window, finishes the run,
-   then waits past the deadline the gate recorded and tries to decide again: the verdict is still the
-   approval, and the late decision is refused because the workflow is terminal. The gate itself never
-   writes a decision — it reads one — so a stale timer has nothing to overwrite with.
+   (`Gate.cs`, `GateCommands.RecordAsync`). All three captures are needed, because the two refusals are
+   different guards and only one of them is the one that matters:
+
+   - **§3, a duplicate against a live gate.** `alice` approves, then `mallory` approves, and only then
+     is the run driven. The second write is refused with `ignored: a decision is already on file
+     (alice, approved)` — the document's own rule — and the evidence asserts the refusal did **not**
+     come from the terminal check. This is the half that proves a duplicate cannot overwrite a
+     decision.
+   - **§4a, a late wakeup.** The gate's four-second window expires in a process that did not set it;
+     the gate wakes at once and records `timed-out`. An approval afterwards cannot turn that into an
+     approval, because the run is terminal.
+   - **§4b, a decision after the run finished.** Refused as late, by the same terminal guard.
+
+   The gate itself never writes a decision — it reads one — so a stale timer has nothing to overwrite
+   with.
 4. **Aborting mid-wait cascades, and terminal state is final.** §5 aborts the parent while it is
-   `Waiting` and its gate is `Running`. Both end terminal: the gate records `aborted` and the parent's
-   verdict is `aborted`. An approval afterwards is refused. The cascade is the layer's
-   (`AbortTaskAsync` aborts the children first); the scenario's abort handler only records what the
-   parent concluded.
+   `Waiting` and its gate is `Running`. The ordering is **recorded, not inferred**: the parent's abort
+   handler reads its child at the moment it runs, so the capture shows
+
+   ```
+   observed:   t59 was Terminal (aborted) when the abort handler ran
+   ```
+
+   That is the difference between "both ended terminal" — which any ordering produces, including no
+   cascade at all — and "the child was already settled when the parent concluded". The parent's verdict
+   is `aborted` and an approval afterwards is refused. The cascade itself is the layer's
+   (`AbortTaskAsync` aborts the children first); the scenario's handler records what it observed.
 5. **`lib/Durable.cs`, through the project reference.** `band-g-durable.cs:19` is
    `#:project ../../../lib/Copilot.Durable.csproj`. No store, task runner, memo, or scheduler is
    copied into this folder.
@@ -146,8 +166,13 @@ assistant message comes back, and the turn is checkpointed. What is supplied is 
 So the ledger proves **how many turns the run issued**, and — because the count commits with the memo —
 that a resumed process issued none for a step already on disk. It proves nothing about model quality,
 and it is not evidence that a provider was reachable. The alternative was a run nobody could repeat,
-which would have made the memoization claim unrepeatable rather than unproven. `--live` with a real
-endpoint changes which bytes come back and nothing else.
+which would have made the memoization claim unrepeatable rather than unproven.
+
+`--live` is the explicit opposite: it takes whatever the configured runtime answered, and changes
+nothing else — not the turn, not the memo, not the count. The two are alternatives, and naming both is
+a usage error rather than a precedence rule. Note that the repository's recorded runtime is not a
+model: `--live` against *it* serves a fixed transcript, so `--live` is only the "take the model's
+words" path when a real runtime is behind `DURABLE_RUNTIME_PATH`.
 
 ## The deterministic fault points
 
@@ -171,11 +196,13 @@ The suites, with an honest caveat about the counts:
 
 | Suite | With the change | Without the change |
 | --- | --- | --- |
-| C# (`tests/Durable.Tests`) | 219 tests, 198 pass, 21 fail | 218 tests, 198 pass, 21 fail |
-| TypeScript (`lib/ts`) | 119 pass / 2 fail | 119 pass / 2 fail (same two tests) |
-| Python (`lib/py`) | 74 tests, 1 fail | 74 tests, 1 fail (same test) |
+| C# (`tests/Durable.Tests`) | 220 tests, 200 pass, 20 fail | 218 tests, 200 pass, 20 fail |
+| TypeScript (`lib/ts`) | 126 tests, 120 pass, 2 fail | 125 tests, 119 pass, 2 fail (same two) |
+| Python (`lib/py`) | 75 tests, 1 fail | 74 tests, 1 fail (same one) |
 
-The change adds exactly one C# test and it passes. **The pre-existing failures are not caused by it
+Each suite gains exactly the tests this change adds, and they pass: two in C# (one per fix) and one
+each in TypeScript and Python for the re-entry wait. Each of the three port tests was checked against
+the guard being removed, and each fails without it. **The pre-existing failures are not caused by it
 and are not a clean baseline either:** most are the bundled-runtime cases CI's download covers, and at
 least one — `LateJoinExampleTests.BarrierReadinessFailuresCleanupAndSourceMutations` — is a timing
 flake that fails on repeated runs of its own, with and without this change. The counts move by one or

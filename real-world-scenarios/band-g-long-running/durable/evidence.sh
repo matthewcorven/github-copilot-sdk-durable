@@ -6,6 +6,9 @@
 #   ./evidence.sh --keep          # leave the scratch directory in place afterwards
 #   ./evidence.sh --only memo     # one flow, printed rather than assembled
 #
+# `--keep` is `KEEP=1` and `--only <flow>` is `ONLY=<flow>`, spelled both ways because a shell script
+# is called both ways. The flows are: happy, memo, duplicate, late, abort, control.
+#
 # The output is written to evidence/durable-gate-restart.md. Every console block in that file is a
 # whole recording: the command, its output, and its exit status, captured by this script. Nothing is
 # retyped beside its output. The assertion at the end fails the script if a claim's expected line
@@ -26,6 +29,46 @@ worktree="$(cd "$band/../.." && pwd)"
 run_root="${RUN_ROOT:-$worktree/.scratch/band-g-evidence}"
 keep="${KEEP:-0}"
 only="${ONLY:-}"
+
+# The flags and the environment variables are the same two settings. Parsing them here rather than
+# documenting them and ignoring them: a `--keep` that silently did nothing would be worse than absent.
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --keep)
+      keep=1
+      shift
+      ;;
+    --only)
+      if [ "$#" -lt 2 ]; then
+        echo "evidence.sh: --only needs a flow name (happy, memo, duplicate, late, abort, control)." >&2
+        exit 2
+      fi
+      only="$2"
+      shift 2
+      ;;
+    --only=*)
+      only="${1#--only=}"
+      shift
+      ;;
+    -h|--help)
+      sed -n '2,/^$/p' "${BASH_SOURCE[0]}" | sed -e 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *)
+      echo "evidence.sh: unknown argument '$1'" >&2
+      echo "             usage: ./evidence.sh [--keep] [--only <flow>]" >&2
+      exit 2
+      ;;
+  esac
+done
+
+case "$only" in
+  ""|happy|memo|duplicate|late|abort|control) ;;
+  *)
+    echo "evidence.sh: no flow called '$only'. The flows are: happy, memo, duplicate, late, abort, control." >&2
+    exit 2
+    ;;
+esac
 
 if [ -n "${DOTNET:-}" ]; then
   dotnet="$DOTNET"
@@ -63,11 +106,19 @@ if [ -e "$run_root" ]; then
 fi
 mkdir -p "$run_root"
 : > "$run_root/.band-g-evidence"
-if [ "$keep" = "1" ]; then
-  trap 'echo "kept: $run_root"' EXIT
-else
-  trap 'rm -rf "$run_root"' EXIT
-fi
+
+# One cleanup, installed wherever the exit path changes, reading `keep` when it runs rather than when
+# it was installed. A claim failure sets `keep=1` and re-installs this, so the recordings the failure
+# message points at are still there to read.
+cleanup() {
+  if [ "$keep" = "1" ]; then
+    echo "kept: $run_root"
+    return 0
+  fi
+
+  rm -rf "$run_root"
+}
+trap cleanup EXIT
 
 recordings="$run_root/recordings"
 mkdir -p "$recordings"
@@ -129,6 +180,12 @@ fi
 # and once with the memo bypassed. The difference between the two is what the memo is worth, stated
 # as a number rather than as a property. The control also proves the fault was real: without the
 # memo the same resume makes one call per step, including the steps already on disk.
+#
+# What this measures, stated precisely: the kill point is *before* the gate, which is the case the
+# baseline also avoids by construction — its pre-gate steps have not run when it stops, so there is
+# nothing for it to repeat there. The comparison below is therefore **within this variant**: it shows
+# that the memo is what saves the calls, not that the variant beats the baseline at this seam. The
+# baseline-relative claim is in the three-way table, where it is marked as likely rather than measured.
 if wanted memo; then
   echo
   echo "flow 2: kill before a step commits, resume on the memo"
@@ -153,38 +210,59 @@ if wanted memo; then
 fi
 
 # ── flow 3: a duplicate approval cannot overwrite the first ────────────────────────────────────
-# Process 2 approves and finishes the run. Process 3 approves again, with a different reviewer and a
-# different comment. The document on file is the first one, and the second caller is told so.
+# Two reviewers approve the same live gate. The first write lands; the second finds one on file and is
+# told so. Only then is the run driven, so the refusal comes from the decision document's own
+# first-writer-wins rule — not from the "this run is already terminal" check, which is a different
+# guard and would prove a different thing.
 if wanted duplicate; then
   echo
-  echo "flow 3: duplicate approval"
+  echo "flow 3: duplicate approval, both while the gate is live"
   echo "──────────────────────────────────────────────────────────────"
   dup="$run_root/duplicate"
   mkdir -p "$dup"
 
   record dup-start env RUN_DIR="$dup" GATE_SECONDS=120 KEEP=1 "$here/run.sh"
-  record dup-approve env RUN_DIR="$dup" APPROVE=1 AS=alice COMMENT="first approval" KEEP=1 "$here/resume.sh"
+  record dup-approve drive "$dup" approve --deterministic --as alice --comment "first approval"
   record dup-duplicate drive "$dup" approve --deterministic --as mallory --comment "second approval"
+  record dup-before-drive drive "$dup" inspect
+  record dup-drive env RUN_DIR="$dup" KEEP=1 "$here/resume.sh"
   record dup-inspect drive "$dup" inspect
 fi
 
-# ── flow 4: a late wakeup cannot overwrite a decision ──────────────────────────────────────────
-# A run with a short window. The approval lands, the run finishes, and the gate's deadline arrives
-# afterwards — the case the layer's terminal guard exists for. The run's verdict and its decision are
-# still the approved ones, and a decision that arrives after the run finished is refused.
+# ── flow 4: a late decision cannot overwrite a verdict ─────────────────────────────────────────
+# Two things have to be true, and they are two captures because they are two different moments.
+#
+# 4a: the gate's own deadline fires in a fresh process, and an approval that arrives afterwards cannot
+#     turn the timeout into an approval. This is the durable-deadline half of requirement 1 and the
+#     "late wakeup" half of requirement 3, in one flow: the gate is re-entered from a checkpoint whose
+#     deadline has already passed, so it wakes at once, records a timeout, and the run finishes. The
+#     approval that follows finds a decision on file and is refused by the document rule.
+#
+# 4b: a decision that arrives after the run has finished is refused as late. This is the case the
+#     layer's terminal guard exists for, and it is a different refusal from 4a's.
 if wanted late; then
   echo
-  echo "flow 4: a late wakeup after the decision"
+  echo "flow 4: a late decision after the gate's deadline, and after the run"
   echo "──────────────────────────────────────────────────────────────"
   late="$run_root/late"
   mkdir -p "$late"
 
-  record late-start env RUN_DIR="$late" GATE_SECONDS=6 KEEP=1 "$here/run.sh"
-  record late-approve env RUN_DIR="$late" APPROVE=1 AS=alice COMMENT="approved inside the window" KEEP=1 "$here/resume.sh"
-  echo "        waiting past the gate's deadline, so the timer that would have fired has fired"
-  record late-after-deadline env RUN_DIR="$late" "$dotnet" run "$source_file" -p:CopilotSkipCliDownload=true -- --run "$late" wait --timeout 20
-  record late-approve-after drive "$late" approve --deterministic --as mallory --comment "too late"
+  # Process 1 stops at the gate. Nothing is decided while the window is open, so process 2 — started
+  # after the deadline has passed — is the one that finds it expired.
+  record late-start env RUN_DIR="$late" GATE_SECONDS=4 KEEP=1 "$here/run.sh"
+  echo "        waiting for the gate's 4s window to pass before the next process opens the store"
+  sleep 6
+  record late-expire env RUN_DIR="$late" KEEP=1 "$here/resume.sh"
   record late-inspect drive "$late" inspect
+
+  # 4a: the approval comes after the timeout. It must not become the verdict.
+  record late-approve-after-timeout drive "$late" approve --deterministic --as alice --comment "approved too late"
+  record late-after-timeout-inspect drive "$late" inspect
+
+  # 4b: and a decision arriving after the run finished is refused for being late, not for naming a
+  # decision already on file — those are two different guards and the captures distinguish them.
+  record late-finish env RUN_DIR="$late" KEEP=1 "$here/resume.sh"
+  record late-approve-after-finish drive "$late" approve --deterministic --as mallory --comment "after the run"
 fi
 
 # ── flow 5: abort cascades from the parent to its children ────────────────────────────────────
@@ -226,7 +304,7 @@ if wanted control; then
   }
   on_exit() {
     restore
-    [ "$keep" = "1" ] || rm -rf "$run_root"
+    cleanup
   }
   trap on_exit EXIT
 
@@ -249,7 +327,7 @@ if wanted control; then
   fi
 
   restore
-  trap '[ "$keep" = "1" ] || rm -rf "$run_root"' EXIT
+  trap cleanup EXIT
   if cmp -s "$worktree/lib/Durable.cs" "$run_root/Durable.cs.as-checked-out"; then
     echo "        restored: lib/Durable.cs is byte-identical to the copy taken before the control"
   else
@@ -322,15 +400,24 @@ fi
 
 if wanted duplicate; then
   claim "flow 3: the first approval is recorded" dup-approve "recorded: alice approved the plan"
-  claim "flow 3: the duplicate is refused" dup-duplicate "refused: the workflow is Terminal, so this decision is late"
-  claim "flow 3: the decision on file is still alice's" dup-inspect "approved by alice: first approval"
+  claim "flow 3: the second approval is refused while the run is still live" dup-duplicate "ignored: a decision is already on file (alice, approved)"
+  rejects "flow 3: that refusal did not come from the terminal check" dup-duplicate "the workflow is Terminal"
+  claim "flow 3: the decision on file is still alice's before the run is driven" dup-before-drive "approved by alice: first approval"
+  claim "flow 3: the run finishes on the first approval" dup-inspect "verdict:    approved"
+  claim "flow 3: the decision on file is still alice's afterwards" dup-inspect "approved by alice: first approval"
 fi
 
 if wanted late; then
-  claim "flow 4: the approval lands inside the window" late-approve "recorded: alice approved the plan"
-  claim "flow 4: the run finished before the deadline was waited out" late-after-deadline "outcome:    completed"
-  claim "flow 4: a decision after the deadline is refused" late-approve-after "refused: the workflow is Terminal, so this decision is late"
-  claim "flow 4: the verdict is still the approval" late-inspect "approved by alice: approved inside the window"
+  # 4a: the gate's deadline fires, in a process that did not set it. The deadline is the run's, read
+  # back from the checkpoint, so a process that starts after it has passed wakes at once.
+  claim "flow 4a: the gate wakes past its recorded deadline in a fresh process" late-inspect "Terminal (timed-out)"
+  claim "flow 4a: the run ends on the timeout rather than waiting again" late-inspect "outcome:    failed — the plan was not approved (timed-out)"
+  claim "flow 4a: an approval after the timeout cannot turn it into a verdict" late-approve-after-timeout "refused: the workflow is Terminal, so this decision is late"
+  claim "flow 4a: the verdict is still the timeout" late-after-timeout-inspect "Terminal (timed-out)"
+
+  # 4b: a decision after the run finished is refused as late. The same guard, reached by a different
+  # route, and the capture says so rather than implying the document rule refused it.
+  claim "flow 4b: a decision after the run is late" late-approve-after-finish "refused: the workflow is Terminal, so this decision is late"
 fi
 
 if wanted abort; then
@@ -352,8 +439,11 @@ fi
 echo
 if [ "$failures" -ne 0 ]; then
   echo "evidence.sh: $failures claim(s) did not hold. No report was written." >&2
+  # Keep the recordings the message above points at: a failure is exactly when they are worth reading,
+  # so the trap must not delete them on the way out. `keep` and the installed trap are both updated.
+  keep=1
+  trap cleanup EXIT
   echo "             The recordings are in $recordings" >&2
-  KEEP=1
   exit 1
 fi
 

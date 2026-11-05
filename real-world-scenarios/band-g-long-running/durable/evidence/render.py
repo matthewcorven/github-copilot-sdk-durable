@@ -45,11 +45,12 @@ BLOCKS = [
         ("The decision on file is still the first one", "dup-inspect"),
     ]),
     ("4", "A late decision cannot overwrite a verdict", [
-        ("Process 1 — a six-second window", "late-start"),
-        ("Process 2 — approve inside the window, and finish", "late-approve"),
-        ("Wait past the deadline the gate recorded", "late-after-deadline"),
-        ("A decision after the run finished", "late-approve-after"),
-        ("The verdict is still the approval", "late-inspect"),
+        ("Process 1 — a four-second window, then exit at the gate", "late-start"),
+        ("Process 2 — started after the window has passed: the gate wakes at once and times out", "late-expire"),
+        ("The store: a timeout, and a run that ended on it", "late-inspect"),
+        ("An approval after the timeout", "late-approve-after-timeout"),
+        ("The verdict is still the timeout", "late-after-timeout-inspect"),
+        ("A decision after the run finished", "late-approve-after-finish"),
     ]),
     ("5", "Aborting mid-wait cascades to the children", [
         ("Process 1 — to the gate", "abort-start"),
@@ -59,8 +60,9 @@ BLOCKS = [
         ("An approval after the abort", "abort-approve-late"),
     ]),
     ("6", "The before/after control for the layer's re-entry wait", [
-        ("The control run: same flow, wait removed", "control-resume"),
-        ("The control's store: the gate finished, and the parent failed anyway", "control-inspect"),
+        ("Process 1 of the control: the same run, to the same gate", "control-start"),
+        ("Process 2 of the control: approve — with the wait removed, the parent reads the gate early", "control-resume"),
+        ("The control's store: the gate finished approved, and the parent failed anyway", "control-inspect"),
     ]),
 ]
 
@@ -143,7 +145,9 @@ in that path is the scenario's.
 
 **What the scenario supplies.** Only the assistant text. `--deterministic` replaces what the model
 said after the turn returns, so a run needs no endpoint and two runs of the same prompt are
-identical. A configured endpoint with `--live` changes which bytes come back and nothing else.
+identical. `--live` is its explicit counterpart: it takes whatever the configured runtime answered,
+so a run against a real model differs only in which bytes come back. Neither flag changes the turn,
+the memo, or the count.
 
 **So the counter proves** how many turns this run of the workflow issued, and — because the count and
 the memo commit together — that a resumed process issued none for a step whose memo the store already
@@ -155,10 +159,11 @@ unrepeatable rather than merely unproven.
 
 | Requirement | Where it is demonstrated |
 | --- | --- |
-| **1. The gate is a task waiting on an external event with a durable deadline, not a blocking read.** | §1. The workflow commits `TaskCommit.Waiting` on a child gate task and returns; the child commits its deadline once, at open. Process 1 exits while the parent is `Waiting` and the gate is `Running`, and process 2 drives both. §4 waits out the deadline after the decision landed, so the timer that would have fired has fired. |
+| **1. The gate is a task waiting on an external event with a durable deadline, not a blocking read.** | §1. The workflow commits `TaskCommit.Waiting` on a child gate task and returns; the child commits its deadline once, at open. Process 1 exits while the parent is `Waiting` and the gate is `Running`, and process 2 drives both. §4 leaves the run at its gate with a four-second window, then opens the store in a **fresh** process
+after that window has passed: the gate wakes at once, records a timeout, and the run ends on it. |
 | **2. Pre-gate work is memoized, proven by counting calls.** | §2 and §2a. The variant resumes without re-calling a step the store already held (`3 calls ..., 1 memo hits`), and the same flow with the memo bypassed re-calls it (`4 calls [plan, research, write, write], 0 memo hits`). Both halves are the same script. |
-| **3. A decision cannot be overwritten by a late wakeup or a duplicate approval.** | §3 shows a second approval refused with the first still on file. §4 shows an approval arriving after the run finished, with the verdict still the one that landed inside the window. |
-| **4. Aborting mid-wait cascades, and terminal state is final.** | §5. The parent is `Waiting` and its gate is `Running`; the abort leaves both terminal, the gate as `aborted` and the parent's verdict `aborted`, and an approval afterwards is refused. |
+| **3. A decision cannot be overwritten by a late wakeup or a duplicate approval.** | §3 approves a **live** gate twice and the second write is refused by the decision document's own first-writer-wins rule (`ignored: a decision is already on file`), with a `rejects` assertion that the refusal did **not** come from the terminal check. §4a leaves a gate to time out in a fresh process and shows a later approval cannot turn the timeout into an approval. §4b shows a decision arriving after the run finished refused as late — the same guard, a different route, and the capture says which. |
+| **4. Aborting mid-wait cascades, and terminal state is final.** | §5. The parent is `Waiting` and its gate is `Running`; the abort leaves both terminal. The ordering is recorded rather than inferred: the parent's abort handler reads its child at the moment it runs and the capture shows `t59 was Terminal (aborted) when the abort handler ran` — so the child was already settled, which "both ended terminal" alone would not establish. An approval afterwards is refused. |
 | **5. `lib/Durable.cs` is used, not copied.** | `durable/band-g-durable.cs` has `#:project ../../../lib/Copilot.Durable.csproj` and no store, task runner, or memo implementation of its own. The scenario's own code is the workflow definition, the gate, and the model ledger. |
 
 ## The layer change this needed, and its control

@@ -37,6 +37,7 @@ public static class BriefWorkflow
     /// The seam a fault-injection run uses. <see langword="null"/> in a normal run.
     /// </param>
     public static DurableTaskDefinition Define(
+        DurableStore store,
         DurableHarness harness,
         DurableTaskDefinition gate,
         ModelGateway model,
@@ -178,17 +179,36 @@ public static class BriefWorkflow
                 },
             },
 
-            // Aborting a waiting parent aborts its children first: that cascade is in the layer,
-            // and this handler is what the parent records once its children are settled.
-            (input, checkpoint, runtime) => runtime.CommitAsync(() => TaskCommit.Completed(DurableJson.ToElement(
-                new BriefOutcome
+            // Aborting a waiting parent aborts its children first: that cascade is in the layer, and
+            // this handler is what the parent records once its children are settled. It reads each
+            // child's record here, inside the handler, so the capture shows the ordering rather than
+            // a pair of terminal states that any ordering would produce.
+            async (input, checkpoint, runtime) =>
+            {
+                var observed = new List<AbortObservation>();
+                // The store, not the runtime: TaskRuntime exposes no read path, which the README
+                // records as a limitation. The children are the tasks this one owns.
+                foreach (var child in store.Tasks.Where(task => task.OwnerTaskId == runtime.Task.Id))
+                {
+                    observed.Add(new AbortObservation
+                    {
+                        TaskId = child.Id,
+                        Status = child.Status.ToString(),
+                        Verdict = child.Outcome?.Deserialize<TaskOutcome>(DurableJson.Options)?.Result
+                            ?.Deserialize<GateOutcome>(DurableJson.Options)?.Verdict,
+                    });
+                }
+
+                return await runtime.CommitAsync(() => TaskCommit.Completed(DurableJson.ToElement(new BriefOutcome
                 {
                     Plan = checkpoint.Plan,
                     Research = checkpoint.Research,
                     Draft = checkpoint.Draft,
                     Verdict = "aborted",
                     Comment = "the run was aborted",
-                }))));
+                    Observed = observed,
+                })));
+            });
     }
 
     /// <summary>The prompt the plan step sends.</summary>
@@ -228,6 +248,30 @@ public sealed class BriefOutcome
 
     /// <summary>The reviewer's comment, when there was one.</summary>
     public string? Comment { get; set; }
+
+    /// <summary>
+    /// What the abort handler saw of its own children, at the moment it ran.
+    /// </summary>
+    /// <remarks>
+    /// This is the ordering evidence for the cascade, and it is only recorded on the abort path.
+    /// "Both tasks are terminal" is equally consistent with the gate ending for any reason; "the
+    /// child was already terminal when the parent's handler ran" is not. <see langword="null"/> on
+    /// every path that is not an abort.
+    /// </remarks>
+    public List<AbortObservation>? Observed { get; set; }
+}
+
+/// <summary>What one child looked like from inside a parent's abort handler.</summary>
+public sealed class AbortObservation
+{
+    /// <summary>The child task's id.</summary>
+    public string TaskId { get; set; } = string.Empty;
+
+    /// <summary>The child's status at the moment the parent's abort handler read it.</summary>
+    public string Status { get; set; } = string.Empty;
+
+    /// <summary>The child's verdict when it had one, or <see langword="null"/> when it had none yet.</summary>
+    public string? Verdict { get; set; }
 }
 
 /// <summary>

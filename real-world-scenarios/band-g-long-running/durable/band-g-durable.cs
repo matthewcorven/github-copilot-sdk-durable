@@ -111,7 +111,7 @@ if (options.NoMemo)
 }
 
 var control = options.Fault is null ? NoControl.Instance : (Control)new ExitAtStep(options.Fault);
-var workflow = BriefWorkflow.Define(harness, gate, gateway, scene, control);
+var workflow = BriefWorkflow.Define(store, harness, gate, gateway, scene, control);
 harness.Registry.Install(new Extension("band-g", tasks: [workflow, gate]));
 
 
@@ -269,15 +269,13 @@ async Task<int> DecideAsync(bool approved)
 
     Console.WriteLine($"decision:   {result.Note}");
     Console.WriteLine($"on file:    {(result.Decision.Approved ? "approved" : "rejected")} by {result.Decision.Recorder} at {result.Decision.At:O}");
+    Console.WriteLine($"run:        {briefTask.Status}");
 
-    // A decision that landed while the gate was waiting is only a fact once the gate has read it,
-    // so the approving process drives the run rather than leaving that to a third one.
-    if (briefTask.Status != Durable.TaskStatus.Terminal)
-    {
-        gateway.Owner = briefTask.Id;
-        return await ResumeToGateAsync(briefTask.Id, "resumed").ConfigureAwait(false);
-    }
-
+    // Recording and driving are separate verbs on purpose. A decision is a value the store holds;
+    // whether the gate has read it yet is a different fact, and a caller that wants both asks for
+    // both. Fusing them would make the second approval of a live gate impossible to observe — the
+    // first one would already have driven the run to completion, so the second would be refused for
+    // being late rather than for naming a decision that is already on file.
     return result.Recorded ? 0 : 4;
 }
 
@@ -297,6 +295,21 @@ int Inspect()
             && result.TryGetProperty("verdict", out var verdict))
         {
             Console.WriteLine($"verdict:    {verdict.GetString()}");
+        }
+
+        // The cascade's ordering, as the parent's abort handler saw it. Printed only when it was
+        // recorded, so a normal run's output does not grow a line that means nothing.
+        if (value.Result is { ValueKind: JsonValueKind.Object } detail
+            && detail.TryGetProperty("observed", out var observed)
+            && observed.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in observed.EnumerateArray())
+            {
+                var id = entry.TryGetProperty("taskId", out var taskId) ? taskId.GetString() : "?";
+                var status = entry.TryGetProperty("status", out var state) ? state.GetString() : "?";
+                var sawVerdict = entry.TryGetProperty("verdict", out var childVerdict) ? childVerdict.GetString() : null;
+                Console.WriteLine($"observed:   {id} was {status}{(sawVerdict is null ? " with no verdict yet" : $" ({sawVerdict})")} when the abort handler ran");
+            }
         }
     }
 
@@ -499,6 +512,10 @@ internal sealed class Cli
           --as <label>        who is asking, on approve/reject (default: resume)
           --deterministic     the scenario supplies each answer after its turn, so a run needs
                               no model endpoint (the turn itself is unchanged)
+          --live              take each answer from the configured model. This is the default when
+                              neither --live nor --deterministic is given, and naming it makes
+                              that explicit. It needs a runtime that can answer; the recorded
+                              runtime serves a fixed transcript, not a model
           --no-memo           the control run: ignore the memo, so every step attempt calls the
                               model. Used by evidence.sh to measure what the memo saves
         """;
@@ -527,6 +544,16 @@ internal sealed class Cli
     /// <summary>Whether the scenario supplies each answer instead of taking the model's.</summary>
     public bool Deterministic { get; private init; }
 
+    /// <summary>
+    /// Whether the answer is whatever the configured model said.
+    /// </summary>
+    /// <remarks>
+    /// The explicit counterpart of <see cref="Deterministic"/>, so a caller states which it means
+    /// rather than relying on an absence. The two are mutually exclusive; naming both is a usage
+    /// error rather than a precedence rule nobody remembers.
+    /// </remarks>
+    public bool Live { get; private init; }
+
     /// <summary>Whether the control run ignores the memo, so every step attempt calls the model.</summary>
     public bool NoMemo { get; private init; }
 
@@ -542,6 +569,7 @@ internal sealed class Cli
         string? comment = null;
         string? asLabel = null;
         var deterministic = false;
+        var live = false;
         var noMemo = false;
 
         for (var i = 0; i < args.Length; i++)
@@ -577,6 +605,9 @@ internal sealed class Cli
                 case "--deterministic":
                     deterministic = true;
                     break;
+                case "--live":
+                    live = true;
+                    break;
                 case "--no-memo":
                     noMemo = true;
                     break;
@@ -589,6 +620,12 @@ internal sealed class Cli
 
                     return null;
             }
+        }
+
+        if (deterministic && live)
+        {
+            Console.Error.WriteLine("band-g-durable: --deterministic and --live are alternatives; name one.");
+            return null;
         }
 
         return verb is null || run is null
@@ -604,6 +641,7 @@ internal sealed class Cli
                 As = asLabel,
                 Deterministic = deterministic,
                 NoMemo = noMemo,
+                Live = live,
             };
     }
 }
