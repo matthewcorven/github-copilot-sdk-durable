@@ -41,7 +41,14 @@ def reference_fixture_sha256(runtime):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write", action="store_true", help="Capture checked-in output from actual C# execution")
+    parser.add_argument(
+        "--artifacts-path", type=Path, default=None,
+        help="Place build output under this directory instead of the per-user runfile artifact cache",
+    )
     args = parser.parse_args()
+    artifacts_path = args.artifacts_path.resolve() if args.artifacts_path else None
+    if artifacts_path is not None:
+        artifacts_path.mkdir(parents=True, exist_ok=True)
     runtime = (ROOT / "tools/ReplayRuntime/bin/Debug/net10.0/ReplayRuntime").resolve(strict=True)
     fixture_hash = reference_fixture_sha256(runtime)
     env = {**os.environ, "DURABLE_RUNTIME_PATH": str(runtime)}
@@ -65,9 +72,13 @@ def main():
         # NuGetAudit at its default true, so the package graph is still audited there.
         command = ["dotnet", "run", str(source.relative_to(ROOT)), "--verbosity", "quiet",
                    "-p:NoWarn=GHCP001%3BCA2266", "-p:NuGetAudit=false"]
-        result = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
+        # The artifacts path is host-local and must not enter provenance, which is compared
+        # verbatim by both runners; it is an additive option, not part of the captured command.
+        invocation = command + (["--artifacts-path", str(artifacts_path)] if artifacts_path else [])
+        result = subprocess.run(invocation, cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
         if result.returncode:
-            raise RuntimeError(f"{source.name} failed:\n{result.stdout}\n{result.stderr}")
+            where = f"\nbuild output: {artifacts_path}" if artifacts_path else ""
+            raise RuntimeError(f"{source.name} failed:\n{result.stdout}\n{result.stderr}{where}")
         if result.stderr:
             sys.stderr.write(result.stderr)
         output = normalise_output(result.stdout)

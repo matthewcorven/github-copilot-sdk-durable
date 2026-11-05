@@ -42,8 +42,12 @@ def artifacts(root):
 
 
 def capture(root, *args):
+    # File-based apps key their build cache by source path, so a fresh temporary tree would
+    # otherwise mint a full ~545 MB artifact directory in the per-user runfile cache per case
+    # (mostly a copy of the Copilot CLI bundle). Build output belongs inside the throwaway tree.
     return subprocess.run(
-        [sys.executable, "tests/parity/capture_reference.py", *args],
+        [sys.executable, "tests/parity/capture_reference.py", *args,
+         "--artifacts-path", str(root / "artifacts")],
         cwd=root,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
              "DURABLE_RUNTIME_PATH": "/must-not-select-this-runtime",
@@ -71,6 +75,17 @@ class CaptureReferenceTests(unittest.TestCase):
                 for detail in (str(fixture), str(deployed), source_hash, deployed_hash):
                     self.assertIn(detail, result.stderr)
                 self.assertNotIn("Actual C# output verified:", result.stdout)
+
+    def test_artifacts_path_keeps_build_output_inside_the_supplied_directory(self):
+        # A file-based app's build output is keyed by source path, so a throwaway tree would
+        # otherwise mint a full artifact directory in the per-user runfile cache for every
+        # case. The option must actually redirect the build, not merely be accepted.
+        with capture_tree() as root:
+            result = capture(root, "--write")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("Actual C# output verified: 04-watches.cs", result.stdout)
+            self.assertTrue((root / "artifacts" / "bin").is_dir(),
+                            "the supplied artifacts path must receive the build output")
 
     def test_missing_or_invalid_inputs_fail_before_execution_or_writes(self):
         for kind in ("runtime", "source", "deployed", "non-executable", "directory"):
