@@ -3,8 +3,8 @@
   "fault": "late-approval",
   "outcome": "terminal state held",
   "phase": "the gate's recorded 3s deadline passed in a process that did not set it",
-  "detail": "The run was created with a 3-second window and its gate recorded deadline 2026-11-05T17:49:09.578455+00:00. A process started after that deadline re-entered the run: the gate woke at once and recorded 'timed-out', and the workflow concluded on it — task terminal, outcome failed, 'the plan was not approved (timed-out): no decision before the gate's deadline'. The late approval was then refused — 'refused: the workflow is Terminal, so this decision is late' — and the decision document is still absent. The terminal state was not overwritten, and the refusal names the terminal record rather than the document rule, which is the different guard a late approval meets.",
-  "evidence": "run at the gate: waiting, 3 call(s), gate deadline 2026-11-05T17:49:09.578455+00:00\nresume after the deadline (exit 0): task terminal, gate verdict 'timed-out', 3 call(s)\nworkflow concluded: failed — the plan was not approved (timed-out): no decision before the gate's deadline\nlate approval (exit 4): 'refused: the workflow is Terminal, so this decision is late'; decision '(absent)'; task terminal",
+  "detail": "The run was created with a 3-second window and its gate recorded deadline 2026-11-05T17:52:04.654325+00:00. A process started after that deadline re-entered the run: the gate woke at once and recorded 'timed-out', and the workflow concluded on it — task terminal, outcome failed, 'the plan was not approved (timed-out): no decision before the gate's deadline'. The late approval was then refused — 'refused: the workflow is Terminal, so this decision is late' — and the decision document is still absent. The terminal state was not overwritten, and the refusal names the terminal record rather than the document rule, which is the different guard a late approval meets.",
+  "evidence": "run at the gate: waiting, 3 call(s), gate deadline 2026-11-05T17:52:04.654325+00:00\nresume after the deadline (exit 0): task terminal, gate verdict 'timed-out', 3 call(s)\nworkflow concluded: failed — the plan was not approved (timed-out): no decision before the gate's deadline\nlate approval (exit 4): 'refused: the workflow is Terminal, so this decision is late'; decision '(absent)'; task terminal",
   "measurements": {
     "gate_window_seconds": 3,
     "model_calls_at_gate": 3,
@@ -19,8 +19,8 @@
     "dotnet": "10.0.402",
     "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
     "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
-    "commit": "913b596e4d6833258460c7f91a2b71885d414d85",
+    "commit": "54ad46156242b6475af4415b98b88554152574e1",
     "command": "./faults/late-approval.sh --variant durable"
   },
-  "recordedAt": "2026-11-05T17:49:11.916313+00:00"
+  "recordedAt": "2026-11-05T17:52:06.851237+00:00"
 }

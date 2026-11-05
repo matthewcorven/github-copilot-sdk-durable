@@ -91,7 +91,16 @@ if ! "$PYTHON" "$HERE/lib/summarise.py" "$RESULTS_DIR" "$STATUS_FILE" > "$RESULT
   log "run-all.sh: the summary could not be rendered; a fault has no result for a variant"
   exit 1
 fi
-"$PYTHON" "$HERE/lib/summarise.py" "$RESULTS_DIR" "$STATUS_FILE" --md > "$RESULTS_DIR/summary.md" || exit 1
+{
+  "$PYTHON" "$HERE/lib/summarise.py" "$RESULTS_DIR" "$STATUS_FILE" --md || exit 1
+  echo
+  echo "## The band's three-way comparison, with the measured cells read from these results"
+  echo
+  echo "The middle column was not run. Its marking is the same one G2 gave it, and it is carried here so a"
+  echo "reader cannot infer a measurement that does not exist."
+  echo
+  "$PYTHON" "$HERE/lib/three_way.py" "$RESULTS_DIR" || exit 1
+} > "$RESULTS_DIR/summary.md"
 log "wrote faults/results/summary.txt and faults/results/summary.md"
 
 if [ "$failures" -ne 0 ]; then

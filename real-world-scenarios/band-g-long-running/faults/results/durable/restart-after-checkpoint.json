@@ -16,8 +16,8 @@
     "dotnet": "10.0.402",
     "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
     "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
-    "commit": "913b596e4d6833258460c7f91a2b71885d414d85",
+    "commit": "54ad46156242b6475af4415b98b88554152574e1",
     "command": "./faults/restart-after-checkpoint.sh --variant durable"
   },
-  "recordedAt": "2026-11-05T17:48:56.272902+00:00"
+  "recordedAt": "2026-11-05T17:51:51.171445+00:00"
 }

@@ -93,9 +93,26 @@ Two of those six are not a loss for the baseline and should not be read as one: 
 outage and it has nothing to abort. One is a tie in outcome and not in mechanism: both resume, and the
 count is what differs. The counts are in `faults/results/` and rendered in `faults/results/summary.md`.
 
-```bash
-./faults/run-all.sh          # both variants, every fault and control
-```
+### The three-way comparison, with the measured cells
+
+Every measured cell below is read from `faults/results/` by `faults/lib/three_way.py`, so it cannot drift
+from the run. The middle column is marked exactly as G2 marked it — **not run** — and the marking is
+carried here so a reader cannot infer a measurement that does not exist.
+
+| | File checkpoint (baseline, #176) | Durable Task (agent-framework-durable-extension) | This variant (#177) |
+| --- | --- | --- | --- |
+| **Restart/resume** | **Yes, measured.** `kill-during-wait`: lost; `restart-after-checkpoint`: resumed, completed work re-done after 2 calls in the stopped process. | **Not run here.** Documented: completed steps are not repeated after a restart. The durable-extension sample was not stood up (no prerelease package on NuGet — see the band README). | **Yes, measured.** `kill-during-wait`: wait survived; `restart-after-checkpoint`: resumed, no calls repeated. |
+| **Re-does model calls on resume** | **Yes, measured.** The stopped resumed process made 2 calls; the fresh resume made 2 more for the same turns, contents identical by request shape. | **Not run here.** Documented: replay does not re-run completed agent executions. | **No, measured.** The resume added **0** calls and served the re-entered step from the memo (1 memo hit(s)). |
+| **Domain state transactional** | **No.** The checkpoint is the workflow's state; a completed turn inside a process is not in it, which is what the call count above shows. | **Not run here.** Documented as partial: workflow and conversation state are checkpointed, a side effect is not. | **Within the run.** A step's checkpoint, its memo and its ledger entry commit together: `store-outage` refused the commit (exit 70), left the run 'waiting' with the decision still 'alice approved', and the store file byte-identical at 31903 bytes. |
+| **What a decision is** | **A request/response pair, not a value.** `duplicate-approval`: doubled — a second resume approves again. `late-approval`: applied again — the finished gate checkpoint is still answerable. | **Not run here.** An external event on an orchestration instance, with a timer for the timeout. | **A first-writer-wins document.** `duplicate-approval`: second delivery refused, and the refusal did not come from the terminal guard (0). `late-approval`: terminal state held — refused: the workflow is Terminal, so this decision is late. |
+| **A decision after a terminal state** | **Applied again.** `late-approval`: applied again. There is no terminal record to refuse it. | **Not run here.** The runtime refuses an event raised after completion; not exercised. | **Held.** `late-approval`: terminal state held — refused: the workflow is Terminal, so this decision is late. |
+| **Abort mid-wait** | **Not exercised.** The baseline's port advertises exactly two modes, 'run' and 'resume' — checked in this run, where an unknown mode answers 'Use run or resume'. | **Not run here.** Orchestration termination exists; a cascade over child work is not described. | **Cascades, measured.** cancelled — the parent's handler saw the child already terminal (t59=Terminal:aborted). |
+| **Operational weight** | A directory on disk, one writer (the framework's store refuses a second). | **Not run here.** DTS + emulator, per the documented prerequisites. | A store file, one writer. Measured only in that shape: no server, no scheduler. |
+
+Read the middle column's markings as a claim about this repository, not about the extension: it was not
+stood up, so every sentence there is documentation.
+
+
 
 ## Prerequisites
 

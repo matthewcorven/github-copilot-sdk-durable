@@ -4,7 +4,7 @@
   "outcome": "approved in time",
   "phase": "approved inside a 600s window (the control)",
   "detail": "Control: the same flow with the approval delivered inside the window. The approval was recorded (exit 0, decision 'alice approved'), the run was driven (exit 0) and ended terminal with verdict 'approved' after 4 call(s). This is what the late approval is measured against: an approval that arrives on time is applied, so a refusal in the fault run is the lateness and not the approval.",
-  "evidence": "run at the gate: waiting, 3 call(s), gate deadline 2026-11-05T17:59:13.714651+00:00\non-time approval (exit 0): decision 'alice approved'\ndriven (exit 0): terminal, verdict 'approved', 4 call(s)",
+  "evidence": "run at the gate: waiting, 3 call(s), gate deadline 2026-11-05T18:02:08.757232+00:00\non-time approval (exit 0): decision 'alice approved'\ndriven (exit 0): terminal, verdict 'approved', 4 call(s)",
   "measurements": {
     "gate_window_seconds": 600,
     "model_calls_at_gate": 3,
@@ -17,8 +17,8 @@
     "dotnet": "10.0.402",
     "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
     "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
-    "commit": "913b596e4d6833258460c7f91a2b71885d414d85",
+    "commit": "54ad46156242b6475af4415b98b88554152574e1",
     "command": "./faults/late-approval.sh --variant durable --fault-not-injected"
   },
-  "recordedAt": "2026-11-05T17:49:14.691572+00:00"
+  "recordedAt": "2026-11-05T17:52:09.798910+00:00"
 }

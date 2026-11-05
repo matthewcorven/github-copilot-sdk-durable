@@ -3,20 +3,20 @@
   "fault": "kill-during-wait-control",
   "outcome": "reached-the-gate",
   "phase": "the manager's first turn, released (the control)",
-  "detail": "Control: the same steps with the held turn released instead of the process killed. The process exited 0, wrote gate checkpoint 05f8c946057d47b28b79ca673e4c5475, and the run is at its gate (2 checkpoint file(s), 2 model call(s) in that process). The killed run is measured against this: releasing instead of killing is the only difference, and the killed one left no gate record at all.",
-  "evidence": "killed pid none (kill -9, confirmed gone) at: the process working out the plan, inside its manager turn, before any gate checkpoint exists\ngate checkpoint before: (absent)\nafter (fresh 'resume' process, exit 0): gate checkpoint 05f8c946057d47b28b79ca673e4c5475, 2 checkpoint file(s), 2 model call(s)\n=== Stage 2: resume from checkpoint and approve plan ===\nResuming from checkpoint 05f8c946057d47b28b79ca673e4c5475 (session 67cc83cd81f8465580844582af8d7ddc)\n  event: RequestInfoEvent 263413ede843401cae2d3dd28e58adec",
+  "detail": "Control: the same steps with the held turn released instead of the process killed. The process exited 0, wrote gate checkpoint 71dba68fa8204a6db753569ea4fcb767, and the run is at its gate (2 checkpoint file(s), 2 model call(s) in that process). The killed run is measured against this: releasing instead of killing is the only difference, and the killed one left no gate record at all.",
+  "evidence": "killed pid none (kill -9, confirmed gone) at: the process working out the plan, inside its manager turn, before any gate checkpoint exists\ngate checkpoint before: (absent)\nafter (fresh 'resume' process, exit 0): gate checkpoint 71dba68fa8204a6db753569ea4fcb767, 2 checkpoint file(s), 2 model call(s)\n=== Stage 2: resume from checkpoint and approve plan ===\nResuming from checkpoint 71dba68fa8204a6db753569ea4fcb767 (session fff53f63c2df4aceb7d0c344c4c57902)\n  event: RequestInfoEvent 037055147a324a1892592ca0eb38e6a1",
   "measurements": {
     "model_calls_held_process": 2,
     "resume_exit": 0,
-    "gate_checkpoint_after": "05f8c946057d47b28b79ca673e4c5475",
+    "gate_checkpoint_after": "71dba68fa8204a6db753569ea4fcb767",
     "checkpoints_after": "2"
   },
   "harness": {
     "dotnet": "10.0.402",
     "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
     "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
-    "commit": "913b596e4d6833258460c7f91a2b71885d414d85",
+    "commit": "54ad46156242b6475af4415b98b88554152574e1",
     "command": "./faults/kill-during-wait.sh --variant baseline --fault-not-injected"
   },
-  "recordedAt": "2026-11-05T17:46:53.056040+00:00"
+  "recordedAt": "2026-11-05T17:49:49.117468+00:00"
 }
