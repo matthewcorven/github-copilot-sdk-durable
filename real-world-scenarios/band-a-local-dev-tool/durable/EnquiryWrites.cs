@@ -32,6 +32,12 @@ public readonly record struct PhaseWrite(bool Written, string Phase, string? Rep
 ///     its report is never replaced. A late wakeup, a late tool call, and a phase that finished
 ///     after the enquiry was rejected all meet this check, so none can overwrite the decision that
 ///     ended the enquiry. This is requirement 3.
+///     <para>
+///     The check lives in every writer, not only in <see cref="MoveToAsync"/>: the phase tools
+///     commit transitions, but a tool result and an intent report commit transcript entries, and
+///     a late one of those would grow a terminal document without moving its phase. All of them
+///     read <see cref="EnquiryState.IsTerminal"/> inside their own transaction.
+///     </para>
 ///     </description>
 ///   </item>
 ///   <item>
@@ -203,6 +209,13 @@ public static class EnquiryWrites
     /// answer exists, so the report arrives one commit later. This can only fill a null report on
     /// an enquiry that is already <c>done</c>: it never changes a phase, and it refuses an enquiry
     /// that ended any other way.
+    /// <para>
+    /// This is the one write that deliberately targets a terminal document — filling the report is
+    /// its entire purpose — so it does not carry the <see cref="EnquiryState.IsTerminal"/> guard
+    /// that the other writes do. Its own guard is narrower and still inside the commit: the
+    /// document must be <c>done</c> and its report must still be null, so a second attach is a
+    /// no-op and a rejected enquiry can never acquire a report.
+    /// </para>
     /// </remarks>
     public static Task<PhaseWrite> AttachReportAsync(
         DurableStore store,
@@ -233,8 +246,71 @@ public static class EnquiryWrites
             return new PhaseWrite(true, EnquiryPhases.Name(state.Phase), state.Report);
         });
 
+    /// <summary>
+    /// Appends the answer of the turn the task is currently running.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not guarded on <see cref="EnquiryState.IsTerminal"/>, and deliberately not
+    /// reachable from a tool. This is the one write that belongs to a turn that may itself have
+    /// ended the enquiry: a model that reports <c>rejected_garbage</c> through its phase tool and
+    /// then answers has produced both in the same turn, and dropping the answer would throw away
+    /// the reason it gave. It cannot be a late write, because the task is still running: the store
+    /// refuses any task commit after the terminal outcome, so this runs only while the turn that
+    /// wrote it is in flight.
+    /// </remarks>
+    public static Task AppendTurnAnswerAsync(DurableStore store, string conversationId, string answer) =>
+        store.CommitAsync(async tx =>
+        {
+            var draft = tx.Doc(EnquiryDurable.Enquiry, conversationId);
+            var state = draft.Value;
+            var entry = tx.AppendEntry(conversationId, "answer", answer);
+            state.Entries.Add(new EnquiryEntry
+            {
+                EntryId = entry,
+                Kind = "answer",
+                Text = answer,
+                At = DateTimeOffset.UtcNow.ToString("O"),
+            });
+            draft.Save(entry);
+
+            await Task.CompletedTask;
+        });
+
+    /// <summary>
+    /// Appends a note the task writes about its own work, such as a lost deliverable.
+    /// </summary>
+    /// <remarks>
+    /// A note is written <em>after</em> the enquiry reached a terminal phase — it records what
+    /// happened to a finished enquiry — so it does not carry the terminal guard. It is not the
+    /// model's transcript and cannot inflate it: the recovery path appends at most one of these
+    /// per outcome, and the outcome is guarded by the task's own memo.
+    /// </remarks>
+    public static Task AppendNoteAsync(DurableStore store, string conversationId, string text) =>
+        store.CommitAsync(async tx =>
+        {
+            var draft = tx.Doc(EnquiryDurable.Enquiry, conversationId);
+            var state = draft.Value;
+            var entry = tx.AppendEntry(conversationId, "note", text);
+            state.Entries.Add(new EnquiryEntry
+            {
+                EntryId = entry,
+                Kind = "note",
+                Text = text,
+                At = DateTimeOffset.UtcNow.ToString("O"),
+            });
+            draft.Save(entry);
+
+            await Task.CompletedTask;
+        });
+
     /// <summary>Appends a transcript entry that is not a phase transition.</summary>
-    public static Task AppendAsync(
+    /// <remarks>
+    /// The terminal guard is here, inside the commit, not at the call site: a tool result that
+    /// arrives after the enquiry ended is exactly the late write requirement 3 is about, and a
+    /// pre-check outside the transaction would let it slip between the read and the write.
+    /// </remarks>
+    /// <returns>Whether the entry was written; a terminal document leaves its transcript alone.</returns>
+    public static Task<bool> AppendAsync(
         DurableStore store,
         string conversationId,
         string kind,
@@ -245,6 +321,12 @@ public static class EnquiryWrites
         {
             var draft = tx.Doc(EnquiryDurable.Enquiry, conversationId);
             var state = draft.Value;
+            if (state.IsTerminal)
+            {
+                await Task.CompletedTask;
+                return false;
+            }
+
             var entry = tx.AppendEntry(conversationId, kind, text);
             state.Entries.Add(new EnquiryEntry
             {
@@ -258,14 +340,26 @@ public static class EnquiryWrites
             draft.Save(entry);
 
             await Task.CompletedTask;
+            return true;
         });
 
     /// <summary>The intent the model last reported, committed as its own entry.</summary>
-    public static Task ReportIntentAsync(DurableStore store, string conversationId, string intent) =>
+    /// <remarks>
+    /// Guarded inside the commit for the same reason as <see cref="AppendAsync"/>: an intent
+    /// reported by a turn that outlived a rejection must not write into the terminal record.
+    /// </remarks>
+    /// <returns>Whether the intent was written; a terminal document keeps the intent it had.</returns>
+    public static Task<bool> ReportIntentAsync(DurableStore store, string conversationId, string intent) =>
         store.CommitAsync(async tx =>
         {
             var draft = tx.Doc(EnquiryDurable.Enquiry, conversationId);
             var state = draft.Value;
+            if (state.IsTerminal)
+            {
+                await Task.CompletedTask;
+                return false;
+            }
+
             state.Intent = intent;
             var entry = tx.AppendEntry(conversationId, "intent", intent);
             state.Entries.Add(new EnquiryEntry
@@ -278,9 +372,16 @@ public static class EnquiryWrites
             draft.Save(entry);
 
             await Task.CompletedTask;
+            return true;
         });
 
     /// <summary>Records that this process re-entered an interrupted enquiry.</summary>
+    /// <remarks>
+    /// This writes the restart counter and an entry that is not part of the enquiry's transcript
+    /// semantics, so it is deliberately <em>not</em> guarded on the terminal phase: the point of
+    /// the record is that a process picked the enquiry up, including a resume that then finds it
+    /// already finished.
+    /// </remarks>
     public static Task NoteRestartAsync(DurableStore store, string conversationId) =>
         store.CommitAsync(async tx =>
         {

@@ -126,6 +126,41 @@ public static class EnquiryTools
             sections: [new PromptSection("instructions", _ => Task.FromResult<string?>(SystemPrompt), tag: false)],
             tasks: [task]);
 
+    /// <summary>
+    /// Calls one of the enquiry's tools the way the runtime calls it, for the late-wakeup probe.
+    /// </summary>
+    /// <remarks>
+    /// The phase writers are not the only writes an enquiry has. <c>search_properties</c> commits a
+    /// tool entry and <c>report_intent</c> commits an intent entry, and neither touches the phase —
+    /// so a probe that only raced phase writers would report a terminal document as safe while
+    /// leaving two of its write paths unexercised. The evidence uses this to fire the real tool
+    /// bodies at a rejected document.
+    /// </remarks>
+    /// <param name="store">The store the tools write through.</param>
+    /// <param name="database">The listings the search tool reads.</param>
+    /// <param name="conversationId">The document the call is attributed to.</param>
+    /// <param name="toolName">The tool to call: <c>search_properties</c> or <c>report_intent</c>.</param>
+    /// <param name="argument">The intent text, for <c>report_intent</c>; ignored otherwise.</param>
+    /// <returns>The tool's answer, as the model would receive it.</returns>
+    public static string CallForProbe(
+        DurableStore store,
+        PropertyDatabase database,
+        string conversationId,
+        string toolName,
+        string argument = "a late wakeup") =>
+        toolName switch
+        {
+            "search_properties" => Search(store, database, conversationId, new PropertyFilter
+            {
+                City = "Toronto",
+                MinBedrooms = 3,
+                Limit = 3,
+            }, reportWrite: true),
+            "report_intent" => ReportIntent(store, conversationId, argument, reportWrite: true),
+            _ => throw new ArgumentOutOfRangeException(nameof(toolName), toolName,
+                "the probe knows only the two entry-writing tools"),
+        };
+
     private static string SetPhase(DurableStore store, string? conversationId, string phase)
     {
         if (conversationId is null)
@@ -146,21 +181,31 @@ public static class EnquiryTools
             : $"phase is now {write.Phase}";
     }
 
-    private static string ReportIntent(DurableStore store, string? conversationId, string intent)
+    private static string ReportIntent(
+        DurableStore store,
+        string? conversationId,
+        string intent,
+        bool reportWrite = false)
     {
         if (conversationId is null)
         {
             return "no conversation is bound to this session";
         }
 
-        var state = EnquiryDurable.Read(store, conversationId);
-        if (state.IsTerminal)
+        // The terminal check is inside the commit, so this call is safe to make unconditionally:
+        // a report that loses the race with a rejection is refused by the same transaction that
+        // would have written it, rather than by a read that a concurrent commit could invalidate.
+        var written = EnquiryWrites.ReportIntentAsync(store, conversationId, intent)
+            .GetAwaiter().GetResult();
+        if (!written)
         {
-            return $"ignored: this enquiry is already {EnquiryPhases.Name(state.Phase)}";
+            var state = EnquiryDurable.Read(store, conversationId);
+            return reportWrite
+                ? $"refused by the terminal guard: this enquiry is already {EnquiryPhases.Name(state.Phase)}"
+                : $"ignored: this enquiry is already {EnquiryPhases.Name(state.Phase)}";
         }
 
-        EnquiryWrites.ReportIntentAsync(store, conversationId, intent).GetAwaiter().GetResult();
-        return $"intent is now {intent}";
+        return reportWrite ? "the terminal guard would have refused it, but it was written" : $"intent is now {intent}";
     }
 
     /// <summary>The filters one search tool call supplies.</summary>
@@ -185,7 +230,8 @@ public static class EnquiryTools
         DurableStore store,
         PropertyDatabase database,
         string? conversationId,
-        PropertyFilter filter)
+        PropertyFilter filter,
+        bool reportWrite = false)
     {
         // The tool's sentinel values are translated here, so the query only carries the filters
         // the model actually supplied. Passing an empty string through would be a filter that
@@ -209,8 +255,17 @@ public static class EnquiryTools
             // browser showed before it died.
             var matches = results.ToList();
             var summary = $"{matches.Count} match(es)";
-            EnquiryWrites.AppendAsync(store, conversationId, "tool", summary, toolName: "search_properties", success: true)
+            var written = EnquiryWrites
+                .AppendAsync(store, conversationId, "tool", summary, toolName: "search_properties", success: true)
                 .GetAwaiter().GetResult();
+
+            if (reportWrite)
+            {
+                var state = EnquiryDurable.Read(store, conversationId);
+                return written
+                    ? $"the terminal guard would have refused it, but it was written into {EnquiryPhases.Name(state.Phase)}"
+                    : $"refused by the terminal guard: this enquiry is already {EnquiryPhases.Name(state.Phase)}";
+            }
         }
 
         return JsonSerializer.Serialize(results.ToList(), DurableJson.Options);

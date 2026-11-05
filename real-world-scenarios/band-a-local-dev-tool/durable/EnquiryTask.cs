@@ -30,6 +30,13 @@ public static class EnquiryTask
     /// </remarks>
     public const int MaxTurns = 8;
 
+    /// <summary>The task memo that records a recovery attempt, so it happens at most once.</summary>
+    public const string RecoveryMemoKey = "report-recovery";
+
+    private const string RecoveryAttempted = "attempted";
+    private const string RecoveryRecovered = "recovered";
+    private const string RecoveryFailed = "failed";
+
     /// <summary>Runs one enquiry, resuming from its checkpoint.</summary>
     public static async Task<TaskCommit> Run(
         DurableStore store,
@@ -38,12 +45,17 @@ public static class EnquiryTask
         EnquiryCheckpoint checkpoint,
         TaskRuntime runtime)
     {
+        // The answer the previous process was holding when it died. Re-reading the document is
+        // not enough to recover it: the model had reported done, the process was killed before the
+        // answer was committed, and nothing on the document holds it.
+        var carried = checkpoint.Answer;
+
         for (var turn = checkpoint.Turns; turn < MaxTurns; turn++)
         {
             var document = EnquiryDurable.Read(store, input.ConversationId);
             if (document.IsTerminal)
             {
-                return await Finish(runtime, document);
+                return await Finish(runtime, await RecoverAsync(store, send, input, document, carried, runtime));
             }
 
             var phase = EnquiryPhases.Name(document.Phase);
@@ -61,18 +73,24 @@ public static class EnquiryTask
 
             if (answer.Length > 0)
             {
-                await EnquiryWrites.AppendAsync(store, input.ConversationId, "answer", answer);
+                await EnquiryWrites.AppendTurnAnswerAsync(store, input.ConversationId, answer);
             }
 
             // The turn boundary is committed as soon as the turn is over, before the driver's
-            // transition. A process that dies here leaves a checkpoint naming the phase it was
-            // working on, so the restart can tell "the prompt was sent" from "the prompt was
-            // never sent" — which is the whole reason the count is durable.
+            // transition. The checkpoint names the phase the turn worked on and carries the
+            // answer it produced, so a process that dies before the answer is committed can
+            // still attach it rather than losing it.
+            //
+            // What this boundary does *not* claim is that the turn is finished: the phase the
+            // document holds is the source of truth for what the model actually did, and a turn
+            // whose turn-entry commit was interrupted is re-run. That is the documented cost of
+            // this design, not a guarantee it can make.
             var boundary = new EnquiryCheckpoint
             {
                 Phase = EnquiryPhases.Run,
                 EnquiryPhase = phase,
                 Turns = turn + 1,
+                Answer = answer,
             };
             var boundaryCommit = await runtime.CommitAsync(
                 () => TaskCommit.Running(DurableJson.ToElement(boundary)));
@@ -86,15 +104,7 @@ public static class EnquiryTask
             var afterTurn = EnquiryDurable.Read(store, input.ConversationId);
             if (afterTurn.IsTerminal)
             {
-                if (afterTurn.IsDone && afterTurn.Report is null && answer.Length > 0)
-                {
-                    // The model ended the enquiry with its phase tool and only then answered, so
-                    // the answer is the report. It is attached to the terminal record rather
-                    // than dropped.
-                    await EnquiryWrites.AttachReportAsync(store, input.ConversationId, answer);
-                }
-
-                return await Finish(runtime, EnquiryDurable.Read(store, input.ConversationId));
+                return await Finish(runtime, await AttachAnswerAsReportAsync(store, input.ConversationId, answer));
             }
 
             // The model normally moved the phase itself through its tool calls, so the driver
@@ -111,16 +121,7 @@ public static class EnquiryTask
             var settled = EnquiryDurable.Read(store, input.ConversationId);
             if (settled.IsTerminal)
             {
-                if (settled.IsDone && settled.Report is null && answer.Length > 0)
-                {
-                    // The model ended the enquiry with its phase tool before its answer existed,
-                    // so the answer is the report. It is attached to the terminal record rather
-                    // than dropped.
-                    await EnquiryWrites.AttachReportAsync(store, input.ConversationId, answer);
-                    settled = EnquiryDurable.Read(store, input.ConversationId);
-                }
-
-                return await Finish(runtime, settled);
+                return await Finish(runtime, await AttachAnswerAsReportAsync(store, input.ConversationId, answer));
             }
 
             var advanced = new EnquiryCheckpoint
@@ -145,13 +146,127 @@ public static class EnquiryTask
             $"the enquiry did not reach a terminal phase in {MaxTurns} turns"));
     }
 
+    /// <summary>
+    /// What a terminal document still owes its caller before the task may finish.
+    /// </summary>
+    /// <remarks>
+    /// A <c>done</c> enquiry has exactly one deliverable: the report. A process killed between the
+    /// model reporting <c>done</c> and the answer being committed leaves a terminal document with
+    /// <see cref="EnquiryState.Report"/> null, and the resumed task would otherwise commit
+    /// <c>completed</c> with no report at all — a lost enquiry that still looks successful. The
+    /// checkpoint's answer covers a kill after a turn boundary; it does not cover a kill inside
+    /// the tool call that reported <c>done</c>, so both cases are handled here.
+    /// </remarks>
+    private static async Task<EnquiryState> RecoverAsync(
+        DurableStore store,
+        Func<EnquiryInput, string, CancellationToken, Task<string>> send,
+        EnquiryInput input,
+        EnquiryState document,
+        string? carried,
+        TaskRuntime runtime)
+    {
+        if (!document.IsDone || document.Report is { Length: > 0 })
+        {
+            return document;
+        }
+
+        // The checkpoint's answer is the cheapest recovery: it is the answer the dead process was
+        // already holding, so nothing has to be asked for again.
+        if (carried is { Length: > 0 })
+        {
+            await EnquiryWrites.AttachReportAsync(store, input.ConversationId, carried);
+            return EnquiryDurable.Read(store, input.ConversationId);
+        }
+
+        // Nothing durable holds the deliverable, so it has to be asked for. The attempt is
+        // recorded in the task's own memo *before* the prompt goes out, and the outcome replaces
+        // it afterwards. A process killed during the recovery therefore resumes with the memo
+        // already set and does not dispatch a second prompt, and a second resume of a finished
+        // recovery adds nothing to the transcript.
+        if (await runtime.MemoAsync(RecoveryMemoKey) is not null)
+        {
+            return document;
+        }
+
+        await runtime.MemoAsync(RecoveryMemoKey, DurableJson.ToElement(EnquiryTask.RecoveryAttempted));
+        await EnquiryWrites.AppendNoteAsync(
+            store, input.ConversationId, "the report was lost; asking the model for it again");
+
+        try
+        {
+            var answer = await send(
+                input,
+                $"<enquiry>{input.Enquiry}</enquiry>\n<phase>done</phase>\n" +
+                "This enquiry is already marked done but its report was never saved. Write the " +
+                "salesperson's report again now, exactly as before.",
+                runtime.CancellationToken);
+
+            if (answer.Length > 0)
+            {
+                // The attach and the note land in document reads that follow, so the memo is set
+                // last: a resume between them re-enters with the memo set and simply re-finishes.
+                await EnquiryWrites.AttachReportAsync(store, input.ConversationId, answer);
+                await EnquiryWrites.AppendNoteAsync(store, input.ConversationId, "the report was recovered");
+                await runtime.MemoAsync(RecoveryMemoKey, DurableJson.ToElement(RecoveryRecovered));
+            }
+            else
+            {
+                await EnquiryWrites.AppendNoteAsync(
+                    store, input.ConversationId, "the report could not be re-derived");
+                await runtime.MemoAsync(RecoveryMemoKey, DurableJson.ToElement(RecoveryFailed));
+            }
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            // The report cannot be re-derived. The enquiry is still finished, so the terminal
+            // outcome stands; saying so in the record is the honest result.
+            await EnquiryWrites.AppendNoteAsync(
+                store, input.ConversationId, $"the report could not be recovered: {error.Message}");
+            await runtime.MemoAsync(RecoveryMemoKey, DurableJson.ToElement(RecoveryFailed));
+        }
+
+        return EnquiryDurable.Read(store, input.ConversationId);
+    }
+
+    /// <summary>
+    /// Makes the turn's answer the report of a <c>done</c> enquiry that has none yet.
+    /// </summary>
+    /// <remarks>
+    /// A model that reports <c>done</c> through its phase tool ends the enquiry before its final
+    /// answer exists, so the answer arrives one commit later and is written onto the already
+    /// terminal document. It can only fill a null report on an enquiry that ended in
+    /// <c>done</c>: <see cref="EnquiryWrites.AttachReportAsync"/> refuses every other terminal
+    /// phase, so a rejection never acquires a report and a second attach is a no-op.
+    /// </remarks>
+    private static async Task<EnquiryState> AttachAnswerAsReportAsync(
+        DurableStore store,
+        string conversationId,
+        string answer)
+    {
+        await EnquiryWrites.AttachReportAsync(store, conversationId, answer);
+        return EnquiryDurable.Read(store, conversationId);
+    }
+
     /// <summary>Commits the terminal outcome the document already reached.</summary>
-    private static Task<TaskCommit> Finish(TaskRuntime runtime, EnquiryState document) =>
-        runtime.CommitAsync(() => TaskCommit.Completed(DurableJson.ToElement(new EnquiryOutcome
+    /// <param name="runtime">The task runtime that commits the outcome.</param>
+    /// <param name="document">The terminal document.</param>
+    /// <param name="carried">
+    /// The answer an interrupted process held in its checkpoint, or null when this process ran the
+    /// turn. It is the last resort for a report the document never got.
+    /// </param>
+    private static Task<TaskCommit> Finish(TaskRuntime runtime, EnquiryState document, string? carried = null)
+    {
+        // A process killed between the model reporting done and the answer committing leaves a
+        // terminal document with no report and nothing else on it that holds the answer. The
+        // checkpoint is the only place it survives — empty at the moment of the kill, because the
+        // commit never happened, and filled here when the boundary carried it forward.
+        var report = document.Report ?? (document.IsDone && carried is { Length: > 0 } ? carried : null);
+        return runtime.CommitAsync(() => TaskCommit.Completed(DurableJson.ToElement(new EnquiryOutcome
         {
             Phase = EnquiryPhases.Name(document.Phase),
-            Report = document.Report,
+            Report = report,
         })));
+    }
 
     /// <summary>The prompt one phase sends.</summary>
     /// <remarks>

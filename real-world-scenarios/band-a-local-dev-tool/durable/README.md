@@ -14,15 +14,15 @@ BAND_A_STORE=/path/store.jsonl ./run.sh   # resume a store from an earlier run
 | Path | What it is |
 | --- | --- |
 | `EnquiryState.cs` | The enquiry document: phase, intent, report, transcript, restart count, hide time. |
-| `EnquiryCheckpoint.cs` | The task checkpoint: the task phase key, the enquiry phase it mirrors, the pass count. |
+| `EnquiryCheckpoint.cs` | The task checkpoint: the task phase key, the enquiry phase it mirrors, the turn count, and the answer a killed process was holding. |
 | `EnquiryDurable.cs` | The document definition, the task factory, and the read helper. |
-| `EnquiryTask.cs` | The state machine: one pass over the enquiry's committed phase per iteration. |
-| `EnquiryWrites.cs` | Every guarded write: the terminal rule, the forward-only rule, the compare-and-swap. |
+| `EnquiryTask.cs` | The state machine: one pass over the enquiry's committed phase per iteration, plus the `done`-without-a-report recovery. |
+| `EnquiryWrites.cs` | Every write: the terminal rule on each path that would add to a finished enquiry, the forward-only rule, and the compare-and-swap. |
 | `EnquiryStore.cs` | The durable host: opens the store, resumes unfinished enquiries, maps sessions. |
 | `ExitSeam.cs` | `BAND_A_EXIT_AFTER_PHASE`: the deterministic kill point. |
 | `AppState.cs` | The read-only projection the renderer uses. There is no dictionary. |
 | `Headless.cs` | The command-line driver the evidence runs use. |
-| `fixtures/` | Recorded transcripts for the deterministic evidence stages. |
+| `fixtures/` | Recorded transcripts for the deterministic evidence stages: `enquiry.json` (a completed enquiry), `concurrent.json` (two customers), `rejection.json` (a spam rejection) and `rejection-tool.json` (a rejection whose turn keeps calling tools after it). |
 | `evidence/` | Captured output, with the commands that produced it. |
 
 ## The baseline, and what is different
@@ -41,8 +41,19 @@ The baseline is not modified. Its defects are the comparison.
 
 **A checkpoint is one committed phase transition.** Each transition writes three things in one
 transaction: the enquiry document's new phase, the transcript entry that records it, and — when
-the task is the writer — the task checkpoint. A process that dies at any point therefore restarts
-from either the phase before the transition or the phase after it, never from part of one.
+the task is the writer — the task checkpoint. A process that dies *between* two transitions
+therefore restarts at the transition after the last one that committed; it cannot restart on a
+half-written document.
+
+**A process that dies inside a model turn re-runs that turn on resume, so the turn's tool calls
+happen again.** The checkpoint boundary is the turn, not the tool call inside it. Nothing in the
+store records "this turn's answer was committed": the turn's tool calls are committed as they
+happen, the answer is not, and a restart has no way to tell a turn that finished from a turn that
+had just started. Stage 6 of `evidence.sh` measures the cost on the recorded runtime — a kill after
+`writing_report` resumes to **12** transcript entries where an uninterrupted run of the same
+fixture ends at **9** — and stage 6b prints the duplicated `intent`/`tool` lines that make up the
+difference. This is a documented limit, not a guarantee: a real system would reconcile the
+interrupted turn against the native session instead of re-sending it.
 
 Where the boundary sits was the design decision, and it is not the obvious one. The baseline's
 unit of work is a whole enquiry: one Copilot session, one run loop, one dictionary entry. Here the
@@ -57,14 +68,17 @@ unit of work is a **phase pass** — one prompt, one model turn, one transition 
    it during the validation pass. If rejection could only be committed at a phase boundary, the
    pass would have to complete first, and the enquiry would keep running while it was already
    decided. Committing the phase from the tool call is what makes requirement 3 possible.
-3. **A phase pass is the smallest step that has an observable side effect.** Nothing smaller
-   (a tool call) is worth a checkpoint on its own: the tool's effect is a row in the transcript and
-   the model's next message, both of which the phase's commit covers.
+3. **A phase pass is the smallest step worth a checkpoint.** A single tool call is not: its effect
+   is a row in the transcript, and the model's next message follows from it within the same turn.
+   The cost of stopping at the turn is the one stated above — an interrupted turn is re-run — and
+   it is accepted rather than paid for with a checkpoint per tool call.
 
 Two boundaries are deliberately **not** separate commits:
 
 - **Intent reports** are their own commit, but not their own checkpoint: `report_intent` writes the
-  document without touching the task. Restarting does not replay an intent; it is display state.
+  document without touching the task. A restart does not deliberately replay an intent — it is
+  display state — but an intent written during an interrupted turn is written again when that turn
+  runs again, which is the duplication stage 6 measures.
 - **The report attach** is a separate commit, not a second checkpoint. The model reports `done`
   through its phase tool and only then answers; the answer is written onto the already-terminal
   document. It cannot change the phase, so it cannot be a transition.
@@ -80,16 +94,30 @@ All five are exercised by `./evidence.sh`; the captured output is in
 2. **Each phase transition is a committed checkpoint.** `EnquiryTask.Run` commits the pass boundary
    and the next phase; `BAND_A_EXIT_AFTER_PHASE=searching` kills the process on the commit path
    (stage 1, exit code 42) and a new process resumes that store at `searching` and finishes it
-   (stage 2).
+   (stage 2). The boundary is the transition, so a kill *between* transitions resumes cleanly;
+   a kill *inside* a turn re-runs it, which is stage 6 and the first known limitation below.
 3. **A rejection is terminal and a late wakeup cannot overwrite it.** Stage 3 races four phase
-   moves and a report attach against a `rejected_garbage` document: all five are refused, the
-   phase does not move and the transcript does not grow. Stage 3b restarts the same store and the
-   rejection is still there — the baseline's timer would have deleted it.
+   moves, the two entry-writing tools (`search_properties`, `report_intent`) and a report attach
+   against a `rejected_garbage` document: all seven are refused, the phase does not move and the
+   transcript does not grow. Stage 3b repeats it with a fixture whose rejection turn itself calls
+   `report_intent` and `search_properties` *after* reporting the rejection, so the tool path that
+   used to write into a finished enquiry is measured rather than assumed. Stage 3c restarts the
+   same store and the rejection is still there — the baseline's timer would have deleted it.
 4. **Concurrent enquiries do not corrupt each other.** Stage 4 submits two enquiries for two
    customers before awaiting either, then asserts that their entry ids are disjoint, that every
    entry in a document belongs to that document's conversation, and that no two documents share an
-   enquiry or a task. Stage 5 goes further and fires eight writers at one document: exactly one
-   write lands and the transcript gains one entry, because the guard is inside the commit gate.
+   enquiry or a task. Stage 5 goes further and races writers at one document twice, because one
+   race is not enough to show the gate:
+
+   - **Eight writers, one target.** `1 of 8` lands. That count is decided by the **rank rule** —
+     once the phase is at `writing_report`, every other writer is refused because its target is no
+     longer forward — so a single-writer serial loop produces it too. It demonstrates the rule,
+     not the gate.
+   - **Eight writers, two forward targets** (four at `writing_report`, four at `done`). `2 of 8`
+     lands, one per target, and the transcript gains exactly two entries. This is the discriminating
+     experiment: both targets are forward from `validating` and neither invalidates the other once
+     one has landed, so a rank comparison alone would let all eight through. Landing exactly two
+     is what only a serialized compare-then-write produces.
 5. **`lib/Durable.cs` through the project reference.** `BandADurable.csproj` references
    `../../lib/Copilot.Durable.csproj`. Nothing from the store is copied into this folder.
 
@@ -121,41 +149,59 @@ The baseline had neither. Its dictionary was mutated from every run task with no
 
 ## Custom durability code, counted
 
-Counting rule: **non-blank, non-comment lines** in `durable/**.cs` and `durable/Components/Pages/Home.razor`.
+Counting rule: **non-blank, non-comment lines** in `durable/**.cs` and
+`durable/Components/Pages/Home.razor`, where a comment is `//` or `/* … */` in C# and `//`,
+`@* … *@` or a markup comment in Razor.
 A line is *durability-specific* when removing it would remove a guarantee this variant exists to
 show: a document or checkpoint definition, a guarded commit, a resume path, the commit wiring that
 ties a task to its document, or the deterministic kill point. A line is *application logic* when it
 would be the same in any version of this app: the pipeline vocabulary, the prompts and tool
 descriptions, the search query, the Razor markup, and the read-only projection the page renders.
 
-| File | Durability | Application |
-| --- | ---: | ---: |
-| `EnquiryState.cs` | 33 | 0 |
-| `EnquiryCheckpoint.cs` | 7 | 0 |
-| `EnquiryDurable.cs` | 22 | 0 |
-| `EnquiryWrites.cs` | 150 | 24 |
-| `EnquiryStore.cs` | 120 | 33 |
-| `EnquiryTask.cs` | 85 | 15 |
-| `ExitSeam.cs` | 18 | 0 |
-| `Program.cs` | 14 | 36 |
-| `AppState.cs` | 10 | 64 |
-| `EnquiryTools.cs` | 25 | 137 |
-| `EnquiryPhases.cs` | 0 | 42 |
-| `EnquiryContracts.cs` | 0 | 12 |
-| `Components/Pages/Home.razor` | 0 | 329 |
-| **Total** | **484** | **692** |
+| File | Code lines | Durability | Application |
+| --- | ---: | ---: | ---: |
+| `EnquiryState.cs` | 33 | 33 | 0 |
+| `EnquiryCheckpoint.cs` | 8 | 8 | 0 |
+| `EnquiryDurable.cs` | 22 | 22 | 0 |
+| `EnquiryWrites.cs` | 218 | 205 | 13 |
+| `EnquiryStore.cs` | 153 | 120 | 33 |
+| `EnquiryTask.cs` | 161 | 137 | 24 |
+| `ExitSeam.cs` | 18 | 18 | 0 |
+| `Program.cs` | 50 | 14 | 36 |
+| `AppState.cs` | 74 | 10 | 64 |
+| `EnquiryTools.cs` | 196 | 40 | 156 |
+| `EnquiryPhases.cs` | 42 | 0 | 42 |
+| `EnquiryContracts.cs` | 12 | 0 | 12 |
+| `Components/Pages/Home.razor` | 323 | 0 | 323 |
+| **Total** | **1310** | **607** | **703** |
 
-**484 durability-specific lines against 692 application lines** — 41% of the variant is the
-durability the matrix row counts. For comparison, the baseline's whole agent state is
-`Agent.cs` (about 60 code lines of which none are durability) plus `AppState.cs` (about 40, of which
-the dictionary lookup and the timer are the durability story, and are wrong).
+**607 durability-specific lines against 703 application lines** — 46% of the variant is the
+durability the matrix row counts. The *Code lines* column is the counting rule applied to the file
+and is what the three columns have to add up to; the split between *Durability* and *Application*
+is a judgement made line by line, and a reader who disagrees with a call changes the split, not the
+total. `Home.razor`'s 323 is non-blank, non-comment with `@* … *@` Razor comments stripped as well
+as `//` comments; counting Razor comments as code reaches 329, which is not what the rule says.
+
+Three files are **excluded from the table on purpose**, so "1310" is "all lines I classified" and
+not "all lines in the folder":
+
+| File | Code lines | Why it is not counted |
+| --- | ---: | --- |
+| `Headless.cs` | 371 | The evidence driver. It is not part of the application — the browser never loads it — so counting it would inflate the durability number with a test harness. |
+| `PropertyDatabase.cs` | 143 | Reused verbatim from the baseline. Zero durability lines by construction. |
+| `Phase.cs` | 27 | Reused verbatim from the baseline. Zero durability lines by construction. |
+
+For comparison, the baseline's whole agent state is `Agent.cs` (about 60 code lines of which none
+are durability) plus `AppState.cs` (about 40, of which the dictionary lookup and the timer are the
+durability story, and are wrong).
 
 ## What is reused, and what is not
 
 Reused verbatim from the baseline: `Phase.cs` (the pipeline graph and its geometry),
 `PropertyDatabase.cs` (the listings and the search query) and the Razor shell
-(`App.razor`, `Routes.razor`, the layout, `app.css`). The seed data under `Data/Properties/` is a
-copy of the baseline's, because a listings database is not agent state.
+(`App.razor`, `Routes.razor`, the layout, `app.css`). The seed data under `Data/Properties/` is
+not copied: `BandADurable.csproj` links the baseline's `Data/Properties/*.json` into the output, so
+there is one copy of the listings and it cannot drift. A listings database is not agent state.
 
 Rewritten: `AppState` (a projection instead of a dictionary), the run loop (a durable task instead
 of a fire-and-forget `Task`), the tools (they commit instead of assigning a field) and the system
@@ -172,6 +218,7 @@ dotnet <publish>/BandADurable.dll --enquiry a --enquiry b  # two, submitted toge
 dotnet <publish>/BandADurable.dll --resume                 # finish what the last process left
 dotnet <publish>/BandADurable.dll --enquiry "…" --contend 8 # eight writers, one document
 dotnet <publish>/BandADurable.dll --enquiry "…" --late-wakeup # terminal-state guard
+dotnet <publish>/BandADurable.dll --enquiry "…" --late-wakeup --tool-path # and the tool writes
 BAND_A_EXIT_AFTER_PHASE=searching …                        # kill the process at a chosen phase
 BAND_A_FIXTURE=<fixture> DURABLE_RUNTIME_PATH=<replay>     # run against a recorded runtime
 ```
@@ -182,8 +229,8 @@ Executed on 2026-11-04, macOS arm64, .NET SDK 10.0.402:
 
 - `dotnet build` and `dotnet publish` of `BandADurable.csproj`, clean apart from the baseline's own
   NU1903 advisory and the EF Core model-validation warning.
-- `./evidence.sh` — stages 1, 2, 3, 3b and 5 against the recorded runtime. All assertions passed;
-  the captured output is the evidence file.
+- `./evidence.sh` — stages 1, 2, 3, 3b, 3c, 3d, 3e, 4, 5, 6, 6b, 6c and 6d against the recorded
+  runtime. All assertions passed; the captured output is the evidence file.
 - Stage 4 against the live signed-in Copilot CLI (1.0.105), two enquiries submitted together. Both
   documents, transcripts and tasks were distinct; the isolation assertions passed.
 - The browser UI was not driven by a headless browser. `./run.sh` was started and served
@@ -192,9 +239,13 @@ Executed on 2026-11-04, macOS arm64, .NET SDK 10.0.402:
 
 Not executed:
 
-- Stage 4 against the recorded runtime. Its `ResolveSession` serves every pinned session from the
-  first recording, so two pinned sessions get the same turns; that is a limitation of the recorded
-  runtime, and it is why the concurrency stage has a `LIVE=1` mode rather than pretending.
+- Stage 4's *live* mode in this run: no signed-in CLI was available, so the captured stage 4 is the
+  recorded one. The recorded runtime cannot stand in for it: `SessionCreate` returns the whole
+  recorded session when the client names one of its own, so both customers receive the same
+  `customer-one` transcript. (Its *resume* path is not the problem — `ResolveSession` checks
+  `_sources` and then `FindSession` before falling back to `Sessions[0]`.) The stage therefore shows
+  isolation of the durable documents, which is what requirement 4 is about, and says so in its own
+  output.
 - Stages 1-3 and 5 against the live CLI. They are deterministic by construction, which is the point.
 
 ## Known limitations of this variant
@@ -202,27 +253,45 @@ Not executed:
 - **One store writer per process.** The JSONL provider takes an exclusive file lock, so two
   processes cannot serve the same store. That is correct for this scenario — one server, restart to
   recover — and it is recorded rather than worked around.
-- **A turn that was sent but not recorded fails the enquiry.** If a process dies after the model
-  turn starts and before the pass boundary commits, the resumed task cannot tell whether the turn
-  had an effect, so it fails the enquiry instead of silently re-sending. That is the conservative
-  choice, not a completed one; a real system would reconcile against the native session.
-- **The card hides, the record does not.** A rejected enquiry's card disappears fifteen seconds
-  after the rejection because `hideAt` has passed. The document stays. That is deliberate — it is
-  the fix for the baseline's delete — but it means the store grows with rejected enquiries.
+- **A turn that was interrupted mid-flight is re-run, not resumed.** If a process dies after the
+  model turn starts and before the turn's answer commits, the resumed task re-sends the phase
+  prompt and the turn's tool calls are recorded again. That is what stage 6 measures: the same
+  fixture ends at 12 entries after a kill at `writing_report` and at 9 without one. It does *not*
+  fail the enquiry, and it does not silently discard anything; it costs duplicate transcript
+  entries. Reconciling the interrupted turn against the native session is what a real system would
+  do instead, and `lib/Durable.cs` does not expose the native transcript to make that possible.
+- **A `done` enquiry whose report never committed is recovered with one extra turn.** A process
+  killed between the model reporting `done` and the answer committing leaves a terminal document
+  with `report: null`. Resuming it asks the model for the report once, recorded in the task's memo
+  so it happens at most once, and marks the transcript with a `note` either way. Stage 3d/3e show
+   the window and the recovery. It costs one extra model turn in exactly that crash window, and the
+  report text is the model's second answer, not the lost first one.
+- **The card hides, the record does not.** A rejected enquiry carries a committed `hideAt` fifteen
+  seconds after the rejection, and `Home.razor`'s `Hidden` predicate filters the card out once that
+  time has passed. The *predicate* flips at fifteen seconds; the *render* does not necessarily. The
+  page re-reads the store when `AppState.Watch` raises its change event, and the watch returns as
+  soon as it observes a terminal phase — so the card stays visible until the next store write or a
+  navigation re-renders the component. The document is never deleted, which is the point; it is why
+  the baseline's loss cannot happen here and why the store grows with rejected enquiries.
 
 ## What `lib/Durable.cs` could not express
 
 Three gaps surfaced while building this variant. None of them blocked a requirement, so none is a
 release blocker; they are recorded because the next consumer will hit them.
 
-1. **A task phase must be named by a string property called `phase` in the checkpoint.**
-   `DurableRuntime.RunTaskCoreAsync` reads `checkpoint["phase"]` and requires a JSON *string*. A
-   checkpoint whose phase is an enum is not rejected: `GetString()` on a JSON number throws
-   `InvalidOperationException`, which `RunTaskCoreAsync` turns into a committed `failed` outcome
-   rather than a clear configuration error. The store's serializer options
-   (`JsonSerializerDefaults.Web`) emit an enum as a number, so the type that reads most naturally
-   is the one that fails. *Consequence*: `EnquiryCheckpoint.Phase` is a `string` with a documented
-   constant, and the enquiry's real phase lives in a second property.
+1. **A checkpoint whose `phase` is a number hangs the host instead of failing the task.**
+   `DurableRuntime.RunTaskCoreAsync` reads `checkpoint["phase"]` with
+   `phaseElement.GetString() ?? "run"`, and that `?:` is evaluated *before* the `try` block that
+   wraps the phase handler. So a JSON number there does not become a `failed` outcome: the
+   `InvalidOperationException` escapes `RunTaskCoreAsync` itself, and the caller is left holding a
+   task whose record still says `Running` with no outcome ever committed — the host waits forever.
+   The store's serializer options (`JsonSerializerDefaults.Web`) emit an enum as a *number*, so the
+   type that reads most naturally is the one that produces this. Repro: a store whose task
+   checkpoint carries `"phase": 0` resumes without error, prints the settled enquiry, and never
+   returns; the JSONL's last task record is still `status: 1` with no `outcome`.
+   *Consequence*: `EnquiryCheckpoint.Phase` is a `string` with a documented constant, and the
+   enquiry's real phase lives in a second property. Filed as #193 with a minimal reproduction;
+   not patched here, because `lib/` is out of scope for this scenario's PR.
 
 2. **`TaskRuntime` exposes no store and no conversation.** A phase handler receives
    `TaskRuntime`, which has the task record, the definition, a cancellation token, and the commit
@@ -242,7 +311,9 @@ release blocker; they are recorded because the next consumer will hit them.
    instead, and the recorded-runtime evidence had to be regenerated once the search tool's
    required parameters were found by reading a failed tool checkpoint in the JSONL by hand.
 
-Point 1 is the one worth filing: a non-string `phase` silently falling through to `"run"` is a
-sharp edge. Filed as a note in the pull request rather than a new issue, because the library
-correctly refuses an unclear configuration once the phase key is found, and the fix would be a
-validation error message rather than new behaviour.
+Point 1 is the one worth filing, and it is filed as
+[#193](https://github.com/matthewcorven/github-copilot-sdk-durable/issues/193): *`lib/Durable.cs: a
+checkpoint with a numeric "phase" hangs the host instead of failing the task`*.
+The task never finishes and never reports, which is worse than the failure it was supposed to
+produce. The fix is a type check around the phase read that commits `failed` — a validation error,
+not new behaviour — but it is a library change, so this PR records it rather than making it.

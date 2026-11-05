@@ -26,5 +26,23 @@ public sealed class EnquiryCheckpoint
     public string EnquiryPhase { get; set; } = EnquiryPhases.Queued;
 
     /// <summary>How many turn boundaries this task has committed.</summary>
+    /// <remarks>
+    /// The count names the turn the task is on, not the turn it has finished: a turn is only
+    /// finished once its effects are all committed, and the document — not this count — is what
+    /// says whether that happened. A restart therefore re-enters at the same index and re-reads
+    /// the document.
+    /// </remarks>
     public int Turns { get; set; }
+
+    /// <summary>
+    /// The answer the turn in flight produced, so an interrupted process does not lose it.
+    /// </summary>
+    /// <remarks>
+    /// A model that reports <c>done</c> through its phase tool ends the enquiry before its answer
+    /// is committed. If the process dies between those two commits, the answer exists nowhere
+    /// else: the document is already terminal and the transcript entry never landed. Carrying it
+    /// on the checkpoint is what closes that window — the resumed task attaches it as the report
+    /// instead of finishing with <c>report: null</c>.
+    /// </remarks>
+    public string? Answer { get; set; }
 }

@@ -20,11 +20,11 @@ public static class Headless
     public static bool TryRun(string[] args, string storePath, PropertyDatabase database)
     {
         var enquiries = new List<string>();
-        var concurrency = 1;
         string? exitAfter = null;
         var resume = false;
         var contend = 0;
         var lateWakeup = false;
+        var toolPath = false;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -32,9 +32,6 @@ public static class Headless
             {
                 case "--enquiry" when i + 1 < args.Length:
                     enquiries.Add(args[++i]);
-                    break;
-                case "--concurrency" when i + 1 < args.Length:
-                    concurrency = int.Parse(args[++i]);
                     break;
                 case "--exit-after-phase" when i + 1 < args.Length:
                     exitAfter = args[++i];
@@ -48,6 +45,9 @@ public static class Headless
                     break;
                 case "--late-wakeup":
                     lateWakeup = true;
+                    break;
+                case "--tool-path":
+                    toolPath = true;
                     break;
                 default:
                     return false;
@@ -113,8 +113,9 @@ public static class Headless
                 task.OwnerConversationId == conversationId && task.Name == EnquiryDurable.TaskName))
             .ToList();
 
-        Console.WriteLine($"submitted {started.Count} enquir{(started.Count == 1 ? "y" : "ies")} " +
-                          $"at concurrency {concurrency}");
+        Console.WriteLine(started.Count == 1
+            ? $"submitted 1 enquiry"
+            : $"submitted {started.Count} enquiries, all before any was awaited");
 
         foreach (var record in records)
         {
@@ -135,7 +136,7 @@ public static class Headless
 
         if (lateWakeup)
         {
-            LateWakeup(store, started[0]);
+            LateWakeup(store, database, started[0], toolPath);
         }
 
         if (contend > 1)
@@ -173,7 +174,11 @@ public static class Headless
     /// commit, so the same write the baseline could not stop is refused and the enquiry is left
     /// exactly as it was. The check is an assertion: if any write lands, the run fails.
     /// </remarks>
-    private static void LateWakeup(EnquiryStore store, string conversationId)
+    private static void LateWakeup(
+        EnquiryStore store,
+        PropertyDatabase database,
+        string conversationId,
+        bool assertToolPath)
     {
         var before = EnquiryDurable.Read(store.Store, conversationId);
         Console.WriteLine();
@@ -206,6 +211,50 @@ public static class Headless
                 throw new InvalidOperationException(
                     $"late wakeup overwrote a terminal state: {phase} replaced {before.Phase}");
             }
+        }
+
+        // The phase writers are only half the wiring. These two go through the tool bodies the
+        // model actually calls, so the entries a tool appends are tested against the terminal
+        // guard rather than assumed to be safe because a phase write was refused.
+        var toolAttempts = new (string Tool, string Argument, string Why)[]
+        {
+            ("search_properties", string.Empty, "a search that finished after the rejection"),
+            ("report_intent", "Late intent report", "an intent reported after the rejection"),
+        };
+
+        foreach (var (tool, argument, why) in toolAttempts)
+        {
+            var answer = EnquiryTools.CallForProbe(store.Store, database, conversationId, tool, argument);
+            var held = EnquiryDurable.Read(store.Store, conversationId);
+            Console.WriteLine($"  wakeup tool {tool,-16} ({why}) -> " +
+                              $"{(held.Entries.Count == before.Entries.Count ? "refused" : "WRITTEN")}; " +
+                              $"tool answered \"{Truncate(answer, 30)}\", entries {held.Entries.Count}");
+            if (held.Entries.Count != before.Entries.Count)
+            {
+                throw new InvalidOperationException(
+                    $"late wakeup grew the transcript through {tool}: " +
+                    $"{before.Entries.Count} -> {held.Entries.Count}");
+            }
+        }
+
+        if (assertToolPath)
+        {
+            // The rejection turn itself called these two tools after reporting the rejection. Both
+            // lost the race with the terminal phase, and neither grew the transcript: that is the
+            // measurement this stage exists to make, because a phase-only probe cannot see it.
+            var settled = EnquiryDurable.Read(store.Store, conversationId);
+            var intents = settled.Entries.Count(entry => entry.Kind == "intent");
+            var tools = settled.Entries.Count(entry => entry.Kind == "tool");
+            Console.WriteLine($"  the rejection turn called report_intent and search_properties after " +
+                              $"reporting it: {intents} intent(s), {tools} tool result(s) in the transcript");
+            if (intents != 1 || tools != 0)
+            {
+                throw new InvalidOperationException(
+                    $"a tool write reached the terminal record: {intents} intent(s), {tools} tool result(s)");
+            }
+
+            Console.WriteLine($"  the enquiry's own answer, \"Rejected as spam.\", is kept: the turn that " +
+                              "ended the enquiry still gets to say why");
         }
 
         var report = EnquiryWrites.AttachReportAsync(store.Store, conversationId, "invented report")
@@ -296,45 +345,137 @@ public static class Headless
     }
 
     /// <summary>
-    /// Fires the same phase transition at one document from many callers at once.
+    /// Races writers at one document, in two experiments that discriminate different rules.
     /// </summary>
     /// <remarks>
-    /// This is the baseline's defect 4, made deterministic: several writers race to move one
-    /// enquiry's phase. In the baseline each of them would have assigned the field on the shared
-    /// object and the last writer won, silently. Here every write goes through the store's commit
-    /// gate, and the transition rule means a phase can only move forward once, so exactly one
-    /// write lands and the rest are dropped. The count printed is the durable evidence: the
-    /// transcript gains one phase entry, not <paramref name="writers"/>.
+    /// <para>
+    /// This is the baseline's defect 4: several writers mutate one enquiry at once. The baseline
+    /// assigned fields on a shared object with no lock, so the last writer won silently. Here
+    /// every write goes through the store's commit gate.
+    /// </para>
+    /// <para>
+    /// The gate is only worth demonstrating with an experiment it can fail. Racing
+    /// <paramref name="writers"/> copies of one forward transition from one phase is decided by
+    /// the <em>rank rule</em> alone — the first commit moves the phase, and every later writer is
+    /// refused because its target is no longer forward. A single-writer serial loop produces the
+    /// same answer, so that race cannot show the gate: it is reported first, and it is labelled as
+    /// the rank-rule demonstration it is.
+    /// </para>
+    /// <para>
+    /// The second experiment is the one the gate decides. Half the writers aim at
+    /// <c>writing_report</c> and half at <c>done</c>; both targets are forward from the starting
+    /// phase and neither invalidates the other once one has landed, so a rank rule alone would let
+    /// both land. Exactly two writes land, and the transcript grows by exactly two — not by the
+    /// number of writers, and not by one. A serial loop that re-read the phase but did not
+    /// serialize its read against the write would land every writer to <c>done</c> as well, so the
+    /// count of two is what a correct gate produces and a broken one cannot.
+    /// </para>
     /// </remarks>
     private static async Task ContendAsync(EnquiryStore store, string conversationId, int writers)
     {
-        // The race is held against a document that has no task running, so the result is decided
-        // by the writers alone rather than by a model turn happening to finish first. The
-        // document is committed first, so every writer starts from the same committed phase.
-        await store.Store.CommitAsync(async tx =>
+        var half = writers / 2;
+        if (half == 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"contention: skipped, {writers} writer(s) cannot be split across two targets");
+            return;
+        }
+
+        // Experiment one: one target, many writers. Reported as what it is — the rank rule being
+        // applied once — not as evidence about the gate.
+        await ContendAsync(
+            store,
+            conversationId,
+            writers,
+            "rank rule: every writer aims at the same forward target",
+            _ => EnquiryPhases.WritingReport);
+
+        // Experiment two: two forward targets from one phase with no expectation, so the rank
+        // order cannot decide the count — both targets are forward, and the second is still
+        // forward of the first. Only serialization plus the terminal/forward guard can, and it
+        // produces exactly one landing per target.
+        await ContendAsync(
+            store,
+            conversationId,
+            writers,
+            "commit gate: half the writers aim at writing_report, half at done",
+            index => index % 2 == 0 ? EnquiryPhases.WritingReport : EnquiryPhases.Done);
+    }
+
+    /// <summary>One race against a reset document, printing what the guards did with it.</summary>
+    private static async Task ContendAsync(
+        EnquiryStore store,
+        string conversationId,
+        int writers,
+        string label,
+        Func<int, string> targetFor)
+    {
+        // The document is reset to a known phase before every race. The tool conversations are
+        // still live, but the workflow's own tool calls only follow turns the replay fixture
+        // serves, and the task is already finished, so nothing else writes while the race runs.
+        await ResetForRaceAsync(store.Store, conversationId);
+
+        var before = EnquiryDurable.Read(store.Store, conversationId);
+        var targets = Enumerable.Range(0, writers).Select(targetFor).ToList();
+        var arrived = await Task.WhenAll(targets.Select(target =>
+            EnquiryWrites.MoveToAsync(store.Store, conversationId, expected: null, target)));
+
+        var after = EnquiryDurable.Read(store.Store, conversationId);
+        var landed = arrived.Count(write => write.Written);
+        var gained = after.Entries.Count - before.Entries.Count;
+
+        Console.WriteLine();
+        Console.WriteLine($"contention: {writers} writers raced {conversationId} — {label}");
+        Console.WriteLine($"  phase before:       {EnquiryPhases.Name(before.Phase)}");
+        Console.WriteLine($"  targets:            {targets.Count(t => t == targets[0])} x {targets[0]}" +
+                          (targets.Distinct(StringComparer.Ordinal).Count() > 1
+                              ? $", {targets.Count(t => t != targets[0])} x {targets.First(t => t != targets[0])}"
+                              : string.Empty));
+        Console.WriteLine($"  writes that landed: {landed} of {writers}");
+        Console.WriteLine($"  phase after:        {EnquiryPhases.Name(after.Phase)}");
+        Console.WriteLine($"  transcript gained:  {gained} entr(ies)");
+
+        // The assertion is the point: the expected count is the one a correct serialize-and-guard
+        // produces. One target can only land once because the phase moves after the first write;
+        // two forward targets from one phase land twice, once per target, and never more.
+        var distinctTargets = targets.Distinct(StringComparer.Ordinal).Count();
+        if (landed != distinctTargets)
+        {
+            throw new InvalidOperationException(
+                $"contention: {landed} of {writers} writes landed, expected {distinctTargets} " +
+                $"(one per distinct forward target)");
+        }
+
+        if (gained != landed)
+        {
+            throw new InvalidOperationException(
+                $"contention: the transcript grew by {gained} but {landed} writes landed");
+        }
+
+        if (!targets.Contains(EnquiryPhases.Name(after.Phase), StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"contention: the final phase {EnquiryPhases.Name(after.Phase)} is not one of the targets");
+        }
+    }
+
+    /// <summary>Puts the document back at <c>validating</c> so a second race starts from the same phase.</summary>
+    /// <remarks>
+    /// The reset is an unguarded commit on purpose: it is the experiment setting up its own
+    /// starting state, not a write the guards are being tested on. It is what lets the two race
+    /// experiments run one after the other against the same document.
+    /// </remarks>
+    private static Task ResetForRaceAsync(DurableStore store, string conversationId) =>
+        store.CommitAsync(async tx =>
         {
             var draft = tx.Doc(EnquiryDurable.Enquiry, conversationId);
             draft.Value.Phase = Phase.Validating;
+            draft.Value.Report = null;
+            draft.Value.FinishedAt = null;
+            draft.Value.HideAt = null;
             draft.Save(tx.AppendEntry(conversationId, "phase", EnquiryPhases.Validating));
             await Task.CompletedTask;
         });
-
-        var before = EnquiryDurable.Read(store.Store, conversationId);
-        var arrived = await Task.WhenAll(Enumerable.Range(0, writers).Select(_ =>
-            EnquiryWrites.MoveToAsync(
-                store.Store,
-                conversationId,
-                expected: null,
-                EnquiryPhases.WritingReport)));
-
-        var after = EnquiryDurable.Read(store.Store, conversationId);
-        Console.WriteLine();
-        Console.WriteLine($"contention: {writers} writers raced to move {conversationId} to writing_report");
-        Console.WriteLine($"  phase before:      {EnquiryPhases.Name(before.Phase)}");
-        Console.WriteLine($"  writes that landed: {arrived.Count(write => write.Written)} of {writers}");
-        Console.WriteLine($"  phase after:       {EnquiryPhases.Name(after.Phase)}");
-        Console.WriteLine($"  transcript gained: {after.Entries.Count - before.Entries.Count} entr(ies)");
-    }
 
     /// <summary>Prints an enquiry's committed state and transcript.</summary>
     public static void Print(DurableStore store, string conversationId)

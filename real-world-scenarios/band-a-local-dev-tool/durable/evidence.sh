@@ -27,7 +27,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-"$DOTNET" publish "$HERE/BandADurable.csproj" -c Release -o "$SCRATCH/app" --nologo -v quiet
+"$DOTNET" publish "$HERE/BandADurable.csproj" -c Release -o "$SCRATCH/app" --nologo -v quiet \
+  2>&1 | grep -v 'NU1903\|^warn: Microsoft.EntityFrameworkCore' >&2
 APP="$SCRATCH/app/BandADurable.dll"
 
 run() {
@@ -57,8 +58,25 @@ rm -f "$SCRATCH/rejected.jsonl"
 run "$SCRATCH/rejected.jsonl" rejection.json --enquiry "BUY CRYPTO NOW!!! Not actually looking for property lol" \
   --late-wakeup | sed "s|$SCRATCH|<scratch>|g"
 echo
-echo "############ 3b. the rejection survives a restart (the baseline loses it) ############"
-run "$SCRATCH/rejected.jsonl" rejection.json --resume | sed "s|$SCRATCH|<scratch>|g"
+echo "############ 3b. a tool result from the rejection turn cannot grow the terminal record ############"
+rm -f "$SCRATCH/rejected-tool.jsonl"
+run "$SCRATCH/rejected-tool.jsonl" rejection-tool.json \
+  --enquiry "BUY CRYPTO NOW!!! Not actually looking for property lol" \
+  --late-wakeup --tool-path | sed "s|$SCRATCH|<scratch>|g"
+
+echo
+echo "############ 3c. the rejection survives a restart (the baseline loses it) ############"
+run "$SCRATCH/rejected-tool.jsonl" rejection-tool.json --resume | sed "s|$SCRATCH|<scratch>|g"
+
+echo
+echo "############ 3d. a kill after the model reports done does not lose the report ############"
+rm -f "$SCRATCH/done.jsonl"
+run "$SCRATCH/done.jsonl" enquiry.json --enquiry "Looking for a 3-bed family home near schools" \
+  --exit-after-phase done | sed "s|$SCRATCH|<scratch>|g"
+echo "exit code: $?  (42 is the seam: the model has reported done and the process is gone)"
+echo
+echo "############ 3e. resume that store: the deliverable is recovered, not dropped ############"
+run "$SCRATCH/done.jsonl" enquiry.json --resume | sed "s|$SCRATCH|<scratch>|g"
 
 echo
 echo "############ 4. concurrency: two enquiries for two customers, submitted together ############"
@@ -82,6 +100,31 @@ else
 fi
 
 echo
-echo "############ 5. concurrency: eight writers race one document ############"
+echo "############ 5. concurrency: rank rule vs commit gate ############"
 rm -f "$SCRATCH/contend.jsonl"
 run "$SCRATCH/contend.jsonl" enquiry.json --enquiry "contended enquiry" --contend 8 | sed "s|$SCRATCH|<scratch>|g"
+
+echo
+echo "############ 6. the mid-turn kill: a resumed turn re-runs, and the transcript shows it ############"
+rm -f "$SCRATCH/midturn.jsonl"
+run "$SCRATCH/midturn.jsonl" enquiry.json --enquiry "Looking for a 3-bed family home near schools" \
+  --exit-after-phase writing_report | sed "s|$SCRATCH|<scratch>|g"
+echo "exit code: $?  (42 is the seam)"
+echo
+echo "############ 6b. resume it: the interrupted turn runs again and duplicates its tool calls ############"
+resumed="$(run "$SCRATCH/midturn.jsonl" enquiry.json --resume)"
+echo "$resumed" | sed "s|$SCRATCH|<scratch>|g"
+
+echo
+echo "############ 6c. a clean run of the same fixture, for the entry count to compare against ############"
+rm -f "$SCRATCH/clean.jsonl"
+clean="$(run "$SCRATCH/clean.jsonl" enquiry.json --enquiry "Looking for a 3-bed family home near schools")"
+echo "$clean" | sed "s|$SCRATCH|<scratch>|g"
+
+echo
+echo "############ 6d. the count: what the mid-turn kill cost ############"
+clean_entries=$(grep -o 'entries:  [0-9]*' <<<"$clean" | head -1 | grep -o '[0-9]*')
+killed_entries=$(grep -o 'entries:  [0-9]*' <<<"$resumed" | head -1 | grep -o '[0-9]*')
+echo "clean run:                        $clean_entries entries"
+echo "killed at writing_report, resumed: $killed_entries entries"
+echo "the ${killed_entries} - ${clean_entries} surplus is the interrupted turn's tool calls, run a second time"
