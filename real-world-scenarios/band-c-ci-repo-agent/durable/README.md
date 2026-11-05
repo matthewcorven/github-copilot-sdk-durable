@@ -209,17 +209,18 @@ is unclassified or the split does not add up to the file.
 | File | Code lines | Durability | Application |
 | --- | ---: | ---: | ---: |
 | `Contracts.cs` | 103 | 103 | 0 |
-| `TriageStore.cs` | 65 | 65 | 0 |
-| `ExitSeam.cs` | 66 | 66 | 0 |
+| `TriageStore.cs` | 71 | 71 | 0 |
+| `ExitSeam.cs` | 70 | 70 | 0 |
 | `Program.cs` | 2 | 2 | 0 |
-| `Runner.cs` | 223 | 154 | 69 |
-| `Phases.cs` | 393 | 132 | 261 |
+| `Runner.cs` | 227 | 158 | 69 |
+| `Phases.cs` | 402 | 141 | 261 |
 | `Triage.cs` | 499 | 47 | 452 |
 | `Fixture.cs` | 69 | 0 | 69 |
-| **Total** | **1420** | **569** | **851** |
+| **Total** | **1443** | **592** | **851** |
 
-**569 durability-specific lines against 851 application lines** — 40% of the variant is the
-durability this row of the matrix counts.
+**592 durability-specific lines against 851 application lines** — 41% of the variant is the
+durability this row of the matrix counts. These are the numbers `./evidence.sh` stage 7 prints; the
+script fails rather than reporting a table that disagrees with the code.
 
 Three judgement calls a reader may disagree with, named so the disagreement is easy to make:
 
