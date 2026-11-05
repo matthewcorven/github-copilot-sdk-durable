@@ -37,7 +37,7 @@ in this table is typed by hand.
 | `restart-after-checkpoint` | durable | **resumed by refund_agent** | `refund_agent` |
 | `duplicate-delivery` | baseline | **not exercised** | `—` |
 | `duplicate-delivery` | durable | **doubled** | `return_agent` |
-| `competing-managers` | baseline | **refused: the second manager** | `return_agent` |
+| `competing-managers` | baseline | **refused: the second manager** | `refund_agent` |
 | `competing-managers` | durable | **refused: the second manager** | `return_agent` |
 | `store-outage` | baseline | **no half-transition; the store's path stopped resolving** | `triage_agent` |
 | `store-outage` | durable | **failed safely, with a split store; resumed at return_agent** | `return_agent` |
@@ -69,7 +69,7 @@ in this table is typed by hand.
 
 | Variant | Outcome | Holder | Detail |
 | --- | --- | --- | --- |
-| baseline | **refused: the second manager** | `return_agent` | A second coordinator was started on the same state while the first was serving turn 0. It was refused by the framework checkpoint store's lock at open, after 0ms and before it could commit anything: "Unhandled exception. System.InvalidOperationException: The store at '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/.scratch/band-f-faults/baseline/competing-manage… |
+| baseline | **refused: the second manager** | `refund_agent` | A second coordinator was started on the same state while the first was serving turn 0. It was refused by the framework checkpoint store's lock at open, after 0ms and before it could commit anything: "Unhandled exception. System.InvalidOperationException: The store at '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/.scratch/band-f-faults/baseline/competing-manage… |
 | durable | **refused: the second manager** | `return_agent` | A second coordinator was started on the same state while the first was serving turn 0. It was refused by the store's single-writer lock at open, after 0ms and before it could commit anything: "Unhandled exception. System.InvalidOperationException: The durable store file '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/.scratch/band-f-faults/durable/competing-mana… |
 
 ### `store-outage`
@@ -93,7 +93,7 @@ control that reaches the same outcome as its fault would prove nothing, and is c
 | `restart-after-checkpoint` | durable | resumed by refund_agent | `refund_agent` | resumed by refund_agent | `refund_agent` | control: triage_agent / fault: refund_agent |
 | `duplicate-delivery` | baseline | control: delivered once | `triage_agent` | not exercised | `—` | control: triage_agent / fault: — |
 | `duplicate-delivery` | durable | control: delivered once | `return_agent` | doubled | `return_agent` | control: return_agent / fault: return_agent |
-| `competing-managers` | baseline | control: one manager completed | `triage_agent` | refused: the second manager | `return_agent` | control: triage_agent / fault: return_agent |
+| `competing-managers` | baseline | control: one manager completed | `triage_agent` | refused: the second manager | `refund_agent` | control: triage_agent / fault: refund_agent |
 | `competing-managers` | durable | control: one manager completed | `return_agent` | refused: the second manager | `return_agent` | control: return_agent / fault: return_agent |
 | `store-outage` | baseline | control: completed | `triage_agent` | no half-transition; the store's path stopped resolving | `triage_agent` | control: return_agent / fault: triage_agent |
 | `store-outage` | durable | control: completed | `return_agent` | failed safely, with a split store; resumed at return_agent | `return_agent` | control: return_agent / fault: return_agent |
@@ -127,7 +127,7 @@ control that reaches the same outcome as its fault would prove nothing, and is c
 
 ## Produced at
 
-- `8caeb53427c9b9b8ad8cf029eab590344d664dc7` — 10 result(s)
+- `6b9b3971673b33be2f8a63928246263f6b5d70f0` — 10 result(s)
 
 <!-- END GENERATED -->
 
