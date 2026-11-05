@@ -2,13 +2,13 @@
 
 | Fault | Variant | Outcome | Holder after recovery |
 | --- | --- | --- | --- |
-| `kill-mid-delegation` | baseline | **recovery failed; control stops at return_agent** | `return_agent` |
+| `kill-mid-delegation` | baseline | **resumed by triage_agent, which routed the turn on to return_agent** | `return_agent` |
 | `kill-mid-delegation` | durable | **resumed by return_agent** | `return_agent` |
 | `restart-after-checkpoint` | baseline | **restart failed; control stops at refund_agent** | `refund_agent` |
 | `restart-after-checkpoint` | durable | **resumed by refund_agent** | `refund_agent` |
 | `duplicate-delivery` | baseline | **not exercised** | `—` |
 | `duplicate-delivery` | durable | **doubled** | `return_agent` |
-| `competing-managers` | baseline | **refused: the second manager** | `return_agent` |
+| `competing-managers` | baseline | **refused: the second manager** | `refund_agent` |
 | `competing-managers` | durable | **refused: the second manager** | `return_agent` |
 | `store-outage` | baseline | **no half-transition; the store's path stopped resolving** | `triage_agent` |
 | `store-outage` | durable | **failed safely, with a split store; resumed at return_agent** | `return_agent` |
@@ -19,28 +19,28 @@
 
 | Variant | Outcome | Holder | Detail |
 | --- | --- | --- | --- |
-| baseline | **recovery failed; control stops at return_agent** | `return_agent` | The process was killed with SIGKILL while return_agent held control; a handoff was queued at that agent's executor. The recovery did not complete: attempt 1 aborted with the framework's "Expected exactly one update for key 'SharedState'"; attempt 2 aborted with the framework's "Expected exactly one update for key 'SharedState'" — the framework aborts every resume of a workflow that still has work… |
+| baseline | **resumed by triage_agent, which routed the turn on to return_agent** | `return_agent` | The process was killed with SIGKILL while return_agent held control; a handoff was queued at that agent's executor. The recovery completed in 2 process(es). The first agent to act in the recovered process was return_agent: control after recovery was resumed by return_agent, read from the framework checkpoint rather than from the port's log. The run's newest checkpoint afterwards names triage_agen… |
 | durable | **resumed by return_agent** | `return_agent` | The process was killed with SIGKILL while return_agent held control, delegated to with nothing produced. A new process reopened the same store and gave control to return_agent — not back to the coordinator — and its first committed action was return_agent produced turn 0 at e45. Control after recovery was return_agent. The run then served every turn and ended with return_agent holding control, wh… |
 
 ### `restart-after-checkpoint`
 
 | Variant | Outcome | Holder | Detail |
 | --- | --- | --- | --- |
-| baseline | **restart failed; control stops at refund_agent** | `refund_agent` | The process was stopped with SIGTERM at turn 1 delegated to refund_agent and nothing produced. The restarted process gave control to refund_agent — the first agent to act in a checkpoint it wrote afterwards — and its newest checkpoint then names return_agent. the specialist tool results the checkpointed conversation held went from {} at the stop to {} after the restart. The restart did not comple… |
+| baseline | **restart failed; control stops at refund_agent** | `refund_agent` | The process was stopped with SIGTERM at turn 1 delegated to refund_agent and nothing produced. The restarted process gave control to refund_agent — the first agent to act in a checkpoint it wrote afterwards — and its newest checkpoint then names return_agent. the specialist tool results the checkpointed conversation held went from {} at the stop to {"Return initiated successfully for order 1234. … |
 | durable | **resumed by refund_agent** | `refund_agent` | The process was stopped with SIGTERM at the commit where refund_agent held turn 1 and had produced nothing. The restarted process read that checkpoint and gave control to refund_agent — the agent the checkpoint named, not the coordinator — and its first committed action was refund_agent produced turn 1 at e68. the specialist tool results went from {"Return initiated successfully for order 1234. Y… |
 
 ### `duplicate-delivery`
 
 | Variant | Outcome | Holder | Detail |
 | --- | --- | --- | --- |
-| baseline | **not exercised** | `—` | The request the kill interrupted was delivered a second time: the port's resume re-sent it from the turn its own log had not recorded as complete, which is the duplicate delivery happening. The delivery could not be completed, however — attempt 1 aborted with the framework's "Expected exactly one update for key 'SharedState'"; attempt 2 aborted with the framework's "Expected exactly one update fo… |
+| baseline | **not exercised** | `—` | The request the kill interrupted was delivered a second time: the port's resume re-sent it from the turn its own log had not recorded as complete, which is the duplicate delivery happening. The delivery could not be completed, however — attempt 1 aborted with the framework's "Expected exactly one update for key 'SharedState'" — and the port refuses a fresh run over a directory that already holds … |
 | durable | **doubled** | `return_agent` | The closing request was delivered twice. The first process was killed with SIGKILL while return_agent held turn 3 with nothing produced; the second delivery was one resume of the state the kill left (exit 0). The specialist's tool results went from {"Order 1234 is currently being processed and will ship in 2 business days.": 1, "Refund processed successfully for order 1234.": 1, "Return initiated… |
 
 ### `competing-managers`
 
 | Variant | Outcome | Holder | Detail |
 | --- | --- | --- | --- |
-| baseline | **refused: the second manager** | `return_agent` | A second coordinator was started on the same state while the first was serving turn 0. It was refused by the framework checkpoint store's lock at open, after 0ms and before it could commit anything: "Unhandled exception. System.InvalidOperationException: The store at '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/.scratch/band-f-faults/baseline/competing-manage… |
+| baseline | **refused: the second manager** | `refund_agent` | A second coordinator was started on the same state while the first was serving turn 0. It was refused by the framework checkpoint store's lock at open, after 1000ms and before it could commit anything: "Unhandled exception. System.InvalidOperationException: The store at '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/.scratch/band-f-faults/baseline/competing-man… |
 | durable | **refused: the second manager** | `return_agent` | A second coordinator was started on the same state while the first was serving turn 0. It was refused by the store's single-writer lock at open, after 0ms and before it could commit anything: "Unhandled exception. System.InvalidOperationException: The durable store file '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/.scratch/band-f-faults/durable/competing-mana… |
 
 ### `store-outage`
@@ -58,13 +58,13 @@ control that reaches the same outcome as its fault would prove nothing, and is c
 
 | Fault | Variant | Control outcome | Control holder | Fault outcome | Fault holder | Holder at injection: control / fault |
 | --- | --- | --- | --- | --- | --- | --- |
-| `kill-mid-delegation` | baseline | control: completed in one process | `triage_agent` | recovery failed; control stops at return_agent | `return_agent` | control: triage_agent / fault: return_agent |
+| `kill-mid-delegation` | baseline | control: completed in one process | `triage_agent` | resumed by triage_agent, which routed the turn on to return_agent | `return_agent` | control: triage_agent / fault: return_agent |
 | `kill-mid-delegation` | durable | control: completed in one process | `return_agent` | resumed by return_agent | `return_agent` | control: return_agent / fault: return_agent |
 | `restart-after-checkpoint` | baseline | restart failed; control stops at triage_agent | `triage_agent` | restart failed; control stops at refund_agent | `refund_agent` | control: triage_agent / fault: refund_agent |
 | `restart-after-checkpoint` | durable | resumed by refund_agent | `refund_agent` | resumed by refund_agent | `refund_agent` | control: triage_agent / fault: refund_agent |
 | `duplicate-delivery` | baseline | control: delivered once | `triage_agent` | not exercised | `—` | control: triage_agent / fault: — |
 | `duplicate-delivery` | durable | control: delivered once | `return_agent` | doubled | `return_agent` | control: return_agent / fault: return_agent |
-| `competing-managers` | baseline | control: one manager completed | `triage_agent` | refused: the second manager | `return_agent` | control: triage_agent / fault: return_agent |
+| `competing-managers` | baseline | control: one manager completed | `triage_agent` | refused: the second manager | `refund_agent` | control: triage_agent / fault: refund_agent |
 | `competing-managers` | durable | control: one manager completed | `return_agent` | refused: the second manager | `return_agent` | control: return_agent / fault: return_agent |
 | `store-outage` | baseline | control: completed | `triage_agent` | no half-transition; the store's path stopped resolving | `triage_agent` | control: return_agent / fault: triage_agent |
 | `store-outage` | durable | control: completed | `return_agent` | failed safely, with a split store; resumed at return_agent | `return_agent` | control: return_agent / fault: return_agent |
@@ -94,9 +94,9 @@ control that reaches the same outcome as its fault would prove nothing, and is c
 
 ## Not exercised, and why
 
-- `baseline` / `duplicate-delivery`: The request the kill interrupted was delivered a second time: the port's resume re-sent it from the turn its own log had not recorded as complete, which is the duplicate delivery happening. The delivery could not be completed, however — attempt 1 aborted with the framework's "Expected exactly one update for key 'SharedState'"; attempt 2 aborted with the framework's "Expected exactly one update for key 'SharedState'" — and the port refuses a fresh run over a directory that already holds one, so there is no completed run to compare counts in. The run's log recorded 3 turn end(s) across 2 proces…
+- `baseline` / `duplicate-delivery`: The request the kill interrupted was delivered a second time: the port's resume re-sent it from the turn its own log had not recorded as complete, which is the duplicate delivery happening. The delivery could not be completed, however — attempt 1 aborted with the framework's "Expected exactly one update for key 'SharedState'" — and the port refuses a fresh run over a directory that already holds one, so there is no completed run to compare counts in. The run's log recorded 3 turn end(s) across 2 process(es) and the newest framework checkpoint names return_agent. The row is recorded as not exe…
 
 ## Produced at
 
-- `8caeb53427c9b9b8ad8cf029eab590344d664dc7` — 10 result(s)
+- `f8b3e5883df379f21537421523ba7d6bd53ca9fa` — 10 result(s)
 

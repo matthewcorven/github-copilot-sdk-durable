@@ -13,10 +13,10 @@
     "endpoint": "https://openrouter.ai/api/v1",
     "model": "harness default (scripted routing)",
     "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/store-outage.sh --variant durable",
-    "commit": "8caeb53427c9b9b8ad8cf029eab590344d664dc7",
+    "commit": "f8b3e5883df379f21537421523ba7d6bd53ca9fa",
     "apiKeyFrom": "OPENAI_API_KEY"
   },
-  "recordedAt": "2026-11-05T18:43:29.550712+00:00",
+  "recordedAt": "2026-11-05T19:02:40.795849+00:00",
   "observations": {
     "holderAtOutage": "return_agent",
     "survivedHolder": "return_agent",

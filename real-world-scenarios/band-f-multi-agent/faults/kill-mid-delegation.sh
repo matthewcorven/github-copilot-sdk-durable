@@ -117,10 +117,15 @@ fi
 # The assertion. `RECOVERED_HOLDER` is the holder the recovered process was given; `FIRST_AGENT` is
 # the agent that actually committed first. When the port's own resume line disagrees with the state,
 # that is reported rather than resolved in the port's favour.
+# One expression for the answer, used by the outcome, the detail and the recorded field, so they
+# cannot say three different things. The acting agent is the one the recovered process committed as;
+# `RECOVERED_HOLDER` is what the state's holder field says, and where they differ that is a finding,
+# not a tie to break quietly.
+POST_HOLDER="${FIRST_AGENT:-$RECOVERED_HOLDER}"
 if [ "$RESUME_STATUS" = "0" ]; then
-  OUTCOME="$(describe_recovery "$RECOVERED_HOLDER" "$FIRST_AGENT")"
+  OUTCOME="$(describe_recovery "$POST_HOLDER" "$FIRST_AGENT")"
 else
-  OUTCOME="recovery failed; control stops at ${RECOVERED_HOLDER:-nothing}"
+  OUTCOME="recovery failed; control stops at ${POST_HOLDER:-nothing}"
 fi
 EVIDENCE="at the kill (pid $killed, SIGKILL, confirmed gone): holder $AT_KILL_HOLDER, fingerprint $(snap "$FROZEN" fingerprint), specialist tool results $FROZEN_COUNTS; after recovery the state moved: $MOVED; first action after recovery: $FIRST_DESC; recovery ran $RECOVERY_ATTEMPTS process(es)${RECOVERY_ERRORS:+ ($RECOVERY_ERRORS)}; port-reported resume: ${REPORTED:-(none)}; $VERIFY_NOTE${HOLDERS:+; holders across the run: $HOLDERS}"
 
@@ -132,13 +137,13 @@ else
   else
     RECOVERY_NOTE="The recovery did not complete: $RECOVERY_ERRORS — the framework aborts every resume of a workflow that still has work, and the port's resume has no way past it."
   fi
-  DETAIL="The process was killed with SIGKILL while $AT_KILL_HOLDER held control; a handoff was queued at that agent's executor. $RECOVERY_NOTE The first agent to act in the recovered process was ${FIRST_AGENT:-none}: control after recovery was $(describe_recovery "${FIRST_AGENT:-$RECOVERED_HOLDER}" "$FIRST_AGENT"), read from the framework checkpoint rather than from the port's log. The run's newest checkpoint afterwards names ${END_HOLDER:-nothing}, which is where the port ended rather than what this fault asks."
+  DETAIL="The process was killed with SIGKILL while $AT_KILL_HOLDER held control; a handoff was queued at that agent's executor. $RECOVERY_NOTE The first agent to act in the recovered process was ${FIRST_AGENT:-none}, so control after recovery was $(describe_recovery "$POST_HOLDER" "$FIRST_AGENT") — read from the framework checkpoint rather than from the port's log. The run's newest checkpoint afterwards names ${END_HOLDER:-nothing}, which is where the port ended rather than what this fault asks."
   if [ -n "$REPORTED" ] && [ "$REPORTED" != "$FIRST_AGENT" ]; then
-    DETAIL="$DETAIL The port's own resume line named $REPORTED as holding control; the framework then ran $FIRST_AGENT first, and the state is what moved, so $FIRST_AGENT is the answer."
+    DETAIL="$DETAIL The port's own resume line named $REPORTED as holding control; the state it moved shows $FIRST_AGENT ran first, so $FIRST_AGENT is the answer."
   fi
 fi
 
-record_result "$VARIANT" "$RESULT_NAME" "$OUTCOME" "${FIRST_AGENT:-$RECOVERED_HOLDER}" "$PHASE" "$DETAIL" "$EVIDENCE" \
+record_result "$VARIANT" "$RESULT_NAME" "$OUTCOME" "$POST_HOLDER" "$PHASE" "$DETAIL" "$EVIDENCE" \
   "{\"processes\":$RECOVERY_ATTEMPTS,\"holderWhenKilled\":\"${AT_KILL_HOLDER:-}\",\"holderAfterRecovery\":\"${RECOVERED_HOLDER:-}\",\"actedFirst\":\"${FIRST_AGENT:-}\",\"stateMoved\":$( [ "$MOVED" = "yes" ] && echo true || echo false ),\"portReportedResume\":\"${REPORTED:-}\"}" \
   "$AT_KILL_HOLDER" "$END_HOLDER"
-echo "$VARIANT / $RESULT_NAME: $OUTCOME (holder ${FIRST_AGENT:-$RECOVERED_HOLDER})" >&2
+echo "$VARIANT / $RESULT_NAME: $OUTCOME (holder $POST_HOLDER)" >&2

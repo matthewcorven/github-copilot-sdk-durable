@@ -1,26 +1,26 @@
 {
   "variant": "baseline",
   "fault": "kill-mid-delegation",
-  "outcome": "recovery failed; control stops at return_agent",
+  "outcome": "resumed by return_agent",
   "holder": "return_agent",
   "holderAtFault": "return_agent",
-  "holderAtEnd": "return_agent",
-  "phase": "a handoff is queued at return_agent's executor, so return_agent is about to run",
-  "detail": "The process was killed with SIGKILL while return_agent held control; a handoff was queued at that agent's executor. The recovery did not complete: attempt 1 aborted with the framework's \"Expected exactly one update for key 'SharedState'\"; attempt 2 aborted with the framework's \"Expected exactly one update for key 'SharedState'\" — the framework aborts every resume of a workflow that still has work, and the port's resume has no way past it. Control after recovery was resumed by return_agent, read from the framework checkpoint rather than from the port's log. The run's newest checkpoint afterwards names return_agent, which is where the port ended and not what this fault asks. The port's own resume line named triage_agent as holding control; the framework then ran return_agent first, and the state is what moved, so return_agent is the answer.",
-  "evidence": "at the kill (pid 4026, SIGKILL, confirmed gone): holder return_agent, fingerprint checkpoints:5/authors:2/last:9c0adbd0b3da4c85a387f0922b250347, specialist tool results {}; after recovery the state moved: yes; first action after recovery: return_agent spoke in checkpoint turn 5 at 1fe4118a29c54c5e92f06d87230c3eff; recovery ran 2 process(es) (attempt 1 aborted with the framework's \"Expected exactly one update for key 'SharedState'\"; attempt 2 aborted with the framework's \"Expected exactly one update for key 'SharedState'\"); port-reported resume: triage_agent; the baseline has no verifier; control is read from its checkpoint, not its log",
+  "holderAtEnd": "triage_agent",
+  "phase": "nothing is queued and triage_agent was the last agent to speak",
+  "detail": "The process was killed with SIGKILL while return_agent held control; a handoff was queued at that agent's executor. The recovery completed in 2 process(es). The first agent to act in the recovered process was return_agent, so control after recovery was resumed by return_agent — read from the framework checkpoint rather than from the port's log. The run's newest checkpoint afterwards names triage_agent, which is where the port ended rather than what this fault asks. The port's own resume line named triage_agent as holding control; the state it moved shows return_agent ran first, so return_agent is the answer.",
+  "evidence": "at the kill (pid 83862, SIGKILL, confirmed gone): holder return_agent, fingerprint checkpoints:5/authors:2/last:81984bc29f3d4848b9408f540c7ebc0f, specialist tool results {}; after recovery the state moved: yes; first action after recovery: return_agent spoke in checkpoint turn 5 at c74354bfa27043a1bb29634edf9711ed; recovery ran 2 process(es) (attempt 1 aborted with the framework's \"Expected exactly one update for key 'SharedState'\"); port-reported resume: triage_agent; the baseline has no verifier; control is read from its checkpoint, not its log",
   "harness": {
     "dotnet": "10.0.402",
     "endpoint": "https://openrouter.ai/api/v1",
     "model": "openai/gpt-4o-mini",
-    "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/kill-mid-delegation.sh --variant baseline",
-    "commit": "8caeb53427c9b9b8ad8cf029eab590344d664dc7",
-    "apiKeyFrom": "OPENAI_API_KEY"
+    "command": "./kill-mid-delegation.sh --variant baseline",
+    "commit": "f8b3e5883df379f21537421523ba7d6bd53ca9fa",
+    "apiKeyFrom": "OPENROUTER_API_KEY"
   },
-  "recordedAt": "2026-11-05T18:36:34.464061+00:00",
+  "recordedAt": "2026-11-05T19:05:43.265678+00:00",
   "observations": {
     "processes": 2,
     "holderWhenKilled": "return_agent",
-    "holderAfterRecovery": "return_agent",
+    "holderAfterRecovery": "triage_agent",
     "actedFirst": "return_agent",
     "stateMoved": true,
     "portReportedResume": "triage_agent"
