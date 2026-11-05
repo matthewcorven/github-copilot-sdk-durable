@@ -1,8 +1,9 @@
 # Band B Durable variant — kill and resume
 
 Captured output of the Durable variant of the Band B job agent (issue #150), run on this machine
-against a live Copilot CLI. Nothing below is retyped: each block is the command shown, with the
-output it produced.
+against a live Copilot CLI. Nothing below is retyped: each block is the command shown followed by
+the output it produced, and the §7 controls are whole transcripts recorded by one driver, including
+the `ls` that proves the outcome.
 
 | Field | Value |
 | --- | --- |
@@ -28,9 +29,9 @@ Seven flows were run, each in its own scratch directory, each with a store of it
 | `divergence/target` | `PLAN.md` edited by hand between the two processes. |
 | `in-flight/target` | Process 1 stops inside iteration 2's turn; process 2 resumes into the failure path. |
 
-Every directory below was produced by one driver script, in the order listed, against the source
-this file is committed with. The §7 controls are part of the same run; two of them leave no
-directory behind, which is the point of the control.
+One driver script produced every directory and every transcript below, in this order, against the
+source this file is committed with. Two §7 controls leave no directory behind, which is the point of
+the control.
 
 ---
 
@@ -82,22 +83,21 @@ iteration 2 complete.
 === Iteration 3/10 ===
   plan digest: bbef84d1f745f802
   agent-turn: no memo step/3/agent-turn — running the turn
-  ⚙ bash
-  ⚙ bash
-  ⚙ bash
+  ⚙ view
+  ⚙ view
+  ⚙ view
+  ⚙ edit
+  ⚙ edit
+  ⚙ view
+  ⚙ view
+  ⚙ edit
   agent-turn: done; memo step/3/agent-turn written
-  reconcile: formatted 2 section heading(s); 6 item(s) still open
+  reconcile: no plan item changed; 6 item(s) still open
 iteration 3 complete.
 stopping: iteration 3 is committed (STOP_AFTER_ITERATION=3).
 
 run:       stopped at a committed iteration boundary.
            the store holds the checkpoint; the next process resumes from it.
-
-stopped at the seam: iteration 3 is committed, the run is not finished.
-resume with: KEEP=1 RUN_DIR=.scratch/band-b-evidence/kill-resume ./resume.sh
-target: .scratch/band-b-evidence/kill-resume/target
-kept: .scratch/band-b-evidence/kill-resume/target
-
 ```
 
 The process is a real process and it exits on its own. `STOP_AFTER_ITERATION` is not a signal
@@ -119,34 +119,29 @@ model:     gpt-5.1-codex-mini (pinned)
 plan:      /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-190-b2/.scratch/band-b-evidence/kill-resume/target/PLAN.md
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 max:       10 iterations (from the run's stored input)
-run:       resuming durable task t8 (restarts before this one: 0)
+run:       resuming durable task t8 (restarts before this process: 0)
 resuming at iteration 4
 last stage: iteration-complete, plan digest 603155e8dfaf31ae
-  recorded step: agent-turn — I finished both items for this pass and ticked them in `PLAN.md`. (3 tool calls)
-  recorded step: reconcile — formatted 2 section heading(s); 6 item(s) still open
+  recorded step: agent-turn — Both items are finished and ticked in `PLAN.md`; I re-read each file after editing. (8 tool calls)
+  recorded step: reconcile — no plan item changed; 6 item(s) still open
 memos on record: 6
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 === Iteration 4/10 ===
   plan digest: 603155e8dfaf31ae
   agent-turn: no memo step/4/agent-turn — running the turn
-  ⚙ view
   ⚙ bash
-  ⚙ edit
-  ⚙ edit
   ⚙ bash
-  ⚙ edit
+  ⚙ bash
   agent-turn: done; memo step/4/agent-turn written
-  reconcile: no plan item changed; 4 item(s) still open
+  reconcile: formatted 2 section heading(s); 4 item(s) still open
 iteration 4 complete.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 === Iteration 5/10 ===
   plan digest: 07a6a447bbae9275
   agent-turn: no memo step/5/agent-turn — running the turn
-  ⚙ view
   ⚙ bash
   ⚙ bash
-  ⚙ edit
   agent-turn: done; memo step/5/agent-turn written
   reconcile: formatted 2 section heading(s); 2 item(s) still open
 iteration 5 complete.
@@ -156,27 +151,22 @@ iteration 5 complete.
   agent-turn: no memo step/6/agent-turn — running the turn
   ⚙ bash
   ⚙ bash
-  ⚙ edit
-  ⚙ edit
   ⚙ bash
-  ⚙ edit
-  ⚙ bash
-  ⚙ bash
-  ⚙ bash
-  ⚙ edit
   agent-turn: done; memo step/6/agent-turn written
   reconcile: no plan item changed; plan has no open item
 iteration 6 complete.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 plan reports complete after 6 iteration(s).
-
-verified: the target matches the plan
-kept: .scratch/band-b-evidence/kill-resume/target
-
 ```
 
 `resuming at iteration 4` is read from the store's checkpoint. The resume process is given no
 iteration number, no cap, and no plan digest on its command line.
+
+`restarts before this process: 0` is the count on the record as this process reads it. The runner
+increments `Restarts` when it re-enters a `Running` task (`lib/Durable.cs:5226`), which happens after
+this banner prints; the store holds `1` immediately afterwards. The label says "before this
+process" for that reason — an earlier draft printed the same number as "before this one", which read
+as a claim about the run.
 
 ---
 
@@ -214,22 +204,24 @@ it rather than restating the contract.
 
 ### What the store holds
 
-The task record at the end of the kill-and-resume flow, read straight out of the JSONL store:
+The task record at the end of the kill-and-resume flow, read straight out of the JSONL store.
+Every line below is the output of that command, including the outcome string the losing process
+recorded:
 
-```console
+```text
 $ python3 - <<'EOF'
 import json
-last=None
+last = None
 for line in open('kill-resume/target/.durable/store.jsonl'):
-    rec=json.loads(line)
-    if rec.get('type')=='task':
-        last=rec['payload']
+    rec = json.loads(line)
+    if rec.get('type') == 'task':
+        last = rec['payload']
 print("memo keys:", sorted(last['memos'].keys()))
+print("restarts:", last.get('restarts'))
 print("checkpoint:", json.dumps(last['checkpoint'], indent=2))
 EOF
-memo keys: ['step/1/agent-turn', 'step/1/reconcile', 'step/2/agent-turn', 'step/2/reconcile',
-            'step/3/agent-turn', 'step/3/reconcile', 'step/4/agent-turn', 'step/4/reconcile',
-            'step/5/agent-turn', 'step/5/reconcile', 'step/6/agent-turn', 'step/6/reconcile']
+memo keys: ['step/1/agent-turn', 'step/1/reconcile', 'step/2/agent-turn', 'step/2/reconcile', 'step/3/agent-turn', 'step/3/reconcile', 'step/4/agent-turn', 'step/4/reconcile', 'step/5/agent-turn', 'step/5/reconcile', 'step/6/agent-turn', 'step/6/reconcile']
+restarts: 1
 checkpoint: {
   "phase": "iteration",
   "iteration": 6,
@@ -238,7 +230,7 @@ checkpoint: {
   "steps": [
     {
       "step": "agent-turn",
-      "outcome": "Both items are done: `docs/section-09.md` and `docs/section-10.md` now start with their H1 (`# Section 09`). (10 tool calls)"
+      "outcome": "Both items are done and re-checked on disk, and every item in `PLAN.md` is now ticked, so I set `Status: complete`. (3 tool calls)"
     },
     {
       "step": "reconcile",
@@ -251,6 +243,28 @@ checkpoint: {
 Twelve keys for six iterations — one `agent-turn` and one `reconcile` per iteration, numbered from
 1. They span two processes: iterations 1–3 were run by process 1, 4–6 by process 2, and the key for
 iteration *n* is the same string whichever process wrote it.
+
+The same store's checkpoint documents, one per conversation, showing the per-turn history the layer
+keeps for a run that finished:
+
+```console
+$ # one line per (conversation, document): the kinds of checkpoint it holds
+c114 durable.admission: ['admitted', 'completed']
+c139 durable.admission: ['admitted', 'completed']
+c161 durable.admission: ['admitted', 'completed']
+c37 durable.admission: ['admitted', 'completed']
+c74 durable.admission: ['admitted', 'completed']
+c9 durable.admission: ['admitted', 'completed']
+c114 durable.checkpoint: ['tool', 'tool', 'tool', 'turn']
+c139 durable.checkpoint: ['tool', 'tool', 'turn']
+c161 durable.checkpoint: ['tool', 'tool', 'tool', 'turn']
+c37 durable.checkpoint: ['tool', 'tool', 'tool', 'tool', 'tool', 'tool', 'tool', 'turn']
+c74 durable.checkpoint: ['tool', 'tool', 'tool', 'tool', 'tool', 'tool', 'tool', 'tool', 'turn']
+c9 durable.checkpoint: ['tool', 'tool', 'tool', 'tool', 'turn']
+```
+
+Every conversation that sent a prompt ends its history at `turn`, and its admission is `completed`.
+That is the contrast §3c needs.
 
 ---
 
@@ -268,12 +282,8 @@ $ RUN_DIR=.scratch/band-b-evidence/mid-turn KEEP=1 STOP_AFTER_ITERATION=2 STOP_B
 === Iteration 2/10 ===
   plan digest: af36a70803b9c0e2
   agent-turn: no memo step/2/agent-turn — running the turn
-  ⚙ view
   ⚙ bash
-  ⚙ edit
-  ⚙ edit
   ⚙ bash
-  ⚙ edit
 stopping: iteration 2's turn is complete, the step memo is not written.
 
 run:       stopped at a committed iteration boundary.
@@ -284,10 +294,10 @@ run:       stopped at a committed iteration boundary.
 $ RUN_DIR=.scratch/band-b-evidence/mid-turn KEEP=1 \
     ./real-world-scenarios/band-b-local-job-agent/durable/resume.sh
 max:       10 iterations (from the run's stored input)
-run:       resuming durable task t8 (restarts before this one: 0)
+run:       resuming durable task t8 (restarts before this process: 0)
 resuming at iteration 2
 last stage: turn-complete, plan digest af36a70803b9c0e2
-  recorded step: agent-turn — I added the H1 to both files and confirmed on disk that each is now the first line. `docs/section-01.md` starts with `# … (6 tool calls)
+  recorded step: agent-turn — I added the H1 to both files and ticked both items in `PLAN.md`. I re-read the top of each file afterwards, and the head… (2 tool calls)
 memos on record: 2
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -301,17 +311,21 @@ iteration 2 complete.
 === Iteration 3/10 ===
   plan digest: bbef84d1f745f802
   agent-turn: no memo step/3/agent-turn — running the turn
+  ⚙ view
+  ⚙ view
+  ⚙ view
+  ⚙ edit
+  ⚙ edit
   ⚙ bash
-  ⚙ bash
-  ⚙ bash
-  ⚙ bash
+  ⚙ edit
   agent-turn: done; memo step/3/agent-turn written
-  reconcile: formatted 2 section heading(s); 6 item(s) still open
+  reconcile: no plan item changed; 6 item(s) still open
 iteration 3 complete.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 === Iteration 4/10 ===
   plan digest: 603155e8dfaf31ae
   agent-turn: no memo step/4/agent-turn — running the turn
+  ⚙ view
   ⚙ bash
   ⚙ bash
   ⚙ edit
@@ -330,7 +344,8 @@ iteration 4 complete.
   ⚙ view
   ⚙ edit
   ⚙ edit
-  ⚙ bash
+  ⚙ view
+  ⚙ view
   ⚙ edit
   agent-turn: done; memo step/5/agent-turn written
   reconcile: no plan item changed; 2 item(s) still open
@@ -343,14 +358,11 @@ iteration 5 complete.
   ⚙ bash
   ⚙ bash
   ⚙ bash
-  ⚙ bash
   agent-turn: done; memo step/6/agent-turn written
-  reconcile: no plan item changed; plan has no open item
+  reconcile: formatted 2 section heading(s); plan has no open item
 iteration 6 complete.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 plan reports complete after 6 iteration(s).
-
-verified: the target matches the plan
 ```
 
 The turn is **not** re-run. The checkpoint written immediately after the turn carries the turn's
@@ -379,14 +391,10 @@ $ RUN_DIR=.scratch/band-b-evidence/memo-hit KEEP=1 STOP_AFTER_ITERATION=2 STOP_A
 === Iteration 2/10 ===
   plan digest: af36a70803b9c0e2
   agent-turn: no memo step/2/agent-turn — running the turn
-  ⚙ view
-  ⚙ view
-  ⚙ view
-  ⚙ edit
-  ⚙ edit
-  ⚙ view
-  ⚙ view
-  ⚙ edit
+  ⚙ bash
+  ⚙ bash
+  ⚙ bash
+  ⚙ bash
   agent-turn: done; memo step/2/agent-turn written
 stopping: iteration 2's turn memo is written, the iteration is not settled.
 
@@ -398,10 +406,10 @@ run:       stopped at a committed iteration boundary.
 $ RUN_DIR=.scratch/band-b-evidence/memo-hit KEEP=1 \
     ./real-world-scenarios/band-b-local-job-agent/durable/resume.sh
 max:       10 iterations (from the run's stored input)
-run:       resuming durable task t8 (restarts before this one: 0)
+run:       resuming durable task t8 (restarts before this process: 0)
 resuming at iteration 2
 last stage: turn-complete, plan digest af36a70803b9c0e2
-  recorded step: agent-turn — I added the H1 to `docs/section-01.md` (`# Section 01`) and `docs/section-02.md` (`# Section 02`). I re-read both files … (8 tool calls)
+  recorded step: agent-turn — I added the H1 to `docs/section-01.md` (`# Section 01`) and `docs/section-02.md` (`# Section 02`). I re-read both files … (4 tool calls)
 memos on record: 3
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -414,9 +422,7 @@ iteration 2 complete.
 === Iteration 3/10 ===
   plan digest: bbef84d1f745f802
   agent-turn: no memo step/3/agent-turn — running the turn
-  ⚙ view
-  ⚙ view
-  ⚙ view
+  ⚙ bash
   ⚙ edit
   ⚙ edit
   ⚙ bash
@@ -429,18 +435,20 @@ iteration 3 complete.
   plan digest: 603155e8dfaf31ae
   agent-turn: no memo step/4/agent-turn — running the turn
   ⚙ bash
+  ⚙ edit
+  ⚙ edit
   ⚙ bash
+  ⚙ edit
   agent-turn: done; memo step/4/agent-turn written
-  reconcile: formatted 2 section heading(s); 4 item(s) still open
+  reconcile: no plan item changed; 4 item(s) still open
 iteration 4 complete.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 === Iteration 5/10 ===
   plan digest: 07a6a447bbae9275
   agent-turn: no memo step/5/agent-turn — running the turn
-  ⚙ view
   ⚙ bash
   ⚙ bash
-  ⚙ edit
+  ⚙ bash
   agent-turn: done; memo step/5/agent-turn written
   reconcile: formatted 2 section heading(s); 2 item(s) still open
 iteration 5 complete.
@@ -448,23 +456,15 @@ iteration 5 complete.
 === Iteration 6/10 ===
   plan digest: 936e4e5d11031cb7
   agent-turn: no memo step/6/agent-turn — running the turn
-  ⚙ view
-  ⚙ view
-  ⚙ view
-  ⚙ edit
-  ⚙ edit
   ⚙ bash
-  ⚙ edit
-  ⚙ edit
   ⚙ bash
-  ⚙ edit
+  ⚙ bash
+  ⚙ bash
   agent-turn: done; memo step/6/agent-turn written
-  reconcile: no plan item changed; plan has no open item
+  reconcile: formatted 2 section heading(s); plan has no open item
 iteration 6 complete.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 plan reports complete after 6 iteration(s).
-
-verified: the target matches the plan
 ```
 
 The line `agent-turn: memo step/2/agent-turn is present — not run again` is the branch at
@@ -486,16 +486,40 @@ Two things are worth separating here, because they are different mechanisms:
 
 ### 3c. The limit: a turn that was issued and never finished
 
-The layer records each **completed** tool call as a `tool` checkpoint on the conversation's
-`durable.checkpoint` document (`RecordToolCheckpoint`, `lib/Durable.cs:4271`), and that document is
-`DocumentHistory.Rewindable` (`lib:4590`), so a finished turn's calls stay readable through
-`DurableStore.Documents` / `DocumentState.Versions` (`lib:2072`, `lib:110`). What the layer will not
-do is *continue* a half-finished turn: the SDK has no per-tool-call replay, and the turn's own
-checkpoint is written only when the turn reports success.
+The layer writes a `tool` checkpoint into the conversation's `durable.checkpoint` document for every
+completed tool call (`RecordToolCheckpoint`, `lib/Durable.cs:4271`), and the document is
+`DocumentHistory.Rewindable` (`lib:4590`), so a run that finishes keeps its per-turn history — §2
+shows that history for the kill-and-resume store.
 
-So a resume into `Stage = "turn-started"` fails the run, and says what the store knows before it
-does. `STOP_MID_TURN=1` reproduces the state end to end: the process leaves while iteration 2's
-turn is running.
+That is not the same as keeping the calls of a turn that **never returned**. `RecordToolCheckpoint`
+hands each record to `CheckpointAsync` (`lib:4126` → `QueueCheckpointAsync`, `lib:4074`), which
+queues it on the conversation's serial chain and returns; the only await is
+`CheckpointBarrierAsync` (`lib:4150`), and `SubmitAsync` reaches it at `lib:4246`, *after*
+`if (result is not null)`. A turn that is cancelled or throws never gets there, and neither the
+`catch` at `lib:4251` nor the `finally` at `lib:4259` drains the chain. The queued records are
+discarded with the conversation.
+
+So the store's account of a dead turn is:
+
+- the loop's own `turn-started` checkpoint, written by the phase before it issued the turn;
+- the turn's `durable.admission`, at `admitted`, because `AdmitAsync` commits before the prompt is
+  sent (`lib:4019`);
+- **no** `durable.checkpoint` document for that conversation at all — not a partial list of tool
+  calls, none — and no `turn` record.
+
+`STOP_MID_TURN=1` reproduces the state end to end: the process leaves while iteration 2's turn is
+running. Here is the store *before* the resume reads it, next to the finished store from §2:
+
+```console
+$ # in-flight/target/.durable/store.jsonl, before the resume
+c37 durable.admission: ['admitted']
+c9 durable.admission: ['admitted', 'completed']
+c9 durable.checkpoint: ['tool', 'tool', 'tool', 'tool', 'turn']
+```
+
+`c9` is iteration 1's conversation, which finished: four tool calls and a turn. `c37` is the
+dead turn: one admission, `admitted`, and no checkpoint document — the `durable.checkpoint` line for
+it is absent, which is the whole of what "not committed" means here.
 
 ```console
 $ RUN_DIR=.scratch/band-b-evidence/in-flight KEEP=1 STOP_AFTER_ITERATION=2 STOP_MID_TURN=1 \
@@ -504,14 +528,10 @@ $ RUN_DIR=.scratch/band-b-evidence/in-flight KEEP=1 STOP_AFTER_ITERATION=2 STOP_
 === Iteration 2/10 ===
   plan digest: af36a70803b9c0e2
   agent-turn: no memo step/2/agent-turn — running the turn
-  ⚙ view
   ⚙ bash
 stopping: iteration 2's turn is in flight, after 1 completed tool call(s).
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 durable: run did not complete: failed task did not finish
-
-the durable variant exited with status 1
-target: .scratch/band-b-evidence/in-flight/target
 ```
 
 Process 1 leaves the task at `turn-started` and exits 1 — the runner reports `failed task did not
@@ -522,45 +542,46 @@ store is whole and closed normally, so the next process opens it like any other 
 $ RUN_DIR=.scratch/band-b-evidence/in-flight KEEP=1 \
     ./real-world-scenarios/band-b-local-job-agent/durable/resume.sh
 max:       10 iterations (from the run's stored input)
-run:       resuming durable task t8 (restarts before this one: 0)
+run:       resuming durable task t8 (restarts before this process: 0)
 resuming at iteration 2
 last stage: turn-started, plan digest af36a70803b9c0e2
-  recorded step: agent-turn — I finished both items for this pass and ticked them in `PLAN.md`. I re-read `release-notes.md` on disk after editing, an… (4 tool calls)
+  recorded step: agent-turn — Both assigned items are done and ticked in `PLAN.md`. I re-read `release-notes.md` after editing, and both changes are o… (4 tool calls)
   recorded step: reconcile — no plan item changed; 10 item(s) still open
 memos on record: 2
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   iteration 2's turn is recorded as issued and never finished.
-  the store holds no completed tool call(s) for it:
-  the turn's tool writes were queued and not committed: the process left first.
-  that is the whole of what the store can say: the turn is observable, not replayable.
+  the store holds no tool record for it: the layer drains tool records
+  when the turn returns, and this turn never did.
+  what the store does hold is the admission and the loop's turn-started checkpoint:
+  the turn is observable to that extent, and not replayable.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 durable: run did not complete: failed iteration 2 was in flight: the turn was issued (plan digest af36a70803b9c0e2) and its outcome was never recorded, so it may have mutated files. Re-running it would duplicate those mutations. Recreate the target from baseline/target/ and re-run.
-
-the durable variant exited with status 1
-target: .scratch/band-b-evidence/in-flight/target
 ```
 
-The message is accurate about the boundary in both directions:
+The report is accurate about all three facts:
 
-- **Observable.** The store knows the turn was issued (the `turn-started` checkpoint the phase
-  wrote before it), and it holds whatever tool checkpoints had committed by the time the process
-  left. In this capture, none had: the layer queues a tool checkpoint per conversation and awaits
-  the queue at the turn's completion barrier (`CheckpointBarrierAsync`, `lib:4150`), so a process
-  that leaves mid-turn can exit with its last calls unwritten. The report says exactly that rather
-  than claiming a partial record it does not have.
-- **Not replayable.** The turn cannot be continued, so re-issuing it would repeat whatever it did.
-  The run fails instead, naming the iteration, and asks for the target to be recreated.
+- **The turn is partly represented.** The admission and the `turn-started` checkpoint exist, so the
+  store can say *which* iteration was in flight and what the plan looked like when it started.
+- **No tool call is committed.** Not "some of them landed" — the queue never drains for a turn that
+  does not return, so there is no partial record to read. The line `the store holds no tool record
+  for it` is that fact, and the store dump above is the evidence for it.
+- **Not replayable.** The SDK will not continue the turn, so re-issuing it would repeat whatever it
+  did. The run fails instead, naming the iteration, and asks for the target to be recreated.
 
-Re-entering a *finished* turn is a different case and the store answers it directly: the turn's
-checkpoint carries its outcome, so the resume reports what the dead turn did. That is 3a, and it is
-the demonstrable half. 3c is the half that cannot be recovered, and it is the reason the variant
-fails rather than retries.
+Re-entering a *finished* turn is the different case, and the store answers it directly: the turn's
+checkpoint carries its outcome, so the resume reports what that turn did. That is 3a, and it is the
+demonstrable half. 3c is the half that cannot be recovered, and it is the reason the variant fails
+rather than retries.
 
-What would close it is a primitive the layer does not have: per-tool-call replay in the SDK, or a
-tool record written *before* the call and settled after it, so a resume could tell an interrupted
-call from a completed one. The layer's current record is written after the call and settled in a
-batch, which makes it a history rather than a cursor. That is a real feature request and it is
-written up in the PR for #150, not attempted in this tree.
+What would close it is a primitive the layer does not have, and the gap is worth stating precisely:
+
+- the **replay** half needs per-tool-call continuation in the SDK;
+- the **record** half needs a write that is durable at the call rather than at the turn's end — a
+  record written *before* each call and settled after it, so a resume could tell an interrupted
+  call from a completed one. The layer's current record is a history drained at success, not a
+  cursor.
+
+Both are real feature requests, written up in the PR for #150 rather than attempted in this tree.
 
 ---
 
@@ -578,7 +599,7 @@ $ RUN_DIR=.scratch/band-b-evidence/cap KEEP=1 STOP_AFTER_ITERATION=2 \
   ⚙ bash
   ⚙ bash
   agent-turn: done; memo step/2/agent-turn written
-  reconcile: no plan item changed; 8 item(s) still open
+  reconcile: formatted 2 section heading(s); 8 item(s) still open
 iteration 2 complete.
 stopping: iteration 2 is committed (STOP_AFTER_ITERATION=2).
 
@@ -592,35 +613,48 @@ run:       stopped at a committed iteration boundary.
 $ RUN_DIR=.scratch/band-b-evidence/cap KEEP=1 \
     ./real-world-scenarios/band-b-local-job-agent/durable/resume.sh
 max:       3 iterations (from the run's stored input)
-run:       resuming durable task t8 (restarts before this one: 0)
+run:       resuming durable task t8 (restarts before this process: 0)
 resuming at iteration 3
 last stage: iteration-complete, plan digest bbef84d1f745f802
-  recorded step: agent-turn — I added the H1 to both files and ticked both items in `PLAN.md`. (2 tool calls)
-  recorded step: reconcile — no plan item changed; 8 item(s) still open
+  recorded step: agent-turn — I added the H1 to `docs/section-01.md` (`# Section 01`) and `docs/section-02.md` (`# Section 02`). Each is now the first… (2 tool calls)
+  recorded step: reconcile — formatted 2 section heading(s); 8 item(s) still open
 memos on record: 4
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 === Iteration 3/3 ===
   plan digest: bbef84d1f745f802
   agent-turn: no memo step/3/agent-turn — running the turn
-  ⚙ bash
+  ⚙ view
+  ⚙ view
+  ⚙ view
   ⚙ edit
   ⚙ edit
   ⚙ bash
-  ⚙ bash
+  ⚙ edit
   agent-turn: done; memo step/3/agent-turn written
   reconcile: no plan item changed; 6 item(s) still open
 iteration 3 complete.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 iteration cap reached: 3 iterations and the plan is not complete.
 first open item: - [ ] `docs/section-05.md`: add the missing H1
-
-iteration cap reached; the plan is still open. See the loop output above.
-target: .scratch/band-b-evidence/cap/target
 ```
 
 It stops at 3, not at 5 (2 + 3). The cap lives in the task's stored input, which the first process
-wrote once.
+wrote once. This is also the flow the banner's restart wording is about: the resume prints `0`
+because it reads the record before re-entering the task, and the store says:
+
+```console
+$ python3 - <<'EOF'
+import json
+last = None
+for line in open('cap/target/.durable/store.jsonl'):
+    rec = json.loads(line)
+    if rec.get('type') == 'task':
+        last = rec['payload']
+print("restarts on the record after the resume:", last["restarts"])
+EOF
+restarts on the record after the resume: 1
+```
 
 A resumed process that tries to supply a different cap is told so and the stored value wins:
 
@@ -633,9 +667,6 @@ run:       task t8 is already finished; nothing to resume.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 iteration cap reached: 3 iterations and the plan is not complete.
 first open item: - [ ] `docs/section-05.md`: add the missing H1
-
-iteration cap reached; the plan is still open. See the loop output above.
-target: .scratch/band-b-evidence/cap/target
 ```
 
 So the run is bounded by its own budget, and a finished run stays finished: re-entering a terminal
@@ -667,19 +698,18 @@ Status: in-progress
 - [ ] `docs/section-10.md`: add the missing H1
 ```
 
-**The plan the user edited it into** — three deliberate divergences:
-
-1. the open items were **reordered** (`section-09` and `section-08` first, `section-03` last, with a
-   blank line before it);
-2. `docs/section-08.md` was **ticked by hand** although its H1 is still missing;
-3. the store still records iterations 1–2 as complete, and its checkpoint still names iteration 2 as
-   the last one done.
+**The plan the user edited it into** — three deliberate divergences: the open items were
+**reordered** (`section-09` and `section-08` first, `section-03` last), `docs/section-08.md` was
+**ticked by hand** although its H1 is still missing, and the store still records iterations 1–2 as
+complete:
 
 ```markdown
+# Plan: release notes job
+
 Status: in-progress
 
-- [x] `release-notes.md`: ... (unchanged)
-- [x] `release-notes.md`: ... (unchanged)
+- [x] `release-notes.md`: demote every heading one level (H2->H3, H3->H4, H4->H5), leaving the title and fenced blocks alone
+- [x] `release-notes.md`: end every bullet under `### New` with `<!-- NEW -->`
 - [x] `docs/section-01.md`: add the missing H1
 - [x] `docs/section-02.md`: add the missing H1
 - [ ] `docs/section-09.md`: add the missing H1 and replace the stale `2020-01-01` with `2026-01-01`
@@ -689,6 +719,7 @@ Status: in-progress
 - [ ] `docs/section-06.md`: add the missing H1
 - [ ] `docs/section-07.md`: add the missing H1
 - [ ] `docs/section-10.md`: add the missing H1
+
 - [ ] `docs/section-03.md`: add the missing H1 and repoint the broken `./runner.md` link to `./section-01.md`
 ```
 
@@ -699,10 +730,10 @@ $ RUN_DIR=.scratch/band-b-evidence/divergence KEEP=1 \
     ./real-world-scenarios/band-b-local-job-agent/durable/resume.sh
 ...
 max:       10 iterations (from the run's stored input)
-run:       resuming durable task t8 (restarts before this one: 0)
+run:       resuming durable task t8 (restarts before this process: 0)
 resuming at iteration 3
 last stage: iteration-complete, plan digest bbef84d1f745f802
-  recorded step: agent-turn — I added the H1 to `docs/section-01.md` (`# Section 01`) and `docs/section-02.md` (`# Section 02`). I re-read both files … (7 tool calls)
+  recorded step: agent-turn — I added the H1 to both files and ticked both items in `PLAN.md`. I re-read the top of each file after editing and the he… (7 tool calls)
   recorded step: reconcile — no plan item changed; 8 item(s) still open
 memos on record: 4
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -714,15 +745,16 @@ memos on record: 4
   ⚙ bash
   ⚙ bash
   agent-turn: done; memo step/3/agent-turn written
-  reconcile: unticked item-10 (condition does not hold on disk); 6 item(s) still open
+  reconcile: formatted 2 section heading(s); unticked item-10 (condition does not hold on disk); 6 item(s) still open
 iteration 3 complete.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 === Iteration 4/10 ===
   plan digest: 267b7acaf3720fac
   agent-turn: no memo step/4/agent-turn — running the turn
-  ⚙ view
   ⚙ bash
   ⚙ bash
+  ⚙ edit
+  ⚙ edit
   agent-turn: done; memo step/4/agent-turn written
   reconcile: formatted 2 section heading(s); 4 item(s) still open
 iteration 4 complete.
@@ -743,13 +775,13 @@ iteration 5 complete.
 === Iteration 6/10 ===
   plan digest: 7e94d99d117d1b6f
   agent-turn: no memo step/6/agent-turn — running the turn
-  ⚙ view
-  ⚙ view
-  ⚙ view
+  ⚙ bash
+  ⚙ bash
+  ⚙ edit
   ⚙ edit
   ⚙ edit
   ⚙ bash
-  ⚙ grep
+  ⚙ bash
   ⚙ edit
   ⚙ edit
   ⚙ bash
@@ -759,8 +791,6 @@ iteration 5 complete.
 iteration 6 complete.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 plan reports complete after 6 iteration(s).
-
-verified: the target matches the plan
 ```
 
 Three things are visible in that output, and each is the point of the constraint:
@@ -772,9 +802,8 @@ Three things are visible in that output, and each is the point of the constraint
   (recorded by process 1) to `d6b06db0ad2a02e5` (the edited file), and iteration 3 worked the
   edited file's list in the edited file's order — `section-09` first, `section-03` last.
 - **The hand-ticked lie was corrected.** `docs/section-08.md` was ticked but had no H1; the
-  reconcile step unticked it (`unticked item-10 (condition does not hold on disk)`), so the run did
-  the work and only then ticked it again. The final plan has every item `[x]` and every condition
-  holds on disk — `verify.sh` passed.
+  reconcile step unticked it, so the run did the work and only then ticked it again. The final plan
+  has every item `[x]` and every condition holds on disk — `verify.sh` passed.
 
 The final `PLAN.md` kept the user's order, which is the correct outcome: the store knows what was
 *done*, the file says what is *wanted*, and a resume reconciles the second against the first.
@@ -791,7 +820,7 @@ to keep durable state.
 - Count code lines in `durable/ralph-loop-durable.cs` only — not the shell runners, not
   `lib/Durable.cs`.
 - Blank lines and comment lines (`//`, and the `#:` file directives) are excluded. The regions below
-  are disjoint and their union is every such line in the file: **22 regions, 658 code lines**.
+  are disjoint and their union is every such line in the file: **21 regions, 663 code lines**.
   Re-running the region boundaries over the committed file reproduces both columns exactly.
 - A code line counts as **durability** when its only reason to exist is durable state: opening or
   disposing the store, creating or finding the task, deciding first-run versus resume, reading the
@@ -811,48 +840,44 @@ Applied to the file, region by region (line ranges in the committed source):
 | --- | --- | --- | --- | --- |
 | File header: `#:` directives and `using` | 1–60 | 5 | 0 | 5 |
 | Top-level statements | 61–62 | 2 | 0 | 2 |
-| `DurableLoopAsync` — target, args, model, store path | 64–103 | 29 | 4 | 25 |
-| `DurableLoopAsync` — store, harness, extension install | 104–124 | 12 | 12 | 0 |
-| `DurableLoopAsync` — first-run branch | 125–149 | 21 | 17 | 4 |
-| `DurableLoopAsync` — resume branch: stored input, terminal check, resume banner | 150–184 | 27 | 18 | 9 |
-| `DurableLoopAsync` — `try`/`finally` around the store | 185–189 | 4 | 4 | 0 |
-| `AwaitRunAsync` — await the runner, the stopped-at-seam path | 190–205 | 15 | 11 | 4 |
-| `Report` — the outcome, the cap line, the exit statuses | 206–231 | 20 | 4 | 16 |
-| `Definition` — the task definition and its one phase | 235–248 | 13 | 13 | 0 |
-| `RunIterationAsync` — plan read, completion and cap from the stored input | 249–278 | 23 | 19 | 4 |
-| `RunIterationAsync` — in-flight detection and the report it prints | 279–293 | 9 | 9 | 0 |
-| `RunIterationAsync` — banner, checkpoint before the turn, memo read, no-turn branches | 294–331 | 29 | 29 | 0 |
-| `RunIterationAsync` — the turn, checkpoint after it, the memo, the two seams | 332–384 | 36 | 36 | 0 |
-| `RunIterationAsync` — reconcile, settle checkpoint, stop at the seam | 389–430 | 35 | 23 | 12 |
-| `RunAgentTurnAsync` — the SDK turn and the seam that leaves it in flight | 437–495 | 42 | 0 | 42 |
-| `Choices` | 496–504 | 6 | 0 | 6 |
-| `BuildTurnPrompt` | 505–532 | 21 | 0 | 21 |
-| `ReportInFlightTurn` — reading the store's checkpoint documents back | 542–606 | 49 | 49 | 0 |
-| `Reconcile`, its conditions and parsers, `NormalizeSectionHeadings` | 608–864 | 207 | 0 | 207 |
-| Helpers — `StepKey`, the three seams, `Digest`, `IsComplete`, `OpenItems`, … | 867–905 | 24 | 12 | 12 |
-| `Job` constants and the `LoopInput`/`LoopCheckpoint`/`StepOutcome`/`LoopResult` records | 907–948 | 29 | 29 | 0 |
-| **Total** | | **658** | **289** | **369** |
+| `DurableLoopAsync` — target, args, model, store path | 64–123 | 41 | 4 | 37 |
+| `DurableLoopAsync` — first-run branch | 124–151 | 21 | 17 | 4 |
+| `DurableLoopAsync` — resume branch: stored input, terminal check, resume banner | 152–185 | 26 | 18 | 8 |
+| `DurableLoopAsync` — `try`/`finally` around the store | 186–191 | 5 | 5 | 0 |
+| `AwaitRunAsync` — await the runner, the stopped-at-seam path | 192–207 | 15 | 11 | 4 |
+| `Report` — the outcome, the cap line, the exit statuses | 208–235 | 20 | 4 | 16 |
+| `Definition` — the task definition and its one phase | 237–250 | 13 | 13 | 0 |
+| `RunIterationAsync` — plan read, completion and cap from the stored input | 251–286 | 23 | 19 | 4 |
+| `RunIterationAsync` — in-flight detection and the report it prints | 287–295 | 9 | 9 | 0 |
+| `RunIterationAsync` — banner, checkpoint before the turn, memo read, no-turn branches | 296–333 | 29 | 29 | 0 |
+| `RunIterationAsync` — the turn, checkpoint after it, the memo, the two seams | 334–390 | 36 | 36 | 0 |
+| `RunIterationAsync` — reconcile, settle checkpoint, stop at the seam | 391–437 | 35 | 23 | 12 |
+| `RunAgentTurnAsync` — the SDK turn and the seam that leaves it in flight | 439–501 | 42 | 0 | 42 |
+| `Choices` | 502–510 | 6 | 0 | 6 |
+| `BuildTurnPrompt` | 511–537 | 21 | 0 | 21 |
+| `ReportInFlightTurn` — reading the store's checkpoint documents back | 548–620 | 54 | 54 | 0 |
+| `Reconcile`, its conditions and parsers, `NormalizeSectionHeadings` | 621–878 | 207 | 0 | 207 |
+| Helpers — `StepKey`, the three seams, `Digest`, `IsComplete`, `OpenItems`, … | 880–919 | 24 | 12 | 12 |
+| `Job` constants and the `LoopInput`/`LoopCheckpoint`/`StepOutcome`/`LoopResult` records | 920–963 | 29 | 29 | 0 |
+| **Total** | | **663** | **283** | **380** |
 
-The durability column sums to **289** and the application column to **369**; together they are
-**658**, the file's own code-line count. That is the check the previous revision's table failed: its
-rows summed to 504/219 against a stated 570/201, because three regions (`Report`, the top-level
-statements, and the `try`/`finally` around the store) were folded into other rows and two more were
-undercounted.
+The durability column sums to **283** and the application column to **380**; together they are
+**663**, the file's own code-line count.
 
-**289 of 658 code lines — 44% — exist only for durability.** The baseline has **0**:
+**283 of 663 code lines — 43% — exist only for durability.** The baseline has **0**:
 `baseline/ralph-loop.cs` contains no store, no task, no checkpoint, no memo, and no resume path; its
 entire progress model is the `iteration` local variable plus the markdown file.
 
 Two rows deserve a note, because they are where a reader is most likely to disagree:
 
-- **`ReportInFlightTurn` (49 lines) is durability.** It exists only to read the layer's own
-  checkpoint history back, so the 49 lines would not exist without a store. It is the largest
-  single durability block, and it is the demonstration §3c rests on.
+- **`ReportInFlightTurn` (54 lines) is durability.** It exists only to read the layer's own
+  checkpoint history back, so the 54 lines would not exist without a store. It is the largest
+  single durability block, and it is the report §3c rests on.
 - **`Reconcile` (207 lines) is application.** It is the target's contract expressed in C#; the
   baseline keeps the same contract in `baseline/verify.sh` instead. Moving it between languages
   moves the number without changing what the loop does.
 
-`NormalizeSectionHeadings` (719–754, 32 lines) sits inside the `Reconcile` row and is classified
+`NormalizeSectionHeadings` (732–767, 32 lines) sits inside the `Reconcile` row and is classified
 **application**. Its own comment says pinning the blank line after the H1 "is what makes two
 correct runs byte-identical", which reads like a durability concern; it is not. The property it
 protects is the *comparison* in §2 — two baseline runs need the same normalizer to be comparable —
@@ -862,25 +887,21 @@ reclassifying it would move 32 lines and change nothing about the comparison the
 
 ---
 
-## 7. Scratch provenance: nothing is emptied that the script did not create
+## 7. Scratch provenance: nothing is emptied or removed that the script did not create
 
 `run.sh` and `resume.sh` both take `RUN_DIR` (and `TARGET`) from the environment and remove the
 scratch directory on exit unless `KEEP=1`. That is a destructive default pointed at a caller's
 path, so both scripts follow the convention #189 established for Band G: a directory the script
-created is marked with an empty `.band-b-scratch` file, and only a marked directory is removed.
-Both directions are captured below.
+created carries an empty `.band-b-scratch` marker, only a marked directory is removed, and a
+`RUN_DIR` or `TARGET` that already holds content is refused with exit 2.
 
-### A hand-written directory survives
+Each block below is one recorded transcript: the command, its output, and the `ls` that proves what
+survived, all from the same run.
 
-A directory this loop never created, holding its own `notes.txt` and a hand-written target:
+### A directory the scripts did not create
 
 ```console
-$ mkdir -p .scratch/band-b-evidence/hand-written/target/.durable
-$ printf 'keep me\n' > .scratch/band-b-evidence/hand-written/notes.txt
-$ printf '# Plan\n\nStatus: in-progress\n' > .scratch/band-b-evidence/hand-written/target/PLAN.md
-$ printf '{"v":1}\n' > .scratch/band-b-evidence/hand-written/target/.durable/store.jsonl
-$ RUN_DIR=.scratch/band-b-evidence/hand-written \
-    ./real-world-scenarios/band-b-local-job-agent/durable/resume.sh
+$ env RUN_DIR=.scratch/band-b-evidence/hand-written ./real-world-scenarios/band-b-local-job-agent/durable/resume.sh
 target:    .scratch/band-b-evidence/hand-written/target
 dotnet:    /opt/homebrew/bin/dotnet (10.0.402)
 
@@ -902,81 +923,218 @@ durable: run did not complete: failed Could not find file '/Users/core/git/matth
 the durable variant exited with status 1
 target: .scratch/band-b-evidence/hand-written/target
 not removing non-scratch directory: .scratch/band-b-evidence/hand-written
-
-$ echo "exit=$?"
 exit=1
+
 $ ls -A .scratch/band-b-evidence/hand-written
 notes.txt
 target
+exit=0
 ```
 
-`resume.sh` refused to remove it, said so on stderr, and the caller's `notes.txt` is still there.
-The failure it reports is the loop's own (this hand-written target has no `PROMPT.md`); it is not a
-cleanup failure, and it is the reason the example is honest about the exit status.
+`resume.sh` refused to remove the caller's directory, said why on stderr, and `notes.txt` is still
+there. The exit status is 1 because the loop itself failed — `PROMPT.md` is missing. That is worth
+being explicit about: this control proves the *cleanup* path, and the directory it proves it on is
+one the loop rejects before writing anything, because a first-run `TARGET` with only `PLAN.md` dies
+on the missing prompt. The control answers "does a hand-written directory survive a failing
+`resume.sh`", not "does a real user's target survive". Those are different questions, and only the
+first is measured here.
 
-And `run.sh` refuses rather than emptying it — including when it would have had to create `RUN_DIR`
-to hold a pre-populated `TARGET`:
+`run.sh` refuses such a directory outright, including when it has to create `RUN_DIR` to hold a
+pre-populated `TARGET`:
 
 ```console
-$ mkdir -p .scratch/band-b-evidence/pre-populated-target/target
-$ printf 'hand written\n' > .scratch/band-b-evidence/pre-populated-target/target/notes.txt
-$ RUN_DIR=.scratch/band-b-evidence/pre-populated-target/runs/new \
-    TARGET=.scratch/band-b-evidence/pre-populated-target/target \
-    ./real-world-scenarios/band-b-local-job-agent/durable/run.sh 1
+$ env RUN_DIR=.scratch/band-b-evidence/pre-populated-target/runs/new TARGET=.scratch/band-b-evidence/pre-populated-target/target ./real-world-scenarios/band-b-local-job-agent/durable/run.sh 1
 run.sh: refusing to use .scratch/band-b-evidence/pre-populated-target/target: TARGET already has content
         Point RUN_DIR (and TARGET) at a new or empty path, or remove it yourself.
         run.sh does not empty a directory it cannot prove it created.
-
-$ echo "exit=$?"
 exit=2
+
 $ ls -A .scratch/band-b-evidence/pre-populated-target/runs
+exit=0
+
 $ ls -A .scratch/band-b-evidence/pre-populated-target/target
 notes.txt
+exit=0
 ```
 
 Two things to read out of that: the `runs/` directory `run.sh` had already created for itself is
 gone again (it was marked, so the script removed it when it refused), and the caller's `target/`
 and its `notes.txt` are untouched.
 
-### A directory the script created is still removed
+### A directory the script created
+
+`run.sh`, when it created the directory and the run finished:
 
 ```console
-$ RUN_DIR=.scratch/band-b-evidence/created-by-run \
-    ./real-world-scenarios/band-b-local-job-agent/durable/run.sh 1
-...
+$ env RUN_DIR=.scratch/band-b-evidence/created-by-run ./real-world-scenarios/band-b-local-job-agent/durable/run.sh 1
+target:    .scratch/band-b-evidence/created-by-run/target
+dotnet:    /opt/homebrew/bin/dotnet (10.0.402)
+
+target:    /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-190-b2/.scratch/band-b-evidence/created-by-run/target
+store:     /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-190-b2/.scratch/band-b-evidence/created-by-run/target/.durable/store.jsonl
+model:     gpt-5.1-codex-mini (pinned)
+plan:      /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-190-b2/.scratch/band-b-evidence/created-by-run/target/PLAN.md
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+max:       1 iterations
+run:       new durable task t8 (cap 1, written to the store)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+=== Iteration 1/1 ===
+  plan digest: 3e60cf2491efcc1c
+  agent-turn: no memo step/1/agent-turn — running the turn
+  ⚙ view
+  ⚙ view
+  ⚙ edit
+  ⚙ bash
+  ⚙ edit
+  agent-turn: done; memo step/1/agent-turn written
+  reconcile: no plan item changed; 10 item(s) still open
+iteration 1 complete.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+iteration cap reached: 1 iterations and the plan is not complete.
+first open item: - [ ] `docs/section-01.md`: add the missing H1
+
 iteration cap reached; the plan is still open. See the loop output above.
 target: .scratch/band-b-evidence/created-by-run/target
-$ echo "exit=$?"
 exit=3
-$ ls -d .scratch/band-b-evidence/created-by-run 2>&1
+
+$ ls -d .scratch/band-b-evidence/created-by-run
 ls: .scratch/band-b-evidence/created-by-run: No such file or directory
+exit=1
 ```
 
-And the same for `resume.sh`, which is the process that usually cleans up a kept run:
+`resume.sh`, on a run kept across the two processes:
 
 ```console
-$ RUN_DIR=.scratch/band-b-evidence/created-kept KEEP=1 STOP_AFTER_ITERATION=1 \
-    ./real-world-scenarios/band-b-local-job-agent/durable/run.sh 10
-...
+$ env RUN_DIR=.scratch/band-b-evidence/created-kept KEEP=1 STOP_AFTER_ITERATION=1 ./real-world-scenarios/band-b-local-job-agent/durable/run.sh 10
+target:    .scratch/band-b-evidence/created-kept/target
+dotnet:    /opt/homebrew/bin/dotnet (10.0.402)
+
+target:    /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-190-b2/.scratch/band-b-evidence/created-kept/target
+store:     /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-190-b2/.scratch/band-b-evidence/created-kept/target/.durable/store.jsonl
+model:     gpt-5.1-codex-mini (pinned)
+plan:      /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-190-b2/.scratch/band-b-evidence/created-kept/target/PLAN.md
+stopping: after iteration 1 commits (STOP_AFTER_ITERATION)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+max:       10 iterations
+run:       new durable task t8 (cap 10, written to the store)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+=== Iteration 1/10 ===
+  plan digest: 3e60cf2491efcc1c
+  agent-turn: no memo step/1/agent-turn — running the turn
+  ⚙ bash
+  ⚙ bash
+  ⚙ bash
+  ⚙ bash
+  agent-turn: done; memo step/1/agent-turn written
+  reconcile: no plan item changed; 10 item(s) still open
+iteration 1 complete.
+stopping: iteration 1 is committed (STOP_AFTER_ITERATION=1).
+
+run:       stopped at a committed iteration boundary.
+           the store holds the checkpoint; the next process resumes from it.
+
 stopped at the seam: iteration 1 is committed, the run is not finished.
+resume with: KEEP=1 RUN_DIR=.scratch/band-b-evidence/created-kept ./resume.sh
+target: .scratch/band-b-evidence/created-kept/target
 kept: .scratch/band-b-evidence/created-kept/target
+exit=0
+
 $ ls -A .scratch/band-b-evidence/created-kept
 .band-b-scratch
 target
-$ RUN_DIR=.scratch/band-b-evidence/created-kept \
-    ./real-world-scenarios/band-b-local-job-agent/durable/resume.sh
-...
-verified: the target matches the plan
-kept: .scratch/band-b-evidence/created-kept/target
-$ echo "exit=$?"
 exit=0
-$ ls -d .scratch/band-b-evidence/created-kept 2>&1
+
+$ env RUN_DIR=.scratch/band-b-evidence/created-kept ./real-world-scenarios/band-b-local-job-agent/durable/resume.sh
+target:    .scratch/band-b-evidence/created-kept/target
+dotnet:    /opt/homebrew/bin/dotnet (10.0.402)
+
+target:    /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-190-b2/.scratch/band-b-evidence/created-kept/target
+store:     /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-190-b2/.scratch/band-b-evidence/created-kept/target/.durable/store.jsonl
+model:     gpt-5.1-codex-mini (pinned)
+plan:      /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-190-b2/.scratch/band-b-evidence/created-kept/target/PLAN.md
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+max:       10 iterations (from the run's stored input)
+run:       resuming durable task t8 (restarts before this process: 0)
+resuming at iteration 2
+last stage: iteration-complete, plan digest af36a70803b9c0e2
+  recorded step: agent-turn — I finished both items for this pass and ticked them in `PLAN.md`. (4 tool calls)
+  recorded step: reconcile — no plan item changed; 10 item(s) still open
+memos on record: 2
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+=== Iteration 2/10 ===
+  plan digest: af36a70803b9c0e2
+  agent-turn: no memo step/2/agent-turn — running the turn
+  ⚙ view
+  ⚙ bash
+  ⚙ edit
+  ⚙ edit
+  ⚙ bash
+  ⚙ edit
+  ⚙ edit
+  agent-turn: done; memo step/2/agent-turn written
+  reconcile: no plan item changed; 8 item(s) still open
+iteration 2 complete.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+=== Iteration 3/10 ===
+  plan digest: bbef84d1f745f802
+  agent-turn: no memo step/3/agent-turn — running the turn
+  ⚙ bash
+  ⚙ bash
+  ⚙ bash
+  agent-turn: done; memo step/3/agent-turn written
+  reconcile: formatted 2 section heading(s); 6 item(s) still open
+iteration 3 complete.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+=== Iteration 4/10 ===
+  plan digest: 603155e8dfaf31ae
+  agent-turn: no memo step/4/agent-turn — running the turn
+  ⚙ bash
+  ⚙ bash
+  ⚙ edit
+  ⚙ edit
+  ⚙ bash
+  ⚙ bash
+  agent-turn: done; memo step/4/agent-turn written
+  reconcile: no plan item changed; 4 item(s) still open
+iteration 4 complete.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+=== Iteration 5/10 ===
+  plan digest: 07a6a447bbae9275
+  agent-turn: no memo step/5/agent-turn — running the turn
+  ⚙ bash
+  ⚙ bash
+  agent-turn: done; memo step/5/agent-turn written
+  reconcile: formatted 2 section heading(s); 2 item(s) still open
+iteration 5 complete.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+=== Iteration 6/10 ===
+  plan digest: 936e4e5d11031cb7
+  agent-turn: no memo step/6/agent-turn — running the turn
+  ⚙ bash
+  ⚙ bash
+  ⚙ bash
+  ⚙ bash
+  agent-turn: done; memo step/6/agent-turn written
+  reconcile: formatted 2 section heading(s); plan has no open item
+iteration 6 complete.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+plan reports complete after 6 iteration(s).
+
+verified: the target matches the plan
+exit=0
+
+$ ls -d .scratch/band-b-evidence/created-kept
 ls: .scratch/band-b-evidence/created-kept: No such file or directory
+exit=1
 ```
 
-The marker is visible in the second listing — that is the file that tells `resume.sh` the directory
-is its own to remove. `KEEP=1` still wins in both scripts, which is how the flows in §1–§5 kept
-their directories long enough to be diffed.
+The `.band-b-scratch` marker is visible in the `ls` between the two processes — that is the file
+that tells `resume.sh` the directory is its own to remove, and its absence from the hand-written
+directory above is why that one survived. `KEEP=1` wins in both scripts, which is how the flows in
+§1–§5 kept their directories long enough to be diffed.
 
 ---
 
@@ -996,9 +1154,10 @@ their directories long enough to be diffed.
 - The divergence flow (`run.sh 10` stopping at 2, hand-edited `PLAN.md`, `resume.sh`) — exit 0,
   verified.
 - The in-flight flow (`STOP_AFTER_ITERATION=2 STOP_MID_TURN=1`, then `resume.sh`) — process 1
-  exits 1 with the task left at `turn-started`; process 2 fails the run with the message in §3c,
-  after printing what the store holds.
-- Both marker directions (§7), against hand-written and script-created directories.
+  exits 1 with the task left at `turn-started`; process 2 reports the store's account (§3c) and
+  fails the run.
+- The store probes in §2 and §3c, read from the JSONL files themselves.
+- All four scratch-directory controls (§7), each as a whole recorded transcript.
 - `dotnet build` of `durable/ralph-loop-durable.cs` — clean.
 
 **Did not run:**
@@ -1045,15 +1204,18 @@ layer cannot tell what a dead turn did":
 
 - The layer **does** record each completed tool call (`RecordToolCheckpoint`, `lib:4271`) on the
   conversation's `durable.checkpoint` document, and that document is `DocumentHistory.Rewindable`,
-  so a finished turn's calls are readable afterwards.
-- What it does **not** do is commit those records at the point of the call. They are queued per
-  conversation and awaited by the completion barrier at the end of the turn
-  (`CheckpointBarrierAsync`, `lib:4150`), so a process that dies mid-turn can take uncommitted tool
-  records with it. §3c captures exactly that: the turn was issued, one tool call completed, and the
-  store holds neither the call nor the turn.
-- And it does **not** offer replay. The SDK will not continue a half-finished turn, so
+  so a run that finishes keeps its per-turn history.
+- The layer does **not** commit those records while the turn is running. Each one is queued on the
+  conversation's serial chain (`QueueCheckpointAsync`, `lib:4074`) and the queue is drained by
+  `CheckpointBarrierAsync` (`lib:4150`), which `SubmitAsync` reaches at `lib:4246` only when the
+  turn returned. A turn that is cancelled or throws never drains it. §3c's store dump is the
+  measured consequence: the dead turn's conversation has an `admitted` admission and no
+  `durable.checkpoint` document, while every finished turn ends at `turn`.
+- The layer does **not** offer replay. The SDK will not continue a half-finished turn, so
   `Stage = "turn-started"` is a state the variant can describe but not recover from.
 
-Closing the second point would need either per-tool-call replay in the SDK, or a tool record
-written *before* each call and settled after it — a durable cursor rather than a history. That is a
-real feature request, and it is written up in the PR for #150 rather than attempted in this tree.
+Closing that needs two things, and the first is the one a durable host would notice: a tool record
+written *before* the call and settled after it, so the store can distinguish an interrupted call
+from one that never started; and per-call replay in the SDK, so the turn can continue. A history
+drained at success gives neither. That is a real feature request, and it is written up in the PR
+for #150 rather than attempted in this tree.

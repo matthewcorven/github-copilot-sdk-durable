@@ -216,25 +216,28 @@ that already holds content is refused with exit 2 instead of being emptied.
 - **The plan file stays the input.** A resume reads its position from the store and the work list
   from the file, and corrects a hand-ticked item whose change is not on disk.
 
-Cost, measured: `durable/ralph-loop-durable.cs` is 658 code lines, of which 289 exist only for
-durability (44%). `baseline/ralph-loop.cs` has 0. The counting rule and a per-region table whose
+Cost, measured: `durable/ralph-loop-durable.cs` is 663 code lines, of which 283 exist only for
+durability (43%). `baseline/ralph-loop.cs` has 0. The counting rule and a per-region table whose
 rows sum to those totals are in `evidence/durable-kill-and-resume.md` §6.
 
 The honest limit, in two parts. The memo boundary is the *turn*, not the tool call inside it, and
 the layer is asymmetric about that boundary:
 
-- **It records.** Every completed tool call becomes a `tool` checkpoint on the conversation's
-  `durable.checkpoint` document, which keeps full history. A finished turn's calls can be read back
-  from the store, and a resume reports the dead turn's outcome from that record.
-- **It does not replay.** The SDK will not continue a half-finished turn, and the layer commits the
-  queued tool records at the turn's completion barrier rather than at the call. A process that dies
-  mid-turn can therefore leave the store knowing the turn was issued and holding none of its calls.
-  The variant reports exactly that and fails the run, rather than re-issuing a turn that may have
-  already written files.
+- **It records a turn that returns.** Every completed tool call becomes a `tool` checkpoint on the
+  conversation's `durable.checkpoint` document, which keeps full history. A finished turn's calls
+  can be read back from the store, and a resume reports that turn's outcome from the record.
+- **It records nothing from a turn that does not return.** Each tool record is queued on the
+  conversation's serial chain and the queue is drained at the turn's completion barrier, so a
+  cancelled or failed turn never drains it. The store is left with the turn's admission and the
+  loop's own `turn-started` checkpoint, and no tool record at all — not a partial list.
+- **It does not replay.** The SDK will not continue a half-finished turn, so the variant reports
+  what the store holds and fails the run, rather than re-issuing a turn that may have already
+  written files.
 
-So a dead turn's work is *observable*, not *replayable* — and only as observable as the records
-that had committed. §3 of the evidence captures all three cases: memo rebuilt from a checkpoint
-(3a), memo hit and the step skipped (3b), and the unrecoverable in-flight turn (3c).
+So a dead turn's work is *observable* only to the extent of "which iteration was in flight, and
+what the plan looked like when it started", and never *replayable*. §3 of the evidence captures all
+three cases: memo rebuilt from a checkpoint (3a), memo hit and the step skipped (3b), and the
+unrecoverable in-flight turn, with the store dumped before the resume reads it (3c).
 
 Full transcript with diffs, the cap demonstration, the plan-divergence demonstration, and the
 scratch-directory controls: `evidence/durable-kill-and-resume.md`.

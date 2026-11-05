@@ -168,7 +168,9 @@ static async Task<int> DurableLoopAsync(string[] args)
 
         // The headline line. A second process says where it is picking up, and it read that from
         // the store — not from the markdown, and not from the command line.
-        Console.WriteLine($"run:       resuming durable task {prior.Id} (restarts before this one: {prior.Restarts})");
+        // The count on the record is the one written by previous processes. This process's own
+        // restart is added by the runner when it re-enters the task, which has not happened yet.
+        Console.WriteLine($"run:       resuming durable task {prior.Id} (restarts before this process: {prior.Restarts})");
         Console.WriteLine($"resuming at iteration {checkpoint.Iteration + 1}");
         Console.WriteLine($"last stage: {checkpoint.Stage}, plan digest {checkpoint.PlanDigest ?? "(none recorded)"}");
         foreach (var step in checkpoint.Steps)
@@ -459,11 +461,15 @@ static async Task<(string Text, int ToolCalls, bool Interrupted)> RunAgentTurnAs
         }
 
         // The in-flight seam: the process leaves with the turn unfinished, which is the one state
-        // a memo cannot recover. It is anchored on a tool call *completing* — not on the next one
-        // starting, which would race the runtime's own dispatch — so the call count is fixed:
-        // MID_TURN_COMPLETED calls are in the store, the one in flight is not. The store is closed
-        // properly rather than torn down, so the record is the one a crash would leave:
-        // `turn-started`, no turn checkpoint, and the completed tool calls.
+        // a memo cannot recover. It is anchored on a tool call *completing* rather than on the
+        // next one starting, so the stop point is the runtime's, not a race with its dispatch.
+        // Anchor choice is the whole of what it controls: the completed call is not in the store.
+        // `RecordToolCheckpoint` queues each tool record on the conversation's serial chain and
+        // never awaits it; the chain is drained by `CheckpointBarrierAsync`, which only the
+        // success path reaches. A turn that does not return is never drained, so the store ends up
+        // with the loop's `turn-started` checkpoint, the turn's admission, and no tool record at
+        // all. That is the state the resume has to describe, and it is why the anchor is on a
+        // completion the store will never see.
         if (evt is ToolExecutionCompleteEvent && ++completed == Job.MidTurnCompleted
             && stopAfter > 0 && iteration >= stopAfter && StopMidTurn() && !interrupted)
         {
@@ -482,9 +488,9 @@ static async Task<(string Text, int ToolCalls, bool Interrupted)> RunAgentTurnAs
     catch (OperationCanceledException) when (interrupted)
     {
         // The send was cancelled on purpose; the turn is left as an unrecorded, in-flight turn.
-        // The layer queues a tool checkpoint on every completed call and awaits the queue at the
-        // turn's completion barrier, so an abandoned turn has its records still in flight. The
-        // store then holds the turn and not its calls, which is exactly what the resume reports.
+        // No tool record reaches the store either: the queue is awaited only at the turn's
+        // completion barrier, which this path does not reach, so the queued records are discarded
+        // with the conversation. The resume is the process that has to say so.
         return (string.Empty, toolCalls, true);
     }
 
@@ -577,21 +583,28 @@ static void ReportInFlightTurn(DurableStore store, int iteration)
     if (!recorded.Any(entry => entry.Kind == "turn"))
     {
         Console.WriteLine($"  iteration {iteration}'s turn is recorded as issued and never finished.");
-        Console.WriteLine($"  the store holds {(calls.Count == 0 ? "no" : calls.Count.ToString())} completed tool call(s) for it:");
-        foreach (var call in calls)
-        {
-            var args = call.ToolArgs is { Length: > 0 } raw
-                ? " " + Truncate(raw.ReplaceLineEndings(" "), 60)
-                : string.Empty;
-            Console.WriteLine($"    {call.ToolName ?? "(unknown tool)"}{args} — {(call.Success == false ? "failed" : "ok")}");
-        }
-
         if (calls.Count == 0)
         {
-            Console.WriteLine("  the turn's tool writes were queued and not committed: the process left first.");
+            // The expected case, and the reason the report is worded this way: the layer queues a
+            // tool record per completed call and drains the queue only when the turn returns, so a
+            // turn that does not return leaves no tool record at all — not a partial list.
+            Console.WriteLine("  the store holds no tool record for it: the layer drains tool records");
+            Console.WriteLine("  when the turn returns, and this turn never did.");
+        }
+        else
+        {
+            Console.WriteLine($"  the store holds {calls.Count} tool record(s) for it:");
+            foreach (var call in calls)
+            {
+                var args = call.ToolArgs is { Length: > 0 } raw
+                    ? " " + Truncate(raw.ReplaceLineEndings(" "), 60)
+                    : string.Empty;
+                Console.WriteLine($"    {call.ToolName ?? "(unknown tool)"}{args} — {(call.Success == false ? "failed" : "ok")}");
+            }
         }
 
-        Console.WriteLine("  that is the whole of what the store can say: the turn is observable, not replayable.");
+        Console.WriteLine("  what the store does hold is the admission and the loop's turn-started checkpoint:");
+        Console.WriteLine("  the turn is observable to that extent, and not replayable.");
         return;
     }
 
@@ -921,7 +934,9 @@ static class Job
     // The model `upstream/ralph-loop.ts` pins, and the model the baseline pins.
     public const string PinnedModel = "gpt-5.1-codex-mini";
 
-    // How many completed tool calls the in-flight seam leaves behind before stopping the turn.
+    // How many completed tool calls the in-flight seam waits for before stopping the turn. It
+    // fixes *when* the stop happens; it does not fix what the store retains from those calls,
+    // which is nothing — a turn that never returns is never drained.
     public const int MidTurnCompleted = 1;
 }
 
