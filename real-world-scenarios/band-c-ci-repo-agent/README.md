@@ -26,6 +26,7 @@ conversation document in this tree.
 | `run.sh` | Two runs: one full triage, then a second that reads the state back and is inside the cooldown. |
 | `FIDELITY.md` | What is faithful, what is reduced, and what that means for the matrix. Read it before quoting a number. |
 | `evidence/two-runs.md` | The captured stdout of both runs, with the command that produced them. |
+| `faults/` | Six faults — `kill-mid-turn`, `restart-after-checkpoint`, `duplicate-delivery`, `concurrent-clients`, `store-outage`, `cooldown-desync` — each run against both variants with a `--fault-not-injected` control. `./faults/run-all.sh` renders the matrix from the checked-in results. |
 
 ## Pinned source
 
@@ -221,6 +222,7 @@ real-world-scenarios/band-c-ci-repo-agent/
 │       └── pull-requests.json      # 17 fixed PRs, the Phase 1 snapshot
 ├── evidence/
 │   └── two-runs.md                 # captured stdout of both runs
+├── faults/                         # six faults against both variants, controls included
 └── upstream/
     ├── LICENSE                     # MIT, github/gh-aw
     ├── PROVENANCE.md               # repo, commit, paths, hashes
