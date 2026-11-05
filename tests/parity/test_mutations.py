@@ -30,14 +30,16 @@ class FactMutationTests(unittest.TestCase):
                 ("transaction", "this.undoLog?.undo();", "void this.undoLog;", "rollback leaked a partial entry"),
                 ("fork", "return boundaries.has(entry) || !kinds || [...kinds].some(kind => !internalKinds.has(kind));",
                  "return true;", "inherited bookkeeping or post-boundary entry leaked"),
-                ("recovery", "return task.memos[key] ?? null;", "return null;", "repeated the side effect"),
+                ("recovery", "      return task.memos[key] ?? null;\n    });", "      return null;\n    });", "repeated the side effect"),
                 ("abort", "await this.abortTaskAsync(child.id, cancellationToken);",
                  "void child;", "abort must visit each owned task once"),
             ],
             "py": [
                 ("transaction", "self._undo.undo(self)", "pass", "rollback leaked a partial entry"),
                 ("fork", "if entry not in bookkeeping][:limit]", "if True][:limit]", "inherited bookkeeping or later entry leaked"),
-                ("recovery", "return task.memos.get(key)", "return None", "repeated the side effect"),
+                ("recovery", "            return task.memos.get(key)\n\n    async def sleep_until_async",
+                 "            return task.memos.get(key) if False else None\n\n    async def sleep_until_async",
+                 "repeated the side effect"),
                 ("abort", "await self.abort_task_async(child.id, cancellation)", "pass", "Lists differ"),
             ],
         }

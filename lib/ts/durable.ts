@@ -498,7 +498,13 @@ export class TaskRuntime {
     this.store.scheduleTask(taskId, cancellationToken);
   }
 
-  /** Reads an idempotency memo, or writes one when `value` is supplied. */
+  /**
+   * Reads an idempotency memo, or writes one when `value` is supplied.
+   *
+   * Call this from a phase handler, not from inside a `commitAsync` callback: it takes the
+   * store's commit gate, which the commit already holds, so it does not return. Use
+   * `transaction.memo` inside a transaction.
+   */
   memoAsync(key: string, value?: JsonValue): Promise<JsonValue | null> {
     return this.store.memoAsync(this.task.id, key, value);
   }
@@ -1981,6 +1987,38 @@ export class Transaction {
       definition.fork,
       DurableJson.toElement(definition.initial()),
     );
+  }
+
+  /**
+   * Reads or writes an idempotency memo as part of this transaction.
+   *
+   * `taskRuntime.memoAsync` is the form to call from a phase handler, outside a transaction.
+   * It takes the store's commit gate, and so does the commit that is running the handler, so
+   * calling it from inside a commit callback waits for a release that cannot happen: the gate
+   * is not reentrant and the callback cannot return. That is a hang, not an error.
+   *
+   * This method exists for the one shape the other cannot express: an external effect whose
+   * memo has to commit with the checkpoint, so a crash between the effect and its record
+   * leaves either both or neither.
+   */
+  memo(taskId: string, key: string, value?: JsonValue): JsonValue | null {
+    const task = this.provider.task(taskId);
+    if (task === null) {
+      return null;
+    }
+
+    if (value !== undefined) {
+      task.memos[key] = DurableJson.clone(value);
+      // The task record changed inside the transaction, so the provider is told about it; that is
+      // what arms the undo with the pre-transaction memo map. A rollback then discards this write —
+      // including on the *next* failed transaction, which restores the snapshot the undo put back
+      // into the provider's baseline rather than the state this write produced.
+      // `UndoLog.restore` is where both halves of that live.
+      this.provider.updateTask(task);
+      return task.memos[key];
+    }
+
+    return task.memos[key] ?? null;
   }
 
   /** Creates a task and returns its record. */

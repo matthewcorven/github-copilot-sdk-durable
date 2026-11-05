@@ -417,7 +417,12 @@ class TaskRuntime:
         self._store.schedule_task(task_id, cancellation)
 
     async def memo_async(self, key: str, value: Any = None) -> Any:
-        """Reads an idempotency memo, or writes one when ``value`` is supplied."""
+        """Reads an idempotency memo, or writes one when ``value`` is supplied.
+
+        Call this from a phase handler, not from inside a ``commit_async`` callback: it takes
+        the store's commit gate, which the commit already holds, so it does not return. Use
+        ``transaction.memo`` inside a transaction.
+        """
         return await self._store.memo_async(self.task.id, key, value)
 
     async def sleep_until_async(
@@ -828,9 +833,27 @@ class UndoLog:
         """Records a restore action, such as resetting the write sequence."""
         self._actions.append(restore)
 
-    def restore(self, snapshot: TaskStateSnapshot, task: DurableTaskRecord) -> None:
-        """Records the task's own state, so a failed phase leaves the checkpoint where it was."""
-        self._actions.append(lambda: snapshot.apply_to(task))
+    def restore(
+        self,
+        snapshot: TaskStateSnapshot,
+        task: DurableTaskRecord,
+        states: dict[str, TaskStateSnapshot],
+    ) -> None:
+        """Records the task's own state, so a failed phase leaves the checkpoint where it was.
+
+        The record is not the only thing to put back. The provider keeps a baseline of each
+        task's last known state so the *next* transaction can arm its own undo with it, and
+        :meth:`InMemoryStoreProvider.update_task` has already moved that baseline forward to the
+        state this transaction wrote. Restoring only the record leaves the baseline ahead of it, so
+        the next failed transaction restores the state this one discarded — a memo or checkpoint
+        that reappears one rollback later. Both are put back here.
+        """
+
+        def action() -> None:
+            snapshot.apply_to(task)
+            states[task.id] = snapshot
+
+        self._actions.append(action)
 
     def undo(self, provider: DurableStoreProvider) -> None:
         """Undoes every recorded mutation, most recent first."""
@@ -1167,7 +1190,7 @@ class InMemoryStoreProvider(DurableStoreProvider):
         current = TaskStateSnapshot.capture(record)
         previous = self._task_states.get(record.id)
         if self._undo is not None and previous is not None:
-            self._undo.restore(previous, record)
+            self._undo.restore(previous, record, self._task_states)
         self._task_states[record.id] = current
 
     @staticmethod
@@ -2357,6 +2380,35 @@ class Transaction:
             definition.fork,
             DurableJson.to_wire(definition.initial_value()),
         )
+
+    def memo(self, task_id: str, key: str, value: Any = None) -> Any:
+        """Reads or writes an idempotency memo as part of this transaction.
+
+        ``task_runtime.memo_async`` is the form to call from a phase handler, outside a
+        transaction. It takes the store's commit gate, and so does the commit that is running
+        the handler, so calling it from inside a commit callback waits for a release that
+        cannot happen: the gate is not reentrant and the callback cannot return. That is a
+        hang, not an error.
+
+        This method exists for the one shape the other cannot express: an external effect
+        whose memo has to commit with the checkpoint, so a crash between the effect and its
+        record leaves either both or neither.
+        """
+        task = self._provider.task(task_id)
+        if task is None:
+            return None
+
+        if value is not None:
+            task.memos[key] = DurableJson.clone(value)
+            # The task record changed inside the transaction, so the provider is told about it;
+            # that is what arms the undo with the pre-transaction memo map. A rollback then
+            # discards this write — including on the *next* failed transaction, which restores the
+            # snapshot the undo put back into the provider's baseline rather than the state this
+            # write produced. ``UndoLog.restore`` is where both halves of that live.
+            self._provider.update_task(task)
+            return task.memos[key]
+
+        return task.memos.get(key)
 
     def create_task(
         self,
