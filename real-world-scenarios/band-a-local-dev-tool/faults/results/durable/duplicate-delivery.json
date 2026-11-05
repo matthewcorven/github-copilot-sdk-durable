@@ -1,0 +1,16 @@
+{
+  "variant": "durable",
+  "fault": "duplicate-delivery",
+  "outcome": "doubled",
+  "phase": "the same enquiry delivered twice",
+  "detail": "Two deliveries of the same enquiry produced 2 cards, 2 enquiry documents, 2 model admissions and 2 search tool call(s), across 18 transcript entries. The variant has no identity for an enquiry to deduplicate on, so the second delivery is a second conversation: the search and the report happen twice, and the store keeps both documents intact — nothing was corrupted, but nothing was reused either.",
+  "evidence": "deliveries=2; cards=2; enquiry documents=2; task records=2; admissions=2; search tool calls=2; exception/cross-talk lines=0 [none]; transcript of the last document=phase; intent:Validate home enquiry; phase; intent:Searching listings; tool:1 match(es); phase; phase; answer:The report is written an; report:The report is written an; the headless driver path cannot express this fault at all: Headless.VerifyIsolation throws when two documents carry the same enquiry text, so the duplicate is delivered through the page, as a customer would",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "tools/ReplayRuntime",
+    "command": "./faults/duplicate-delivery.sh --variant durable",
+    "script": "duplicate-delivery.sh",
+    "commit": "4ab32e3371a4738eac5ac1c1c6ee7fd64d9b2cc8"
+  },
+  "recordedAt": "2026-11-05T17:19:07.312236+00:00"
+}

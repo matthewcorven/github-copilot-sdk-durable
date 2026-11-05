@@ -1,0 +1,94 @@
+## Fault matrix — outcome per fault per variant
+
+| Fault | baseline | durable |
+| --- | --- | --- |
+| `kill-mid-turn` | **lost** | **resumed** |
+| `restart-after-checkpoint` | **lost** | **resumed** |
+| `duplicate-delivery` | **doubled** | **doubled** |
+| `concurrent-clients` | **not corrupted** | **not corrupted** |
+| `store-outage` | **not exercised** | **failed safely, with a split store** |
+
+## What each result observed
+
+### `kill-mid-turn`
+
+| Variant | Outcome | Phase | Detail |
+| --- | --- | --- | --- |
+| baseline | **lost** | a model turn in flight (a tool result held by the gate, the answer not yet rece… | The enquiry was mid-turn when pid 10785 was killed. A new process, same port, same working directory, shows 0 cards: processing 0, completed 0, rejected 0. Nothing resumes: the agent lived in a Dictionary<string, Agent> that died with the process, and the SDK session id was never retained. |
+| durable | **resumed** | committed at validating when the process was killed | The kill left a committed document at phase validating with 2 entries and task status running. A new process resumed 1 task(s) at phase validating and finished with task terminal at phase done, 10 entries, restarts=1, exit 0, report 46 characters. The turn that was cut off committed no answer, so the new process sends it again: the pass is re-sent and its earlier intents are committed a second time — 4 repeated entr(y/ies) against the control. What the resume guarantees is that everything before the committed checkpoint is not redone; it does not make the interrupted turn happen once. |
+
+### `restart-after-checkpoint`
+
+| Variant | Outcome | Phase | Detail |
+| --- | --- | --- | --- |
+| baseline | **lost** | committed at nothing the restart can read (the baseline writes no state) | The server was stopped with SIGTERM (a committed phase, process stopped while waiting on the runtime; status 0 reported by the shell, which is not evidence of an orderly stop (the application registers no handler)) and restarted. It shows 0 cards: processing 0, completed 0. Whatever phase had committed is gone with the process, so there is no checkpoint for a restart to resume from. |
+| durable | **resumed** | committed at validating when the process was stopped (SIGTERM while waiting on … | The restart resumed 1 task(s) from the committed checkpoint (validating, 2 entries) and finished at done with 10 entries (task terminal, exit 0). The checkpoint was honoured — the finished part was not re-run from the start — but the pass that was cut off was sent again, so the transcript carries 4 repeated entr(y/ies) relative to the control. Replay of the interrupted turn is not eliminated by the checkpoint; only work before the checkpoint is. |
+
+### `duplicate-delivery`
+
+| Variant | Outcome | Phase | Detail |
+| --- | --- | --- | --- |
+| baseline | **doubled** | the same enquiry delivered twice | Two deliveries of the same enquiry produced 2 agents on the page (Need a downtown condo with parking, 1-2 bedrooms, under $350k \| Need a downtown condo with parking, 1-2 bedrooms, under $350k) and 2 model turns reached the runtime. The application has no identity for an enquiry, so the second delivery is a second agent: its side effects — a Copilot session, a search, a report — happen twice. |
+| durable | **doubled** | the same enquiry delivered twice | Two deliveries of the same enquiry produced 2 cards, 2 enquiry documents, 2 model admissions and 2 search tool call(s), across 18 transcript entries. The variant has no identity for an enquiry to deduplicate on, so the second delivery is a second conversation: the search and the report happen twice, and the store keeps both documents intact — nothing was corrupted, but nothing was reused either. |
+
+### `concurrent-clients`
+
+| Variant | Outcome | Phase | Detail |
+| --- | --- | --- | --- |
+| baseline | **not corrupted** | two enquiries in flight together | Both enquiries completed with the first held inside a tool call when the second was submitted: 2 agents on the page, completed=2, rejected=0, 2 model turn(s) reached the runtime. In this sample the dictionary race did not manifest — the defect is present in the code (unlocked Dictionary<string, Agent> mutated from every run task), but one concurrent pair is not enough to make it throw. This row is a tie on behaviour and a difference only in the code. |
+| durable | **not corrupted** | two enquiries in flight together | 2 enquiry documents and 2 task records, all 2 terminal, 16 transcript entries and 0 entries crossing documents. The commit gate serialized the two writers, so neither document saw the other's entries. |
+
+### `store-outage`
+
+| Variant | Outcome | Phase | Detail |
+| --- | --- | --- | --- |
+| baseline | **not exercised** | a store that holds agent state | The baseline keeps every agent in an in-process Dictionary<string, Agent> and writes no agent state to disk for the lifetime of the process. There is no store file to remove, lock, or corrupt: properties.db holds property listings only, and an outage of it would test the search tool rather than the durability of an enquiry. Removing it mid-run was not substituted, because a different fault reported under this name would be worse than an honest absence. |
+| durable | **failed safely, with a split store** | a model turn in flight, store removed mid-write | The store was moved aside mid-turn. The application did not stop writing: it created a new file at the same path, so the live path was recreated and now holds phase done with 9 entries, in 51 records, while the moved file still holds the committed prefix intact (28 records, 0 torn, phase validating, 2 entries, phase; intent:Validate home enquiry). Nothing was lost, but the state is now in two files: an operator reading the live path sees a different enquiry history from the one the process held a moment before the outage, and restoring the moved file would be a second store rather than a merge. The application fails safe in the sense that it reports no corruption and keeps writing; it does not fail loudly, and it does not tell anyone the old file was gone. |
+
+## Before/after controls
+
+Each control runs the same steps with the injection removed. The fault and its control are
+different only in whether the fault happened, so a difference between them is attributable to it.
+
+| Fault | Variant | Control outcome | Fault outcome | Control phase | Fault phase |
+| --- | --- | --- | --- | --- | --- |
+| `kill-mid-turn` | baseline | control: completed | lost | an uninterrupted model turn (the control) | a model turn in flight (a tool result held by the… |
+| `kill-mid-turn` | durable | control: completed | resumed | an uninterrupted model turn (the control) | committed at validating when the process was kill… |
+| `restart-after-checkpoint` | baseline | control: lost | lost | committed at nothing the restart can read (the ba… | committed at nothing the restart can read (the ba… |
+| `restart-after-checkpoint` | durable | control: resumed | resumed | committed at queued when the process was stopped … | committed at validating when the process was stop… |
+| `duplicate-delivery` | baseline | control: single delivery | doubled | the same enquiry delivered once (the control) | the same enquiry delivered twice |
+| `duplicate-delivery` | durable | control: single delivery | doubled | the same enquiry delivered once (the control) | the same enquiry delivered twice |
+| `concurrent-clients` | baseline | control: not corrupted | not corrupted | two enquiries submitted one after the other (the … | two enquiries in flight together |
+| `concurrent-clients` | durable | control: not corrupted | not corrupted | two enquiries submitted one after the other (the … | two enquiries in flight together |
+| `store-outage` | durable | control: completed | failed safely, with a split store | a model turn in flight, store left in place (the … | a model turn in flight, store removed mid-write |
+
+## Provenance
+
+Checked out at `4ab32e3371a4`; every result's `harness.commit` is compared against it.
+
+## Harness status
+
+- `baseline` kill-mid-turn: exit 0
+- `baseline` kill-mid-turn-control: exit 0
+- `baseline` restart-after-checkpoint: exit 0
+- `baseline` restart-after-checkpoint-control: exit 0
+- `baseline` duplicate-delivery: exit 0
+- `baseline` duplicate-delivery-control: exit 0
+- `baseline` concurrent-clients: exit 0
+- `baseline` concurrent-clients-control: exit 0
+- `baseline` store-outage: exit 0
+- `durable` kill-mid-turn: exit 0
+- `durable` kill-mid-turn-control: exit 0
+- `durable` restart-after-checkpoint: exit 0
+- `durable` restart-after-checkpoint-control: exit 0
+- `durable` duplicate-delivery: exit 0
+- `durable` duplicate-delivery-control: exit 0
+- `durable` concurrent-clients: exit 0
+- `durable` concurrent-clients-control: exit 0
+- `durable` store-outage: exit 0
+- `durable` store-outage-control: exit 0
+
+## Not exercised, and why
+
+- `baseline` / `store-outage`: The baseline keeps every agent in an in-process Dictionary<string, Agent> and writes no agent state to disk for the lifetime of the process. There is no store file to remove, lock, or corrupt: properties.db holds property listings only, and an outage of it would test the search tool rather than the durability of an enquiry. Removing it mid-run was not substituted, because a different fault reported under this name would be worse than an honest absence.
+

@@ -1,0 +1,16 @@
+{
+  "variant": "baseline",
+  "fault": "concurrent-clients-not-injected",
+  "outcome": "not corrupted",
+  "phase": "two enquiries submitted one after the other (the control)",
+  "detail": "Control: the same two enquiries, submitted one after the other. 2 agents, completed=2, rejected=0, 2 model turn(s). Same content as the concurrent run; a sequential pair cannot show the race, which is why the concurrent run exists.",
+  "evidence": "cards=2 completed=2 processing=0 rejected=0; session.send frames=2; driver status=0; exception lines in the server log=0",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "tools/ReplayRuntime",
+    "command": "./faults/concurrent-clients.sh --variant baseline --fault-not-injected",
+    "script": "concurrent-clients.sh",
+    "commit": "4ab32e3371a4738eac5ac1c1c6ee7fd64d9b2cc8"
+  },
+  "recordedAt": "2026-11-05T17:18:30.541792+00:00"
+}

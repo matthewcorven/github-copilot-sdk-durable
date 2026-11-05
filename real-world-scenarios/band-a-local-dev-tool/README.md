@@ -164,3 +164,51 @@ the line count. Two things are worth knowing before reading the code:
   `durable/evidence.sh`, not a description of what the code should do.
 
 `baseline/` is unmodified by this work. Its defects are the comparison, so nothing in it is fixed.
+
+## Fault evidence
+
+`faults/` runs five faults against **both** variants and records what happened. The table below is
+rendered from `faults/results/` by `faults/lib/summarise.py`; the full per-run detail, the evidence each
+result cites, and the before/after controls are in `faults/results/summary.txt` and `faults/README.md`.
+
+| Fault | baseline | durable |
+| --- | --- | --- |
+| `kill-mid-turn` | **lost** | **resumed** |
+| `restart-after-checkpoint` | **lost** | **resumed** |
+| `duplicate-delivery` | **doubled** | **doubled** |
+| `concurrent-clients` | **not corrupted** | **not corrupted** |
+| `store-outage` | **not exercised** (no store holds agent state) | **failed safely, with a split store** |
+
+```bash
+./faults/run-all.sh          # all five faults, both variants, controls included
+./faults/run-all.sh durable  # one variant
+```
+
+Three of these rows deserve to be read carefully rather than as wins:
+
+- **"resumed" does not mean "replayed nothing".** The Durable variant resumes from the committed
+  checkpoint, but the turn that was cut off left no answer, so the new process sends it again and the
+  intents that turn had already committed are committed a second time. The fault results show it
+  (`validating/2` → `done/10` with one intent twice, against 9 entries and one copy for the control), and
+  `durable/evidence/durable-restart-and-concurrency.md` documents the same effect. What the checkpoint
+  guarantees is that work *before* it is not redone and nothing durable is lost.
+- **`duplicate-delivery` is a tie at "doubled".** Neither variant deduplicates a repeated delivery: the
+  baseline holds two agents, the Durable variant holds two conversations, two admissions and two
+  searches. The Durable variant is not better here and the table does not claim it is.
+- **`concurrent-clients` is a tie on behaviour.** Both completed both enquiries correctly in this sample.
+  The baseline's unlocked `Dictionary<string, Agent>` is still a defect, but one concurrent pair did not
+  make it throw; the Durable variant's commit gate is what makes the isolation structural rather than
+  incidental. That distinction is in the code, not in this row.
+- **`store-outage` records a split store.** Moving the store file aside did not make the Durable variant
+  fail: it recreated the path and kept writing, while the moved file still held the committed prefix
+  intact. Nothing was lost and nothing was corrupted, but the state ended up in two files and the
+  application did not say so. That is the honest result, and it is a limitation rather than a clean pass.
+
+The baseline's `store-outage` is **not exercised**: it writes no agent state to disk, so there is no store
+to remove. `properties.db` holds listings, and an outage of it would test the search tool. That absence is
+the finding.
+
+Both variants were driven through the same recorded runtime behind the same JSON-RPC gate, so a fault is
+injected at the same instant in both and the comparison is of the applications. The baseline is not
+modified for this: the gate is reached through the SDK's `COPILOT_CLI_PATH`, which the baseline's own
+client already honours.

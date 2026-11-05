@@ -1,0 +1,16 @@
+{
+  "variant": "durable",
+  "fault": "kill-mid-turn",
+  "outcome": "resumed",
+  "phase": "committed at validating when the process was killed",
+  "detail": "The kill left a committed document at phase validating with 2 entries and task status running. A new process resumed 1 task(s) at phase validating and finished with task terminal at phase done, 10 entries, restarts=1, exit 0, report 46 characters. The turn that was cut off committed no answer, so the new process sends it again: the pass is re-sent and its earlier intents are committed a second time — 4 repeated entr(y/ies) against the control. What the resume guarantees is that everything before the committed checkpoint is not redone; it does not make the interrupted turn happen once.",
+  "evidence": "resumed tasks:  1\n  t11 resumes: the enquiry is committed at phase validating, after 0 completed pass(es)\n  t11 finished: completed; resume exit=0; repeated entries after the resume=4; entries after=10",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "tools/ReplayRuntime",
+    "command": "./faults/kill-mid-turn.sh --variant durable",
+    "script": "kill-mid-turn.sh",
+    "commit": "4ab32e3371a4738eac5ac1c1c6ee7fd64d9b2cc8"
+  },
+  "recordedAt": "2026-11-05T17:18:44.395569+00:00"
+}

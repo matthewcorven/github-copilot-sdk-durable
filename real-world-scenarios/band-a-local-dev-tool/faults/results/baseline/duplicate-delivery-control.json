@@ -1,0 +1,16 @@
+{
+  "variant": "baseline",
+  "fault": "duplicate-delivery-control",
+  "outcome": "control: single delivery",
+  "phase": "the same enquiry delivered once (the control)",
+  "detail": "Control: one delivery produced 1 agent and 1 model turn.",
+  "evidence": "cards=1 [Need a downtown condo with parking, 1-2 bedrooms, under $350k]; session.send frames=1; processing=0; completed=1; rejected=0",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "tools/ReplayRuntime",
+    "command": "./faults/duplicate-delivery.sh --variant baseline --fault-not-injected",
+    "script": "duplicate-delivery.sh",
+    "commit": "4ab32e3371a4738eac5ac1c1c6ee7fd64d9b2cc8"
+  },
+  "recordedAt": "2026-11-05T17:17:58.540713+00:00"
+}
