@@ -107,12 +107,13 @@ re-provisioning that name fails:
 '/subscriptions/…/accounts/aif-qe7dhfdujkpiw' has been soft-deleted. …"}
 ```
 
-Two things landed rather than being worked around by hand: `infra/provision.sh` takes
+Three things landed rather than being worked around by hand: `infra/provision.sh` takes
 `RUN_STAMP` and `infra/main.bicep` mixes it into the name token, so a re-provision starts from
-fresh names; and `infra/teardown.sh` now **purges** the account and verifies that no
-soft-delete record remains. Without the second, the issue's "teardown verified" would have
-been false in a way `az resource list` cannot see. See `evidence/teardown.md` §"The soft-delete
-grave".
+fresh names; `infra/teardown.sh` **purges** the account and verifies that no soft-delete record
+remains; and when `.deployment.json` is gone it finds the graves by **resource group** instead
+of skipping the purge. Without the last two, "teardown verified" would have been false in a way
+`az resource list` cannot see — and the final run's teardown did run without the record, which
+is how the gap was found. See `evidence/teardown.md` §"The soft-delete grave".
 
 ## The layer change, and the control
 

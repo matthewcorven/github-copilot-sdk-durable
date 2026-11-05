@@ -163,43 +163,68 @@ if [ "$STATUS" -ne 0 ]; then
 fi
 
 # --- purge the Foundry account's soft-deleted record ---------------------------
+#
+# The account's name is the record's `.deployment.json`, but a teardown must not depend on
+# a file the operator may have removed: the soft-deleted listing carries the resource group
+# each grave belongs to, so that is the fallback key. Either way the answer is checked, not
+# assumed - a grave that survives makes re-provisioning the same name fail.
 
-ACCOUNT=""
-if [ -f "$RECORD" ]; then
-  ACCOUNT="$(python3 - "$RECORD" <<'PY'
-import json, sys
-o = json.load(open(sys.argv[1]))
-print(o.get("foundryAccountName", {}).get("value") or "")
-PY
-)"
-fi
-
-echo "teardown: foundry account soft-delete record"
-if [ -n "$ACCOUNT" ]; then
-  LOCATION="$(python3 - "$RECORD" <<'PY'
-import json, sys
-o = json.load(open(sys.argv[1]))
-print(o.get("location", {}).get("value") or "eastus2")
-PY
-)"
-  echo "  $ACCOUNT ($LOCATION): purging"
-  PURGE_OUT="$(az cognitiveservices account purge -n "$ACCOUNT" -g "$RG" -l "$LOCATION" 2>&1)" || {
-    echo "teardown.sh: 'az cognitiveservices account purge -n $ACCOUNT' failed; refusing to report anything." >&2
-    printf '%s\n' "$PURGE_OUT" | sed 's/^/    /' >&2
+purge_one() { # account location why
+  local account="$1" location="$2" why="$3"
+  echo "  $account ($location): purging [$why]"
+  local out
+  out="$(az cognitiveservices account purge -n "$account" -g "$RG" -l "$location" 2>&1)" || {
+    echo "teardown.sh: 'az cognitiveservices account purge -n $account' failed; refusing to report anything." >&2
+    printf '%s\n' "$out" | sed 's/^/    /' >&2
     exit 1
   }
-  REMAINING="$(az cognitiveservices account list-deleted --query "[?name=='$ACCOUNT'].name" -o tsv)" || {
+}
+
+echo "teardown: foundry account soft-delete records in $RG"
+ACCOUNT=""
+LOCATION=""
+if [ -f "$RECORD" ]; then
+  read -r ACCOUNT LOCATION <<EOF
+$(python3 - "$RECORD" <<'PY'
+import json, sys
+o = json.load(open(sys.argv[1]))
+print(o.get("foundryAccountName", {}).get("value") or "-",
+      o.get("location", {}).get("value") or "eastus2")
+PY
+)
+EOF
+fi
+
+if [ -n "$ACCOUNT" ] && [ "$ACCOUNT" != "-" ]; then
+  purge_one "$ACCOUNT" "$LOCATION" "from .deployment.json"
+else
+  echo "  no .deployment.json record; looking the graves up by resource group"
+  GRAVES="$(az cognitiveservices account list-deleted \
+    --query "[?resourceGroup=='$RG'].{name:name,location:location}" -o tsv)" || {
     echo "teardown.sh: the soft-deleted account list failed; refusing to report anything." >&2
     exit 1
   }
-  if [ -n "${REMAINING//[$'\n']/}" ]; then
-    echo "  $ACCOUNT: STILL SOFT-DELETED; re-provisioning this name will fail" >&2
-    STATUS=2
+  if [ -n "${GRAVES//[$'\n']/}" ]; then
+    while IFS=$'\t' read -r name location; do
+      [ -n "$name" ] && purge_one "$name" "$location" "found by resource group"
+    done <<< "$GRAVES"
   else
-    echo "  $ACCOUNT: purged, no soft-delete record remains"
+    echo "  none"
   fi
+fi
+
+REMAINING="$(az cognitiveservices account list-deleted \
+  --query "[?resourceGroup=='$RG'].name" -o tsv)" || {
+  echo "teardown.sh: the soft-deleted account list failed; refusing to report anything." >&2
+  exit 1
+}
+if [ -n "${REMAINING//[$'\n']/}" ]; then
+  echo "  soft-deleted account(s) still present in $RG:" >&2
+  printf '%s\n' "$REMAINING" | sed 's/^/    /' >&2
+  echo "  re-provisioning those names will fail until they are purged" >&2
+  STATUS=2
 else
-  echo "  no foundryAccountName recorded; nothing to purge"
+  echo "  no soft-delete record remains for $RG"
 fi
 
 if [ "$STATUS" -ne 0 ]; then
