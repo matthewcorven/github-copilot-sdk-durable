@@ -3,8 +3,8 @@
   "fault": "kill-during-wait",
   "outcome": "lost",
   "phase": "the manager's first turn, held; process killed before any gate checkpoint",
-  "detail": "The kill landed on pid 57823 (the process working out the plan, inside its manager turn, before any gate checkpoint exists) with 1 model call(s) served to that process and no gate checkpoint on disk. Nothing continues it: the baseline's own continuation entry point — a fresh process running 'resume' against the directory the killed process left — exited 134 and wrote nothing, because there is no gate record (0 checkpoint file(s) on disk). The wait existed only inside the killed process, so killing it cost the whole pre-gate run.",
-  "evidence": "killed pid 57823 (kill -9, confirmed gone) at: the process working out the plan, inside its manager turn, before any gate checkpoint exists\ngate checkpoint before: (absent)\nafter (fresh 'resume' process, exit 134): gate checkpoint (absent), 0 checkpoint file(s), 0 model call(s)\nUnhandled exception. System.InvalidOperationException: No gate record at '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-178-work/.scratch/band-g-faults/baseline/kill-during-wait/checkpoints/gate.json'. Run run.sh first.\n   at Program.<Main>$(String[] args) in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-178-work/real-world-scenarios/band-g-long-running/baseline/BaselineCheckpoint.cs:line 183\n   at Program.<Main>(String[] args)",
+  "detail": "The kill landed on pid 70828 (the process working out the plan, inside its manager turn, before any gate checkpoint exists) with 1 model call(s) served to that process and no gate checkpoint on disk. Nothing continues it: the baseline's own continuation entry point — a fresh process running 'resume' against the directory the killed process left — exited 134 and wrote nothing, because there is no gate record (0 checkpoint file(s) on disk). The wait existed only inside the killed process, so killing it cost the whole pre-gate run.",
+  "evidence": "killed pid 70828 (kill -9, confirmed gone) at: the process working out the plan, inside its manager turn, before any gate checkpoint exists\ngate checkpoint before: (absent)\nafter (fresh 'resume' process, exit 134): gate checkpoint (absent), 0 checkpoint file(s), 0 model call(s)\nUnhandled exception. System.InvalidOperationException: No gate record at '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-178-work/.scratch/band-g-faults/baseline/kill-during-wait/checkpoints/gate.json'. Run run.sh first.\n   at Program.<Main>$(String[] args) in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-178-work/real-world-scenarios/band-g-long-running/baseline/BaselineCheckpoint.cs:line 183\n   at Program.<Main>(String[] args)",
   "measurements": {
     "model_calls_held_process": 1,
     "resume_exit": 134,
@@ -15,8 +15,8 @@
     "dotnet": "10.0.402",
     "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
     "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
-    "commit": "7531adcd4366b82b1cc5477164d571faab8bae88",
+    "commit": "cfbea21cbbe3f29403b095d77ec80a9112745ea3",
     "command": "./faults/kill-during-wait.sh --variant baseline"
   },
-  "recordedAt": "2026-11-05T19:38:53.477938+00:00"
+  "recordedAt": "2026-11-05T19:45:29.307688+00:00"
 }

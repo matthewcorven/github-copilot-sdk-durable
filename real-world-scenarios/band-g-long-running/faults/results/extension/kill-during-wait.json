@@ -3,8 +3,8 @@
   "fault": "kill-during-wait",
   "outcome": "wait survived",
   "phase": "parked at ManagerApproval, with a process serving the answer",
-  "detail": "The run was parked at ManagerApproval with task status Running and one answer raised (1 raise(s) recorded before the kill). pid 63868 — the process carrying the worker — was killed with SIGKILL and confirmed gone; Running it was still Running. A different process then raised the port's answer and reported 'delivered' 1 time(s), and the run's history after that is: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > EventRaised > TaskScheduled > OrchestratorStarted > TaskCompleted. Raised events now: ManagerApproval. The wait survived the death of the only process that was in it, because the wait is an orchestration instance the scheduler holds, not a call the killed process held.",
-  "evidence": "instance: i107563329\nat the gate: Running; killed pid 63868 (kill -9, confirmed gone)\nafter the kill: Running\nsuccessor process: 'delivered' printed 1 time(s); status Running; raised: ManagerApproval\nhistory: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > EventRaised > TaskScheduled > OrchestratorStarted > TaskCompleted\nraised:     ManagerApproval (1 of 1)\nserving:    a worker is running to deliver the answer\ndelivered:  ManagerApproval",
+  "detail": "The run was parked at ManagerApproval with task status Running and one answer raised (1 raise(s) recorded before the kill). pid 76244 — the process carrying the worker — was killed with SIGKILL and confirmed gone; Running it was still Running. A different process then raised the port's answer and reported 'delivered' 1 time(s), and the run's history after that is: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > EventRaised > TaskScheduled > OrchestratorStarted > TaskCompleted. Raised events now: ManagerApproval. The wait survived the death of the only process that was in it, because the wait is an orchestration instance the scheduler holds, not a call the killed process held.",
+  "evidence": "instance: i24233566\nat the gate: Running; killed pid 76244 (kill -9, confirmed gone)\nafter the kill: Running\nsuccessor process: 'delivered' printed 1 time(s); status Running; raised: ManagerApproval\nhistory: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > EventRaised > TaskScheduled > OrchestratorStarted > TaskCompleted\nraised:     ManagerApproval (1 of 1)\nserving:    a worker is running to deliver the answer\ndelivered:  ManagerApproval",
   "measurements": {
     "status_at_gate": "Running",
     "status_after_kill": "Running",
@@ -16,8 +16,8 @@
     "dotnet": "10.0.402",
     "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
     "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
-    "commit": "7531adcd4366b82b1cc5477164d571faab8bae88",
+    "commit": "cfbea21cbbe3f29403b095d77ec80a9112745ea3",
     "command": "./faults/extension.sh --fault kill-during-wait"
   },
-  "recordedAt": "2026-11-05T19:41:40.710903+00:00"
+  "recordedAt": "2026-11-05T19:48:16.072597+00:00"
 }

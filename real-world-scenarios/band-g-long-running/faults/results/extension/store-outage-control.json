@@ -4,7 +4,7 @@
   "outcome": "completed",
   "phase": "no outage (the control)",
   "detail": "Control: no outage. The answer was delivered (exit 0) and the run is Running with history: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > EventRaised > TaskScheduled > OrchestratorStarted > TaskCompleted. This is what the outage run is measured against.",
-  "evidence": "instance: i2396614237; parked at Running; raised (none)\nscheduler stopped? no\nanswering process: exit 0 \nafter: status Running; raised ManagerApproval\n  history: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > EventRaised > TaskScheduled > OrchestratorStarted > TaskCompleted",
+  "evidence": "instance: i3198725803; parked at Running; raised (none)\nscheduler stopped? no\nanswering process: exit 0 \nafter: status Running; raised ManagerApproval\n  history: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > EventRaised > TaskScheduled > OrchestratorStarted > TaskCompleted",
   "measurements": {
     "drive_exit": 0,
     "status_at_gate": "Running",
@@ -16,8 +16,8 @@
     "dotnet": "10.0.402",
     "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
     "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
-    "commit": "7531adcd4366b82b1cc5477164d571faab8bae88",
+    "commit": "cfbea21cbbe3f29403b095d77ec80a9112745ea3",
     "command": "./faults/extension.sh --fault store-outage --fault-not-injected"
   },
-  "recordedAt": "2026-11-05T19:43:53.001083+00:00"
+  "recordedAt": "2026-11-05T19:50:30.595772+00:00"
 }
