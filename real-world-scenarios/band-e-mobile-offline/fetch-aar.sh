@@ -60,7 +60,10 @@ expected_sha() {
 }
 
 verify() {
-  local mode="$1" file="$libs/foundry-local-${mode}-sdk-${VERSION}.aar"
+  local mode="$1"
+  # `mode` must be bound before `file` is expanded: in one `local` statement they are
+  # unset until the whole statement completes, so `file` would name the wrong AAR.
+  local file="$libs/foundry-local-${mode}-sdk-${VERSION}.aar"
   local want actual
   want="$(expected_sha "$mode")"
 
