@@ -36,13 +36,16 @@
 // side effects on resume. `iteration` is monotonic and `step` is a fixed label, so the key names
 // the same work however many processes try it.
 //
-// The limit, stated plainly: the memo boundary is the turn, not the tool call inside it. The
-// model's file mutations happen inside one SDK turn, and the durable layer records that turn as
-// a conversation checkpoint only after it finishes. A process that dies mid-turn leaves no
-// `agent-turn` memo, so resume re-runs the turn, and any file the turn had already written can
-// be written again. That is a property of this layer, not something papered over: making a
-// half-finished turn resumable would need per-tool-call replay, which the SDK does not offer.
-// See ../evidence/durable-kill-and-resume.md, "The limit of the memo boundary".
+// The limit, stated plainly: the memo boundary is the turn, not the tool call inside it, and the
+// difference is *visibility*, not memory. The layer records every completed tool call
+// (`RecordToolCheckpoint` in lib/Durable.cs) into `durable.checkpoint` after the fact, so a turn
+// that finished can be read back from the store. What it cannot do is *continue* a half-finished
+// turn — and it does not commit those tool records at the call either, but at the turn's
+// completion barrier, so a turn that died mid-way may have left none of them. The SDK will not
+// resume such a turn and this variant will not re-issue one, because re-running it could repeat the
+// writes it already made: on re-entry with `Stage = "turn-started"` it reports what the store holds
+// and fails the run. So a dead turn's work is observable, not replayable, and only as observable as
+// the records that had committed. See ../evidence/durable-kill-and-resume.md §3a–§3c.
 
 #:package GitHub.Copilot.SDK@1.0.26
 #:property TargetFramework=net10.0
@@ -273,13 +276,16 @@ static async Task<TaskCommit> RunIterationAsync(
     var iteration = checkpoint.Iteration + 1;
     var digest = Digest(plan);
 
-    // A turn that was issued and whose outcome was never recorded. The durable layer cannot tell
-    // whether the turn ran, so it does not guess: it fails the run with the iteration named and
-    // the side effects described. Re-running the turn here would duplicate whatever it did
-    // before the process died — the limit documented at the top of this file.
+    // A turn that was issued and whose outcome was never recorded. The store knows the turn
+    // started and, for the tool calls whose records had committed, what it did — but not what it
+    // would have done next, and the SDK will not continue it. So this does not guess: it reports
+    // what the store holds and fails the run with the iteration named. Re-running the turn here
+    // would duplicate whatever it did before the process died. See the limit at the top of the
+    // file, and ../evidence/durable-kill-and-resume.md §3c.
     if (checkpoint.Stage == "turn-started")
     {
         var unrecorded = checkpoint.Iteration + 1;
+        ReportInFlightTurn(harness.Store, unrecorded);
         return await runtime.CommitAsync(() => TaskCommit.Failed(
             $"iteration {unrecorded} was in flight: the turn was issued (plan digest {checkpoint.PlanDigest}) "
             + "and its outcome was never recorded, so it may have mutated files. Re-running it would "
@@ -326,7 +332,16 @@ static async Task<TaskCommit> RunIterationAsync(
     else
     {
         Console.WriteLine($"  agent-turn: no memo {turnKey} — running the turn");
-        var answer = await RunAgentTurnAsync(harness, input, model, BuildTurnPrompt(input, plan));
+        var answer = await RunAgentTurnAsync(
+            harness, input, model, BuildTurnPrompt(input, plan), iteration, stopAfter, stop);
+        if (answer.Interrupted)
+        {
+            // Leave the checkpoint where it is: `turn-started`, with the completed tool calls in
+            // the store and no outcome. The next process is the one that has to decide what that
+            // means.
+            throw new OperationCanceledException("STOP_MID_TURN");
+        }
+
         var outcome = new StepOutcome("agent-turn", $"{answer.Text} ({answer.ToolCalls} tool calls)");
         steps.Add(outcome);
 
@@ -354,10 +369,24 @@ static async Task<TaskCommit> RunIterationAsync(
 
         await runtime.MemoAsync(turnKey, DurableJson.ToElement(outcome));
         Console.WriteLine($"  agent-turn: done; memo {turnKey} written");
+
+        // The other mid-iteration seam: the turn has finished and its step memo is written, but
+        // the reconcile step and the settle checkpoint have not happened. A resume from here
+        // reaches the memo-hit branch above, which is the only way to show the guard *working*
+        // rather than merely present.
+        if (stopAfter > 0 && iteration >= stopAfter && StopAfterMemo())
+        {
+            Console.WriteLine($"stopping: iteration {iteration}'s turn memo is written, the iteration is not settled.");
+            Console.Out.Flush();
+            stop.Cancel();
+            runtime.CancellationToken.ThrowIfCancellationRequested();
+        }
     }
 
-    // ── Step 2: reconcile the plan. Verification and plan bookkeeping only: it never writes
-    //    documentation content, so it cannot hide a turn that did nothing. ──
+    // ── Step 2: reconcile the plan. Verification, plan bookkeeping, and the formatting
+    //    normalizer — not the job's content. It writes PLAN.md and can rewrite a section file's
+    //    heading block, but it never invents the missing H1, demotes a heading, or adds a
+    //    marker, so it cannot hide a turn that did nothing. ──
     var reconcileKey = StepKey(iteration, "reconcile");
     var reconcileMemo = await runtime.MemoAsync(reconcileKey);
     if (reconcileMemo is not null)
@@ -402,17 +431,25 @@ static async Task<TaskCommit> RunIterationAsync(
 
 // ─── The agent turn ─────────────────────────────────────────────────────────
 
-static async Task<(string Text, int ToolCalls)> RunAgentTurnAsync(
+// `interrupted` is set when STOP_MID_TURN leaves the turn in flight. It is a flag on the caller's
+// frame rather than an exception out of the event callback: an exception there would surface as an
+// SDK failure, which is not what the state under test is.
+static async Task<(string Text, int ToolCalls, bool Interrupted)> RunAgentTurnAsync(
     DurableHarness harness,
     LoopInput input,
     string model,
-    string prompt)
+    string prompt,
+    int iteration,
+    int stopAfter,
+    CancellationTokenSource stop)
 {
     // A fresh durable conversation per iteration: the baseline's context isolation, kept, with
     // the transcript in the store instead of only in the runtime.
     var conversation = await harness.CreateConversationAsync(Choices(input.Target, model));
 
     var toolCalls = 0;
+    var completed = 0;
+    var interrupted = false;
     using var subscription = conversation.Session.On<SessionEvent>(evt =>
     {
         if (evt is ToolExecutionStartEvent tool)
@@ -420,12 +457,40 @@ static async Task<(string Text, int ToolCalls)> RunAgentTurnAsync(
             toolCalls++;
             Console.WriteLine($"  ⚙ {tool.Data.ToolName}");
         }
+
+        // The in-flight seam: the process leaves with the turn unfinished, which is the one state
+        // a memo cannot recover. It is anchored on a tool call *completing* — not on the next one
+        // starting, which would race the runtime's own dispatch — so the call count is fixed:
+        // MID_TURN_COMPLETED calls are in the store, the one in flight is not. The store is closed
+        // properly rather than torn down, so the record is the one a crash would leave:
+        // `turn-started`, no turn checkpoint, and the completed tool calls.
+        if (evt is ToolExecutionCompleteEvent && ++completed == Job.MidTurnCompleted
+            && stopAfter > 0 && iteration >= stopAfter && StopMidTurn() && !interrupted)
+        {
+            interrupted = true;
+            Console.WriteLine($"stopping: iteration {iteration}'s turn is in flight, after {completed} completed tool call(s).");
+            Console.Out.Flush();
+            stop.Cancel();
+        }
     });
 
-    var answer = await conversation.SubmitAsync(prompt);
+    AssistantMessageEvent? answer = null;
+    try
+    {
+        answer = await conversation.SubmitAsync(prompt, stop.Token);
+    }
+    catch (OperationCanceledException) when (interrupted)
+    {
+        // The send was cancelled on purpose; the turn is left as an unrecorded, in-flight turn.
+        // The layer queues a tool checkpoint on every completed call and awaits the queue at the
+        // turn's completion barrier, so an abandoned turn has its records still in flight. The
+        // store then holds the turn and not its calls, which is exactly what the resume reports.
+        return (string.Empty, toolCalls, true);
+    }
+
     var text = answer?.Data.Content ?? "(no answer)";
     var firstLine = text.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? "(empty)";
-    return (Truncate(firstLine, 120), toolCalls);
+    return (Truncate(firstLine, 120), toolCalls, false);
 }
 
 static AgentChoices Choices(string target, string model) => new()
@@ -462,6 +527,75 @@ static string BuildTurnPrompt(LoopInput input, string plan)
     brief.AppendLine();
     brief.AppendLine("Do not start any other item. Do not tick an item you did not finish.");
     return prompt + brief;
+}
+
+// ─── Reading back what a dead turn did ─────────────────────────────────────
+
+// The in-flight case is where the layer's boundary shows, so it is worth stating exactly what the
+// store knows. The layer writes a `tool` checkpoint into the conversation's `durable.checkpoint`
+// document for every completed tool call (see `RecordToolCheckpoint` in lib/Durable.cs), and the
+// document is `DocumentHistory.Rewindable`, so a finished turn's calls stay readable. What does
+// not follow is that a *dead* turn's calls are readable: the write is queued per conversation and
+// awaited by the completion barrier only when the turn reports success, so a process that leaves
+// mid-turn can exit with its last calls uncommitted. So the honest report is per conversation:
+// what was committed, and whether the turn as a whole was recorded.
+static void ReportInFlightTurn(DurableStore store, int iteration)
+{
+    // The unfinished turn is the conversation whose prompt was admitted and never settled: the
+    // admission is committed before the prompt is sent, so it exists even when nothing else about
+    // the turn does.
+    var admitted = store.Documents
+        .Where(document => document.Kind == "durable.admission")
+        .Select(document => new
+        {
+            document.OwnerId,
+            Latest = document.Versions
+                .Select(version => version.Value.Deserialize<InputAdmission>(DurableJson.Options))
+                .OfType<InputAdmission>()
+                .LastOrDefault(),
+        })
+        .Where(candidate => candidate.Latest is { State: "admitted" })
+        .Select(candidate => candidate.OwnerId)
+        .FirstOrDefault();
+
+    var checkpoint = admitted is null
+        ? null
+        : store.Documents.FirstOrDefault(document =>
+            document.Kind == "durable.checkpoint" && document.OwnerId == admitted);
+    var recorded = checkpoint?.Versions
+        .Select(version => version.Value.Deserialize<ConversationCheckpoint>(DurableJson.Options))
+        .OfType<ConversationCheckpoint>()
+        .ToList() ?? [];
+    var calls = recorded.Where(entry => entry.Kind == "tool").ToList();
+
+    if (admitted is null)
+    {
+        Console.WriteLine($"  no turn was left in flight; iteration {iteration} never started a prompt.");
+        return;
+    }
+
+    if (!recorded.Any(entry => entry.Kind == "turn"))
+    {
+        Console.WriteLine($"  iteration {iteration}'s turn is recorded as issued and never finished.");
+        Console.WriteLine($"  the store holds {(calls.Count == 0 ? "no" : calls.Count.ToString())} completed tool call(s) for it:");
+        foreach (var call in calls)
+        {
+            var args = call.ToolArgs is { Length: > 0 } raw
+                ? " " + Truncate(raw.ReplaceLineEndings(" "), 60)
+                : string.Empty;
+            Console.WriteLine($"    {call.ToolName ?? "(unknown tool)"}{args} — {(call.Success == false ? "failed" : "ok")}");
+        }
+
+        if (calls.Count == 0)
+        {
+            Console.WriteLine("  the turn's tool writes were queued and not committed: the process left first.");
+        }
+
+        Console.WriteLine("  that is the whole of what the store can say: the turn is observable, not replayable.");
+        return;
+    }
+
+    Console.WriteLine($"  iteration {iteration}'s turn is already recorded as finished; nothing was left in flight.");
 }
 
 // ─── Reconcile: verification and plan bookkeeping ───────────────────────────
@@ -738,6 +872,16 @@ static string Digest(string text) =>
 static bool StopBeforeMemo() =>
     Environment.GetEnvironmentVariable("STOP_BEFORE_MEMO") == "1";
 
+// The complementary seam: the step memo exists, the iteration is not settled. It is what puts a
+// resume on the memo-hit branch.
+static bool StopAfterMemo() =>
+    Environment.GetEnvironmentVariable("STOP_AFTER_MEMO") == "1";
+
+// The in-flight seam: leave while the iteration's turn is running, after this many tool calls have
+// completed. The completed calls are in the store; the one in flight is not.
+static bool StopMidTurn() =>
+    Environment.GetEnvironmentVariable("STOP_MID_TURN") == "1";
+
 static int StopAfterIteration() =>
     Environment.GetEnvironmentVariable("STOP_AFTER_ITERATION") is { Length: > 0 } text
     && int.TryParse(text, out var value) && value > 0
@@ -776,6 +920,9 @@ static class Job
 
     // The model `upstream/ralph-loop.ts` pins, and the model the baseline pins.
     public const string PinnedModel = "gpt-5.1-codex-mini";
+
+    // How many completed tool calls the in-flight seam leaves behind before stopping the turn.
+    public const int MidTurnCompleted = 1;
 }
 
 sealed record LoopInput

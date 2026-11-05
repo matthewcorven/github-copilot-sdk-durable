@@ -822,3 +822,42 @@ both; GraphQL showed 70/70 edges and proved nothing about whether work could sta
 
 **Rule:** After filing a dependency graph, run the consumer — not a query that confirms what was written.
 `issue_queue.py --mode status` is the acceptance test, and "all N issues available" is the failure signal.
+
+### 2026-11-05T05:30:00Z: The Durable layer records a dead turn, but does not commit at the call — state the gap as replay, not as absence
+**By:** core-engineer (Band B, PR #190 review follow-up)
+**What:** PR #190's evidence and header attributed a gap to `lib/Durable.cs` that the layer partly
+covers. `RecordToolCheckpoint` (`lib/Durable.cs:4271`) writes a per-call record on every completed
+tool call into `durable.checkpoint`, which is `DocumentHistory.Rewindable` (`lib:4590`), so a
+finished turn's calls stay readable through `DurableStore.Documents` / `DocumentState.Versions`
+(`lib:2072`, `lib:110`). The claim "no evidence in the store distinguishes 'the turn did nothing
+yet' from 'the turn had written four of five files'" was wrong, as was "would need a durable 'tool
+intent' record the layer writes before each tool execution".
+**References:** #150, #148, PR #190, real-world-scenarios/band-b-local-job-agent/evidence/durable-kill-and-resume.md §3c, durable/ralph-loop-durable.cs
+**Why:**
+#### Position
+
+The real gap is narrower and has two parts, both now demonstrated rather than asserted:
+
+1. **The record is written after the call and committed in a batch.** Tool checkpoints are queued
+   per conversation (`QueueCheckpointAsync`, `lib:4074`) and awaited by `CheckpointBarrierAsync`
+   (`lib:4150`) only when the turn reports success. A process that leaves mid-turn can therefore
+   exit with its last calls unwritten. `STOP_MID_TURN=1` reproduces this: the store holds the
+   `turn-started` checkpoint and **no** tool call from the dead turn.
+2. **There is no replay.** The SDK will not continue a half-finished turn, and the layer offers no
+   per-tool-call resume. So the work is *observable* (to the extent its records committed), not
+   *replayable*.
+
+The honest one-liner is: **the layer records what a dead turn did; it cannot resume the turn.**
+Closing the second part needs per-tool-call replay in the SDK, or a record written *before* each
+call and settled after it — a durable cursor rather than a history. That is a feature request, not
+a scenario fix.
+
+#### Why this matters beyond this PR
+
+`.github/copilot-instructions.md` requires a *reproduced* gap before a scenario may claim one. The
+previous text claimed a gap that source inspection contradicts, which is exactly the error class
+that makes the program's conclusions wrong: a reader would have filed a layer issue for something
+the layer already does, and missed the thing it actually does not do.
+**Rule:** Before attributing a limitation to `lib/`, read the write path, not just the public
+surface. A public getter existing does not mean the data is committed at the moment you need it —
+and a record existing does not mean it can be replayed.

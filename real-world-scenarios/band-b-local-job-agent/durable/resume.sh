@@ -10,10 +10,17 @@
 # inside it is the record of what that process had done. resume.sh passes no iteration cap: the
 # cap is part of the run's stored input, and a second one would defeat the demonstration.
 #
+# Scratch provenance: the directory is removed on exit unless KEEP=1, and only when run.sh marked
+# it as scratch — an empty `.band-b-scratch` file in RUN_DIR. Any other directory is left in place
+# with a `not removing non-scratch directory` message, so a hand-written directory is safe to
+# point this script at.
+#
 # Exit statuses match run.sh: 0 complete, 1 the target does not match the plan, 2 nothing to
 # resume, 3 the run's cap was reached with the plan still open.
 
 set -uo pipefail
+
+SCRATCH_MARKER=".band-b-scratch"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 band="$(cd "$here/.." && pwd)"
@@ -44,11 +51,24 @@ if [ ! -f "$target/.durable/store.jsonl" ]; then
   exit 2
 fi
 
+# Decided up front, so the exit path does not depend on what the resumed run leaves behind. The
+# marker records provenance directly: a path check would be wrong for a symlink or a RUN_DIR that
+# deliberately sits outside the worktree.
+scratch_dir=0
+if [ -f "$run_dir/$SCRATCH_MARKER" ]; then
+  scratch_dir=1
+fi
+
 cleanup() {
   if [ "${KEEP:-0}" = "1" ]; then
     echo "kept: $target"
-  else
+    return 0
+  fi
+
+  if [ "$scratch_dir" = 1 ]; then
     rm -rf "$run_dir"
+  else
+    echo "not removing non-scratch directory: $run_dir" >&2
   fi
 }
 trap cleanup EXIT

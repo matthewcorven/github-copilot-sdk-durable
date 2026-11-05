@@ -173,7 +173,9 @@ keeps it in a Durable store, so a second process can continue the first one's ru
 ./real-world-scenarios/band-b-local-job-agent/run.sh
 
 # Durable: one process, resumable. run.sh and resume.sh remove the scratch directory
-# on exit unless KEEP=1, so a two-process sequence keeps it across both.
+# on exit unless KEEP=1, so a two-process sequence keeps it across both. Neither script
+# will empty or delete a directory it did not create: it marks its own with
+# `.band-b-scratch` and refuses (exit 2) a RUN_DIR or TARGET that already has content.
 KEEP=1 ./real-world-scenarios/band-b-local-job-agent/durable/run.sh
 KEEP=1 ./real-world-scenarios/band-b-local-job-agent/durable/resume.sh   # only after a stop
 ```
@@ -187,6 +189,8 @@ KEEP=1 ./real-world-scenarios/band-b-local-job-agent/durable/resume.sh   # only 
 | `KEEP=1 durable/run.sh` | Keep the scratch directory |
 | `STOP_AFTER_ITERATION=2 durable/run.sh 10` | Commit iteration 2, then stop — the killed-run seam |
 | `STOP_AFTER_ITERATION=2 STOP_BEFORE_MEMO=1 durable/run.sh 10` | Stop between a turn's commit and its step memo |
+| `STOP_AFTER_ITERATION=2 STOP_AFTER_MEMO=1 durable/run.sh 10` | Stop after the step memo, before the iteration settles — resume hits the memo |
+| `STOP_AFTER_ITERATION=2 STOP_MID_TURN=1 durable/run.sh 10` | Stop inside the turn — the unrecoverable state |
 | `KEEP=1 durable/resume.sh` | Reopen the store and continue where the last process stopped |
 | `RUN_DIR=/path durable/run.sh` | Put the scratch area somewhere other than `.scratch/band-b-durable/` |
 
@@ -195,7 +199,11 @@ checkpoint, which is what makes a resumed run continue rather than restart. `KEE
 process is required — the default removes the scratch directory on exit.
 
 The scratch area is `.scratch/band-b-durable/` in the worktree root (the baseline uses
-`.scratch/band-b-target/`), so the two variants never share a directory or a store.
+`.scratch/band-b-target/`), so the two variants never share a directory or a store. `RUN_DIR`
+moves the whole area; `TARGET` moves the target directory inside it. Both scripts follow the
+convention #189 established for Band G: a directory they created carries an empty
+`.band-b-scratch` marker, only a marked directory is removed on exit, and a `RUN_DIR` or `TARGET`
+that already holds content is refused with exit 2 instead of being emptied.
 
 ### What the Durable variant adds, and its cost
 
@@ -208,17 +216,28 @@ The scratch area is `.scratch/band-b-durable/` in the worktree root (the baselin
 - **The plan file stays the input.** A resume reads its position from the store and the work list
   from the file, and corrects a hand-ticked item whose change is not on disk.
 
-Cost, measured: `durable/ralph-loop-durable.cs` is 570 code lines, of which 201 exist only for
-durability. `baseline/ralph-loop.cs` has 0. The counting rule and the per-region table are in
-`evidence/durable-kill-and-resume.md` §6.
+Cost, measured: `durable/ralph-loop-durable.cs` is 658 code lines, of which 289 exist only for
+durability (44%). `baseline/ralph-loop.cs` has 0. The counting rule and a per-region table whose
+rows sum to those totals are in `evidence/durable-kill-and-resume.md` §6.
 
-The honest limit: the memo boundary is the *turn*, not the tool call inside it. A process that dies
-mid-turn leaves no memo, so the variant detects that state and fails the run instead of replaying a
-turn that may have already written files. §3 of the evidence covers both the recoverable case and
-that one.
+The honest limit, in two parts. The memo boundary is the *turn*, not the tool call inside it, and
+the layer is asymmetric about that boundary:
 
-Full transcript with diffs, the cap demonstration, and the plan-divergence demonstration:
-`evidence/durable-kill-and-resume.md`.
+- **It records.** Every completed tool call becomes a `tool` checkpoint on the conversation's
+  `durable.checkpoint` document, which keeps full history. A finished turn's calls can be read back
+  from the store, and a resume reports the dead turn's outcome from that record.
+- **It does not replay.** The SDK will not continue a half-finished turn, and the layer commits the
+  queued tool records at the turn's completion barrier rather than at the call. A process that dies
+  mid-turn can therefore leave the store knowing the turn was issued and holding none of its calls.
+  The variant reports exactly that and fails the run, rather than re-issuing a turn that may have
+  already written files.
+
+So a dead turn's work is *observable*, not *replayable* — and only as observable as the records
+that had committed. §3 of the evidence captures all three cases: memo rebuilt from a checkpoint
+(3a), memo hit and the step skipped (3b), and the unrecoverable in-flight turn (3c).
+
+Full transcript with diffs, the cap demonstration, the plan-divergence demonstration, and the
+scratch-directory controls: `evidence/durable-kill-and-resume.md`.
 
 ## Upstream
 

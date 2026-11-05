@@ -8,10 +8,22 @@
 #                                   # commit iteration 2, then stop: the "killed after N" seam
 #   RUN_DIR=/path ./run.sh          # put the whole scratch area somewhere else
 #
-# Everything the run writes lives under RUN_DIR (default .scratch/band-b-durable/ in the
-# worktree root) — the scratch target and its durable store — never inside this tree. The whole
-# directory is removed on exit unless KEEP=1, so a kill-and-resume sequence is
-# `KEEP=1 ./run.sh` followed by `KEEP=1 ./resume.sh`.
+# Every run writes under RUN_DIR (default .scratch/band-b-durable/ in the worktree root) — the
+# scratch target and its durable store — never inside this tree. The whole directory is removed on
+# exit unless KEEP=1, so a kill-and-resume sequence is `KEEP=1 ./run.sh` followed by
+# `KEEP=1 ./resume.sh`.
+#
+# Scratch provenance: this script never empties or deletes a directory it did not create. Every
+# directory it creates is marked with an empty `.band-b-scratch` file.
+#   - RUN_DIR unset, or set to a path that does not exist: it is created and marked.
+#   - RUN_DIR exists and is empty: it is used as it is, left unmarked, and not removed on exit, so
+#     a caller's own empty directory stays theirs.
+#   - RUN_DIR holds only a `.band-b-scratch` marker: it is a scratch directory a previous run left
+#     behind (a failure with KEEP=1), so it is adopted rather than refused.
+#   - RUN_DIR is a `.band-b-scratch` directory that holds anything else, or is non-empty and
+#     unmarked: this script refuses with exit 2 and does not touch it. Pick a new path, or remove
+#     it yourself. It will not empty a directory on a guess.
+# The same rule applies to TARGET: a pre-populated target is refused, never emptied.
 #
 # RALPH_MODEL overrides the pinned model (gpt-5.1-codex-mini), exactly as in the baseline.
 #
@@ -19,6 +31,8 @@
 # the previous process left, together with the store's record of what it had done to it.
 
 set -uo pipefail
+
+SCRATCH_MARKER=".band-b-scratch"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 band="$(cd "$here/.." && pwd)"
@@ -39,17 +53,79 @@ if [ -z "$dotnet" ]; then
   exit 2
 fi
 
+refuse() {
+  echo "run.sh: refusing to use $1: $2" >&2
+  echo "        Point RUN_DIR (and TARGET) at a new or empty path, or remove it yourself." >&2
+  echo "        run.sh does not empty a directory it cannot prove it created." >&2
+  exit 2
+}
+
+run_dir_created=0
+if [ ! -e "$run_dir" ]; then
+  mkdir -p "$run_dir" || {
+    echo "run.sh: could not create RUN_DIR '$run_dir'" >&2
+    exit 2
+  }
+  run_dir_created=1
+elif [ ! -d "$run_dir" ]; then
+  refuse "$run_dir" "it exists and is not a directory"
+else
+  listing="$(ls -A "$run_dir" 2>/dev/null)"
+  if [ -f "$run_dir/$SCRATCH_MARKER" ] && [ "$listing" = "$SCRATCH_MARKER" ]; then
+    # A marker and nothing else: a previous run left its own scratch directory behind (a failure
+    # with KEEP=1, or a target that was never created). Adopt it rather than refuse it.
+    run_dir_created=1
+  elif [ -n "$listing" ]; then
+    if [ -f "$run_dir/$SCRATCH_MARKER" ]; then
+      refuse "$run_dir" "it is a run.sh scratch directory that already holds a run"
+    fi
+    refuse "$run_dir" "it already has content and was not created by run.sh"
+  fi
+  # An existing empty directory is usable, but it is not ours: it stays unmarked and in place.
+fi
+
+if [ "$run_dir_created" = 1 ]; then
+  : > "$run_dir/$SCRATCH_MARKER" || {
+    echo "run.sh: could not write the scratch marker in '$run_dir'" >&2
+    exit 2
+  }
+fi
+
 cleanup() {
   if [ "${KEEP:-0}" = "1" ]; then
     echo "kept: $target"
-  else
+    return 0
+  fi
+
+  # Only a directory this script created is ours to remove, and the marker is what says so. A
+  # caller's RUN_DIR is left in place whether or not it is empty.
+  if [ "$run_dir_created" = 1 ] && [ -f "$run_dir/$SCRATCH_MARKER" ]; then
     rm -rf "$run_dir"
+    return 0
+  fi
+
+  echo "not removing non-scratch directory: $run_dir" >&2
+  if [ "$target_created" = 1 ]; then
+    rm -rf "$target"
   fi
 }
+# Armed before the target is validated, so a refusal below does not leave a created RUN_DIR behind.
 trap cleanup EXIT
 
-# A run's target is its own: the baseline template, copied, never the template itself.
-rm -rf "$target"
+target_created=0
+if [ ! -e "$target" ]; then
+  target_created=1
+elif [ ! -d "$target" ]; then
+  refuse "$target" "TARGET exists and is not a directory"
+elif [ -n "$(ls -A "$target" 2>/dev/null)" ]; then
+  refuse "$target" "TARGET already has content"
+else
+  echo "run.sh: using the existing empty directory as TARGET: $target"
+fi
+
+# A run's target is its own: the baseline template, copied, never the template itself. The
+# directory is either one this script created above or one it verified empty, so there is nothing
+# here to empty.
 mkdir -p "$target"
 cp -R "$band/baseline/target/." "$target/"
 
