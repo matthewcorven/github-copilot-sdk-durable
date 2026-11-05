@@ -891,8 +891,10 @@ ledger, for a different and correct reason: the ledger is a cross-run fact).
 
 The fix is `Transaction.Memo(taskId, key, value)` in all three ports. The write lands in the task's
 memo map before the provider is told and before the commit, so it commits with the checkpoint and a
-rollback restores it through the existing `TaskStateSnapshot` path. The outside-a-transaction form is
-unchanged; both now say which one to use.
+rollback restores it through the existing `TaskStateSnapshot` path — after review established that
+path was itself incomplete (it restored the record but not the provider's baseline, so a discarded
+memo came back one transaction later; fixed separately, see #205's record of the rollback defect).
+The outside-a-transaction form is unchanged; both now say which one to use.
 
 #### Why the failure mode matters more than the missing feature
 
