@@ -2098,6 +2098,40 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
                     reopened.close()
                     await host.close_async()
 
+    async def test_memo_discarded_by_a_rollback_does_not_reappear_in_the_next_failed_transaction(self):
+        store = DurableStore.create(DurableStoreOptions())
+        definition = DurableTask.define_phases(
+            "memo-rollback-then-fail-again", lambda: {"phase": "run"}, {"run": lambda i, c, r: r.commit_async(
+                lambda: TaskCommit.running({"phase": "run"}))})
+
+        async def create(tx):
+            return tx.create_task(definition)
+
+        record = await store.commit_async(create)
+
+        async def first(tx):
+            tx.memo(record.id, "effect/once", "written")
+            raise RuntimeError("the effect failed after the memo was staged")
+
+        with self.assertRaises(RuntimeError):
+            await asyncio.wait_for(store.commit_async(first), 10)
+        self.assertNotIn("effect/once", store.task(record.id).memos)
+
+        # A second failed transaction must not reinstate the first one's write. It has to stage
+        # something: a rollback only restores what the transaction armed.
+        async def second(tx):
+            tx.memo(record.id, "effect/never-written", "staged")
+            raise RuntimeError("a later transaction failed")
+
+        with self.assertRaises(RuntimeError):
+            await asyncio.wait_for(store.commit_async(second), 10)
+
+        self.assertNotIn(
+            "effect/once", store.task(record.id).memos,
+            "the memo discarded by the first rollback must not reappear in the next one")
+        self.assertNotIn("effect/never-written", store.task(record.id).memos)
+        store.close()
+
     async def test_memo_inside_a_commit_writes_with_the_transaction_and_rolls_back(self):
         store = DurableStore.create(DurableStoreOptions())
         definition = DurableTask.define_phases(

@@ -2009,8 +2009,11 @@ export class Transaction {
 
     if (value !== undefined) {
       task.memos[key] = DurableJson.clone(value);
-      // The task record changed inside the transaction, so the provider is told about it
-      // before the commit; a rollback then restores the memo map along with everything else.
+      // The task record changed inside the transaction, so the provider is told about it; that is
+      // what arms the undo with the pre-transaction memo map. A rollback then discards this write —
+      // including on the *next* failed transaction, which restores the snapshot the undo put back
+      // into the provider's baseline rather than the state this write produced.
+      // `UndoLog.restore` is where both halves of that live.
       this.provider.updateTask(task);
       return task.memos[key];
     }

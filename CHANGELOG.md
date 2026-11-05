@@ -48,6 +48,27 @@ See [`docs/RELEASING.md`](docs/RELEASING.md) for the release procedure.
 - **`docs/SANDBOX_MATRIX.md`** — sandbox capability × platform/backend, what is enforced
   versus advisory, what `SandboxFilesystemPolicyDetails` does and does not report, and the
   host-hook limitation above. (#16)
+- **`Transaction.Memo(taskId, key, value)`** — read or write an idempotency memo as part of a
+  transaction, so an external effect's memo commits with the checkpoint that surrounds it. The
+  other entry point, `TaskRuntime.MemoAsync`, takes the store's commit gate; a phase handler that
+  calls it from inside `CommitAsync` waits for a release the commit itself is holding, which is a
+  hang rather than an exception. Both paths and both ports say which one to use. C#, TypeScript and
+  Python. (#201)
+
+### Fixed
+
+- **A rollback discarded a write and the next failed transaction put it back.**
+  `InMemoryStoreProvider.UpdateTask` keeps a baseline of each task's last known state so the
+  following transaction can arm its own undo with it, and it moved that baseline forward to the
+  state the failing transaction wrote. `UndoLog.Restore` only restored the *record*, so the
+  baseline stayed ahead of it and the next `UpdateTask` armed itself with the post-failed-write
+  state: a memo (or checkpoint) that a rollback had discarded reappeared one transaction later, and
+  with a JSONL store it reached disk. `UndoLog.Restore` now takes the baseline map and puts the
+  snapshot back into it, so both halves are restored together. The TypeScript port already did this;
+  C# and Python did not. (#201)
+- `TaskRuntime.MemoAsync` documentation now states that it must not be called from inside a commit
+  callback — it takes the commit gate the commit already holds, so it does not return — and points
+  at `Transaction.Memo` for that case. (#201)
 
 ### Changed
 

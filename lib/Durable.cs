@@ -1112,7 +1112,7 @@ public class InMemoryStoreProvider : IDurableStoreProvider
         var current = TaskStateSnapshot.Capture(record);
         if (_undo is not null && _taskStates.TryGetValue(record.Id, out var previous))
         {
-            _undo.Restore(previous, record);
+            _undo.Restore(previous, record, _taskStates);
         }
 
         _taskStates[record.Id] = current;
@@ -2535,8 +2535,11 @@ public sealed class Transaction
         if (value is { } element)
         {
             task.Memos[key] = element.Clone();
-            // The task record changed inside the transaction, so the provider is told about it
-            // before the commit; a rollback then restores the memo map along with everything else.
+            // The task record changed inside the transaction, so the provider is told about it; that
+            // is what arms the undo with the pre-transaction memo map. A rollback then discards this
+            // write — including on the *next* failed transaction, which restores the snapshot the
+            // undo put back into the provider's baseline rather than the state this write produced.
+            // `UndoLog.Restore` is where both halves of that live.
             _provider.UpdateTask(task);
             return task.Memos[key];
         }
@@ -7335,8 +7338,23 @@ internal sealed class UndoLog
     /// Records the task's own state, so a failed phase leaves the checkpoint where
     /// it was and the task can be resumed.
     /// </summary>
-    public void Restore(TaskStateSnapshot snapshot, DurableTaskRecord task) =>
-        _actions.Add(() => snapshot.ApplyTo(task));
+    /// <remarks>
+    /// The record is not the only thing to put back. The provider keeps a baseline of each task's
+    /// last known state so the *next* transaction can arm its own undo with it, and
+    /// <see cref="InMemoryStoreProvider.UpdateTask"/> has already moved that baseline forward to the
+    /// state this transaction wrote. Restoring only the record leaves the baseline ahead of it, so
+    /// the next failed transaction restores the state this one discarded — a memo or checkpoint that
+    /// reappears one rollback later. Both are put back here.
+    /// </remarks>
+    public void Restore(
+        TaskStateSnapshot snapshot,
+        DurableTaskRecord task,
+        Dictionary<string, TaskStateSnapshot> states) =>
+        _actions.Add(() =>
+        {
+            snapshot.ApplyTo(task);
+            states[task.Id] = snapshot;
+        });
 }
 
 /// <summary>Convenience helpers for the durable layer.</summary>

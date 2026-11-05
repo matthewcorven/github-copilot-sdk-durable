@@ -422,6 +422,113 @@ public class TaskResumeTests
     }
 
     /// <summary>
+    /// A rollback discards a memo written inside the transaction, and the *next* failed transaction
+    /// does not bring it back.
+    /// </summary>
+    /// <remarks>
+    /// The second half is the point. `InMemoryStoreProvider.UpdateTask` keeps a baseline of each
+    /// task's last known state so the next transaction can arm its own undo with it, and it had
+    /// already moved that baseline forward to the state the failed transaction wrote. Restoring only
+    /// the record left the baseline ahead of it, so the following failure restored the memo this one
+    /// had discarded — the write came back one rollback later, which is the opposite of what a
+    /// rollback is for. The TypeScript port reset the baseline; the C# one did not.
+    /// </remarks>
+    [Fact]
+    public async Task MemoDiscardedByARollback_DoesNotReappearInTheNextFailedTransaction()
+    {
+        var store = DurableStore.CreateEphemeral();
+        var definition = DurableTask.DefinePhases<Dictionary<string, string>, Dictionary<string, string>>(
+            "test.memo-rollback-then-fail-again",
+            () => new Dictionary<string, string> { ["phase"] = "run" },
+            new Dictionary<string, Func<Dictionary<string, string>, Dictionary<string, string>, TaskRuntime, Task<TaskCommit>>>
+            {
+                ["run"] = (_, _, runtime) => runtime.CommitAsync(() => TaskCommit.Running(
+                    DurableJson.ToElement(new Dictionary<string, string> { ["phase"] = "run" }))),
+            });
+
+        var taskId = await store.CommitAsync(tx => Task.FromResult(
+            tx.CreateTask(definition, DurableJson.ToElement(new Dictionary<string, string>())).Id));
+
+        // A: write, then fail. The memo goes.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.CommitAsync(tx =>
+        {
+            tx.Memo(taskId, "effect/once", DurableJson.ToElement("written"));
+            throw new InvalidOperationException("the effect failed after the memo was staged");
+        }));
+        Assert.False(store.Task(taskId)!.Memos.ContainsKey("effect/once"),
+            "the first rollback discarded the memo");
+
+        // B: an unrelated transaction that fails without touching the memo at all. Its rollback must
+        // not reinstate A's write.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.CommitAsync(tx =>
+        {
+            tx.Memo(taskId, "effect/never-written", DurableJson.ToElement("staged"));
+            throw new InvalidOperationException("a later transaction failed");
+        }));
+
+        Assert.False(store.Task(taskId)!.Memos.ContainsKey("effect/once"),
+            "the memo discarded by the first rollback must not reappear in the next one");
+        Assert.False(store.Task(taskId)!.Memos.ContainsKey("effect/never-written"),
+            "the second transaction's own memo is discarded too");
+    }
+
+    /// <summary>
+    /// The same sequence for a checkpoint, because the defect was never memo-specific.
+    /// </summary>
+    /// <remarks>
+    /// `UpdateTask` is how every in-place task mutation is recorded, so the stale baseline applied to
+    /// the checkpoint and the status as well. This test uses no memos at all, which is what makes it
+    /// evidence that the fix is in the provider rather than in `Transaction.Memo`.
+    /// </remarks>
+    [Fact]
+    public async Task CheckpointDiscardedByARollback_DoesNotReappearInTheNextFailedTransaction()
+    {
+        var store = DurableStore.CreateEphemeral();
+        var definition = DurableTask.DefinePhases<Dictionary<string, string>, Dictionary<string, string>>(
+            "test.checkpoint-rollback-then-fail-again",
+            () => new Dictionary<string, string> { ["phase"] = "run", ["n"] = "0" },
+            new Dictionary<string, Func<Dictionary<string, string>, Dictionary<string, string>, TaskRuntime, Task<TaskCommit>>>
+            {
+                ["run"] = (_, _, runtime) => runtime.CommitAsync(() => TaskCommit.Running(
+                    DurableJson.ToElement(new Dictionary<string, string> { ["phase"] = "run", ["n"] = "0" }))),
+            });
+
+        var taskId = await store.CommitAsync(tx => Task.FromResult(
+            tx.CreateTask(definition, DurableJson.ToElement(new Dictionary<string, string>())).Id));
+
+        // A committed advance to n=1: this one must survive everything below.
+        await store.CommitTaskAsync(taskId, () => TaskCommit.Running(
+            DurableJson.ToElement(new Dictionary<string, string> { ["phase"] = "run", ["n"] = "1" })));
+
+        // A transaction that stages n=2 in place and then fails.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.CommitAsync(tx =>
+        {
+            var task = store.Task(taskId)!;
+            task.Checkpoint = DurableJson.ToElement(new Dictionary<string, string> { ["phase"] = "run", ["n"] = "2" });
+            store.Provider.UpdateTask(task);
+            throw new InvalidOperationException("the phase failed after moving the checkpoint");
+        }));
+
+        Assert.True(store.Task(taskId)!.Checkpoint.GetProperty("n").GetString() == "1",
+            "the rollback restored the committed checkpoint");
+
+        // A second failed transaction that also stages a write must not bring n=2 back. It has to
+        // stage something: a rollback only restores what the transaction armed, which is why the
+        // stale baseline needs a second `UpdateTask` — and the real path always supplies one, since
+        // `CommitTaskAsync` records the task unconditionally before it commits.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.CommitAsync(tx =>
+        {
+            var task = store.Task(taskId)!;
+            task.Checkpoint = DurableJson.ToElement(new Dictionary<string, string> { ["phase"] = "run", ["n"] = "3" });
+            store.Provider.UpdateTask(task);
+            throw new InvalidOperationException("a later transaction failed");
+        }));
+
+        Assert.True(store.Task(taskId)!.Checkpoint.GetProperty("n").GetString() == "1",
+            "the checkpoint discarded by the first rollback must not reappear in the next one");
+    }
+
+    /// <summary>
     /// A memo written inside a transaction that then throws is rolled back with the rest of it.
     /// </summary>
     /// <remarks>

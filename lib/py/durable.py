@@ -833,9 +833,27 @@ class UndoLog:
         """Records a restore action, such as resetting the write sequence."""
         self._actions.append(restore)
 
-    def restore(self, snapshot: TaskStateSnapshot, task: DurableTaskRecord) -> None:
-        """Records the task's own state, so a failed phase leaves the checkpoint where it was."""
-        self._actions.append(lambda: snapshot.apply_to(task))
+    def restore(
+        self,
+        snapshot: TaskStateSnapshot,
+        task: DurableTaskRecord,
+        states: dict[str, TaskStateSnapshot],
+    ) -> None:
+        """Records the task's own state, so a failed phase leaves the checkpoint where it was.
+
+        The record is not the only thing to put back. The provider keeps a baseline of each
+        task's last known state so the *next* transaction can arm its own undo with it, and
+        :meth:`InMemoryStoreProvider.update_task` has already moved that baseline forward to the
+        state this transaction wrote. Restoring only the record leaves the baseline ahead of it, so
+        the next failed transaction restores the state this one discarded — a memo or checkpoint
+        that reappears one rollback later. Both are put back here.
+        """
+
+        def action() -> None:
+            snapshot.apply_to(task)
+            states[task.id] = snapshot
+
+        self._actions.append(action)
 
     def undo(self, provider: DurableStoreProvider) -> None:
         """Undoes every recorded mutation, most recent first."""
@@ -1172,7 +1190,7 @@ class InMemoryStoreProvider(DurableStoreProvider):
         current = TaskStateSnapshot.capture(record)
         previous = self._task_states.get(record.id)
         if self._undo is not None and previous is not None:
-            self._undo.restore(previous, record)
+            self._undo.restore(previous, record, self._task_states)
         self._task_states[record.id] = current
 
     @staticmethod
@@ -2382,9 +2400,11 @@ class Transaction:
 
         if value is not None:
             task.memos[key] = DurableJson.clone(value)
-            # The task record changed inside the transaction, so the provider is told about it
-            # before the commit; a rollback then restores the memo map along with everything
-            # else.
+            # The task record changed inside the transaction, so the provider is told about it;
+            # that is what arms the undo with the pre-transaction memo map. A rollback then
+            # discards this write — including on the *next* failed transaction, which restores the
+            # snapshot the undo put back into the provider's baseline rather than the state this
+            # write produced. ``UndoLog.restore`` is where both halves of that live.
             self._provider.update_task(task)
             return task.memos[key]
 
