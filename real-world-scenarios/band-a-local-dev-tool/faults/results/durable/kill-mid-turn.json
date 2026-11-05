@@ -1,0 +1,14 @@
+{
+  "variant": "durable",
+  "fault": "kill-mid-turn",
+  "outcome": "resumed",
+  "phase": "committed at validating when the process was killed",
+  "detail": "The kill left a committed document at phase validating with 2 entries and task status running. A new process resumed 1 task(s) at phase validating and finished with task terminal at phase done, 10 entries, restarts=1, report 46 characters. The turn that was cut off was re-sent, not replayed: it left no answer to reuse.",
+  "evidence": "resumed tasks:  1\n  t11 resumes: the enquiry is committed at phase validating, after 0 completed pass(es)\n  t11 finished: completed",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "tools/ReplayRuntime",
+    "command": "./faults/kill-mid-turn.sh --variant durable"
+  },
+  "recordedAt": "2026-11-05T15:16:30.140093+00:00"
+}

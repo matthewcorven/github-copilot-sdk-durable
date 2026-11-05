@@ -1,0 +1,14 @@
+{
+  "variant": "durable",
+  "fault": "kill-mid-turn-control",
+  "outcome": "completed",
+  "phase": "an uninterrupted model turn (the control)",
+  "detail": "Control: the same steps, with the held tool result released instead of the process killed. The enquiry reached phase done with a 46-character report and 9 transcript entries. This is what the killed run is measured against: the kill is the only difference.",
+  "evidence": "gate held one tool result; release let the turn finish",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "tools/ReplayRuntime",
+    "command": "./faults/kill-mid-turn.sh --variant durable --fault-not-injected"
+  },
+  "recordedAt": "2026-11-05T15:16:33.808536+00:00"
+}

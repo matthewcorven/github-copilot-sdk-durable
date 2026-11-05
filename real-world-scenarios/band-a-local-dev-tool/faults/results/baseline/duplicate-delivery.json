@@ -1,0 +1,14 @@
+{
+  "variant": "baseline",
+  "fault": "duplicate-delivery",
+  "outcome": "doubled",
+  "phase": "the same enquiry delivered twice",
+  "detail": "Two deliveries of the same enquiry produced 2 agents on the page (Need a downtown condo with parking, 1-2 bedrooms, under $350k | Need a downtown condo with parking, 1-2 bedrooms, under $350k) and 2 model turns reached the runtime. The application has no identity for an enquiry, so the second delivery is a second agent: its side effects — a Copilot session, a search, a report — happen twice.",
+  "evidence": "cards=2 [Need a downtown condo with parking, 1-2 bedrooms, under $350k | Need a downtown condo with parking, 1-2 bedrooms, under $350k]; session.send frames=2; processing=0; completed=2; rejected=0",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "tools/ReplayRuntime",
+    "command": "./faults/duplicate-delivery.sh --variant baseline"
+  },
+  "recordedAt": "2026-11-05T15:15:19.976403+00:00"
+}

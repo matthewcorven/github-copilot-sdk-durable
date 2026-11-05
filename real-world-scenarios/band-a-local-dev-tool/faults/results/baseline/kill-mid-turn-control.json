@@ -1,0 +1,14 @@
+{
+  "variant": "baseline",
+  "fault": "kill-mid-turn-control",
+  "outcome": "completed",
+  "phase": "an uninterrupted model turn (the control)",
+  "detail": "Control: the same steps, with the held tool result released instead of the process killed. The page's dashboard reads completed=1 and the completed card is \"Looking for a 3-bed family home near good schools in the suburbs, budget around $500k\". This is what the killed run is measured against: the kill is the only difference, and the same run then showed 0 cards after it.",
+  "evidence": "gate held one tool result; release let the turn finish",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "tools/ReplayRuntime",
+    "command": "./faults/kill-mid-turn.sh --variant baseline --fault-not-injected"
+  },
+  "recordedAt": "2026-11-05T15:14:38.955193+00:00"
+}

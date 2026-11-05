@@ -1,0 +1,14 @@
+{
+  "variant": "baseline",
+  "fault": "store-outage",
+  "outcome": "not exercised",
+  "phase": "a store that holds agent state",
+  "detail": "The baseline keeps every agent in an in-process Dictionary<string, Agent> and writes no agent state to disk for the lifetime of the process. There is no store file to remove, lock, or corrupt: properties.db holds property listings only, and an outage of it would test the search tool rather than the durability of an enquiry. Removing it mid-run was not substituted, because a different fault reported under this name would be worse than an honest absence.",
+  "evidence": "",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "tools/ReplayRuntime",
+    "command": "./faults/store-outage.sh --variant baseline"
+  },
+  "recordedAt": "2026-11-05T15:16:25.470108+00:00"
+}

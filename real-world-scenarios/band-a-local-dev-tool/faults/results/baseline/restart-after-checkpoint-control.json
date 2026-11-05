@@ -1,0 +1,14 @@
+{
+  "variant": "baseline",
+  "fault": "restart-after-checkpoint-control",
+  "outcome": "lost",
+  "phase": "before any phase has progressed (queued only)",
+  "detail": "The server was stopped cleanly (before any phase has progressed (queued only)) and restarted. It shows 0 cards: processing 0, completed 0. Whatever phase had committed is gone with the process, so there is no resume to be exact about.",
+  "evidence": "clean stop: SIGTERM while the page showed the enquiry in flight, then the process was confirmed gone; restart: same directory /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-146-work/.scratch/band-a-faults/baseline/restart-after-checkpoint-control/app, same port 5217; cards=0 processing=0 completed=0",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "tools/ReplayRuntime",
+    "command": "./faults/restart-after-checkpoint.sh --variant baseline --fault-not-injected"
+  },
+  "recordedAt": "2026-11-05T15:15:08.696244+00:00"
+}

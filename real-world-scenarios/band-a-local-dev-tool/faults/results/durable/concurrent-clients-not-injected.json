@@ -1,0 +1,14 @@
+{
+  "variant": "durable",
+  "fault": "concurrent-clients-not-injected",
+  "outcome": "not corrupted",
+  "phase": "two enquiries submitted one after the other (the control)",
+  "detail": "2 enquiry documents and 2 task records, all 2 terminal, 16 transcript entries and 0 entries crossing documents. The commit gate serialized the two writers, so neither document saw the other's entries.",
+  "evidence": "documents=2; tasks=2; terminal=2; transcript entries=16; entries belonging to another conversation=0; search tool calls=10",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "tools/ReplayRuntime",
+    "command": "./faults/concurrent-clients.sh --variant durable --fault-not-injected"
+  },
+  "recordedAt": "2026-11-05T15:17:01.156255+00:00"
+}

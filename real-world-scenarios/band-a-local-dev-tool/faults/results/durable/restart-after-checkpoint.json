@@ -1,0 +1,14 @@
+{
+  "variant": "durable",
+  "fault": "restart-after-checkpoint",
+  "outcome": "resumed",
+  "phase": "committed at validating when the process was stopped (SIGTERM while waiting on the runtime, then the process was confirmed gone)",
+  "detail": "The restart resumed 1 task(s) from the committed phase and finished at done with 10 entries (task terminal). The committed checkpoint was ahead of the last completed turn, so the remaining work ran and the finished part did not.",
+  "evidence": "clean stop: SIGTERM while waiting on the runtime, then the process was confirmed gone; store after the stop: complete; resumed tasks: 1; restarts=1; session.send frames across both processes: 2; before: validating/2 entries [phase; intent:Validate home enquiry]; after: done/10 entries [phase; intent:Validate home enquiry; intent:Validate home enquiry; phase; intent:Searching listings; tool:1 match(es); phase; phase; answer:The report is written an; report:The report is written an]",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "tools/ReplayRuntime",
+    "command": "./faults/restart-after-checkpoint.sh --variant durable"
+  },
+  "recordedAt": "2026-11-05T15:16:38.805968+00:00"
+}

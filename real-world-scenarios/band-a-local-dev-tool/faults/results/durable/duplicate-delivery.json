@@ -1,0 +1,14 @@
+{
+  "variant": "durable",
+  "fault": "duplicate-delivery",
+  "outcome": "doubled",
+  "phase": "the same enquiry delivered twice",
+  "detail": "Two deliveries of the same enquiry produced 2 enquiry documents, 2 model admissions and 2 search tool call(s), across 18 transcript entries. The variant has no identity for an enquiry to deduplicate on, so the second delivery is a second conversation: the search and the report happen twice, and the store keeps both documents intact — nothing was corrupted, but nothing was reused either.",
+  "evidence": "deliveries=2; submitted=2; enquiry documents=2; task records=2; admissions=2; search tool calls=2; transcript of the last document=phase; intent:Validate home enquiry; phase; intent:Searching listings; tool:1 match(es); phase; phase; answer:The report is written an; report:The report is written an",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "tools/ReplayRuntime",
+    "command": "./faults/duplicate-delivery.sh --variant durable"
+  },
+  "recordedAt": "2026-11-05T15:16:48.410722+00:00"
+}

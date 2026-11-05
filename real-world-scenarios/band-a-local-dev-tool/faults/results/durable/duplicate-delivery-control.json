@@ -1,0 +1,14 @@
+{
+  "variant": "durable",
+  "fault": "duplicate-delivery-control",
+  "outcome": "control: single delivery",
+  "phase": "the same enquiry delivered once (the control)",
+  "detail": "Control: one delivery produced 1 enquiry document, 1 model admission, 1 search tool call and 9 transcript entries. The same steps delivered twice produced two of each, so the doubling is attributable to the duplicate delivery and not to the run.",
+  "evidence": "deliveries=1; submitted=; enquiry documents=1; task records=1; admissions=1; search tool calls=1; transcript of the last document=phase; intent:Validate home enquiry; phase; intent:Searching listings; tool:1 match(es); phase; phase; answer:The report is written an; report:The report is written an",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "tools/ReplayRuntime",
+    "command": "./faults/duplicate-delivery.sh --variant durable --fault-not-injected"
+  },
+  "recordedAt": "2026-11-05T15:16:52.460608+00:00"
+}
