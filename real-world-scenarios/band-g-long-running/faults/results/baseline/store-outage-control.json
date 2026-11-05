@@ -1,0 +1,24 @@
+{
+  "variant": "baseline",
+  "fault": "store-outage-control",
+  "outcome": "completed",
+  "phase": "no outage (the control)",
+  "detail": "Control: the same steps with nothing made immutable. The resume exited 0 after 2 model call(s), the run finished, and a second resume exited 0 with 3 checkpoint file(s) and a post-approval checkpoint present: yes. This is what the outage run is measured against.",
+  "evidence": "gate checkpoint: 352f17b802b84823bc1fc854f6e566a7; checkpoints at the gate: 1\ndrive (exit 0): 2 model call(s)\nafter the flag was removed, fresh resume (exit 0): 3 file(s), latest 5a946fd4d88a45c18a7d2e40fd23d3cd, post-approval checkpoint: yes, pending requests: 50ca05e7a4e14c40961898f6a54f86e0\n",
+  "measurements": {
+    "drive_exit": 0,
+    "model_calls_drive": 2,
+    "checkpoints_at_gate": "1",
+    "checkpoints_after": "3",
+    "post_approval_checkpoint_after": "yes",
+    "gate_reapproved_after_outage": "1"
+  },
+  "harness": {
+    "dotnet": "10.0.402",
+    "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
+    "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
+    "commit": "913b596e4d6833258460c7f91a2b71885d414d85",
+    "command": "./faults/store-outage.sh --variant baseline --fault-not-injected"
+  },
+  "recordedAt": "2026-11-05T17:47:15.304751+00:00"
+}

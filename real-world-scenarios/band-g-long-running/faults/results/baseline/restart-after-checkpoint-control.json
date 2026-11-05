@@ -1,0 +1,21 @@
+{
+  "variant": "baseline",
+  "fault": "restart-after-checkpoint-control",
+  "outcome": "resumed, uninterrupted",
+  "phase": "uninterrupted (the control)",
+  "detail": "Control: the same two processes with no stop. The first process exited 0 after 2 model call(s), wrote checkpoint c7bffa9bf74a47fa8906caf934dce4ce, and a second process started from that checkpoint issued 2 model call(s) and left the run completed. This is what the fault result is measured against: the interrupted run differs from it only by the stop.",
+  "evidence": "process 1: 2 model call(s); gate checkpoint ab0e1364581b4b7baf542e351b73d0b7\nstopped pid none at: the resumed process, uninterrupted; 2 model call(s) served to it\nsecond process (fresh resume, exit 0): 2 model call(s), shapes: system:687ce436|user:3c4e51a2|assistant:2f3d15ab|user:3bdbfc18|assistant:6010ea3c|user:314f85c5|user:a6ad27be system:687ce436|user:3c4e51a2|assistant:2f3d15ab|user:3bdbfc18|assistant:6010ea3c|user:314f85c5|user:0bb64012\nlatest checkpoint: c7bffa9bf74a47fa8906caf934dce4ce; approved checkpoint present: yes; checkpoints on disk: 3",
+  "measurements": {
+    "model_calls_process_1": 2,
+    "model_calls_stopped_process": 2,
+    "model_calls_second_process": 2
+  },
+  "harness": {
+    "dotnet": "10.0.402",
+    "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
+    "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
+    "commit": "913b596e4d6833258460c7f91a2b71885d414d85",
+    "command": "./faults/restart-after-checkpoint.sh --variant baseline --fault-not-injected"
+  },
+  "recordedAt": "2026-11-05T17:46:58.431763+00:00"
+}

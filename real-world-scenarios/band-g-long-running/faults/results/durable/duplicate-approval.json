@@ -1,0 +1,25 @@
+{
+  "variant": "durable",
+  "fault": "duplicate-approval",
+  "outcome": "second delivery refused",
+  "phase": "two approve processes against a live gate",
+  "detail": "alice's approval was recorded (exit 0). mallory's approval of the same live gate was refused — 'ignored: a decision is already on file (alice, approved)' — and the decision on file was still 'alice approved'. The refusal did not come from the terminal guard (the run was still 'waiting'), so it came from the decision document's first-writer-wins rule: the second delivery found a value already on file and returned it.",
+  "evidence": "run before the deliveries: waiting, gate phase wait, 3 call(s)\nfirst delivery (exit 0): decision on file 'alice approved'\nsecond delivery (exit 4): note 'ignored: a decision is already on file (alice, approved)', decision on file 'alice approved', run still 'waiting', terminal-guard hits 0\ndriven (exit 0): terminal, verdict approved, decision 'alice approved', 4 call(s)",
+  "measurements": {
+    "model_calls_at_gate": 3,
+    "decision_after_first": "alice approved",
+    "decision_after_second": "alice approved",
+    "second_refused_by_terminal_guard": "0",
+    "run_after_finish": "terminal",
+    "verdict": "approved",
+    "model_calls_end": 4
+  },
+  "harness": {
+    "dotnet": "10.0.402",
+    "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
+    "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
+    "commit": "913b596e4d6833258460c7f91a2b71885d414d85",
+    "command": "./faults/duplicate-approval.sh --variant durable"
+  },
+  "recordedAt": "2026-11-05T17:49:01.859480+00:00"
+}

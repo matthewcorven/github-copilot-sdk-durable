@@ -1,0 +1,23 @@
+{
+  "variant": "durable",
+  "fault": "restart-after-checkpoint",
+  "outcome": "resumed, no calls repeated",
+  "phase": "stopped after the write checkpoint (inside the write step, after its turn and before its checkpoint commits); the resume stopped at the gate",
+  "detail": "The fault left the process before the write step's checkpoint committed, with the run at phase write and the ledger reading 3 call(s) [plan,research,write]. A fresh process re-entered the run and stopped at the gate again: task waiting, gate phase wait, 3 call(s) [plan,research,write] with 1 memo hit(s). So the resume added no model call at all for a step the store already held: every step it re-entered was served from the memo, and the resume's own count is 0.",
+  "evidence": "start (the write step, after its turn and before its checkpoint commits): 3 call(s) [plan,research,write], run running at phase write\nresume (exit 0): 3 call(s) [plan,research,write], 1 memo hit(s), run waiting, gate phase wait\ngate:       t62 Running\nmodel:      3 calls [plan, research, write], 1 memo hits",
+  "measurements": {
+    "model_calls_process_1": 3,
+    "model_calls_process_2": 3,
+    "calls_added_by_resume": 0,
+    "memo_hits": 1,
+    "steps_after_resume": "plan,research,write"
+  },
+  "harness": {
+    "dotnet": "10.0.402",
+    "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
+    "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
+    "commit": "913b596e4d6833258460c7f91a2b71885d414d85",
+    "command": "./faults/restart-after-checkpoint.sh --variant durable"
+  },
+  "recordedAt": "2026-11-05T17:48:56.272902+00:00"
+}
