@@ -870,3 +870,26 @@ the layer already does, and missed the thing it actually does not do.
 **Rule:** Before attributing a limitation to `lib/`, read the write path, not just the public
 surface. A public getter existing does not mean the data is committed at the moment you need it —
 and a record existing does not mean it can be replayed.
+
+### 2026-11-05T17:00:00Z: A durable store's rollback must restore the provider's baseline, not just the record
+
+**By:** coordinator (round 18, found while judging #155)
+
+**What:** `Transaction.Memo` (#201's fix) exposed a pre-existing defect in the rollback path.
+`InMemoryStoreProvider.UpdateTask` captures the current state into `_taskStates` *after* queuing the undo
+action, and `UndoLog.Restore` only performed `snapshot.ApplyTo(task)`. The record was restored; the
+baseline the *next* transaction arms itself with was not. So a memo written by a transaction the library
+reported as rolled back came back on the **next** failed transaction — and with a JSONL store it reached
+disk after a reopen. TypeScript was already correct (`restore(snapshot, task, states)` also does
+`states.set(task.id, snapshot)`); C# and Python were not.
+
+**Why:** The failure mode is the one this program keeps finding: silence. The memo is the record that an
+external effect happened, so a resurrected memo makes a host skip work it never did — the "silently
+missing comment" the Band C variant's own README calls unrecoverable. Nothing throws, nothing logs, and
+the single-failure test passes either way; only a **second** failing transaction exposes it.
+
+**Rule:** When a layer keeps two copies of a piece of state — the record and a snapshot baseline — a
+rollback must put back both, and the test must fail the transaction **twice**. A one-shot rollback test
+proves the record and says nothing about the bookkeeping. Check every port: a divergence here is invisible
+until someone's store corrupts.
+
