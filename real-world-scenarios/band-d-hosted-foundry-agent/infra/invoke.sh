@@ -9,12 +9,15 @@
 #                   returns its structured CoverageResult.
 #   2. synthesis  — the synthesis agent (gate-based decision rubric) returns its
 #                   APPROVE / PEND recommendation with an audit trail.
-#   3. approval   — a human reviewer accepts or overrides that recommendation.
-#                   There is no approval UI in the minimal deployment, so the
-#                   reviewer's decision is recorded as its own file by this
-#                   script, in the shape the accelerator's POST /api/decision
-#                   takes (action = accept | override, reviewer_name), and
-#                   applied as a step.
+#   3. decision   — the recommendation is accepted or overridden. This is the
+#                   accelerator backend's rule, not a person and not a backend:
+#                   there is no approval UI in the minimal deployment, so this
+#                   script writes the decision in the shape POST /api/decision
+#                   takes (action = accept | override, reviewer_name) and applies
+#                   it. `accept` keeps the recommendation, so the decision step on
+#                   its own does not change the outcome — deleting it would give
+#                   byte-identical output. The final result records that in
+#                   provenance.decision.
 #   4. result     — the final authorization outcome. This is the step that makes
 #                   the run a decision and not just an agent output.
 #
@@ -116,7 +119,9 @@ PY
 post "$AGENT_SYNTHESIS" "$OUT_DIR/20-synthesis.request.json" "$OUT_DIR/20-synthesis.response.json"
 text_of "$OUT_DIR/20-synthesis.response.json" > "$OUT_DIR/20-synthesis.result.json"
 
-# -- 3. Human approval -------------------------------------------------------
+# -- 3. Decision applied -----------------------------------------------------
+# Not a human round-trip: this reproduces the backend's rule over the deployed
+# agents' real recommendation, and says so in the final result's provenance.
 REVIEW_ID="$(basename "$OUT_DIR")"
 python3 - "$REVIEW_ID" "$REVIEWER" "$OUT_DIR/30-human-decision.json" <<'PY'
 import json, sys
@@ -124,7 +129,7 @@ rid, reviewer, out = sys.argv[1:4]
 json.dump({"request_id": rid, "action": "accept", "override_recommendation": None,
            "override_rationale": None, "reviewer_name": reviewer}, open(out, "w"), indent=1)
 PY
-echo "-- human decision: accept (reviewer: $REVIEWER)"
+echo "-- decision applied: accept (backend rule reproduced here; reviewer field: $REVIEWER)"
 
 # -- 4. Final result ---------------------------------------------------------
 python3 - "$OUT_DIR" <<'PY'
@@ -160,7 +165,8 @@ out = {
     "provenance": {
         "coverage": "hosted agent, Responses API",
         "synthesis": "hosted agent, Responses API",
-        "decision": "applied by invoke.sh using backend/app/routers/decision.py rules",
+        "decision": "applied by invoke.sh using backend/app/routers/decision.py rules; "
+                    "an accept keeps the recommendation, so this step does not change the outcome",
     },
 }
 (d / "40-final-result.json").write_text(json.dumps(out, indent=1) + "\n")

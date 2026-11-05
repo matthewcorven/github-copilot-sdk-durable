@@ -54,15 +54,26 @@ az deployment sub create \
   --parameters namePrefix="$NAME_PREFIX" location="$LOCATION" \
                modelDeploymentName="$MODEL" modelDeploymentSku="$MODEL_SKU" \
                modelCapacityK="$CAPACITY_K" \
-  --query 'properties.outputs' -o json > "$ROOT/.deployment.json"
+  --query 'properties.outputs' -o json > "$ROOT/.deployment.json.raw"
 
-python3 - "$ROOT/.deployment.json" <<'PY'
-import json, sys
-o = json.load(open(sys.argv[1]))
-print("provisioned:")
+# Record the subscription alongside the outputs. teardown.sh targets this
+# subscription explicitly, so a later `az account set` cannot make it delete
+# nothing from the wrong place and call that clean.
+python3 - "$ROOT/.deployment.json.raw" "$ROOT/.deployment.json" <<'PY'
+import json, subprocess, sys
+raw, out = sys.argv[1:3]
+o = json.load(open(raw))
+sub = subprocess.run(["az", "account", "show", "--query", "id", "-o", "tsv"],
+                     capture_output=True, text=True, check=True).stdout.strip()
+o["subscriptionId"] = {"type": "String", "value": sub}
+json.dump(o, open(out, "w"), indent=2)
+print("provisioned (subscription %s):" % sub)
 for k, v in o.items():
+    if k == "subscriptionId":
+        continue
     print(f"  {k:24s} {v['value']}")
 PY
+rm -f "$ROOT/.deployment.json.raw"
 
 echo
 echo "next: ./deploy.sh   (build, push, register the agent version)"

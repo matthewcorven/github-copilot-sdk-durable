@@ -5,9 +5,16 @@ The baseline side of Band D: `microsoft/Prior-Authorization-Multi-Agent-Solution
 observed. The Durable variants (D2 inside, D3 outside) compare against this.
 
 **What is proven:** two hosted agents (coverage, synthesis) deployed, a complete
-prior-authorization run — coverage assessment → decision → human approval → final
-result — captured in `evidence/run-20261105T125254Z/`, and four platform questions
-answered in `evidence/platform-behaviour.md`.
+prior-authorization run through the platform — coverage → synthesis → decision
+applied → `pend_for_review` — captured in `evidence/run-20261105T125254Z/`, and four
+platform questions answered in `evidence/platform-behaviour.md`.
+
+**One step in that chain is not the platform's.** The decision is the
+accelerator backend's rule (`routers/decision.py`) reproduced by `invoke.sh`: it
+writes `"action": "accept"`, so accepting the recommendation is a no-op that keeps
+`final = rec`. It is a *decision applied*, not a person, not a review UI, and not
+a backend call — the run's `40-final-result.json` says so in
+`provenance.decision`. Removing the step would produce byte-identical output.
 
 **What is not proven:** the local Docker Compose path does **not** complete a prior-auth
 run in this environment (three captured failures, `evidence/local-compose-path.md`), and
@@ -25,8 +32,8 @@ application.
 | `infra/main.bicep` | Provisioning: resource group, registry, Log Analytics + App Insights, Foundry account + project + both capability hosts + one `gpt-5.4` deployment. Nothing else. |
 | `infra/provision.sh` | `az deployment sub create` against `infra/main.bicep`, writes `.deployment.json`. |
 | `infra/deploy.sh` | Build + push both agent images, grant the roles Foundry needs, register both agent versions, wait for `active`, write `deployment.env`. |
-| `infra/invoke.sh` | One four-step run (coverage → synthesis → human approval → final result) with every input/output saved. |
-| `infra/teardown.sh` | Deletes the resource group, waits, and verifies with `az resource list` that nothing remains. Idempotent. |
+| `infra/invoke.sh` | One four-step run (coverage → synthesis → decision applied → final result) with every input/output saved. The decision step replays the accelerator backend's rules; it is not a human round-trip. |
+| `infra/teardown.sh` | Deletes the resource group on the subscription `provision.sh` recorded, waits, and treats a failed `az` call as a failure rather than as "nothing left". Idempotent. |
 | `evidence/` | Captured transcripts. Index below. |
 
 ## Cost, and teardown
@@ -100,7 +107,7 @@ and the monitoring that makes a deployed run observable.
 | Not deployed | Why | Consequence |
 | --- | --- | --- |
 | `clinical`, `compliance` agents | Each is a separate specialist; D1 proves one decision path, and the `compliance` image in the accelerator cannot even import `agent_framework_foundry` (it omits `agent-framework-openai`) | Every synthesis transcript records `agents_absent: [compliance, clinical]` and the recommendation errs to PEND rather than claiming a verdict it did not make |
-| FastAPI backend | It owns the four-agent fan-out *and* the in-memory review store; it is the thing D3 replaces with a Durable orchestrator | The approval step is reproduced in `invoke.sh` from the backend's own rules, and `40-final-result.json` labels it `"decision": "applied by invoke.sh…"` |
+| FastAPI backend | It owns the four-agent fan-out *and* the in-memory review store; it is the thing D3 replaces with a Durable orchestrator | The decision step is applied in `invoke.sh` from the backend's own rules — an `accept` of the recommendation, hence a no-op on the outcome — and `40-final-result.json` labels it `"decision": "applied by invoke.sh…"` |
 | Next.js frontend | Nothing to review without the backend | The transcript is the artefact |
 | Foundry project App Insights *connection* | Portal Traces-tab rendering only | On this subscription the `connections` resource fails validation (`Required metadata property ResourceId is missing`); the platform still injects `APPLICATIONINSIGHTS_CONNECTION_STRING`, and `azd ai agent monitor` is the documented console-log path when `azd` is available |
 | `session_configuration` on the agent version | Leaving it out is what makes the observed idle behaviour the platform *default* | The 900 s default applies; `evidence/platform-behaviour.md` §2 says the eviction itself was not waited out |
@@ -124,7 +131,7 @@ transcript; recovering in-flight work is the builder's job.**
 
 | Path | What it is |
 | --- | --- |
-| `evidence/run-20261105T125254Z/` | The complete run: request, coverage Response, coverage result, synthesis request, synthesis Response, synthesis result, human decision, final result. |
+| `evidence/run-20261105T125254Z/` | The complete run: request, coverage Response, coverage result, synthesis request, synthesis Response, synthesis result, the decision applied, final result. Captured before review, so its `provenance.decision` string is the shorter earlier wording; the field means the same thing. |
 | `evidence/platform-behaviour.md` | The four questions, each marked documented/observed, with citations and the two observations that pin them (session TTL, cancelled foreground response, session resume vs. fresh-session control). |
 | `evidence/session-resume/` | Session before stop, after stop, after resume, and the fresh-session control response. |
 | `evidence/local-compose-path.md` | The local path: what was run, three verbatim failures, and where it stops. |

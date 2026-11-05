@@ -184,8 +184,11 @@ $ az rest --method GET  .../sessions/6f7126f7…        # after the follow-up tu
 ```
 
 Then a follow-up turn was sent with `agent_session_id: 6f7126f7…` and no other
-context. It completed in 10.5 s, in the **same** session, and the agent answered from
-its earlier assessment:
+context. It completed, in the **same** session, and the agent answered from its
+earlier assessment. The timing is the artifact's, not the stopwatch's —
+`resume-response.json` records `created_at 1793882892` and `completed_at 1793882898`
+(2026-11-05T12:48:12Z → 12:48:18Z, **6 s** inside the platform); the client's own
+wall clock for the same call, including connection setup, was 10.5 s:
 
 ```json
 {"criterion": "Provider Specialty-Procedure Appropriateness", "status": "MET",
@@ -202,6 +205,15 @@ Session state came back; the session flipped to `active`.
  "checks_performed": [{"rule": "Prior assessment availability in current conversation",
                        "result": "not_found"}]}
 ```
+
+**The control ran on agent version 2.** `fresh-session-control.json` carries
+`"agent_reference": {"name": "coverage-assessment-agent", "version": "2"}` while the
+session objects and `resume-response.json` are version 1: a second `deploy.sh` run
+between the two — the documented `create_version()` behaviour — re-registered the
+agent with the same image and configuration. `evidence/session-resume/README.md`
+lays out the order. It changes nothing here: the control's claim rests on its new
+session id and its `NO PRIOR CONTEXT` answer, not on the version, and both turns ran
+the same image.
 
 `evidence/session-resume/` holds both responses. Read together, (a) and (b) say the
 resumption above was **session-resident state**, not the platform replaying the
