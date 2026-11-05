@@ -1,0 +1,17 @@
+# Band F baseline — no endpoint configured
+
+The baseline needs an OpenAI-compatible endpoint. With `OPENAI_API_KEY` unset, `run.sh` exits 1
+before building or calling a model, and names the variable it needs:
+
+```
+$ unset OPENAI_API_KEY && ./run.sh
+exit=1
+OPENAI_API_KEY is not set; run.sh needs an OpenAI-compatible endpoint.
+  export OPENAI_API_KEY=...                       # any compatible key
+  export OPENAI_BASE_URL=https://openrouter.ai/api/v1   # optional
+  export OPENAI_MODEL=openai/gpt-4o                     # optional, this is the default
+```
+
+stderr is the text above; stdout is empty. This file is the failure evidence, not a run: no
+delegation was performed in this invocation. The real run is in `run-stdout.txt` and
+`control-transfer.jsonl`.
