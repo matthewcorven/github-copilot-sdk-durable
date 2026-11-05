@@ -142,3 +142,25 @@ and a run against a different CLI version. Those belong to the fault-evidence wo
 ## Licence
 
 MIT. See `upstream/LICENSE` and `upstream/PROVENANCE.md`.
+
+## The Durable variant
+
+`durable/` is the sibling of `baseline/`: the same page, the same pipeline, the same tools and the
+same system prompt, with the enquiry state moved out of a dictionary and into the Durable store.
+Both variants run from this folder, side by side.
+
+```bash
+./run.sh                                  # baseline, port 5027
+(cd durable && ./run.sh)                  # Durable variant, port 5028
+(cd durable && KEEP=1 ./run.sh)           # keep the store, so a restart can resume
+```
+
+The Durable variant has its own `durable/README.md` with the checkpoint design, the evidence, and
+the line count. Two things are worth knowing before reading the code:
+
+- **`durable/` references `lib/Durable.cs`** through a project reference
+  (`../../lib/Copilot.Durable.csproj`). No part of the store is copied into the scenario.
+- **`durable/evidence/durable-restart-and-concurrency.md`** is captured output, produced by
+  `durable/evidence.sh`, not a description of what the code should do.
+
+`baseline/` is unmodified by this work. Its defects are the comparison, so nothing in it is fixed.

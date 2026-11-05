@@ -1,0 +1,138 @@
+{
+  "protocolVersion": 3,
+  "runtimeVersion": "0.0.0-replay",
+  "models": [
+    {
+      "id": "replay-model",
+      "name": "Replay Model",
+      "vendor": "replay",
+      "capabilities": {
+        "supports": {
+          "toolCalls": true
+        }
+      }
+    }
+  ],
+  "sessions": [
+    {
+      "id": "baseline-two-sends",
+      "model": "replay-model",
+      "turns": [
+        {
+          "messageId": "two-0001",
+          "content": "Checking the enquiry.",
+          "toolRequests": [
+            {
+              "name": "set_current_phase",
+              "toolCallId": "t-0001",
+              "arguments": {
+                "phase": "validating"
+              }
+            },
+            {
+              "name": "report_intent",
+              "toolCallId": "t-0002",
+              "arguments": {
+                "intent": "Validate enquiry"
+              }
+            }
+          ]
+        },
+        {
+          "messageId": "two-0002",
+          "content": "I have validated the enquiry."
+        },
+        {
+          "messageId": "two-0003",
+          "content": "Searching the listings.",
+          "toolRequests": [
+            {
+              "name": "set_current_phase",
+              "toolCallId": "t-0003",
+              "arguments": {
+                "phase": "searching"
+              }
+            },
+            {
+              "name": "report_intent",
+              "toolCallId": "t-0004",
+              "arguments": {
+                "intent": "Search listings"
+              }
+            },
+            {
+              "name": "search_properties",
+              "toolCallId": "t-0005",
+              "arguments": {
+                "type": "",
+                "status": "",
+                "city": "Toronto",
+                "province": "",
+                "minPrice": 0,
+                "maxPrice": 900000,
+                "minBedrooms": 3,
+                "maxBedrooms": 0,
+                "minBathrooms": 0,
+                "textContains": "",
+                "limit": 3
+              }
+            }
+          ]
+        },
+        {
+          "messageId": "two-0004",
+          "content": "The search is done."
+        },
+        {
+          "messageId": "two-0005",
+          "content": "Writing the report.",
+          "toolRequests": [
+            {
+              "name": "set_current_phase",
+              "toolCallId": "t-0006",
+              "arguments": {
+                "phase": "writing_report"
+              }
+            },
+            {
+              "name": "report_intent",
+              "toolCallId": "t-0007",
+              "arguments": {
+                "intent": "Write report"
+              }
+            }
+          ]
+        },
+        {
+          "messageId": "two-0006",
+          "content": "Draft report: 12 Maple Row and 88 Birch Lane."
+        },
+        {
+          "messageId": "two-0007",
+          "content": "Finishing.",
+          "toolRequests": [
+            {
+              "name": "set_current_phase",
+              "toolCallId": "t-0008",
+              "arguments": {
+                "phase": "done"
+              }
+            }
+          ]
+        },
+        {
+          "messageId": "two-0008",
+          "content": "The enquiry is complete."
+        },
+        {
+          "messageId": "two-0009",
+          "content": "The enquiry is complete."
+        },
+        {
+          "messageId": "two-0010",
+          "content": "The enquiry is complete."
+        }
+      ]
+    }
+  ]
+}
