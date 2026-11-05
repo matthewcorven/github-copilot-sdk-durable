@@ -318,6 +318,159 @@ public class TaskResumeTests
         }
     }
 
+    // ─── A memo written inside a commit ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A memo written through <see cref="Transaction.Memo"/> commits with the checkpoint that
+    /// surrounded it, and is readable afterwards.
+    /// </summary>
+    /// <remarks>
+    /// The reason this exists: `TaskRuntime.MemoAsync` takes the store's commit gate, and the
+    /// commit running the phase handler already holds it, so calling it from inside a commit
+    /// callback waits for a release that cannot happen. The failure is a hang, not an exception, so
+    /// a test that merely awaited it would hang the suite instead of failing. Every await here goes
+    /// through <see cref="WithTimeout{T}"/> for that reason.
+    /// </remarks>
+    [Fact]
+    public async Task MemoInsideCommit_CommitsWithTheCheckpoint_AndIsReadableAfterwards()
+    {
+        var store = DurableStore.CreateEphemeral();
+        var registry = new ExtensionRegistry();
+
+        var definition = DurableTask.DefinePhases<Dictionary<string, string>, Dictionary<string, string>>(
+            "test.memo-in-transaction",
+            () => new Dictionary<string, string> { ["phase"] = "run" },
+            new Dictionary<string, Func<Dictionary<string, string>, Dictionary<string, string>, TaskRuntime, Task<TaskCommit>>>
+            {
+                ["run"] = async (_, _, runtime) =>
+                {
+                    var commit = await WithTimeout(runtime.CommitAsync(async tx =>
+                    {
+                        // The read before the write, the write, and the read back: all three are
+                        // what a caller recording an external effect needs in one transaction.
+                        Assert.Null(tx.Memo(runtime.Task.Id, "comment/101/abc"));
+                        tx.Memo(runtime.Task.Id, "comment/101/abc", DurableJson.ToElement(new Dictionary<string, string>
+                        {
+                            ["posted"] = "yes",
+                        }));
+                        Assert.Equal("yes", tx.Memo(runtime.Task.Id, "comment/101/abc")!
+                            .Value.Deserialize<Dictionary<string, string>>()!["posted"]);
+                        return TaskCommit.Running(DurableJson.ToElement(new Dictionary<string, string> { ["phase"] = "done" }));
+                    }));
+
+                    return await WithTimeout(runtime.CommitAsync(
+                        () => TaskCommit.Completed(DurableJson.ToElement(new Dictionary<string, string> { ["ok"] = "yes" }))));
+                },
+                ["done"] = (_, _, runtime) => WithTimeout(runtime.CommitAsync(
+                    () => TaskCommit.Completed(DurableJson.ToElement(new Dictionary<string, string> { ["ok"] = "yes" })))),
+            });
+
+        registry.Install(new Extension("memo", tasks: [definition]));
+        await using var harness = await DurableHarness.OpenAsync(store, registry);
+
+        var record = await WithTimeout(harness.CreateTaskAsync(
+            definition,
+            DurableJson.ToElement(new Dictionary<string, string>())));
+        var outcome = await WithTimeout(harness.WaitForTaskAsync(record.Id));
+
+        Assert.Equal("completed", outcome.Status);
+        Assert.Equal("yes", store.Task(record.Id)!.Memos["comment/101/abc"]
+            .Deserialize<Dictionary<string, string>>()!["posted"]);
+    }
+
+    /// <summary>
+    /// The behaviour this pair replaces: `TaskRuntime.MemoAsync` called from inside a commit does
+    /// not return, because it takes the gate the commit already holds.
+    /// </summary>
+    /// <remarks>
+    /// This is the before half of the before/after control, and it compiles and runs against the
+    /// layer without the transaction-scoped overload. It deliberately exercises the *public* failure
+    /// a caller meets, with a budget, so the hang is a failing assertion rather than a hung suite.
+    /// Delete it when the memo-inside-commit shape is no longer a trap worth fixturing; keep it while
+    /// two entry points for the same concept exist, because the wrong one is the obvious one.
+    /// </remarks>
+    [Fact]
+    public async Task MemoAsyncInsideCommit_DoesNotReturn_BecauseTheGateIsNotReentrant()
+    {
+        var store = DurableStore.CreateEphemeral();
+        var definition = DurableTask.DefinePhases<Dictionary<string, string>, Dictionary<string, string>>(
+            "test.memo-async-inside-commit",
+            () => new Dictionary<string, string> { ["phase"] = "run" },
+            new Dictionary<string, Func<Dictionary<string, string>, Dictionary<string, string>, TaskRuntime, Task<TaskCommit>>>
+            {
+                ["run"] = (_, _, runtime) => runtime.CommitAsync(async tx =>
+                {
+                    var memo = runtime.MemoAsync("k", DurableJson.ToElement("written"));
+                    var finished = await Task.WhenAny(memo, Task.Delay(TimeSpan.FromSeconds(2)));
+                    Assert.NotSame(memo, finished);
+                    return TaskCommit.Completed(DurableJson.ToElement(new Dictionary<string, string>()));
+                }),
+            });
+
+        var registry = new ExtensionRegistry();
+        registry.Install(new Extension("memo", tasks: [definition]));
+        await using var harness = await DurableHarness.OpenAsync(store, registry);
+        var record = await WithTimeout(harness.CreateTaskAsync(
+            definition,
+            DurableJson.ToElement(new Dictionary<string, string>())));
+
+        // The task never settles: the phase handler is stuck in the inner gate wait, so the run it
+        // sits in cannot finish. The assertion above is what the test is really about; this proves
+        // the stuck run is observable as unfinished rather than as a spurious completion.
+        var settled = await Task.WhenAny(harness.WaitForTaskAsync(record.Id), Task.Delay(TimeSpan.FromSeconds(2)));
+        Assert.NotSame(settled, harness.WaitForTaskAsync(record.Id));
+    }
+
+    /// <summary>
+    /// A memo written inside a transaction that then throws is rolled back with the rest of it.
+    /// </summary>
+    /// <remarks>
+    /// The other half of "commits together": if the write survived a failed transaction, a host
+    /// that recorded its effect and then failed the commit would come back believing the effect had
+    /// happened — it would skip the effect, and the store would hold a memo for work nobody did.
+    /// </remarks>
+    [Fact]
+    public async Task MemoInsideFailedTransaction_IsRolledBack()
+    {
+        var store = DurableStore.CreateEphemeral();
+        var definition = DurableTask.DefinePhases<Dictionary<string, string>, Dictionary<string, string>>(
+            "test.memo-rollback",
+            () => new Dictionary<string, string> { ["phase"] = "run" },
+            new Dictionary<string, Func<Dictionary<string, string>, Dictionary<string, string>, TaskRuntime, Task<TaskCommit>>>
+            {
+                ["run"] = (_, _, runtime) => runtime.CommitAsync(() => TaskCommit.Running(
+                    DurableJson.ToElement(new Dictionary<string, string> { ["phase"] = "run" }))),
+            });
+
+        var taskId = await store.CommitAsync(tx => Task.FromResult(
+            tx.CreateTask(definition, DurableJson.ToElement(new Dictionary<string, string>())).Id));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.CommitAsync(tx =>
+        {
+            tx.Memo(taskId, "effect/half-done", DurableJson.ToElement("written"));
+            throw new InvalidOperationException("the effect failed after the memo was staged");
+        }));
+
+        Assert.False(store.Task(taskId)!.Memos.ContainsKey("effect/half-done"));
+    }
+
+    /// <summary>
+    /// Awaits a task, or fails the assertion when it does not finish in time.
+    /// </summary>
+    /// <remarks>
+    /// The layer's gate is not reentrant, so the failure this suite exists to catch is an await
+    /// that never completes. Without a budget, a regression would hang the test run instead of
+    /// failing it — which is exactly how the defect this covers reached a scenario.
+    /// </remarks>
+    private static async Task<T> WithTimeout<T>(Task<T> task)
+    {
+        var finished = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.True(ReferenceEquals(finished, task), "the operation did not complete within 10s");
+        return await task;
+    }
+
+    private static Task<T> WithTimeout<T>(ValueTask<T> task) => WithTimeout(task.AsTask());
+
     /// <summary>
     /// Writes a task record without scheduling it, with an arbitrary initial checkpoint.
     /// </summary>

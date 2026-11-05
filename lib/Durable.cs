@@ -346,6 +346,12 @@ public sealed class TaskRuntime
         _store.ScheduleTask(taskId, cancellationToken);
 
     /// <summary>Reads an idempotency memo, or writes one when <paramref name="value"/> is supplied.</summary>
+    /// <remarks>
+    /// Call this from a phase handler, not from inside a
+    /// <see cref="CommitAsync(Func{Transaction, Task{TaskCommit}})"/> callback: it takes the store's
+    /// commit gate, which the commit already holds, so it does not return. Use
+    /// <see cref="Transaction.Memo"/> inside a transaction.
+    /// </remarks>
     public Task<JsonElement?> MemoAsync(string key, JsonElement? value = null) =>
         _store.MemoAsync(Task.Id, key, value);
 
@@ -2486,6 +2492,56 @@ public sealed class Transaction
         };
         _provider.AddTask(record);
         return record;
+    }
+
+    /// <summary>
+    /// Reads or writes an idempotency memo as part of this transaction.
+    /// </summary>
+    /// <param name="taskId">The task the memo belongs to.</param>
+    /// <param name="key">The memo key.</param>
+    /// <param name="value">
+    /// The value to write, or <see langword="null"/> to read. The parameter means what
+    /// <see cref="TaskRuntime.MemoAsync"/>'s does: a memo holds a JSON value, and a JSON
+    /// null is not a memo worth writing.
+    /// </param>
+    /// <returns>The memo's value after the call, or <see langword="null"/> when it is not set.</returns>
+    /// <remarks>
+    /// <para>
+    /// <see cref="TaskRuntime.MemoAsync"/> is the form to call from a phase handler, outside a
+    /// transaction. It takes the store's commit gate, and so does the commit that is running the
+    /// handler, so calling it from inside a commit callback waits for a release that cannot happen:
+    /// the gate is not reentrant and the callback cannot return. That is not a deadlock a caller can
+    /// detect — it is a hang.
+    /// </para>
+    /// <para>
+    /// This overload exists for the one shape the other cannot express: an external effect whose
+    /// memo has to commit with the checkpoint, so a crash between the effect and its record leaves
+    /// either both or neither. The write lands in the task's memo map before the transaction
+    /// commits, so a rollback restores it through the same snapshot that restores the task's status
+    /// and checkpoint.
+    /// </para>
+    /// </remarks>
+    public JsonElement? Memo(string taskId, string key, JsonElement? value = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(taskId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
+        var task = _provider.Task(taskId);
+        if (task is null)
+        {
+            return null;
+        }
+
+        if (value is { } element)
+        {
+            task.Memos[key] = element.Clone();
+            // The task record changed inside the transaction, so the provider is told about it
+            // before the commit; a rollback then restores the memo map along with everything else.
+            _provider.UpdateTask(task);
+            return task.Memos[key];
+        }
+
+        return task.Memos.TryGetValue(key, out var existing) ? existing : null;
     }
 
     internal void CommitDocument<T>(DocumentDefinition<T> definition, string ownerId, T value, string entryId)

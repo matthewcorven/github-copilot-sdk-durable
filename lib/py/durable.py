@@ -417,7 +417,12 @@ class TaskRuntime:
         self._store.schedule_task(task_id, cancellation)
 
     async def memo_async(self, key: str, value: Any = None) -> Any:
-        """Reads an idempotency memo, or writes one when ``value`` is supplied."""
+        """Reads an idempotency memo, or writes one when ``value`` is supplied.
+
+        Call this from a phase handler, not from inside a ``commit_async`` callback: it takes
+        the store's commit gate, which the commit already holds, so it does not return. Use
+        ``transaction.memo`` inside a transaction.
+        """
         return await self._store.memo_async(self.task.id, key, value)
 
     async def sleep_until_async(
@@ -2357,6 +2362,33 @@ class Transaction:
             definition.fork,
             DurableJson.to_wire(definition.initial_value()),
         )
+
+    def memo(self, task_id: str, key: str, value: Any = None) -> Any:
+        """Reads or writes an idempotency memo as part of this transaction.
+
+        ``task_runtime.memo_async`` is the form to call from a phase handler, outside a
+        transaction. It takes the store's commit gate, and so does the commit that is running
+        the handler, so calling it from inside a commit callback waits for a release that
+        cannot happen: the gate is not reentrant and the callback cannot return. That is a
+        hang, not an error.
+
+        This method exists for the one shape the other cannot express: an external effect
+        whose memo has to commit with the checkpoint, so a crash between the effect and its
+        record leaves either both or neither.
+        """
+        task = self._provider.task(task_id)
+        if task is None:
+            return None
+
+        if value is not None:
+            task.memos[key] = DurableJson.clone(value)
+            # The task record changed inside the transaction, so the provider is told about it
+            # before the commit; a rollback then restores the memo map along with everything
+            # else.
+            self._provider.update_task(task)
+            return task.memos[key]
+
+        return task.memos.get(key)
 
     def create_task(
         self,

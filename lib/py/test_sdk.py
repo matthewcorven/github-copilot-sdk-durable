@@ -2098,6 +2098,34 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
                     reopened.close()
                     await host.close_async()
 
+    async def test_memo_inside_a_commit_writes_with_the_transaction_and_rolls_back(self):
+        store = DurableStore.create(DurableStoreOptions())
+        definition = DurableTask.define_phases(
+            "memo-in-transaction", lambda: {"phase": "run"}, {"run": lambda i, c, r: r.commit_async(
+                lambda: TaskCommit.running({"phase": "run"}))})
+
+        async def create(tx):
+            return tx.create_task(definition)
+
+        record = await store.commit_async(create)
+
+        async def stage(tx):
+            self.assertIsNone(tx.memo(record.id, "comment/101/abc"))
+            tx.memo(record.id, "comment/101/abc", {"posted": "yes"})
+            self.assertEqual(tx.memo(record.id, "comment/101/abc"), {"posted": "yes"})
+
+        await asyncio.wait_for(store.commit_async(stage), 10)
+        self.assertEqual(store.task(record.id).memos["comment/101/abc"], {"posted": "yes"})
+
+        async def fail(tx):
+            tx.memo(record.id, "effect/half-done", "written")
+            raise RuntimeError("the effect failed after the memo was staged")
+
+        with self.assertRaises(RuntimeError):
+            await asyncio.wait_for(store.commit_async(fail), 10)
+        self.assertNotIn("effect/half-done", store.task(record.id).memos)
+        store.close()
+
     async def test_initiating_run_cancellation_settles_and_reopens_checkpoint_and_memo(self):
         with tempfile.TemporaryDirectory() as directory:
             options = DurableStoreOptions(path=str(Path(directory) / "store.jsonl"))

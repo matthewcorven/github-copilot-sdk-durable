@@ -2566,6 +2566,41 @@ test("JSONL truncates a file containing only an unterminated record to zero", ()
   } finally { rmSync(dir, { recursive: true }); }
 });
 
+test("transaction.memo writes with the commit and rolls back with it", async () => {
+  const store = DurableStore.createEphemeral();
+  const definition = DurableTask.definePhases<Record<string, string>, Record<string, string>>(
+    "memo-in-transaction",
+    () => ({ phase: "run" }),
+    new Map<string, PhaseHandler<Record<string, string>, Record<string, string>>>([
+      [
+        "run",
+        (_input, _checkpoint, runtime) =>
+          runtime.commitAsync(() => TaskCommit.running(DurableJson.toElement({ phase: "run" }))),
+      ],
+    ]),
+  );
+
+  const record = await store.commitAsync(async tx => tx.createTask(definition));
+
+  await store.commitAsync(async tx => {
+    assert.equal(tx.memo(record.id, "comment/101/abc"), null);
+    tx.memo(record.id, "comment/101/abc", { posted: "yes" });
+    assert.deepEqual(tx.memo(record.id, "comment/101/abc"), { posted: "yes" });
+  });
+
+  assert.deepEqual(store.task(record.id)!.memos["comment/101/abc"], { posted: "yes" });
+
+  await assert.rejects(
+    store.commitAsync(async tx => {
+      tx.memo(record.id, "effect/half-done", "written");
+      throw new Error("the effect failed after the memo was staged");
+    }),
+    /the effect failed after the memo was staged/,
+  );
+
+  assert.equal("effect/half-done" in store.task(record.id)!.memos, false);
+});
+
 test("JSONL commits, rollback, task memos and torn-tail reopen", async () => {
   const dir = mkdtempSync(join(tmpdir(), "durable-ts-"));
   const file = join(dir, "store.jsonl");
