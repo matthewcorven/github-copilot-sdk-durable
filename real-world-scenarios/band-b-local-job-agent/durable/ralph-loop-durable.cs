@@ -41,11 +41,11 @@
 // (`RecordToolCheckpoint` in lib/Durable.cs) into `durable.checkpoint` after the fact, so a turn
 // that finished can be read back from the store. What it cannot do is *continue* a half-finished
 // turn — and it does not commit those tool records at the call either, but at the turn's
-// completion barrier, so a turn that died mid-way may have left none of them. The SDK will not
+// completion barrier, so a turn that died mid-way left none of them. The SDK will not
 // resume such a turn and this variant will not re-issue one, because re-running it could repeat the
 // writes it already made: on re-entry with `Stage = "turn-started"` it reports what the store holds
-// and fails the run. So a dead turn's work is observable, not replayable, and only as observable as
-// the records that had committed. See ../evidence/durable-kill-and-resume.md §3a–§3c.
+// and fails the run. So a dead turn is observable as *issued* and nothing more, and not replayable
+// at all. See ../evidence/durable-kill-and-resume.md §3a–§3c.
 
 #:package GitHub.Copilot.SDK@1.0.26
 #:property TargetFramework=net10.0
@@ -279,11 +279,13 @@ static async Task<TaskCommit> RunIterationAsync(
     var digest = Digest(plan);
 
     // A turn that was issued and whose outcome was never recorded. The store knows the turn
-    // started and, for the tool calls whose records had committed, what it did — but not what it
-    // would have done next, and the SDK will not continue it. So this does not guess: it reports
-    // what the store holds and fails the run with the iteration named. Re-running the turn here
-    // would duplicate whatever it did before the process died. See the limit at the top of the
-    // file, and ../evidence/durable-kill-and-resume.md §3c.
+    // started, but it holds no tool record from it: tool records are queued per conversation and
+    // drained only at the turn's completion barrier, which a turn that does not return never
+    // reaches. So the store cannot say what the turn did, only that it was issued. It also cannot
+    // continue it, and the SDK will not. So this does not guess: it reports what the store holds
+    // and fails the run with the iteration named. Re-running the turn here would duplicate
+    // whatever it did before the process died. See the limit at the top of the file, and
+    // ../evidence/durable-kill-and-resume.md §3c.
     if (checkpoint.Stage == "turn-started")
     {
         var unrecorded = checkpoint.Iteration + 1;
@@ -338,9 +340,10 @@ static async Task<TaskCommit> RunIterationAsync(
             harness, input, model, BuildTurnPrompt(input, plan), iteration, stopAfter, stop);
         if (answer.Interrupted)
         {
-            // Leave the checkpoint where it is: `turn-started`, with the completed tool calls in
-            // the store and no outcome. The next process is the one that has to decide what that
-            // means.
+            // Leave the checkpoint where it is: `turn-started`, and no outcome. No tool record is
+            // committed either — the queue is drained only when the turn returns, and this turn
+            // never will — so the store keeps the turn's admission and this checkpoint, nothing
+            // about the work. The next process is the one that has to decide what that means.
             throw new OperationCanceledException("STOP_MID_TURN");
         }
 
@@ -543,8 +546,9 @@ static string BuildTurnPrompt(LoopInput input, string plan)
 // document is `DocumentHistory.Rewindable`, so a finished turn's calls stay readable. What does
 // not follow is that a *dead* turn's calls are readable: the write is queued per conversation and
 // awaited by the completion barrier only when the turn reports success, so a process that leaves
-// mid-turn can exit with its last calls uncommitted. So the honest report is per conversation:
-// what was committed, and whether the turn as a whole was recorded.
+// mid-turn exits with none of that turn's calls committed. The honest report is therefore two
+// facts about the conversation: that its prompt was admitted and never settled, and whether the
+// turn as a whole was recorded.
 static void ReportInFlightTurn(DurableStore store, int iteration)
 {
     // The unfinished turn is the conversation whose prompt was admitted and never settled: the
@@ -891,7 +895,8 @@ static bool StopAfterMemo() =>
     Environment.GetEnvironmentVariable("STOP_AFTER_MEMO") == "1";
 
 // The in-flight seam: leave while the iteration's turn is running, after this many tool calls have
-// completed. The completed calls are in the store; the one in flight is not.
+// completed. It fixes only when the stop happens: a turn that does not return commits no tool
+// record at all, so neither the completed call nor the one in flight is in the store.
 static bool StopMidTurn() =>
     Environment.GetEnvironmentVariable("STOP_MID_TURN") == "1";
 
