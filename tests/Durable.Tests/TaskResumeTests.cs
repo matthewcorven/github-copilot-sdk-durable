@@ -61,6 +61,45 @@ public class TaskResumeTests
         Assert.Equal([first, second], store.Tasks.Select(task => task.Id));
     }
 
+    /// <summary>
+    /// A parent that committed <c>Waiting</c> on a child is not finished: it has a checkpoint to
+    /// continue from and a child to wait for. It holds no invocation, which is why a process that
+    /// stopped there leaves it <c>Waiting</c> in the store, and why a resume that skipped it would
+    /// leave the workflow half-done with nothing left to drive it.
+    /// </summary>
+    [Fact]
+    public async Task ResumeAsync_AParentLeftWaitingOnAChild_FinishesWhenTheChildDoes()
+    {
+        var store = DurableStore.CreateEphemeral();
+        var registry = new ExtensionRegistry();
+        var parent = WaitingParentTask();
+        var child = InstantChildTask();
+        registry.Install(new Extension("waiting", tasks: [parent, child]));
+
+        await using var harness = await DurableHarness.OpenAsync(store, registry);
+
+        var parentId = await SeedWaitingParentAsync(store, parent, child);
+
+        // The state a process that died while its child was still queued leaves behind: the
+        // parent's Waiting commit and the child's Pending record are both durable.
+        Assert.Equal(TaskStatus.Waiting, store.Task(parentId)!.Status);
+
+        var outcomes = await harness.ResumeAsync().WaitAsync(TimeSpan.FromSeconds(30));
+
+        // One outcome per task the resume re-entered, and the parent is one of them. Before the
+        // fix the parent had no outcome at all: it stayed Waiting forever.
+        Assert.Equal(2, outcomes.Count);
+        var final = Assert.Single(outcomes, outcome => outcome.Result is { } result
+            && result.ValueKind == JsonValueKind.Object
+            && result.TryGetProperty("parent", out _));
+        Assert.Equal("completed", final.Status);
+        Assert.Equal(TaskStatus.Terminal, store.Task(parentId)!.Status);
+
+        // The parent's next phase ran, and it read the child's outcome rather than re-doing the
+        // work the child had already done.
+        Assert.Equal("child-done", final.Result!.Value.GetProperty("parent").GetString());
+    }
+
     [Fact]
     public async Task ResumeAsync_WithNothingInterrupted_ReturnsNoOutcomes()
     {
@@ -161,6 +200,78 @@ public class TaskResumeTests
                 },
             },
             (_, _, runtime) => runtime.CommitAsync(() => TaskCommit.Aborted()));
+
+    /// <summary>
+    /// A parent that creates one child, waits on it, and then reads its outcome. The second phase
+    /// is what a resume has to reach: a resume that treats <c>Waiting</c> as finished never does.
+    /// </summary>
+    private static DurableTaskDefinition WaitingParentTask() =>
+        DurableTask.DefinePhases<Dictionary<string, string>, Dictionary<string, string>>(
+            "test.waiting-parent",
+            () => new Dictionary<string, string> { ["phase"] = "spawn" },
+            new Dictionary<string, Func<Dictionary<string, string>, Dictionary<string, string>, TaskRuntime, Task<TaskCommit>>>
+            {
+                ["spawn"] = (_, checkpoint, runtime) => runtime.CommitAsync(async tx =>
+                {
+                    // Re-entered after the checkpoint already names the child: wait on it again
+                    // rather than creating a second one.
+                    if (checkpoint.TryGetValue("child", out var existing))
+                    {
+                        return TaskCommit.Waiting(
+                            DurableJson.ToElement(new Dictionary<string, string> { ["phase"] = "collect", ["child"] = existing }),
+                            [existing]);
+                    }
+
+                    var child = runtime.CreateChildTask(tx, InstantChildTask(), DurableJson.ToElement(new Dictionary<string, string>()));
+                    return TaskCommit.Waiting(
+                        DurableJson.ToElement(new Dictionary<string, string> { ["phase"] = "collect", ["child"] = child.Id }),
+                        [child.Id]);
+                }),
+                ["collect"] = (_, checkpoint, runtime) => runtime.CommitAsync(() =>
+                    TaskCommit.Completed(DurableJson.ToElement(
+                        new Dictionary<string, string> { ["parent"] = "child-done", ["child"] = checkpoint["child"] }))),
+            },
+            (_, _, runtime) => runtime.CommitAsync(() => TaskCommit.Aborted()));
+
+    /// <summary>A child that finishes on its first phase, so the parent's wait is one step.</summary>
+    private static DurableTaskDefinition InstantChildTask() =>
+        DurableTask.DefinePhases<Dictionary<string, string>, Dictionary<string, string>>(
+            "test.instant-child",
+            () => new Dictionary<string, string> { ["phase"] = "work" },
+            new Dictionary<string, Func<Dictionary<string, string>, Dictionary<string, string>, TaskRuntime, Task<TaskCommit>>>
+            {
+                ["work"] = (_, _, runtime) => runtime.CommitAsync(() => TaskCommit.Completed(
+                    DurableJson.ToElement(new Dictionary<string, string> { ["child"] = "done" }))),
+            },
+            (_, _, runtime) => runtime.CommitAsync(() => TaskCommit.Aborted()));
+
+    /// <summary>
+    /// Leaves the parent committed as <c>Waiting</c> on an unscheduled child: the task graph a
+    /// process that died between the parent's waiting commit and the child's first phase leaves.
+    /// </summary>
+    private static async Task<string> SeedWaitingParentAsync(
+        DurableStore store,
+        DurableTaskDefinition parent,
+        DurableTaskDefinition child)
+    {
+        var record = await store.CommitAsync(tx =>
+        {
+            var childRecord = tx.CreateTask(child, DurableJson.ToElement(new Dictionary<string, string>()));
+            var parentRecord = tx.CreateTask(parent, DurableJson.ToElement(new Dictionary<string, string>()), ownerTaskId: null);
+            parentRecord.Checkpoint = DurableJson.ToElement(new Dictionary<string, string>
+            {
+                ["phase"] = "collect",
+                ["child"] = childRecord.Id,
+            });
+            parentRecord.Status = TaskStatus.Waiting;
+            parentRecord.WaitingOn.Add(childRecord.Id);
+            store.Provider.UpdateTask(parentRecord);
+            return Task.FromResult(parentRecord);
+        });
+
+        await store.CommitAsync(_ => Task.CompletedTask);
+        return record.Id;
+    }
 
     /// <summary>
     /// Writes a task record without scheduling it, which is the state a process that stopped

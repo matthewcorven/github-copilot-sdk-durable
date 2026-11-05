@@ -313,7 +313,7 @@ Wraps a `CopilotSession` plus the durable store, exposing Pi-shaped operations:
 - `RootAsync()` → the root conversation (idempotent)
 - `CreateConversationAsync(options)`
 - `WaitForTaskAsync(id)`, `AbortTaskAsync(id)`, `TaskGraphAsync()`
-- `ResumeAsync()` → re-enter running tasks
+- `ResumeAsync()` → re-enter every task still in flight: pending, running, and waiting-on-children
 - `CloseAsync()`
 
 ### 3.6 Session identity — the id is chosen before the session exists
