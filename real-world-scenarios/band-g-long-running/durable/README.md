@@ -20,7 +20,7 @@ comparison, and the middle column is not a straw man.
 | `run.sh` | Process 1: create the run, drive it to the gate, exit. |
 | `resume.sh` | Every later process: re-enter, approve or reject, finish. |
 | `evidence.sh` | Every claim below, measured. Six flows with their controls. |
-| `evidence/durable-gate-restart.md` | The captured output, lifted from `evidence.sh`'s recordings. |
+| `evidence/durable-gate-restart.md` | The captured output, lifted from `evidence.sh`'s recordings. Re-running reproduces it except for wall-clock timestamps. |
 | `evidence/remove-reentry-wait.py` | The mutation that produces the before/after control. |
 
 ## Two processes, the way the baseline does it
