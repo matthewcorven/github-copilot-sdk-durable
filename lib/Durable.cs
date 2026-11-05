@@ -5299,6 +5299,17 @@ internal sealed class DurableRuntime : IAsyncDisposable
             await Store.CommitAsync(_ => Task.CompletedTask);
         }
 
+        // A task re-entered from a checkpoint it committed while WAITING still owes that wait. The
+        // wait is a recorded fact -- the checkpoint names the children -- so it survives the process
+        // that committed it, and re-entering the next phase before the children have finished would
+        // let a parent act on an outcome that does not exist yet. Recover it here, before the first
+        // phase runs, and only for a record that is still Waiting: a fresh record has no children to
+        // wait on, and a Running one is not waiting on anything.
+        if (Store.Task(taskId)?.Status == TaskStatus.Waiting)
+        {
+            await WaitForChildrenAsync(taskId, record.WaitingOn, cancellationToken);
+        }
+
         var runtime = new TaskRuntime(Store, record, definition, cancellationToken);
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -5583,17 +5594,24 @@ internal sealed class DurableRuntime : IAsyncDisposable
         EnableFileHooks = config.EnableFileHooks,
     };
 
-    /// <summary>Resumes every task that was running when the process stopped.</summary>
+    /// <summary>Resumes every task that was still in flight when the process stopped.</summary>
     /// <remarks>
     /// The tasks are awaited, not started and forgotten: a caller that resumes work needs to
     /// know when the work is done, and a fire-and-forget start would report success before a
     /// single phase had run. Each task is re-entered from its last checkpoint, and the outcomes
     /// come back in store order so a caller can pair them with the records it read.
+    /// <para>
+    /// A task left <see cref="TaskStatus.Waiting"/> is unfinished for the same reason a
+    /// <see cref="TaskStatus.Running"/> one is: it holds a checkpoint to continue from and it has
+    /// no invocation in flight, because waiting on children is a commit rather than a call that
+    /// stays open. Skipping it strands the parent while its children finish underneath it, which
+    /// is a workflow that is half-done with nothing left to drive it.
+    /// </para>
     /// </remarks>
     internal async Task<IReadOnlyList<TaskOutcome>> ResumeAsync(CancellationToken cancellationToken = default)
     {
         var resumable = Store.Tasks
-            .Where(t => t.Status is TaskStatus.Running or TaskStatus.Pending)
+            .Where(t => t.Status is TaskStatus.Running or TaskStatus.Pending or TaskStatus.Waiting)
             .ToList();
 
         var outcomes = new List<TaskOutcome>(resumable.Count);
@@ -6432,14 +6450,21 @@ public sealed class DurableHarness : IAsyncDisposable
     public Task AbortTaskAsync(string taskId, CancellationToken cancellationToken = default) =>
         _runtime.AbortTaskAsync(taskId, cancellationToken);
 
-    /// <summary>Resumes every task that was running when the process stopped.</summary>
+    /// <summary>Resumes every task that was still in flight when the process stopped.</summary>
     /// <param name="cancellationToken">Cancels the operation.</param>
     /// <returns>The outcome of each task that was re-entered, in store order.</returns>
     /// <remarks>
+    /// In flight means <see cref="TaskStatus.Pending"/>, <see cref="TaskStatus.Running"/> or
+    /// <see cref="TaskStatus.Waiting"/>: the first was committed but never started, the second was
+    /// in a phase when the process ended, and the third holds a checkpoint whose children may have
+    /// finished underneath it. All three are unfinished, and there is no invocation still running
+    /// for any of them — a waiting task commits its wait rather than holding a call open.
+    /// <para>
     /// The tasks are awaited rather than started and forgotten, so the returned task completes
     /// when the resumed work does. This is the same shape
     /// <see cref="DurableCopilotClient.ResumeTasksAsync"/> has: one operation, one way to await
     /// it, whichever entry point a host uses.
+    /// </para>
     /// </remarks>
     public Task<IReadOnlyList<TaskOutcome>> ResumeAsync(CancellationToken cancellationToken = default) =>
         _runtime.ResumeAsync(cancellationToken);
@@ -7230,14 +7255,15 @@ public sealed class DurableCopilotClient : IAsyncDisposable
         return _runtime.BuildSessionConfig(choices, null);
     }
 
-    /// <summary>Re-enters the tasks the store records as running.</summary>
+    /// <summary>Re-enters the tasks the store records as still in flight.</summary>
     /// <param name="cancellationToken">Cancels the operation.</param>
     /// <returns>The outcome of each task that was re-entered, in store order.</returns>
     /// <remarks>
     /// A task is resumed from its last checkpoint, and its idempotency memo decides which of its
     /// effects are replayed and which are skipped. This is the operation a host calls right after
     /// startup, once the client is initialized, so work interrupted by the previous process
-    /// finishes.
+    /// finishes. <see cref="DurableHarness.ResumeAsync"/> defines which tasks count as in flight:
+    /// pending, running, and waiting on children.
     /// </remarks>
     public async Task<IReadOnlyList<TaskOutcome>> ResumeTasksAsync(CancellationToken cancellationToken = default)
     {

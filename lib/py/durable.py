@@ -4335,6 +4335,16 @@ class DurableHarness:
 
             await self._store.commit_async(noop)
 
+        # A task re-entered from a checkpoint it committed while WAITING still owes that wait.
+        # The wait is a recorded fact -- the checkpoint names the children -- so it survives the
+        # process that committed it, and entering the next phase before the children have finished
+        # would let a parent act on an outcome that does not exist yet. Recover it here, before the
+        # first phase runs, and only for a record that is still WAITING: a fresh record has no
+        # children to wait on, and a RUNNING one is not waiting on anything.
+        current = self._store.task(task_id)
+        if current is not None and current.status is TaskStatus.WAITING:
+            await self._wait_for_children_async(task_id, current.waiting_on, cancellation)
+
         runtime = TaskRuntime(self._store, record, definition, cancellation)
         while cancellation is None or not cancellation.is_set():
             # The task may have been aborted while it was waiting on its children. An

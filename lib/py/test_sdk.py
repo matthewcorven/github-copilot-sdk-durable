@@ -1713,6 +1713,60 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
             await harness.close_async()
             store.close()
 
+    async def test_review_parent_reentered_while_waiting_finishes_children_first(self):
+        """A parent re-entered while WAITING owes the wait it recorded.
+
+        The wait is a recorded fact -- the checkpoint names the children -- so it survives the
+        process that committed it. Entering the next phase first lets the parent act on an outcome
+        that does not exist yet, which is what the assertion below catches: the parent's second
+        phase reads its child through the runtime, not through the store, so a premature phase is
+        visible in the outcome instead of being masked.
+        """
+        store = DurableStore.create_ephemeral()
+        registry = ExtensionRegistry()
+        harness = DurableHarness(sdk_client(sdk_session()), store, registry)
+        try:
+            async def child_phase(_input, _checkpoint, runtime):
+                await asyncio.sleep(0.05)
+                return await runtime.commit_async(lambda: TaskCommit.completed("done"))
+
+            child = DurableTask.define("reentry-child", lambda: None, child_phase)
+
+            async def collect_phase(_input, checkpoint, runtime):
+                outcomes = await runtime.outcomes_async([checkpoint["child"]])
+                seen = outcomes[0].status if outcomes else "missing"
+                return await runtime.commit_async(lambda: TaskCommit.completed(seen))
+
+            parent = DurableTask.define_phases("reentry-parent", lambda: {"phase": "collect"},
+                                               {"collect": collect_phase})
+            registry.install(Extension("reentry", tasks=[parent, child]))
+
+            # The state a process that died between the parent's waiting commit and the child's
+            # first phase leaves: the parent WAITING on a child that has not started.
+            async def seed(tx):
+                child_record = tx.create_task(child)
+                parent_record = tx.create_task(parent)
+                parent_record.checkpoint = {"phase": "collect", "child": child_record.id}
+                parent_record.status = TaskStatus.WAITING
+                parent_record.waiting_on.append(child_record.id)
+                return parent_record, child_record
+
+            parent_record, child_record = await store.commit_async(seed)
+            self.assertIs(store.task(parent_record.id).status, TaskStatus.WAITING)
+            self.assertIs(store.task(child_record.id).status, TaskStatus.PENDING)
+
+            # Re-entered on its own, so the ordering is the thing under test.
+            final = await harness.run_task_async(parent_record.id)
+
+            self.assertEqual(final.status, "completed")
+            self.assertEqual(final.result, "completed",
+                             "the parent's second phase must see a finished child")
+            self.assertIs(store.task(parent_record.id).status, TaskStatus.TERMINAL)
+            self.assertIs(store.task(child_record.id).status, TaskStatus.TERMINAL)
+        finally:
+            await harness.close_async()
+            store.close()
+
     async def test_review_draining_parent_can_schedule_dependency_not_external_work(self):
         store = DurableStore.create_ephemeral()
         registry = ExtensionRegistry()

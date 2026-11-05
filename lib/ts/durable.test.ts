@@ -2038,6 +2038,55 @@ test("review: draining parent's public creation retains ownership without admitt
   } finally { release.resolve(); await closing; store.dispose(); }
 });
 
+test("review: a parent re-entered while Waiting finishes its children before its next phase", { timeout: 5000 }, async () => {
+  const store = DurableStore.createEphemeral();
+  const registry = new ExtensionRegistry();
+
+  // The child's first phase takes real time, so a parent that skipped its recorded wait sees it
+  // unfinished rather than racing it.
+  const child = DurableTask.define("reentry-child", () => ({}), async (_input, _checkpoint, runtime) => {
+    await new Promise(resolve => setTimeout(resolve, 60));
+    return runtime.commitAsync(() => TaskCommit.completed("done"));
+  });
+
+  // What the parent's second phase saw, which is the assertion: nothing here reads the task record
+  // directly, so a premature phase is visible in the outcome instead of being masked.
+  const parent = DurableTask.definePhases("reentry-parent", () => ({ phase: "collect" }), new Map<string,
+    import("./durable.js").PhaseHandler<import("./durable.js").JsonValue, { phase: string; child?: string }>>([
+    ["collect", async (_input, checkpoint, runtime) => {
+      const outcomes = await runtime.outcomesAsync([checkpoint.child!]);
+      const seen = outcomes.length > 0 ? outcomes[0].status : "missing";
+      return runtime.commitAsync(() => TaskCommit.completed(seen));
+    }],
+  ]));
+
+  registry.install(new Extension("reentry", [], [], [parent, child]));
+  const runner = new DurableTaskRunner(store, registry);
+  try {
+    // The state a process that died between the parent's waiting commit and the child's first phase
+    // leaves: the parent Waiting on a child that has not started.
+    const [parentRecord, childRecord] = await store.commitAsync(tx => {
+      const childRecord = tx.createTask(child, null);
+      const parentRecord = tx.createTask(parent, null);
+      parentRecord.checkpoint = { phase: "collect", child: childRecord.id };
+      parentRecord.status = TaskStatus.Waiting;
+      parentRecord.waitingOn = [childRecord.id];
+      return [parentRecord, childRecord] as const;
+    });
+    assert.equal(store.task(parentRecord.id)!.status, TaskStatus.Waiting);
+    assert.equal(store.task(childRecord.id)!.status, TaskStatus.Pending);
+
+    // The parent is re-entered on its own, so the ordering is the thing under test.
+    const final = await runner.runTaskAsync(parentRecord.id);
+
+    assert.equal(final.status, "completed");
+    assert.equal(final.result, "completed",
+      "the parent's second phase must see a finished child, not one that has not run");
+    assert.equal(store.task(parentRecord.id)!.status, TaskStatus.Terminal);
+    assert.equal(store.task(childRecord.id)!.status, TaskStatus.Terminal);
+  } finally { await runner.disposeAsync(); store.dispose(); }
+});
+
 test("review: draining parent can commit and schedule a dependent child but external work is rejected", { timeout: 2000 }, async () => {
   const store = DurableStore.createEphemeral();
   const registry = new ExtensionRegistry();
