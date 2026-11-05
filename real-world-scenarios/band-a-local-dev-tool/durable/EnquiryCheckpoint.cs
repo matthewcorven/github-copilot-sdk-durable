@@ -22,7 +22,16 @@ public sealed class EnquiryCheckpoint
     /// <summary>The task phase key. Always <see cref="EnquiryPhases.Run"/>.</summary>
     public string Phase { get; set; } = EnquiryPhases.Run;
 
-    /// <summary>The document's phase at the last committed turn boundary.</summary>
+    /// <summary>
+    /// The phase of the turn this checkpoint describes.
+    /// </summary>
+    /// <remarks>
+    /// Two different meanings share this field, and the turn count tells them apart. Before a turn
+    /// sends its prompt the value is the phase the turn is <em>working</em>; after the turn settles
+    /// the value is the phase the document reads, which is how the next iteration picks its prompt.
+    /// A resume compares it against the document to decide whether the checkpoint describes a turn
+    /// that was started, which is why the distinction matters.
+    /// </remarks>
     public string EnquiryPhase { get; set; } = EnquiryPhases.Queued;
 
     /// <summary>How many turn boundaries this task has committed.</summary>
@@ -45,4 +54,18 @@ public sealed class EnquiryCheckpoint
     /// the answer — so the turn is not sent a second time.
     /// </remarks>
     public string? SeenCheckpoint { get; set; }
+
+    /// <summary>
+    /// Whether this checkpoint was written <em>before</em> a turn's prompt and that turn has not
+    /// been recorded as settled yet.
+    /// </summary>
+    /// <remarks>
+    /// This is the gate the resume reconciliation reads. A checkpoint with this set describes a
+    /// turn that may have run to completion in a process that then died; a checkpoint without it
+    /// describes a turn that is already accounted for, so there is nothing to recover and the next
+    /// iteration must start a new one. Inferring the same thing from <see cref="EnquiryPhase"/> or
+    /// the turn count cannot work, because a turn that ends the enquiry leaves the document in a
+    /// phase the checkpoint never named.
+    /// </remarks>
+    public bool InTurn { get; set; }
 }

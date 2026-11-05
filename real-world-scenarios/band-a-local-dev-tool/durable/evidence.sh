@@ -195,36 +195,45 @@ echo "surplus measures is: session replay + the interrupted turn, and the record
 echo "separate them. The duplicated tool line is the part traceable to the interrupted turn."
 
 echo
-echo "############ 6e. a FINISHED turn killed after its answer: the resume must not re-send it ############"
-# The mirror of stage 6. Here the answer and the conversation's turn checkpoint are both durable
-# when the process dies, so the resumed task can see that the turn completed and must not send
-# it again. This is the case the reconciliation in EnquiryTask.SettledTurnAnswer exists for.
-rm -f "$SCRATCH/settled.jsonl"
-BAND_A_STORE="$SCRATCH/settled.jsonl" BAND_A_FIXTURE="$SCRATCH/app/fixtures/enquiry.json" \
-BAND_A_EXIT_AFTER_ANSWER=queued DURABLE_RUNTIME_PATH="$RUNTIME" Logging__LogLevel__Default=Warning \
-  "$DOTNET" "$APP" --enquiry "Looking for a 3-bed family home near schools" > "$SCRATCH/settled.log" 2>&1
-echo "exit code: $?  (42 is the seam: the answer is committed, the task boundary is not)"
-grep -v '^      \|NU1903\|^warn: Microsoft.EntityFrameworkCore' "$SCRATCH/settled.log" | sed "s|$SCRATCH|<scratch>|g"
+echo "############ 6e. the two-send fixture: each turn ends a send, leaving a non-terminal document ############"
+rm -f "$SCRATCH/twosends.jsonl"
+run "$SCRATCH/twosends.jsonl" two-sends.json --enquiry "a two-send enquiry" | sed "s|$SCRATCH|<scratch>|g"
+
 echo
-echo "############ 6f. resume that store: no prompt is sent for a turn that already finished ############"
-settled="$(run "$SCRATCH/settled.jsonl" enquiry.json --resume)"
+echo "############ 6f. kill between a turn's answer and its boundary, then resume ############"
+# This is the only stage that reaches SettledTurnAnswer, and the two-send fixture is what makes
+# that possible: the interrupted turn must leave a NON-terminal document, so the reconciliation
+# runs instead of the terminal recovery, and it must not be the first turn, so a conversation
+# baseline exists to order the candidate against.
+rm -f "$SCRATCH/settled.jsonl"
+BAND_A_STORE="$SCRATCH/settled.jsonl" BAND_A_FIXTURE="$SCRATCH/app/fixtures/two-sends.json" \
+BAND_A_EXIT_AFTER_ANSWER=searching DURABLE_RUNTIME_PATH="$RUNTIME" Logging__LogLevel__Default=Warning \
+  "$DOTNET" "$APP" --enquiry "a two-send enquiry" > "$SCRATCH/settled.log" 2>&1
+echo "exit code: $?  (42 is the seam: the answer is committed and the boundary is not)"
+grep -v '^      \|NU1903\|^warn: Microsoft.EntityFrameworkCore' "$SCRATCH/settled.log" | sed "s|$SCRATCH|<scratch>|g"
+echo "entries committed before the kill: $(count_entries "$SCRATCH/settled.jsonl")"
+
+echo
+echo "############ 6g. resume it: the reconciliation must run, and this fails if it does not ############"
+settled="$(run "$SCRATCH/settled.jsonl" two-sends.json --resume)"
 echo "$settled" | sed "s|$SCRATCH|<scratch>|g"
-# The counts are compared on the transcript proper, not on the printed total: the resumed run adds
-# a "note:" line that records the recovery, and that line is not a replayed turn.
-clean_lines=$(grep -c '^    ' <<<"$clean")
-settled_lines=$(grep -c '^    ' <<<"$settled")
-settled_notes=$(grep -c 'note: the report was recovered from the answer already committed' <<<"$settled")
-settled_intents=$(grep -c 'intent: Validate home enquiry' <<<"$settled")
-clean_intents=$(grep -c 'intent: Validate home enquiry' <<<"$clean")
-echo "clean run:                          $clean_lines entries"
-echo "settled-turn resume:                $settled_lines entries (the clean run's $clean_entries plus one recovery note)"
-echo "duplicated \"intent: Validate home enquiry\": $settled_intents in the resume, $clean_intents in the clean run"
-if [ "$settled_intents" != "$clean_intents" ]; then
-  echo "6f FAILED: a turn that finished was sent again ($settled_intents intents vs $clean_intents)" >&2
+if ! grep -q 'reconciliation: the interrupted turn already answered' <<<"$settled"; then
+  echo "6g FAILED: SettledTurnAnswer never ran, so this stage proves nothing" >&2
   exit 1
 fi
-if [ "$settled_notes" != "1" ]; then
-  echo "6f FAILED: expected exactly one recovery note, saw $settled_notes" >&2
+echo "6g held: the reconciliation ran and reused the committed answer"
+echo "  the interrupted turn's answer appears $(grep -c 'answer: The search is done.' <<<"$settled") time(s)"
+
+echo
+echo "############ 6h. an ambiguous store: two candidate turns must be refused ############"
+# The wrong-turn bug. A baseline that precedes more than one different turn checkpoint leaves the
+# lookup unable to say which turn was interrupted; attaching either would put the wrong text in the
+# transcript, so it must refuse and re-send instead.
+python3 "$HERE/forge-ambiguous.py" "$SCRATCH/settled.jsonl" "$SCRATCH/ambiguous.jsonl"
+ambiguous="$(run "$SCRATCH/ambiguous.jsonl" two-sends.json --resume)"
+echo "$ambiguous" | sed "s|$SCRATCH|<scratch>|g" | tail -5
+if grep -q 'reconciliation: the interrupted turn already answered' <<<"$ambiguous"; then
+  echo "6h FAILED: the guard attached a turn it could not identify" >&2
   exit 1
 fi
-echo "6f held: the finished turn was not re-sent; only the recovery note was added"
+echo "6h held: with more than one candidate turn the guard refused rather than guessing"

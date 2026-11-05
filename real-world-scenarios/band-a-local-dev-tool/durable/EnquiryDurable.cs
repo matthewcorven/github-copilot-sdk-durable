@@ -43,9 +43,14 @@ public static class EnquiryDurable
     /// a task restored in a new process reaches its session through this delegate, which is the
     /// process that resumed it.
     /// </param>
+    /// <param name="settledTurn">
+    /// Returns the single turn checkpoint committed after <paramref name="seenEventId"/>, or null.
+    /// It is what lets a resumed turn tell "finished" from "started" without attributing a later
+    /// turn's answer; see <see cref="EnquiryTask.SettledTurnAnswer"/>.
+    /// </param>
     /// <param name="conversationCheckpoint">
-    /// Reads the conversation's latest checkpoint, or null when there is none. It is what lets a
-    /// resumed turn tell "finished" from "started"; see <see cref="EnquiryTask.Run"/>.
+    /// Reads the conversation's latest checkpoint, or null when there is none. Only the event id is
+    /// used, as the baseline a turn's own checkpoint is compared against.
     /// </param>
     /// <returns>The task definition to register.</returns>
     /// <remarks>
@@ -56,13 +61,15 @@ public static class EnquiryDurable
     public static DurableTaskDefinition Task(
         DurableStore store,
         Func<EnquiryInput, string, CancellationToken, Task<string>> send,
-        Func<string, ConversationCheckpoint?>? conversationCheckpoint = null) =>
+        Func<string, ConversationCheckpoint?>? conversationCheckpoint = null,
+        Func<string, string?, ConversationCheckpoint?>? settledTurn = null) =>
         DurableTask.Define<EnquiryInput, EnquiryCheckpoint, EnquiryOutcome>(
             TaskName,
             () => new EnquiryCheckpoint { Phase = EnquiryPhases.Run, EnquiryPhase = EnquiryPhases.Queued },
             (input, checkpoint, runtime) =>
                 EnquiryTask.Run(store, send, input, checkpoint, runtime,
-                    conversationCheckpoint is null ? null : () => conversationCheckpoint(input.ConversationId)),
+                    conversationCheckpoint is null ? null : () => conversationCheckpoint(input.ConversationId),
+                    settledTurn is null ? null : seen => settledTurn(input.ConversationId, seen)),
             (_, checkpoint, runtime) => runtime.CommitAsync(() => TaskCommit.Aborted()));
 
     /// <summary>

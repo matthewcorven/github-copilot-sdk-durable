@@ -80,7 +80,8 @@ public sealed class EnquiryStore : IAsyncDisposable
         var definition = EnquiryDurable.Task(
             store,
             (input, prompt, token) => self!.SendAsync(input.ConversationId, prompt, token),
-            conversationId => self!.LastCheckpoint(conversationId));
+            conversationId => self!.LastCheckpoint(conversationId),
+            (conversationId, seen) => self!.TurnCheckpointAfter(conversationId, seen));
 
         var harness = await DurableHarness.OpenAsync(store, registry, options, cancellationToken);
         self = new EnquiryStore(harness, definition);
@@ -248,6 +249,57 @@ public sealed class EnquiryStore : IAsyncDisposable
         Store.Document(CheckpointKind, conversationId)?.Latest is { } latest
             ? latest.Deserialize<ConversationCheckpoint>(DurableJson.Options)
             : null;
+
+    /// <summary>
+    /// The turn checkpoint the task should adopt as the answered turn, or null.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The rule is about <em>which turn</em>, not "the latest is different". Candidates are the
+    /// turn checkpoints committed after the baseline the task recorded, and the answer is returned
+    /// only when those candidates name exactly one turn.
+    /// </para>
+    /// <para>
+    /// Counting distinct turn ids rather than versions matters because the same turn can be
+    /// committed twice: a resumed process that replays a session writes the turn checkpoint for a
+    /// message it has already recorded. Deduplicating by <see cref="ConversationCheckpoint.EventId"/>
+    /// keeps that from looking like two different turns, which would refuse a legitimate match.
+    /// </para>
+    /// <para>
+    /// Two genuinely different turns after the baseline still returns null. Handing one of them
+    /// back would attach a later turn's answer to the interrupted one, and the cost of refusing is
+    /// only that the turn is sent again.
+    /// </para>
+    /// </remarks>
+    public ConversationCheckpoint? TurnCheckpointAfter(string conversationId, string? seenEventId)
+    {
+        if (seenEventId is not { Length: > 0 } || Store.Document(CheckpointKind, conversationId) is not { } document)
+        {
+            return null;
+        }
+
+        // The baseline is identified by the checkpoint's own event id, which is what the task
+        // recorded. A document version's EntryId is the id of the entry that carried it, so
+        // comparing against that would never match.
+        var values = document.Versions
+            .Select(version => version.Value.Deserialize<ConversationCheckpoint>(DurableJson.Options))
+            .ToList();
+
+        var baselineAt = values.FindIndex(checkpoint =>
+            string.Equals(checkpoint?.EventId, seenEventId, StringComparison.Ordinal));
+        if (baselineAt < 0)
+        {
+            return null;
+        }
+
+        var laterTurns = values
+            .Skip(baselineAt + 1)
+            .Where(checkpoint => checkpoint is { Kind: "turn", EventId.Length: > 0 })
+            .GroupBy(checkpoint => checkpoint!.EventId, StringComparer.Ordinal)
+            .ToList();
+
+        return laterTurns.Count == 1 ? laterTurns[0].Last() : null;
+    }
 
     /// <summary>The document kind the durable layer commits a conversation's checkpoints under.</summary>
     private const string CheckpointKind = "durable.checkpoint";

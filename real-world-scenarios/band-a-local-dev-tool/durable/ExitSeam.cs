@@ -40,13 +40,19 @@ public static class ExitSeam
     /// is a second seam rather than a variant of <see cref="AfterCommit"/> because the interesting
     /// fact is not which phase committed, it is that the answer did not.
     /// </remarks>
-    public static void BeforeAnswer(string phase)
+    /// <param name="startedPhase">The phase the turn was sent for.</param>
+    /// <param name="reachedPhase">The phase the document holds once the turn returned.</param>
+    public static void BeforeAnswer(string startedPhase, string reachedPhase)
     {
         var target = Environment.GetEnvironmentVariable(AnswerVariable);
-        if (string.IsNullOrWhiteSpace(target) || !string.Equals(target, phase, StringComparison.Ordinal))
-        {
-            return;
-        }
+        if (string.IsNullOrWhiteSpace(target)) return;
+
+        // Either name selects the kill. A caller naturally picks the phase it asked the model to
+        // work on, and the turn usually moves the document somewhere else before answering, so
+        // matching only the starting phase would make the seam inert for most turns.
+        var matches = string.Equals(target, startedPhase, StringComparison.Ordinal)
+            || string.Equals(target, reachedPhase, StringComparison.Ordinal);
+        if (!matches) return;
 
         Console.WriteLine(
             $"{AnswerVariable}={target}: the turn returned and the process exits before its answer " +
@@ -63,18 +69,24 @@ public static class ExitSeam
     /// task's boundary is.
     /// </summary>
     /// <remarks>
-    /// The mirror image of <see cref="BeforeAnswer"/>. Here the turn <em>did</em> finish — the
-    /// answer and the conversation's turn checkpoint are both durable — so a resume can recognise
-    /// it and continue without sending the prompt again. That is the case
-    /// <see cref="EnquiryTask.SettledTurnAnswer"/> exists for; stage 6e exercises it.
+    /// Here the turn <em>did</em> finish — the answer and the conversation's turn checkpoint are
+    /// both durable — but the task's own checkpoint is still the one written before the prompt.
+    /// That is the only state <see cref="EnquiryTask.SettledTurnAnswer"/> can act on, and it is
+    /// reachable only on a turn that leaves a non-terminal document, which is why stages 6e-6g use
+    /// the two-send fixture rather than the single-send one.
     /// </remarks>
-    public static void AfterAnswer(string phase)
+    /// <param name="startedPhase">The phase the turn was sent for.</param>
+    /// <param name="reachedPhase">The phase the document holds once the turn returned.</param>
+    public static void AfterAnswer(string startedPhase, string reachedPhase)
     {
         var target = Environment.GetEnvironmentVariable(AnswerCommittedVariable);
-        if (string.IsNullOrWhiteSpace(target) || !string.Equals(target, phase, StringComparison.Ordinal))
-        {
-            return;
-        }
+        if (string.IsNullOrWhiteSpace(target)) return;
+
+        // Match either name, for the same reason as BeforeAnswer: a turn usually moves the
+        // document out of the phase it was sent for.
+        var matches = string.Equals(target, startedPhase, StringComparison.Ordinal)
+            || string.Equals(target, reachedPhase, StringComparison.Ordinal);
+        if (!matches) return;
 
         Console.WriteLine(
             $"{AnswerCommittedVariable}={target}: the answer is committed and the process exits " +

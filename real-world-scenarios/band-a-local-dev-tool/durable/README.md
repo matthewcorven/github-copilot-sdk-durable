@@ -51,11 +51,13 @@ are committed as they happen, the answer is not, and a process killed in between
 whose phase has moved but whose answer is missing. What happens next depends on whether the answer
 made it:
 
-- **The answer committed.** `EnquiryTask.SettledTurnAnswer` compares the conversation's
-  `turn:<messageId>` checkpoint against the one the task recorded before sending. A different,
-  non-null checkpoint means the turn finished, so the resume writes that answer to the transcript
-  and continues *without sending the prompt again*. Stage 6e/6f exercise this: the resume ends at
-  the clean run's 9 entries plus one recovery note, with one `intent` line.
+- **The answer committed before the boundary.** The task records the conversation checkpoint it
+  saw before sending, and `EnquiryTask.SettledTurnAnswer` accepts the turn checkpoint committed
+  *after* that baseline — but only when the candidates name exactly one turn. The resume then
+  writes that answer to the transcript and continues *without sending the prompt again*. Stages
+  6f/6g exercise this on the two-send fixture; 6g fails if the reconciliation does not run. Stage
+  6h forges a store whose baseline precedes two different turns and requires the guard to refuse
+  rather than attach the wrong one.
 - **The answer did not commit.** Nothing durable says the turn ran, so it is sent again and its
   effects happen twice. Stage 6 measures this on the recorded runtime.
 
@@ -273,13 +275,21 @@ Not executed:
 - **One store writer per process.** The JSONL provider takes an exclusive file lock, so two
   processes cannot serve the same store. That is correct for this scenario — one server, restart to
   recover — and it is recorded rather than worked around.
-- **A turn that was interrupted mid-flight is re-run, not resumed.** If a process dies after the
-  model turn starts and before the turn's answer commits, the resumed task re-sends the phase
-  prompt and the turn's tool calls are recorded again. That is what stage 6 measures: the same
-  fixture ends at 12 entries after a kill at `writing_report` and at 9 without one. It does *not*
-  fail the enquiry, and it does not silently discard anything; it costs duplicate transcript
-  entries. Reconciling the interrupted turn against the native session is what a real system would
-  do instead, and `lib/Durable.cs` does not expose the native transcript to make that possible.
+- **A turn interrupted before its answer commits is re-run.** Whether the resume re-sends it
+  depends on what survived, and the two cases are not the same:
+  - The answer and its `turn:<messageId>` checkpoint both committed, and the task's boundary did
+    not. The resume recognises the turn and reuses the answer (stages 6f/6g). The transcript gains
+    no duplicate; the only addition is whatever the reconnected session replays (below).
+  - The answer never committed. Nothing durable says the turn ran, so it is sent again and its
+    tool calls are recorded a second time. This is the residual, and it is what stage 6 shows.
+
+  Neither case fails the enquiry. On the **recorded runtime** both are inflated by session replay:
+  a resumed process reconnects to a session served from its first recorded turn, so earlier turns
+  are sent and committed again. Stage 6d's `12` vs `9` is therefore an upper bound that mixes that
+  replay with the interrupted turn, not a measurement of the boundary; the evidence file says so
+  rather than subtracting the two. Reconciling against the *native* transcript is what a real
+  system would do, and `lib/Durable.cs` does not expose it — which is why this variant reads the
+  conversation's persisted checkpoints instead.
 - **A `done` enquiry whose answer never committed loses that answer, and the recovery replaces it.**
   A process killed between the model reporting `done` and the answer committing leaves a terminal
   document with `report: null`. Resuming asks the model once more, guarded by a task memo so it

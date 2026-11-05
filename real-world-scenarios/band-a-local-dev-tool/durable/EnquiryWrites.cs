@@ -263,6 +263,16 @@ public static class EnquiryWrites
         {
             var draft = tx.Doc(EnquiryDurable.Enquiry, conversationId);
             var state = draft.Value;
+
+            // Idempotent on the text. A resumed turn can reach here twice for the same answer: the
+            // layer replays a session and re-commits the turn, and the coordination then writes the
+            // answer again. Writing the same text twice says nothing new, so it is skipped.
+            if (state.Entries.Any(entry => entry.Kind == "answer" && entry.Text == answer))
+            {
+                await Task.CompletedTask;
+                return;
+            }
+
             var entry = tx.AppendEntry(conversationId, "answer", answer);
             state.Entries.Add(new EnquiryEntry
             {

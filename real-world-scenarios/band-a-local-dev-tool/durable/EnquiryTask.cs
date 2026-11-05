@@ -54,28 +54,39 @@ public static class EnquiryTask
         EnquiryInput input,
         EnquiryCheckpoint checkpoint,
         TaskRuntime runtime,
-        Func<ConversationCheckpoint?>? conversationCheckpoint = null)
+        Func<ConversationCheckpoint?>? conversationCheckpoint = null,
+        Func<string?, ConversationCheckpoint?>? settledTurn = null)
     {
         for (var turn = checkpoint.Turns; turn < MaxTurns; turn++)
         {
             var document = EnquiryDurable.Read(store, input.ConversationId);
+
+            // The reconciliation runs first, and for *any* document — including a terminal one.
+            // A turn that reported done and then produced an answer leaves the document terminal
+            // before that answer exists, so checking the terminal branch first would route the
+            // resume into the recovery path and never consult the conversation at all.
+            var resumedAnswer = SettledTurnAnswer(
+                checkpoint,
+                document,
+                settledTurn ?? (_ => conversationCheckpoint?.Invoke()));
+            if (resumedAnswer is not null)
+            {
+                // Observable on purpose: a stage that claims to exercise the reconciliation has to
+                // be able to show that it ran, not infer it from an entry count it would also get
+                // from the recovery path.
+                Console.WriteLine(
+                    "reconciliation: the interrupted turn already answered; reusing that answer " +
+                    "instead of sending the prompt again");
+                return await ResolveSettledTurnAsync(
+                    store, input, resumedAnswer, turn, runtime, checkpoint.SeenCheckpoint);
+            }
+
             if (document.IsTerminal)
             {
                 return await Finish(runtime, await RecoverAsync(store, send, input, document, runtime));
             }
 
             var phase = EnquiryPhases.Name(document.Phase);
-
-            // A turn that was interrupted mid-flight is not re-sent if the conversation shows it
-            // finished. Resuming re-enters the loop at the checkpoint's turn index and the
-            // document's phase, and both of those were already true when the turn began — so the
-            // only evidence that separates "finished" from "started" is the conversation's own
-            // checkpoint, which the layer writes when a turn's answer commits.
-            var resumedAnswer = SettledTurnAnswer(checkpoint, phase, conversationCheckpoint?.Invoke());
-            if (resumedAnswer is not null)
-            {
-                return await ResolveSettledTurnAsync(store, input, resumedAnswer, turn, runtime);
-            }
 
             // Record what the conversation had before this turn's prompt goes out. A process that
             // dies during the turn leaves this on the checkpoint, and the next process compares it
@@ -86,6 +97,7 @@ public static class EnquiryTask
                 EnquiryPhase = phase,
                 Turns = turn,
                 SeenCheckpoint = conversationCheckpoint?.Invoke()?.EventId,
+                InTurn = true,
             };
             var startedCommit = await runtime.CommitAsync(
                 () => TaskCommit.Running(DurableJson.ToElement(started)));
@@ -98,7 +110,13 @@ public static class EnquiryTask
             try
             {
                 answer = await send(input, PromptFor(phase, input.Enquiry), runtime.CancellationToken);
-                ExitSeam.BeforeAnswer(phase);
+
+                // The seam is checked against the phase the *turn* reached, not the phase it
+                // started in: a turn's tool calls move the document before the answer arrives, so
+                // the starting phase would never match for a turn that reports progress.
+                ExitSeam.BeforeAnswer(
+                    phase,
+                    EnquiryPhases.Name(EnquiryDurable.Read(store, input.ConversationId).Phase));
             }
             catch (Exception error) when (error is not OperationCanceledException)
             {
@@ -110,7 +128,12 @@ public static class EnquiryTask
             if (answer.Length > 0)
             {
                 await EnquiryWrites.AppendTurnAnswerAsync(store, input.ConversationId, answer);
-                ExitSeam.AfterAnswer(phase);
+
+                // The seam is here: the answer is durable and the boundary is not. That is exactly
+                // the state the reconciliation has to handle, so the kill must land on it.
+                ExitSeam.AfterAnswer(
+                    phase,
+                    EnquiryPhases.Name(EnquiryDurable.Read(store, input.ConversationId).Phase));
             }
 
             // The settled boundary, committed once the turn's answer is durable. It advances the
@@ -128,6 +151,8 @@ public static class EnquiryTask
             {
                 return boundaryCommit;
             }
+
+
 
             // Re-read after the turn: the model's tool calls commit phase transitions while the
             // turn runs, so the document — not the checkpoint — is where the enquiry is now.
@@ -177,49 +202,59 @@ public static class EnquiryTask
     }
 
     /// <summary>
-    /// The answer of a turn the previous process finished but never recorded, or null.
+    /// The answer of the turn this task was running when it was interrupted, or null.
     /// </summary>
     /// <remarks>
     /// <para>
     /// A resume re-enters the loop at the checkpoint's turn index and the document's phase, and
     /// both were already true when the interrupted turn sent its prompt — so neither can say
-    /// whether that turn ran. The conversation can:
-    /// <see cref="DurableConversation.Checkpoint"/> returns the most recent
-    /// <c>turn:&lt;messageId&gt;</c> checkpoint, and the task records the one it saw before it
-    /// sent. A different, non-null checkpoint now means the turn finished, and its content is the
-    /// answer it produced.
+    /// whether that turn ran. The conversation can: the task records the conversation checkpoint it
+    /// saw <em>before</em> sending, and a <c>turn</c> checkpoint committed after that baseline is
+    /// the answer the interrupted turn produced.
     /// </para>
     /// <para>
-    /// This is what stops a resume at a turn boundary from re-sending the turn. It depends on the
-    /// layer having committed the turn checkpoint before the process died, which
-    /// <c>SubmitAsync</c>'s completion barrier guarantees once the answer has arrived.
+    /// The lookup is ordered, not "latest differs". Only the single turn committed after the
+    /// recorded baseline can belong to the interrupted turn; anything later belongs to a turn this
+    /// task already consumed, and attaching it would write the wrong text into the transcript. So
+    /// a missing baseline, or more than one later turn, yields null and the turn is simply sent
+    /// again.
+    /// </para>
+    /// <para>
+    /// No phase comparison is made, and that is deliberate: a turn that ends the enquiry moves the
+    /// document to a terminal phase the checkpoint never named, so requiring the two to match would
+    /// refuse exactly the case this exists for. <see cref="EnquiryCheckpoint.InTurn"/> already
+    /// says the checkpoint describes an unrecorded turn, and the ordered lookup already says the
+    /// candidate is that turn's own checkpoint.
     /// </para>
     /// </remarks>
+    /// <param name="checkpoint">The task checkpoint this process resumed from.</param>
+    /// <param name="document">The enquiry document as it stands now.</param>
+    /// <param name="settledTurn">
+    /// Returns the single turn checkpoint committed after a given baseline, or null.
+    /// </param>
     private static string? SettledTurnAnswer(
         EnquiryCheckpoint checkpoint,
-        string phase,
-        ConversationCheckpoint? conversation)
+        EnquiryState document,
+        Func<string?, ConversationCheckpoint?> settledTurn)
     {
-        if (conversation is not { Kind: "turn" } || conversation.Content is not { Length: > 0 } content)
+        // Only a checkpoint written before a turn's prompt can describe a turn that may have run
+        // and not been recorded. A settled boundary — or the initial checkpoint — has nothing to
+        // recover, and reconciling against it would attribute an answer to a turn that never
+        // started.
+        if (!checkpoint.InTurn)
         {
             return null;
         }
 
-        // Only a turn that was started for this phase can have finished it. A checkpoint whose
-        // phase differs is the settled boundary of an earlier turn, which the loop already steps
-        // past.
-        if (checkpoint.EnquiryPhase != phase)
+        // The baseline is required. Without it there is nothing to order candidates against, and
+        // "any turn checkpoint at all" would match a turn this task has already consumed.
+        if (checkpoint.SeenCheckpoint is not { Length: > 0 } seen)
         {
             return null;
         }
 
-        // Nothing was observed before the prompt, so there is no baseline to compare against.
-        if (checkpoint.SeenCheckpoint is not { Length: > 0 } seen || seen == conversation.EventId)
-        {
-            return null;
-        }
-
-        return content;
+        var finished = settledTurn(seen);
+        return finished is { Kind: "turn" } && finished.Content is { Length: > 0 } content ? content : null;
     }
 
     /// <summary>
@@ -235,7 +270,8 @@ public static class EnquiryTask
         EnquiryInput input,
         string answer,
         int turn,
-        TaskRuntime runtime)
+        TaskRuntime runtime,
+        string? seenCheckpoint)
     {
         await EnquiryWrites.AppendTurnAnswerAsync(store, input.ConversationId, answer);
 
@@ -246,12 +282,16 @@ public static class EnquiryTask
         }
 
         // The turn is over, so the settled boundary advances the count: a later restart re-enters
-        // at the next turn, exactly as it would after an uninterrupted one.
+        // at the next turn, exactly as it would after an uninterrupted one. The baseline is carried
+        // forward with the turn that consumed it, so a later turn can never be matched against an
+        // earlier one's baseline.
         var advanced = new EnquiryCheckpoint
         {
             Phase = EnquiryPhases.Run,
             EnquiryPhase = EnquiryPhases.Name(settled.Phase),
             Turns = turn + 1,
+            SeenCheckpoint = seenCheckpoint,
+            InTurn = false,
         };
         return await runtime.CommitAsync(() => TaskCommit.Running(DurableJson.ToElement(advanced)));
     }
