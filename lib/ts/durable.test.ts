@@ -2075,6 +2075,28 @@ test("review: draining parent can commit and schedule a dependent child but exte
   } finally { release.resolve(); store.dispose(); }
 });
 
+test("review: a numeric checkpoint phase fails the task instead of hanging the waiter", { timeout: 5000 }, async () => {
+  const store = DurableStore.createEphemeral();
+  const definition = DurableTask.definePhases("numeric-phase", () => ({ phase: "run" }),
+    new Map<string, import("./durable.js").PhaseHandler<import("./durable.js").JsonValue, { phase: string }>>([
+      ["run", async (_input, _checkpoint, runtime) => runtime.commitAsync(() => TaskCommit.completed(1))],
+    ]));
+  const registry = new ExtensionRegistry();
+  registry.install(new Extension("numeric-phase", [], [], [definition]));
+  const runner = new DurableTaskRunner(store, registry);
+  const record = await store.commitAsync(tx => tx.createTask(definition, null));
+  const task = store.task(record.id)!;
+  task.checkpoint = { phase: 0 };
+  store.storeProvider.updateTask(task);
+  await store.commitAsync(() => undefined);
+
+  const outcome = await runner.waitForTaskAsync(record.id);
+  assert.equal(outcome.status, "failed");
+  assert.match(outcome.error ?? "", /checkpoint phase must be a string, found Number/);
+  assert.equal(store.task(record.id)!.status, TaskStatus.Terminal, "the store agrees with the waiter");
+  store.dispose();
+});
+
 test("review: waitForTask propagates scheduling rejection instead of an unresolved completion", { timeout: 1000 }, async () => {
   const store = DurableStore.createEphemeral();
   const runner = new DurableTaskRunner(store, new ExtensionRegistry());

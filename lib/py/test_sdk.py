@@ -1762,6 +1762,37 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(closing, drain, return_exceptions=True)
             store.close()
 
+    async def test_review_numeric_checkpoint_phase_fails_the_task_instead_of_hanging(self):
+        store, registry = DurableStore.create_ephemeral(), ExtensionRegistry()
+
+        async def phase(_input, _checkpoint, runtime):
+            return await runtime.commit_async(lambda: TaskCommit.completed(1))
+
+        definition = DurableTask.define_phases("numeric-phase", lambda: {"phase": "run"}, {"run": phase})
+        registry.install(Extension("numeric-phase", tasks=[definition]))
+        harness = await DurableHarness.open_async(store, registry)
+        try:
+            async def create(tx):
+                return tx.create_task(definition)
+            record = await store.commit_async(create)
+            task = store.task(record.id)
+            assert task is not None
+            # JsonSerializerDefaults.Web serializes an enum as a number, so a checkpoint
+            # whose phase is enum-typed is written like this.
+            task.checkpoint = {"phase": 0}
+            store.provider.update_task(task)
+
+            outcome = await asyncio.wait_for(harness.wait_for_task_async(record.id), 5)
+
+            self.assertEqual(outcome.status, "failed")
+            self.assertIn("checkpoint phase must be a string, found Number", outcome.error or "")
+            saved = store.task(record.id)
+            assert saved is not None
+            self.assertIs(saved.status, TaskStatus.TERMINAL, "the store agrees with the waiter")
+        finally:
+            await harness.close_async()
+            store.close()
+
     async def _start_close_gate(self, harness, closing):
         # Starting the shared drain is synchronous up to creating its dedicated core.
         drain = asyncio.create_task(harness._drain_async())

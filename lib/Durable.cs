@@ -5191,6 +5191,16 @@ internal sealed class DurableRuntime : IAsyncDisposable
         {
             return await run;
         }
+        catch (Exception exception)
+        {
+            // Nothing observes this run: it is started fire-and-forget by
+            // CreateTaskAsync, WaitForTaskAsync and ResumeAsync. A fault that escapes
+            // the core loop has to settle the completion source, or every waiter for
+            // this task waits for an outcome that will never come. The run still
+            // fails, so a caller awaiting it -- ResumeAsync, say -- is told why.
+            completion.TrySetResult(new TaskOutcome("failed", Error: exception.Message));
+            throw;
+        }
         finally
         {
             _inFlight.TryRemove(taskId, out _);
@@ -5241,12 +5251,18 @@ internal sealed class DurableRuntime : IAsyncDisposable
                 break;
             }
 
-            var phase = record.Checkpoint.ValueKind == JsonValueKind.Object
-                && record.Checkpoint.TryGetProperty("phase", out var phaseElement)
-                    ? phaseElement.GetString() ?? "run"
-                    : "run";
+            // A checkpoint's phase is the name of a handler, so it has to be a JSON
+            // string. Anything else is a definition error: say which kind was found
+            // and fail the task, rather than letting GetString throw out of the run
+            // where nothing can observe it.
+            var (phase, phaseError) = ReadPhase(record.Checkpoint);
+            if (phaseError is not null)
+            {
+                await Store.CommitTaskAsync(taskId, () => TaskCommit.Failed(phaseError));
+                break;
+            }
 
-            if (!definition.Phases.TryGetValue(phase, out var handler))
+            if (!definition.Phases.TryGetValue(phase!, out var handler))
             {
                 await Store.CommitTaskAsync(taskId, () => TaskCommit.Failed($"unknown phase {phase}"));
                 break;
@@ -5290,6 +5306,28 @@ internal sealed class DurableRuntime : IAsyncDisposable
             : new TaskOutcome("failed", Error: "task did not finish");
         completion.TrySetResult(final);
         return final;
+    }
+
+    /// <summary>
+    /// Reads the handler name a checkpoint names, without throwing. A checkpoint is
+    /// caller-supplied data: it can come from an enum serializer, an older schema, or
+    /// hand-edited JSON, and none of those is a reason to escape the run.
+    /// </summary>
+    /// <returns>The phase name, or the failure to report when the checkpoint cannot be read.</returns>
+    private static (string? Phase, string? Error) ReadPhase(JsonElement checkpoint)
+    {
+        if (checkpoint.ValueKind != JsonValueKind.Object
+            || !checkpoint.TryGetProperty("phase", out var element)
+            || element.ValueKind == JsonValueKind.Null)
+        {
+            // A task with no phase in its checkpoint starts at "run", which is what
+            // every definition's initial checkpoint looks like before its first commit.
+            return ("run", null);
+        }
+
+        return element.ValueKind == JsonValueKind.String
+            ? (element.GetString() ?? "run", null)
+            : (null, $"checkpoint phase must be a string, found {element.ValueKind}");
     }
 
     /// <summary>
