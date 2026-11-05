@@ -318,6 +318,14 @@ export class TaskOutcome {
   }
 }
 
+/** The prefix that marks a `waitingOn` entry as an external event, so the event namespace
+ *  and the child-task namespace share one stored list without colliding. */
+export const EXTERNAL_EVENT_PREFIX = "external:";
+
+/** The memo key an external event's payload is delivered under, read by a parked task with
+ *  `runtime.memoAsync(DurableStore.EXTERNAL_EVENT_MEMO_KEY)`. */
+export const EXTERNAL_EVENT_MEMO_KEY = "external-event";
+
 /** A commit that advances a task's durable state. */
 export class TaskCommit {
   private constructor(
@@ -339,6 +347,23 @@ export class TaskCommit {
   /** Creates a commit that continues the task, waiting on child tasks. */
   static waiting(checkpoint: JsonValue, on: readonly string[]): TaskCommit {
     return new TaskCommit(TaskStatus.Waiting, checkpoint, null, [...on]);
+  }
+
+  /** Parks the task until an external event is delivered against the store.
+   *
+   *  The event is not a child task: nothing in the store produces it, so the run ends with
+   *  the task `waiting`, and `DurableStore.raiseEventAsync` makes it runnable again. */
+  static waitingForEvent(checkpoint: JsonValue, eventName: string): TaskCommit {
+    if (eventName.trim().length === 0) {
+      throw new Error("An external event name is required.");
+    }
+
+    return new TaskCommit(TaskStatus.Waiting, checkpoint, null, [eventName]);
+  }
+
+  /** Whether a `waitingOn` name is an external event rather than a child task id. */
+  static isExternalEvent(name: string): boolean {
+    return name.startsWith(EXTERNAL_EVENT_PREFIX);
   }
 
   /** Creates a commit that finishes the task successfully. */
@@ -1652,6 +1677,70 @@ export class DurableStore {
     return this.provider.task(id);
   }
 
+  /** Delivers an external event to every task parked on it, and returns the ids it woke.
+   *
+   *  A task parks with `TaskCommit.waitingForEvent`: it commits a `waiting` checkpoint and
+   *  ends the run, holding no invocation and no timer. This is the other half of that
+   *  commit, and it lives on the store because an event outlives the process that parked on
+   *  it. The delivered payload is written as the task's memo `EXTERNAL_EVENT_MEMO_KEY` and
+   *  the task's `waitingOn` list drops the event, inside one transaction; the task is left
+   *  `running`, so the owner of the task runner can re-enter it at that checkpoint. A second
+   *  delivery finds no waiter, and never overwrites a memo the task already holds. */
+  async raiseEventAsync(eventName: string, payload: JsonValue): Promise<string[]> {
+    if (eventName.trim().length === 0) {
+      throw new Error("An external event name is required.");
+    }
+
+    if (!TaskCommit.isExternalEvent(eventName)) {
+      throw new Error(
+        `An external event name is written '${EXTERNAL_EVENT_PREFIX}<name>'; ` +
+          `'${eventName}' would be read back as a child task id.`,
+      );
+    }
+
+    return this.withGate(async () => {
+      const waiting = this.provider.tasks
+        .filter((task) => task.status === TaskStatus.Waiting && task.waitingOn.includes(eventName))
+        .map((task) => task.id);
+      if (waiting.length === 0) {
+        return [];
+      }
+
+      this.provider.beginTransaction();
+      try {
+        const woken: string[] = [];
+        for (const taskId of waiting) {
+          const task = this.provider.task(taskId);
+          if (task === null) {
+            continue;
+          }
+
+          // The task's own state is part of the transaction, so a failure below puts it
+          // back where it was rather than leaving it half-woken.
+          this.provider.updateTask(task);
+          if (!(EXTERNAL_EVENT_MEMO_KEY in task.memos)) {
+            task.memos[EXTERNAL_EVENT_MEMO_KEY] = DurableJson.clone(payload);
+          }
+
+          task.waitingOn = task.waitingOn.filter((name) => name !== eventName);
+          task.status = TaskStatus.Running;
+          this.provider.updateTask(task);
+          woken.push(taskId);
+        }
+
+        this.provider.commit();
+        this.notifyCommitted();
+        return woken;
+      } catch (error) {
+        this.provider.rollback();
+        throw error;
+      }
+    });
+  }
+
+  /** The memo key an external event's payload is delivered under. */
+  static readonly EXTERNAL_EVENT_MEMO_KEY = EXTERNAL_EVENT_MEMO_KEY;
+
   /** Reads a conversation record. */
   conversation(id: string): ConversationRecord | null {
     return this.provider.conversation(id);
@@ -1751,9 +1840,17 @@ export class DurableStore {
       this.provider.beginTransaction();
       try {
         const next = await commit();
+        // The task's own state is part of the commit. `waitingOn` is written on both arms:
+        // a `waiting` commit whose names were dropped is indistinguishable from `running`,
+        // and the task would never be resumed by the name it parked on.
+        this.provider.updateTask(task);
         task.status = next.status;
         if (next.checkpoint !== null) {
           task.checkpoint = next.checkpoint;
+        }
+
+        if (next.waitingOn.length > 0) {
+          task.waitingOn = [...next.waitingOn];
         }
 
         if (next.outcome !== null) {
@@ -2401,6 +2498,7 @@ export class DurableTaskRunner {
         record.outcome === null
           ? new TaskOutcome("completed")
           : (TaskOutcome.fromJson(record.outcome) ?? new TaskOutcome("completed"));
+      this.completions.delete(taskId);
       completion.resolve(existing);
       return existing;
     }
@@ -2408,6 +2506,7 @@ export class DurableTaskRunner {
     const definition = this.registry.findTask(record.name);
     if (definition === null) {
       const unknown = new TaskOutcome("failed", null, `unknown task definition ${record.name}`);
+      this.completions.delete(taskId);
       completion.resolve(unknown);
       return unknown;
     }
@@ -2495,19 +2594,37 @@ export class DurableTaskRunner {
         break;
       }
 
-      // A task that is waiting on child tasks holds no invocation: it is resumed when
-      // its children finish.
+      // A task that is waiting on child tasks holds no invocation: it is resumed when its
+      // children finish. A task waiting on an external event holds no invocation either, but
+      // nothing in the store ever produces that event, so the run ends with the task still
+      // `waiting` and `raiseEventAsync` is what makes it runnable again. Reading the event
+      // name as a child task id would find no task, and end it as failed instead of parked.
       if (commit.status === TaskStatus.Waiting) {
-        await this.waitForChildrenAsync(taskId, commit.waitingOn, cancellationToken);
+        const children = commit.waitingOn.filter((name) => !TaskCommit.isExternalEvent(name));
+        if (children.length === 0) {
+          break;
+        }
+
+        await this.waitForChildrenAsync(taskId, children, cancellationToken);
         continue;
       }
     }
 
-    const final =
-      this.store.task(taskId)?.outcome == null
-        ? new TaskOutcome("failed", null, "task did not finish")
-        : (TaskOutcome.fromJson(this.store.task(taskId)!.outcome) ??
-          new TaskOutcome("failed", null, "task did not finish"));
+    const settled = this.store.task(taskId);
+    let final: TaskOutcome;
+    if (settled?.outcome != null) {
+      final = TaskOutcome.fromJson(settled.outcome) ?? new TaskOutcome("failed", null, "task did not finish");
+    } else if (settled?.status === TaskStatus.Waiting) {
+      // The task parked on something outside the store, so the run ends without it being
+      // over. "pending" is what the store already reports for a task with no outcome; it is
+      // not a failure, and a caller that treated it as one would fail a task the next event
+      // can still wake.
+      final = new TaskOutcome("pending");
+    } else {
+      final = new TaskOutcome("failed", null, "task did not finish");
+    }
+
+    this.completions.delete(taskId);
     completion.resolve(final);
     return final;
   }

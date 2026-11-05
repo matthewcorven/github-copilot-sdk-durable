@@ -263,6 +263,14 @@ Mirrors Pi's `defineTask`:
 The runner is a plain `async` loop over the store. On restart, a task in `running` state is
 re-entered at its last saved checkpoint — exactly Pi's resume semantics.
 
+A task can also park on something outside the store: `TaskCommit.WaitingForEvent(checkpoint,
+"external:<name>")` commits a `waiting` checkpoint and ends the run, holding no invocation and no
+timer, and `DurableStore.RaiseEventAsync` delivers the event's payload as a memo and makes the task
+runnable again. The two namespaces share `WaitingOn`, kept apart by the `external:` prefix, so a
+store written before external events existed reads back unchanged. A run that ended at a park
+settles as `pending`, never `failed`: the task is not over. The deadline is the caller's — put it
+in the checkpoint and check it on the run the event starts.
+
 The loop reads the task's **committed** record at the top of every step, not a record it captured
 when the run started. A commit replaces the stored checkpoint, and the next step must see the
 checkpoint the previous step committed; a runner that holds one record for the whole run would
