@@ -10,7 +10,7 @@ lines identical). What changes is **where state lives**, and therefore what surv
 ./run.sh                          # one run: cold start, eight phases, a store
 KEEP=1 ./run.sh                   # keep the store and the run directory
 KEEP=1 ./run.sh && REUSE=1 ./run.sh         # the second run posts nothing
-./evidence.sh                     # every claim in evidence/, reproduced (41 assertions)
+./evidence.sh                     # every claim in evidence/, reproduced (66 assertions)
 BAND_C_EXIT_AFTER_PHASE=comment ./run.sh     # stop after phase 6 commits
 BAND_C_EXIT_AFTER_COMMENTS=7 ./run.sh        # stop inside phase 6, after seven comments
 BAND_C_EXIT_AFTER_COMMENTS=7 ./run.sh && REUSE=1 ./run.sh   # the seam, then the resume
@@ -239,9 +239,9 @@ Three judgement calls a reader may disagree with, named so the disagreement is e
 Not counted: `run.sh`, `evidence.sh`, and `evidence/*.py` present the variant and check it; they are
 not part of the agent. `baseline/PrTriageBaseline.cs` is the baseline's, not this variant's.
 
-For comparison, the baseline's whole durability story is `Repo` — 96 code lines, of which the write, the
-read and the compare-and-swap are the 30 that matter — plus the `Options.DryRun` flag that exists to
-make its crash seam reproducible.
+For comparison, the baseline's whole durability story is `Repo` — 106 code lines (`PrTriageBaseline.cs:931-1062`),
+of which the write, the read and the compare-and-swap are the ones that matter — plus the
+`Options.DryRun` flag that exists to make its crash seam reproducible.
 
 ## What `lib/Durable.cs` could not express, and the one change made
 
@@ -310,7 +310,7 @@ a tie is called one.
 | **Resume from a mid-run stop** | not expressible: its only state is a whole-file snapshot written at the end | expressible: the run record names the phase, each document names its stage, memos name the completed steps | stage 3 (between phases) and stage 4 (inside a phase) |
 | **Store outage / write failure** | `repo.git` moved aside mid-run: the run fails loudly (exit 1) with the comments on disk and the state gone | the store file moved aside mid-run: the process survives, recreates the path and finishes, and the state is split across the moved file and the new one — nothing committed is lost, and nothing tells the operator | `../faults/store-outage.sh`, both variants (`../faults/results/`). Not a win: the baseline's failure is loud and loses the state, this variant's is quiet and splits it |
 | **Fault evidence, all six** | lost / lost / doubled / doubled, no conflict detected / failed loudly / **doubled: 13 PRs get two comments** | resumed / resumed / refused / refused / failed safely, split store / **not doubled: 0 re-posted, 13 adopted** | `../faults/` — the matrix is rendered by `../faults/lib/summarise.py` from checked-in results |
-| **Lines of custom durability code** | `Repo`: 96 code lines, of which the read, the write and the compare-and-swap are ~30 | 569 of 1420 code lines (40%) | `evidence/count.py`, stage 7 |
+| **Lines of custom durability code** | `Repo`: 106 code lines, of which the read, the write and the compare-and-swap are the ones that matter | 592 of 1443 code lines (41%) | `evidence/count.py`, stage 7 |
 | **Operational burden** | a branch and a bare repository; nothing to install | a store file per repository, its `.lock` and `.lock.owner` sidecars, and a resume-or-create decision in the host | `Runner.cs`; `run.sh` |
 
 ### Where the baseline wins
@@ -397,7 +397,7 @@ Executed on 2026-11-05, macOS arm64, .NET SDK 10.0.402 at `/opt/homebrew/bin/dot
 
 - `dotnet build` of `BandCDurable.csproj` and of `baseline/PrTriageBaseline.cs`, both clean.
 - `./evidence.sh` twice, both times with exit 0 and identical assertion output. The capture in
-  `evidence/durable-triage-and-idempotency.md` is from the first; 41 assertions, all passing.
+  `evidence/durable-triage-and-idempotency.md` is from the first; 66 assertions, all passing.
 - `./run.sh` for the ordinary single-run path, and each seam by hand before it was wired into the
   evidence script.
 - `dotnet test tests/Durable.Tests` for the layer change: 221 tests, 220 passing. The one failure is
