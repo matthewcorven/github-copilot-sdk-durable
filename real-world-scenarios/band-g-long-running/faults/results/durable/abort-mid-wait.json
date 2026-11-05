@@ -1,0 +1,27 @@
+{
+  "variant": "durable",
+  "fault": "abort-mid-wait",
+  "outcome": "cancelled",
+  "phase": "waiting at the gate (gate phase wait); abort called",
+  "detail": "Before the abort: task waiting, gate phase wait (running), 3 call(s). The abort exited 0 and both tasks ended terminal — the gate 'aborted', the workflow 'aborted'. The parent's abort handler recorded what it saw of its children when it ran: 't59=Terminal:aborted'. The child was already terminal at that moment, which is the cascade shown as an ordering and not merely as two terminal states. A later approval was then refused — 'refused: the workflow is Terminal, so this decision is late' — the decision document is '(absent)', and the run is still terminal with verdict 'aborted'.",
+  "evidence": "before: task waiting, gate running / phase wait, 3 call(s)\nabort (exit 0): task terminal, gate terminal (verdict aborted), workflow verdict aborted\nobserved by the parent's abort handler: t59=Terminal:aborted\nlate approval (exit 4): 'refused: the workflow is Terminal, so this decision is late'; decision '(absent)'; task terminal, verdict 'aborted'\nobserved:   t59 was Terminal (aborted) when the abort handler ran",
+  "measurements": {
+    "model_calls_at_gate": 3,
+    "model_calls_after_abort": 3,
+    "gate_verdict_after_abort": "aborted",
+    "workflow_verdict_after_abort": "aborted",
+    "children_observed": "t59=Terminal:aborted",
+    "child_terminal_when_parent_concluded": "1",
+    "late_approval_note": "refused: the workflow is Terminal, so this decision is late",
+    "decision_after_abort": "(absent)",
+    "run_final": "terminal"
+  },
+  "harness": {
+    "dotnet": "10.0.402",
+    "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
+    "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
+    "commit": "d9d475d2136d8d8fe86a05b12d8737c06b697c5e",
+    "command": "./faults/abort-mid-wait.sh --variant durable"
+  },
+  "recordedAt": "2026-11-05T20:13:54.758501+00:00"
+}

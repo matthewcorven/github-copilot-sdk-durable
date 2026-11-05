@@ -1,0 +1,27 @@
+{
+  "variant": "extension",
+  "fault": "late-approval",
+  "outcome": "terminal state held",
+  "phase": "terminate acknowledged, then answered by a live worker",
+  "detail": "The run was parked at ManagerApproval (1 completed step(s)). The terminate was acknowledged (1 acknowledgement(s)). The answer was then raised with a worker present ('delivered' printed 0 time(s), 1 raise(s) recorded); the run is Terminated with 1 completed step(s) against 1 at the gate, an ExecutionTerminated in its history: 1, and history: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > ExecutionTerminated > EventRaised > ExecutionCompleted > TaskScheduled. No step beyond the gate's ran, so the post-approval step did not run on a terminated run. The worker was present, so a silent orchestrator is not an alternative explanation for that.",
+  "evidence": "instance: i2040112526; parked at Running\nterminate: acknowledged 1 time(s); status before the answer: Running\n  status samples: Running Running Running Running Running\n  history before: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted\nanswer raised with a worker: 1 raise(s), 'delivered' printed 0 time(s)\nafter: status Terminated; raised ManagerApproval; advanced 0\n  history: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > ExecutionTerminated > EventRaised > ExecutionCompleted > TaskScheduled",
+  "measurements": {
+    "scheduler_image_digest": "sha256:82ceb7df2fdfc2e22b0013c7b87b7a8e443bcd220d4fb37c32ced8ee23438719",
+    "status_at_gate": "Running",
+    "completed_steps_at_gate": 1,
+    "completed_steps_after_answer": 1,
+    "execution_terminated_in_history": 1,
+    "terminate_acknowledged": 1,
+    "delivered_by_a_live_worker": 0,
+    "status_after_late_answer": "Terminated",
+    "late_raises": 1
+  },
+  "harness": {
+    "dotnet": "10.0.402",
+    "runtime": "Durable Task Scheduler emulator (docker image mcr.microsoft.com/dts/dts-emulator:latest) + Microsoft.DurableTask.Client/Worker.AzureManaged 1.28.0",
+    "model": "none — the vendored sample's executors call no model; no call count exists in this column",
+    "commit": "d9d475d2136d8d8fe86a05b12d8737c06b697c5e",
+    "command": "./faults/extension.sh --fault late-approval"
+  },
+  "recordedAt": "2026-11-05T20:15:05.457933+00:00"
+}

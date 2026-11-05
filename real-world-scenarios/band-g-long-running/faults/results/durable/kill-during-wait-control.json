@@ -1,0 +1,22 @@
+{
+  "variant": "durable",
+  "fault": "kill-during-wait-control",
+  "outcome": "no kill, run completed",
+  "phase": "blocked in the wait for the gate's verdict; not killed (the control)",
+  "detail": "Control: the same steps with no kill. The host's wait returned on its own budget, a fresh process found the run at its gate (waiting, phase wait), and accepting a decision (alice approved) finished it: terminal, verdict approved, 4 call(s). The fault run is the same flow with one process killed, and it ends in the same place — which is the whole finding: the kill cost a process and nothing else. Nothing here is lost and nothing here is a win.",
+  "evidence": "killed pid none (kill -9, confirmed gone) at: the host process blocked in the wait for the gate's verdict\nbefore: task waiting, gate phase wait, 3 call(s)\nafter resume (exit 0): task waiting, gate phase wait, 3 call(s)\ndecision (exit 0): alice approved\nafter finishing (exit 0): task terminal, verdict approved, 4 call(s)\ngate:       t59 Running\nmodel:      3 calls [plan, research, write], 0 memo hits",
+  "measurements": {
+    "model_calls_before_kill": 3,
+    "model_calls_after_resume": 3,
+    "model_calls_after_finish": 4,
+    "run_after_finish": "terminal"
+  },
+  "harness": {
+    "dotnet": "10.0.402",
+    "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
+    "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
+    "commit": "d9d475d2136d8d8fe86a05b12d8737c06b697c5e",
+    "command": "./faults/kill-during-wait.sh --variant durable --fault-not-injected"
+  },
+  "recordedAt": "2026-11-05T20:13:30.020910+00:00"
+}

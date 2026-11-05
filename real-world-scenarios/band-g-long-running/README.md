@@ -18,6 +18,7 @@ band publishes has to treat restart/resume as a tie unless it shows a concrete d
 | `run.sh` | Process 1: run to the gate, record the checkpoint id, exit. |
 | `resume.sh` | Process 2: resume from the recorded checkpoint, approve, complete. |
 | `evidence/baseline-restart-resume.md` | Captured stdout of both processes, with the commands that produced them. |
+| `faults/` | Six faults against this baseline and against the Durable variant, with controls and model-call counts. See **Fault evidence** below, or `faults/README.md`. |
 
 ## Pinned source
 
@@ -72,6 +73,52 @@ vendored as a sibling reference but is not ported; Band F (#171) covers the Hand
 - **Clearing the checkpoint directory on startup.** The sample deletes `*.json` in its checkpoint
   directory so each invocation starts clean. Here the directory is a scratch directory created by
   `run.sh`, which is a stronger version of the same guarantee, and `resume.sh` must not delete it.
+
+## Fault evidence
+
+`faults/` runs six faults against both variants and records one JSON result per fault per variant, plus a
+control for each. Nothing in that directory changes the baseline; it is driven through `run`, `resume`, and
+the OpenAI-compatible endpoint the port already reads.
+
+| Fault | Injection, baseline | Injection, durable | baseline | durable |
+| --- | --- | --- | --- | --- |
+| `kill-during-wait` | `kill -9` inside the **manager's first model call**, before any gate checkpoint exists | `kill -9` of the **process blocked in the wait** for the gate's verdict | **lost** | **wait survived** |
+| `restart-after-checkpoint` | `SIGTERM` inside the **writer's model call**, after the plan and research turns completed | the process leaves itself **after the write step's turn, before its checkpoint commits** | **resumed, completed work re-done** | **resumed, no calls repeated** |
+| `duplicate-approval` | a **second `resume`** against the same gate checkpoint | a **second `approve`** against a live gate | **doubled** | **second delivery refused** |
+| `late-approval` | `resume` **after the run already finished** | `approve` **after the gate's durable deadline** passed | **applied again** | **terminal state held** |
+| `abort-mid-wait` | — none: the port has no abort to inject | the variant's **abort verb**, on a waiting parent | **not exercised** | **cancelled** |
+| `store-outage` | `chflags uchg` on the **checkpoint directory** while a resume commits | `chflags uchg` on the **store file** while the run drives a decision | **failed safely, gate still answerable** | **failed safely** |
+
+**The injections are not the same test on the two sides, and the table says so by column**, not only by
+outcome: `kill-during-wait` is a kill inside a model call for the baseline and a kill of a blocked process
+for the Durable variant, because the baseline has no durable wait to be in. Reading `lost` against
+`wait survived` as one measurement would be reading two different faults, and the injection column is
+there so nobody does.
+
+Two of those six are not a loss for the baseline and should not be read as one: it fails cleanly on a store
+outage and it has nothing to abort. One is a tie in outcome and not in mechanism: both resume, and the
+count is what differs. The counts are in `faults/results/` and rendered in `faults/results/summary.md`.
+
+### The three-way comparison, with the measured cells
+
+Every measured cell below is read from `faults/results/` by `faults/lib/three_way.py`, so it cannot drift
+from the run. The middle column is marked exactly as G2 marked it — **not run** — and the marking is
+carried here so a reader cannot infer a measurement that does not exist.
+
+| | File checkpoint (baseline, #176) | Durable Task extension on DTS (`extension/`) | This variant (#177) |
+| --- | --- | --- | --- |
+| **Restart/resume** | **Yes, measured.** `kill-during-wait`: lost; `restart-after-checkpoint`: resumed, completed work re-done after 2 calls in the stopped process. | **Yes, measured.** `kill-during-wait`: wait survived; `restart-after-checkpoint`: resumed — a fresh process, its own worker, finished the parked run (status after: Running). | **Yes, measured.** `kill-during-wait`: wait survived; `restart-after-checkpoint`: resumed, no calls repeated. |
+| **Re-does model calls on resume** | **Yes, measured.** The stopped resumed process made 2 calls; the fresh resume made 2 more for the same turns. | **Not measurable here.** The vendored sample's executors call no model, so there is no call to count. The band's call-count comparison therefore has no number for this column, and none is borrowed. | **No, measured.** The resume added **0** calls and served the re-entered step from the memo (1 memo hit(s)). |
+| **Domain state transactional** | **No.** The checkpoint is the workflow's state; a completed turn inside a process is not in it, which is what the call count above shows. | **In the substrate, and only as durable as it.** Stopping the process mid-run lost nothing (`kill-during-wait`: wait survived). Stopping the *scheduler* lost the run: `store-outage`: lost with the scheduler — the instance did not exist after a restart. State is the scheduler's, and on the emulator that also means it is the emulator's lifetime. | **Within the run.** A step's checkpoint, its memo and its ledger entry commit together: `store-outage` refused the commit (exit 70), left the run 'waiting' with the decision still 'alice approved', and the store file identical in size before and after (31903 -> 31903 bytes): a refused commit left no partial write. The exact byte count is run-variable; its equality is not. |
+| **What a decision is** | **A request/response pair, not a value.** `duplicate-approval`: doubled — a second resume approves again. `late-approval`: applied again — the finished gate checkpoint is still answerable. | **An event on the orchestration instance.** `duplicate-approval`: second delivery did not run the next step twice — the second event is recorded but schedules no second step. `late-approval`: terminal state held. | **A first-writer-wins document.** `duplicate-approval`: second delivery refused, and the refusal did not come from the terminal guard (0). `late-approval`: terminal state held — refused: the workflow is Terminal, so this decision is late. |
+| **A decision after a terminal state** | **Applied again.** `late-approval`: applied again. There is no terminal record to refuse it. | **Not moved.** `late-approval`: terminal state held — a late answer delivered by a live worker completed 1 step(s) against 1 at the gate. | **Held.** `late-approval`: terminal state held — refused: the workflow is Terminal, so this decision is late. |
+| **Abort mid-wait** | **Not exercised.** The baseline's port advertises exactly two modes, 'run' and 'resume' — checked in this run, where an unknown mode answers 'Use run or resume'. | **Stops, with no tree to cascade.** `abort-mid-wait`: cancelled — the run was terminated and an answer delivered by a live worker completed 1 step(s) against 1 at the gate, i.e. the step after the port did not run. There is no child work: the ports live inside one orchestration. | **Cascades, measured.** cancelled — the parent's handler saw the child already terminal (t59=Terminal:aborted). |
+| **Operational weight** | A directory on disk, one writer (the framework's store refuses a second). | **The heaviest, and the least forgiving.** A scheduler (or its emulator) is a prerequisite even for one run. Stopping it under a live run did not fail over: the run was gone when the scheduler came back (`store-outage`: lost with the scheduler). That is the cost the other two columns do not have — their store is a file this harness can move and restore. | A store file, one writer. Measured only in that shape: no server, no scheduler. |
+
+Read the middle column's markings as a claim about this repository, not about the extension: it was not
+stood up, so every sentence there is documentation.
+
+
 
 ## Prerequisites
 

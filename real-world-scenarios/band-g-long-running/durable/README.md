@@ -62,7 +62,8 @@ All five are exercised by `./evidence.sh`; the captured output is in
    memo's whole contribution, stated as a number. **Scope, stated plainly:** the kill point is *before*
    the gate, which is the case the baseline also avoids by not having run those steps yet — so this
    measures the memo **within this variant**, not against the baseline. The baseline-relative claim is
-   in the three-way table, and it is marked as likely rather than measured.
+   in the three-way table, and it is **measured**: `faults/restart-after-checkpoint.sh` stops the
+   baseline after the plan and research calls and a fresh process makes **2 more** for the same steps.
 3. **A decision cannot be overwritten by a late wakeup or a duplicate approval.** The decision is a
    durable document and the first write wins: a second caller finds the first and returns it
    (`Gate.cs`, `GateCommands.RecordAsync`). All three captures are needed, because the two refusals are
@@ -105,11 +106,12 @@ anywhere, that distinction matters.
 | | File checkpoint (baseline, #176) | Durable Task (agent-framework-durable-extension) | This variant |
 | --- | --- | --- | --- |
 | **Restart/resume** | **Yes, demonstrated.** Process 1 stops at the gate, process 2 resumes from the recorded checkpoint id and finishes. | **Yes, event-sourced.** Documented: completed agent and executor steps are not repeated after a restart, and a workflow can "pause for human input or external events". **Not run here.** | **Yes**, demonstrated in §1. The store is the record; the parent is re-entered from a checkpoint it committed while `Waiting`. |
-| **Re-does model calls on resume** | **Likely, unless memoized by the app.** The checkpoint is the framework's workflow state; the port adds no memo of its own, and a step that had not reached a checkpoint is re-executed. The baseline's own README says pre-gate calls are not repeated at *that* gate — because they had not run yet — which is not the same claim. | **No, on replay.** Documented: "completed agent executions are not repeated or lost if a failure occurs", and durable orchestrations "execute the same way when replayed". **Not run here.** | **No, on a memo**, and measured both ways in §2 and §2a: a resume adds no call for a completed step, and the same flow with the memo bypassed adds one. |
+| **Re-does model calls on resume** | **Yes, measured (#178).** It was "likely" here and is now a number: `faults/restart-after-checkpoint.sh` holds the writer's turn, stops the resumed process there, and starts a second process — which issues **2 model calls again** for turns the stopped process had already made, because the checkpoint is the framework's workflow state and a completed turn inside a process is not in it. | **No, on replay.** Documented: "completed agent executions are not repeated or lost if a failure occurs", and durable orchestrations "execute the same way when replayed". **Not run here.** | **No, on a memo**, and measured both ways in §2 and §2a: a resume adds no call for a completed step, and the same flow with the memo bypassed adds one. |
 | **Domain state transactional** | **No.** The checkpoint is workflow state. Anything the workflow wrote to the outside world is outside it, and a resume cannot undo or re-derive it. | **Partial.** Workflow and conversation state are checkpointed; a side effect an executor performs is not in that transaction. | **Yes, within the run.** A step's checkpoint, its memo, and its ledger entry commit in one transaction, so a call that happened is never uncounted and a count never names a call that did not happen. The scene files the run writes are outside it — see the limitations. |
 | **Operational weight** | **None.** A directory on disk. One writer: the store takes an exclusive lock, so a second process on one directory is refused. | **DTS + emulator.** Documented prerequisites for a self-hosted run: a Durable Task Scheduler connection (or the emulator container) and, for Azure Functions hosting, Azurite as well. | **A store file.** A JSONL file and one writer, no server. A second process on one file is refused for the same reason. |
 | **What a decision is** | A request/response pair inside the workflow. The checkpoint holds the pending request; answering it is what resume does. | An external event raised on an orchestration instance, with a timer for the timeout (`WaitForExternalEvent` / `wait_for_external_event`). | A document with a first-writer-wins rule, plus a gate that reads it. Idempotent by construction: a duplicate and a late write both end at the answer already on file. |
-| **Abort mid-wait** | Not part of the shape. The port stops at the gate and resumes; there is no abort tree. | Orchestration termination exists; the documentation does not describe a cascade over child work in these terms. **Not run here.** | **Cascades**, demonstrated in §5: aborting the waiting parent aborts its gate child first, and both end terminal. |
+| **Abort mid-wait** | **Not exercised (#178).** The port has no abort verb and no abort tree, so there is nothing to inject; `faults/abort-mid-wait.sh` records that with the reason it re-checks on every run. | Orchestration termination exists; the documentation does not describe a cascade over child work in these terms. **Not run here.** | **Cascades**, demonstrated in §5 and re-measured by `faults/abort-mid-wait.sh`: the parent's handler records the child already terminal when it ran. |
+| **A late approval after a terminal state** | **Applied again, measured (#178).** The gate checkpoint stays answerable after the run finished, so a later `resume` approves again and re-runs the post-approval work. | An external event raised after an orchestration completes is refused by the runtime; **not run here.** | **Held, measured (#178).** The gate's durable deadline passed in a different process; the later approval is refused as late, and the decision document stays empty. |
 
 ### If the middle column already covers what we do, say it
 
@@ -209,11 +211,31 @@ least one — `LateJoinExampleTests.BarrierReadinessFailuresCleanupAndSourceMuta
 flake that fails on repeated runs of its own, with and without this change. The counts move by one or
 two between runs for that reason. Nothing here should be read as "the suite was green".
 
-**Not executed.** The middle column. The Durable Task extension's `DurableAIAgent`, `WaitForExternalEvent`
-and Durable Task Scheduler were not installed, run, or measured — Docker is available on this machine,
-but standing up the emulator, a Functions host, and a configured model was out of scope for a
-comparison whose conclusion is "it already does this". Every claim about it above is documentation, and
-is marked as such.
+**Executed, after being wrongly declared impossible.** The middle column now runs. G3 originally recorded
+it as "not run" on the stated ground that no prerelease `Microsoft.Agents.AI.DurableTask` package existed on
+NuGet. **That was false** — the package has 41 prerelease versions, latest `1.16.0-preview.261029.1`, MIT,
+`net10.0` — and the mistake was a malformed feed URL (the `Microsoft.Agents.AI` family was probed; the
+`.ai` in this package's id was dropped). A claim that a thing cannot be done needs the same evidence as a
+claim that it was done, and this one had none.
+
+What it took to run it, in full:
+
+```bash
+docker pull mcr.microsoft.com/dts/dts-emulator:latest          # the Durable Task Scheduler emulator
+docker run -d -p 8080:8080 mcr.microsoft.com/dts/dts-emulator:latest
+dotnet add package Microsoft.Agents.AI.DurableTask --prerelease  # 1.16.0-preview.261029.1
+export DURABLE_TASK_SCHEDULER_CONNECTION_STRING="Endpoint=http://localhost:8080;TaskHub=default;Authentication=None"
+```
+
+The vendored sample in `../extension/upstream/` (byte-identical to `microsoft/agent-framework-durable-extension`
+@ `3ffe3fb`, MIT) completes end-to-end against that emulator: three `RequestPort` pauses, answered, then
+`Expense reimbursed at …`. `../extension/src` drives the same workflow through verbs, and
+`../faults/extension.sh` runs the faults against it.
+
+**So the middle column is no longer "not run", and the marking has moved to what is actually true:** it runs,
+and the *comparison* against it is partial — the vendored sample's executors call no model, so the band's
+model-call counts have no measurement in that column and none is invented; and its abort has no child tree
+to observe. Those are the residuals, and they are narrower than the false claim they replace.
 
 **Not executed.** A live model. No endpoint was configured.
 

@@ -1,0 +1,24 @@
+{
+  "variant": "extension",
+  "fault": "store-outage",
+  "outcome": "lost with the scheduler",
+  "phase": "the scheduler stopped and restarted under a live run",
+  "detail": "The run was parked at ManagerApproval (Running) when the Durable Task Scheduler was stopped. The process trying to answer it exited 1. With the scheduler restarted, the instance reads '(absent)' with history '(empty)' and raised '(none)': the run did not survive the scheduler. On this substrate the scheduler is not just the transport, it is the state — a stopped scheduler is a lost run, and the emulator holds its state in memory. Narrowed to what was measured: this says what *this emulator* does, not what a production scheduler does.",
+  "evidence": "instance: i2883228076; parked at Running; raised (none)\nscheduler stopped? yes\nanswering process: exit 1 — extension-app: Status(StatusCode=\"Unavailable\", Detail=\"Error connecting to subchannel.\", DebugException=\"System.Net.Sockets.SocketException: Connection refused\")\nafter: status (absent); raised (none)\n  history: ",
+  "measurements": {
+    "scheduler_image_digest": "sha256:82ceb7df2fdfc2e22b0013c7b87b7a8e443bcd220d4fb37c32ced8ee23438719",
+    "drive_exit": 1,
+    "status_at_gate": "Running",
+    "status_after": "(absent)",
+    "raised_before_outage": "(none)",
+    "raised_after": "none"
+  },
+  "harness": {
+    "dotnet": "10.0.402",
+    "runtime": "Durable Task Scheduler emulator (docker image mcr.microsoft.com/dts/dts-emulator:latest) + Microsoft.DurableTask.Client/Worker.AzureManaged 1.28.0",
+    "model": "none — the vendored sample's executors call no model; no call count exists in this column",
+    "commit": "d9d475d2136d8d8fe86a05b12d8737c06b697c5e",
+    "command": "./faults/extension.sh --fault store-outage"
+  },
+  "recordedAt": "2026-11-05T20:15:58.316423+00:00"
+}
