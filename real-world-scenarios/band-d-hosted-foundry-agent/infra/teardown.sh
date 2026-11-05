@@ -21,6 +21,13 @@
 # query itself failed; a failed `az resource list` aborts the run instead of
 # reading as "nothing left".
 #
+# Three checks make up the verification, and they cover different mistakes:
+#   - each group is absent            (the delete worked)
+#   - no soft-deleted account remains (the *name* is free, so provision.sh can run)
+#   - no resource anywhere in the subscription carries this deployment's uniqueString
+#                                     (nothing was created outside the group and left
+#                                      behind by a run that only checked the group)
+#
 # Idempotent by construction: a missing group is a success. A second invocation
 # prints "already absent" and exits 0.
 #
@@ -215,19 +222,42 @@ if [ "${PURGE:-1}" = "1" ]; then
   else
     purge_cognitive "$RG"
   fi
-  # A purge is asynchronous: the record moves to Deleting and disappears.
-  for i in $(seq 1 60); do
-    left="$(az rest --method GET \
+  # A purge is asynchronous: the record moves to Deleting and disappears. Poll every
+  # group this run touched, not just $RG — wait for all of them, because a purge that is
+  # still in flight at exit is a teardown that will fail the next provision.sh.
+  purge_pending() { # prints the groups that still have a deleted account listed
+    local listing g
+    listing="$(az rest --method GET \
       --url "https://management.azure.com/subscriptions/$SUB/providers/Microsoft.CognitiveServices/deletedAccounts?api-version=2025-06-01" \
-      --query "value[?contains(id,'/resourceGroups/$RG/')].name" -o tsv)" || {
+      -o json)" || {
       echo "teardown.sh: re-reading soft-deleted accounts failed; refusing to report anything." >&2
       exit 1
     }
-    if [ -z "${left//[$'\n']/}" ]; then
-      echo "  [${i}] $RG: no soft-deleted account remains"
+    for g in "$@"; do
+      printf '%s' "$listing" | python3 -c '
+import json, sys
+group = sys.argv[1]
+for account in json.load(sys.stdin).get("value") or []:
+    if "/resourceGroups/" + group + "/" in (account.get("id") or ""):
+        print(group)
+        break
+' "$g"
+    done
+  }
+
+  PURGE_GROUPS="$RG ${EXTRA_GROUPS:-}"
+  for i in $(seq 1 60); do
+    still="$(purge_pending $PURGE_GROUPS)"
+    if [ -z "${still//[$'\n']/}" ]; then
+      echo "  [${i}] no soft-deleted account remains in: $(echo $PURGE_GROUPS)"
       break
     fi
-    echo "  [${i}] $RG: soft-deleted account(s) still listed: ${left//$'\n'/, }"
+    echo "  [${i}] still listed: ${still//$'\n'/, }"
+    if [ "$i" = "60" ]; then
+      echo "teardown.sh: a purge is still in flight after 10 minutes." >&2
+      echo "             The name stays reserved until it finishes; this is not a clean teardown." >&2
+      exit 2
+    fi
     sleep 10
   done
 else
@@ -272,6 +302,51 @@ if [ "${PURGE:-1}" = "1" ]; then
       echo "  $g: no soft-deleted cognitive account, name is free for re-provisioning"
     fi
   done
+fi
+
+# --- leftovers outside the group --------------------------------------------
+#
+# Every check above is scoped to the groups this run deleted, which would also pass if a
+# resource had been created in a *different* group under one of this deployment's names.
+# This one does not assume the group exists: it lists the whole subscription and looks for
+# any resource carrying the deployment's own uniqueString.
+#
+# The token is derived, not guessed: every provisioned name is `<prefix>-<token>` where
+# token = uniqueString(subscription, namePrefix, location), so the account name's suffix
+# is the token. When .deployment.json is gone there is nothing to derive it from, and the
+# check says so instead of passing silently on an assumption.
+echo "teardown: leftovers outside the group"
+LEFTOVER_TOKEN=""
+if [ -f "$RECORD" ]; then
+  LEFTOVER_TOKEN="$(python3 - "$RECORD" <<'PY'
+import json, sys
+try:
+    o = json.load(open(sys.argv[1]))
+except Exception:
+    print(""); raise SystemExit
+name = (o.get("foundryAccountName") or {}).get("value") or ""
+print(name[4:] if name.startswith("aif-") else "")
+PY
+)"
+fi
+
+if [ -n "$LEFTOVER_TOKEN" ]; then
+  # A failed query aborts: an empty list must only ever come from a query that succeeded.
+  leftover="$(az resource list --subscription "$SUB" \
+    --query "[?contains(name,'$LEFTOVER_TOKEN')].id" -o tsv)" || {
+    echo "teardown.sh: 'az resource list' over the subscription failed; refusing to report anything." >&2
+    exit 1
+  }
+  if [ -n "${leftover//[$'\n']/}" ]; then
+    echo "  resources carrying '$LEFTOVER_TOKEN' still exist outside the deleted group(s):" >&2
+    printf '%s\n' "$leftover" | sed 's/^/    /' >&2
+    STATUS=2
+  else
+    echo "  no resource outside the deleted group(s) carries '$LEFTOVER_TOKEN'"
+  fi
+else
+  echo "  skipped: no .deployment.json to derive the deployment's uniqueString from"
+  echo "           (set SUBSCRIPTION_ID and keep .deployment.json for a complete check)"
 fi
 
 if [ "$STATUS" -ne 0 ]; then
