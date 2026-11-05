@@ -55,6 +55,7 @@ whatever the process died after — there is no timer and no window to miss.
 | 6f | A kill between a turn's answer and its boundary — the only state the reconciliation can act on. |
 | 6g | Resuming that store **must** run the reconciliation; the stage fails if the marker line is absent. |
 | 6h | A forged store whose baseline precedes several turns must be **refused**, not guessed at. |
+| 6i | A store whose baseline is recorded twice must not resolve an **earlier** turn. |
 
 ## What the runs show about checkpoint boundaries
 
@@ -92,6 +93,12 @@ those stages are deliberate:
   turn checkpoints let the guard attach a *different* turn's answer. The lookup now groups
   candidates by event id and returns an answer only when they name exactly one turn; stage 6h
   forges a store with four and asserts the guard declines.
+- **Stage 6i is the positional half of the same bug.** Replay commits the same turn checkpoint more
+  than once, so the recorded baseline can appear twice with an *earlier* turn between the two
+  occurrences. Anchoring on the first occurrence makes that earlier turn look like a later
+  candidate; the lookup anchors on the **last** occurrence and discards any turn already seen at or
+  before it. With the first-match anchor restored, the marker fires on this store; with the fix it
+  does not, and the stage fails the run if it does.
 
 ## What stage 6 does and does not measure
 
@@ -115,19 +122,19 @@ stage 6's number is a recorded-runtime **upper bound**.
 
 ```
 ############ 0. an uninterrupted run of the fixture, for every comparison below ############
-PropertyDatabase: seeded 100 properties from /private/var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-a-durable-evidence.mcZ5Nc/app/Data/Properties
+PropertyDatabase: seeded 100 properties from /private/var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-a-durable-evidence.kttCcb/app/Data/Properties
 store:          <scratch>/clean.jsonl
 store persists: True
 conversations:  0
 tasks:          0
-created enquiry 9a2c1d48
+created enquiry 840753f7
 submitted 1 enquiry
 waiting on task t11 (checkpoint at start: queued/0)
-enquiry 9a2c1d48 settled at done
+enquiry 840753f7 settled at done
 task t11 finished: completed
   store record: t11 Terminal enquiryPhase=queued turns=1
 
-enquiry 9a2c1d48 [c1]
+enquiry 840753f7 [c1]
   phase:    done
   intent:   Searching listings
   restarts: 0
@@ -155,7 +162,7 @@ store:          <scratch>/restart.jsonl
 store persists: True
 conversations:  0
 tasks:          0
-created enquiry 6de87437
+created enquiry 0cf72707
 submitted 1 enquiry
 waiting on task t11 (checkpoint at start: queued/0)
 BAND_A_EXIT_AFTER_PHASE=searching: committed, exiting the process mid-enquiry (exit code 42)
@@ -169,10 +176,10 @@ tasks:          1
 resumed 1 unfinished enquiry
 resumed tasks:  1
   t11 resumes: the enquiry is committed at phase searching, after 0 completed pass(es)
-enquiry 6de87437 settled at done
+enquiry 0cf72707 settled at done
   t11 finished: completed
 
-enquiry 6de87437 [c1]
+enquiry 0cf72707 [c1]
   phase:    done
   intent:   Searching listings
   restarts: 1
@@ -201,7 +208,7 @@ store:          <scratch>/rejected.jsonl
 store persists: True
 conversations:  0
 tasks:          0
-created enquiry 14e9ad7d
+created enquiry 67d88008
 submitted 1 enquiry
 waiting on task t11 (checkpoint at start: queued/0)
 task t11 finished: completed
@@ -212,13 +219,13 @@ late wakeup: the enquiry is committed at rejected_garbage
   wakeup validating         (a resumed task restarting the pipeline) -> refused; enquiry stays rejected_garbage
   wakeup searching          (a stale phase report) -> refused; enquiry stays rejected_garbage
   wakeup writing_report     (a driver transition) -> refused; enquiry stays rejected_garbage
-enquiry 14e9ad7d settled at rejected_garbage
+enquiry 67d88008 settled at rejected_garbage
   wakeup tool search_properties (a search that finished after the rejection) -> refused; tool answered "refused by the terminal guard:…", entries 4
   wakeup tool report_intent    (an intent reported after the rejection) -> refused; tool answered "refused by the terminal guard:…", entries 4
   wakeup attach-report       -> refused; report unchanged
   final phase: rejected_garbage, entries unchanged at 4: the terminal state held
 
-enquiry 14e9ad7d [c1]
+enquiry 67d88008 [c1]
   phase:    rejected_garbage
   intent:   Checking enquiry
   restarts: 0
@@ -239,10 +246,10 @@ store:          <scratch>/rejected-tool.jsonl
 store persists: True
 conversations:  0
 tasks:          0
-created enquiry cb8ce9e7
+created enquiry d3faa060
 submitted 1 enquiry
 waiting on task t11 (checkpoint at start: queued/0)
-enquiry cb8ce9e7 settled at rejected_garbage
+enquiry d3faa060 settled at rejected_garbage
 task t11 finished: completed
   store record: t11 Terminal enquiryPhase=queued turns=1
 
@@ -258,7 +265,7 @@ late wakeup: the enquiry is committed at rejected_garbage
   wakeup attach-report       -> refused; report unchanged
   final phase: rejected_garbage, entries unchanged at 4: the terminal state held
 
-enquiry cb8ce9e7 [c1]
+enquiry d3faa060 [c1]
   phase:    rejected_garbage
   intent:   Checking enquiry
   restarts: 0
@@ -292,7 +299,7 @@ store:          <scratch>/done.jsonl
 store persists: True
 conversations:  0
 tasks:          0
-created enquiry 01031e97
+created enquiry ef72cd12
 submitted 1 enquiry
 waiting on task t11 (checkpoint at start: queued/0)
 BAND_A_EXIT_AFTER_PHASE=done: committed, exiting the process mid-enquiry (exit code 42)
@@ -306,10 +313,10 @@ tasks:          1
 resumed 1 unfinished enquiry
 resumed tasks:  1
   t11 resumes: the enquiry is committed at phase done, after 0 completed pass(es)
-enquiry 01031e97 settled at done
+enquiry ef72cd12 settled at done
   t11 finished: completed
 
-enquiry 01031e97 [c1]
+enquiry ef72cd12 [c1]
   phase:    done
   intent:   Searching listings
   restarts: 1
@@ -340,7 +347,7 @@ store:          <scratch>/done-answer.jsonl
 store persists: True
 conversations:  0
 tasks:          0
-created enquiry 36c42cae
+created enquiry fa4c3d24
 submitted 1 enquiry
 waiting on task t11 (checkpoint at start: queued/0)
 BAND_A_EXIT_AFTER_ANSWER=queued: the answer is committed and the process exits before the task boundary (exit code 42)
@@ -354,9 +361,9 @@ resumed 1 unfinished enquiry
 resumed tasks:  1
   t11 resumes: the enquiry is committed at phase done, after 0 completed pass(es)
   t11 finished: completed
-enquiry 36c42cae settled at done
+enquiry fa4c3d24 settled at done
 
-enquiry 36c42cae [c1]
+enquiry fa4c3d24 [c1]
   phase:    done
   intent:   Searching listings
   restarts: 1
@@ -389,11 +396,10 @@ store:          <scratch>/concurrent.jsonl
 store persists: True
 conversations:  0
 tasks:          0
-created enquiry 4034062e
-created enquiry 8d6b7ed9
+created enquiry 56447064
+created enquiry d12ebbd6
 submitted 2 enquiries, all before any was awaited
 waiting on task t11 (checkpoint at start: queued/0)
-enquiry 8d6b7ed9 settled at done
 task t11 finished: completed
   store record: t11 Terminal enquiryPhase=queued turns=1
 waiting on task t34 (checkpoint at start: queued/1)
@@ -406,7 +412,7 @@ isolation: 2 documents checked
   entry ids are disjoint, every entry belongs to its own conversation,
   and no two documents share an enquiry or a task: no cross-talk
 
-enquiry 4034062e [c1]
+enquiry 56447064 [c1]
   phase:    done
   intent:   Checking customer one
   restarts: 0
@@ -422,7 +428,7 @@ enquiry 4034062e [c1]
     report: Customer one is done.
   report:   Customer one is done.
 
-enquiry 8d6b7ed9 [c18]
+enquiry d12ebbd6 [c18]
   phase:    done
   intent:   Checking customer one
   restarts: 0
@@ -449,7 +455,7 @@ store:          <scratch>/contend.jsonl
 store persists: True
 conversations:  0
 tasks:          0
-created enquiry 6b2a6ad9
+created enquiry fb926c6e
 submitted 1 enquiry
 waiting on task t11 (checkpoint at start: queued/0)
 task t11 finished: completed
@@ -469,7 +475,7 @@ contention: 8 writers raced c1 — commit gate: half the writers aim at writing_
   phase after:        done
   transcript gained:  2 entr(ies)
 
-enquiry 6b2a6ad9 [c1]
+enquiry fb926c6e [c1]
   phase:    done
   intent:   Searching listings
   restarts: 0
@@ -498,7 +504,7 @@ store:          <scratch>/midturn.jsonl
 store persists: True
 conversations:  0
 tasks:          0
-created enquiry c113382c
+created enquiry bbb839ad
 submitted 1 enquiry
 waiting on task t11 (checkpoint at start: queued/0)
 BAND_A_EXIT_AFTER_PHASE=writing_report: committed, exiting the process mid-enquiry (exit code 42)
@@ -513,9 +519,10 @@ tasks:          1
 resumed 1 unfinished enquiry
 resumed tasks:  1
   t11 resumes: the enquiry is committed at phase writing_report, after 0 completed pass(es)
+enquiry bbb839ad settled at done
   t11 finished: completed
 
-enquiry c113382c [c1]
+enquiry bbb839ad [c1]
   phase:    done
   intent:   Searching listings
   restarts: 1
@@ -557,14 +564,14 @@ store:          <scratch>/twosends.jsonl
 store persists: True
 conversations:  0
 tasks:          0
-created enquiry b140e345
+created enquiry 3e7a5f30
 submitted 1 enquiry
 waiting on task t11 (checkpoint at start: queued/0)
-enquiry b140e345 settled at done
+enquiry 3e7a5f30 settled at done
 task t11 finished: completed
   store record: t11 Terminal enquiryPhase=writing_report turns=4
 
-enquiry b140e345 [c1]
+enquiry 3e7a5f30 [c1]
   phase:    done
   intent:   Write report
   restarts: 0
@@ -596,7 +603,7 @@ store:          <scratch>/settled.jsonl
 store persists: True
 conversations:  0
 tasks:          0
-created enquiry 0bfb70ef
+created enquiry b84468d5
 submitted 1 enquiry
 waiting on task t11 (checkpoint at start: queued/0)
 BAND_A_EXIT_AFTER_ANSWER=searching: the answer is committed and the process exits before the task boundary (exit code 42)
@@ -611,10 +618,10 @@ reconciliation: the interrupted turn already answered; reusing that answer inste
 resumed 1 unfinished enquiry
 resumed tasks:  1
   t11 resumes: the enquiry is committed at phase searching, after 2 completed pass(es)
-enquiry 0bfb70ef settled at done
+enquiry b84468d5 settled at done
   t11 finished: completed
 
-enquiry 0bfb70ef [c1]
+enquiry b84468d5 [c1]
   phase:    done
   intent:   Write report
   restarts: 1
@@ -654,4 +661,12 @@ task records in the store:
 disposing store…
 disposed.
 6h held: with more than one candidate turn the guard refused rather than guessing
+
+############ 6i. a duplicated baseline must not resolve an EARLIER turn ############
+  forged: turn:two-0002 / turn:two-0004 / turn:two-0002 -- the baseline is recorded twice
+task records in the store:
+  t11 band-a.enquiry Terminal enquiryPhase=searching turns=1 restarts=1
+disposing store…
+disposed.
+6i held: the duplicated baseline did not resolve an earlier turn
 ```

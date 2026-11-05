@@ -285,16 +285,30 @@ public sealed class EnquiryStore : IAsyncDisposable
             .Select(version => version.Value.Deserialize<ConversationCheckpoint>(DurableJson.Options))
             .ToList();
 
-        var baselineAt = values.FindIndex(checkpoint =>
+        // The baseline is the *last* occurrence, not the first. A resumed process replays a session
+        // and re-commits checkpoints it has already written, so the same event id appears more than
+        // once; anchoring on the first occurrence would split the document in the wrong place and
+        // let an older turn reappear as a candidate.
+        var baselineAt = values.FindLastIndex(checkpoint =>
             string.Equals(checkpoint?.EventId, seenEventId, StringComparison.Ordinal));
         if (baselineAt < 0)
         {
             return null;
         }
 
+        // A turn already recorded at or before the baseline cannot be the one this task was
+        // running: if it reappears afterwards that is a replay of older work, not a new turn. The
+        // monotonic check is what keeps a duplicated baseline from re-resolving an earlier turn.
+        var beforeBaseline = values
+            .Take(baselineAt + 1)
+            .Where(checkpoint => checkpoint is { Kind: "turn", EventId.Length: > 0 })
+            .Select(checkpoint => checkpoint!.EventId!)
+            .ToHashSet(StringComparer.Ordinal);
+
         var laterTurns = values
             .Skip(baselineAt + 1)
             .Where(checkpoint => checkpoint is { Kind: "turn", EventId.Length: > 0 })
+            .Where(checkpoint => !beforeBaseline.Contains(checkpoint!.EventId!))
             .GroupBy(checkpoint => checkpoint!.EventId, StringComparer.Ordinal)
             .ToList();
 

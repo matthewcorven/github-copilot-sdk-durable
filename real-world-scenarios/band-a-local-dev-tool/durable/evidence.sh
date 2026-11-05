@@ -237,3 +237,17 @@ if grep -q 'reconciliation: the interrupted turn already answered' <<<"$ambiguou
   exit 1
 fi
 echo "6h held: with more than one candidate turn the guard refused rather than guessing"
+echo
+echo "############ 6i. a duplicated baseline must not resolve an EARLIER turn ############"
+# The nit, made adversarial. Replay commits the same turn checkpoint more than once, so the recorded
+# baseline can appear twice with an earlier turn between the occurrences. Anchoring on the first
+# occurrence makes that earlier turn a candidate and the guard "resolves" a turn the task had
+# already consumed; anchoring on the last makes it refuse. This stage fails if the marker fires.
+python3 "$HERE/forge-duplicate-baseline.py" "$SCRATCH/settled.jsonl" "$SCRATCH/duplicated.jsonl"
+duplicated="$(run "$SCRATCH/duplicated.jsonl" two-sends.json --resume)"
+echo "$duplicated" | sed "s|$SCRATCH|<scratch>|g" | tail -4
+if grep -q 'reconciliation: the interrupted turn already answered' <<<"$duplicated"; then
+  echo "6i FAILED: a duplicated baseline resolved an earlier turn" >&2
+  exit 1
+fi
+echo "6i held: the duplicated baseline did not resolve an earlier turn"

@@ -56,8 +56,9 @@ made it:
   *after* that baseline — but only when the candidates name exactly one turn. The resume then
   writes that answer to the transcript and continues *without sending the prompt again*. Stages
   6f/6g exercise this on the two-send fixture; 6g fails if the reconciliation does not run. Stage
-  6h forges a store whose baseline precedes two different turns and requires the guard to refuse
-  rather than attach the wrong one.
+  6h forges a store whose baseline precedes several different turns and requires the guard to
+  refuse rather than attach the wrong one; 6i duplicates the baseline itself, which replay does
+  legitimately, and requires the guard not to resolve an earlier turn from the first occurrence.
 - **The answer did not commit.** Nothing durable says the turn ran, so it is sent again and its
   effects happen twice. Stage 6 measures this on the recorded runtime.
 
