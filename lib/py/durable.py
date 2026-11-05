@@ -566,6 +566,26 @@ def _camel(name: str) -> str:
     return head + "".join(part[:1].upper() + part[1:] for part in tail)
 
 
+def _settlement_for(error: BaseException) -> TaskOutcome:
+    """The outcome a waiter is given when a run faults outside its phase handlers."""
+    return TaskOutcome.failed(str(error) or type(error).__name__)
+
+
+def _json_kind_of(value: object) -> str:
+    """The JSON name of a parsed value's kind, for error messages."""
+    if value is None:
+        return "Null"
+    if isinstance(value, bool):
+        return "Boolean"
+    if isinstance(value, (int, float)):
+        return "Number"
+    if isinstance(value, str):
+        return "String"
+    if isinstance(value, list):
+        return "Array"
+    return "Object"
+
+
 async def _sleep(delay: float, cancellation: asyncio.Event | None) -> None:
     """Sleeps for ``delay`` seconds, waking early when ``cancellation`` is set."""
     if cancellation is None:
@@ -4203,8 +4223,19 @@ class DurableHarness:
                         completion.set_result(missing)
                     return missing
                 return await self._run_task_core_async(task_id, record, completion, cancellation)
+            except asyncio.CancelledError:
+                self._task_failures.append(asyncio.CancelledError())
+                raise
             except BaseException as error:
+                # Nothing observes this run: it is started fire-and-forget by the create,
+                # start and resume paths. A fault that escapes the core loop has to settle
+                # the completion source, or every waiter waits for an outcome that never
+                # comes. The run still fails, so a caller awaiting it -- resume_async, say
+                # -- is told why.
                 self._task_failures.append(error)
+                failed = _settlement_for(error)
+                if not completion.done():
+                    completion.set_result(failed)
                 raise
             finally:
                 _active_task.reset(token)
@@ -4265,6 +4296,17 @@ class DurableHarness:
             phase = "run"
             if isinstance(checkpoint, Mapping):
                 raw = checkpoint.get("phase")
+                if raw is not None and not isinstance(raw, str):
+                    # A phase is the name of a handler, so a checkpoint that carries
+                    # anything but a string is a definition error. Report it rather than
+                    # silently treating the task as being at its first phase.
+                    await self._store.commit_task_async(
+                        task_id,
+                        lambda: TaskCommit.failed(
+                            f"checkpoint phase must be a string, found {_json_kind_of(raw)}"
+                        ),
+                    )
+                    break
                 if isinstance(raw, str):
                     phase = raw
 

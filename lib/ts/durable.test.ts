@@ -2075,6 +2075,56 @@ test("review: draining parent can commit and schedule a dependent child but exte
   } finally { release.resolve(); store.dispose(); }
 });
 
+test("review: a numeric checkpoint phase fails the task instead of hanging the waiter", { timeout: 5000 }, async () => {
+  const store = DurableStore.createEphemeral();
+  const definition = DurableTask.definePhases("numeric-phase", () => ({ phase: "run" }),
+    new Map<string, import("./durable.js").PhaseHandler<import("./durable.js").JsonValue, { phase: string }>>([
+      ["run", async (_input, _checkpoint, runtime) => runtime.commitAsync(() => TaskCommit.completed(1))],
+    ]));
+  const registry = new ExtensionRegistry();
+  registry.install(new Extension("numeric-phase", [], [], [definition]));
+  const runner = new DurableTaskRunner(store, registry);
+  const record = await store.commitAsync(tx => tx.createTask(definition, null));
+  const task = store.task(record.id)!;
+  task.checkpoint = { phase: 0 };
+  store.storeProvider.updateTask(task);
+  await store.commitAsync(() => undefined);
+
+  const outcome = await runner.waitForTaskAsync(record.id);
+  assert.equal(outcome.status, "failed");
+  assert.match(outcome.error ?? "", /checkpoint phase must be a string, found Number/);
+  assert.equal(store.task(record.id)!.status, TaskStatus.Terminal, "the store agrees with the waiter");
+  store.dispose();
+});
+
+test("review: a store fault outside the phase handlers surfaces instead of hanging", { timeout: 5000 }, async () => {
+  const store = DurableStore.createEphemeral();
+  const definition = DurableTask.definePhases("store-fault", () => ({ phase: "run" }),
+    new Map<string, import("./durable.js").PhaseHandler<import("./durable.js").JsonValue, { phase: string }>>([
+      ["run", async (_input, _checkpoint, runtime) => runtime.commitAsync(() => TaskCommit.completed(1))],
+    ]));
+  const registry = new ExtensionRegistry();
+  registry.install(new Extension("store-fault", [], [], [definition]));
+  const runner = new DurableTaskRunner(store, registry);
+  const record = await store.commitAsync(tx => tx.createTask(definition, null));
+  const task = store.task(record.id)!;
+  task.checkpoint = { phase: 0 };
+  store.storeProvider.updateTask(task);
+
+  // Committing the failure for the bad phase is outside the phase handler's try, so the
+  // store itself throws and the exception leaves the phase loop.
+  const commit = store.commitTaskCheckpointAsync.bind(store);
+  mock.method(store, "commitTaskCheckpointAsync", async (...[id, body]: Parameters<DurableStore["commitTaskCheckpointAsync"]>) => {
+    if (id === record.id) throw new Error("checkpoint storage failed");
+    return commit(id, body);
+  });
+
+  // The run rejects rather than hanging, and the rejection is what waitForTask reports.
+  await assert.rejects(runner.waitForTaskAsync(record.id), /checkpoint storage failed/);
+  assert.equal(runner.failures.at(-1)?.message, "checkpoint storage failed", "the fault is recorded, not swallowed");
+  store.dispose();
+});
+
 test("review: waitForTask propagates scheduling rejection instead of an unresolved completion", { timeout: 1000 }, async () => {
   const store = DurableStore.createEphemeral();
   const runner = new DurableTaskRunner(store, new ExtensionRegistry());

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Durable;
 using GitHub.Copilot;
 using Xunit;
@@ -174,6 +175,166 @@ public class TaskResumeTests
             tx.CreateTask(definition, DurableJson.ToElement(new Dictionary<string, int> { ["target"] = target }))));
 
         return record.Id;
+    }
+
+    [Fact]
+    public async Task ResumeAsync_NumericPhase_FailsTheTaskAndReportsWhy()
+    {
+        var store = DurableStore.CreateEphemeral();
+        var registry = new ExtensionRegistry();
+        var definition = CounterTask();
+        registry.Install(new Extension("counter", tasks: [definition]));
+
+        await using var harness = await DurableHarness.OpenAsync(store, registry);
+
+        // JsonSerializerDefaults.Web serializes an enum as a number, so a checkpoint
+        // whose phase property is enum-typed is written like this.
+        var taskId = await SeedTaskAsync(
+            store,
+            definition,
+            DurableJson.ToElement(new Dictionary<string, JsonElement> { ["phase"] = DurableJson.ToElement(0) }));
+
+        // A run that escapes core used to leave the waiter here forever. The timeout is
+        // the assertion: a hang fails the test instead of holding it open.
+        var outcomes = await harness.ResumeAsync().WaitAsync(TimeSpan.FromSeconds(30));
+
+        var outcome = Assert.Single(outcomes);
+        Assert.Equal("failed", outcome.Status);
+        Assert.Contains("checkpoint phase must be a string", outcome.Error);
+        Assert.Contains("Number", outcome.Error);
+
+        // The store agrees with the waiter: a supervisor polling it sees a failed task,
+        // not one stuck Running.
+        var record = store.Task(taskId)!;
+        Assert.Equal(TaskStatus.Terminal, record.Status);
+        Assert.NotNull(record.Outcome);
+    }
+
+    [Fact]
+    public async Task WaitForTaskAsync_AThrowingPhaseRead_StillSettles()
+    {
+        var store = DurableStore.CreateEphemeral();
+        var registry = new ExtensionRegistry();
+        var definition = CounterTask();
+        registry.Install(new Extension("counter", tasks: [definition]));
+
+        await using var client = new DurableClientBuilder()
+            .UseStore(store)
+            .UseRegistry(registry)
+            .UseClient(UnstartedClient())
+            .Build();
+
+        var taskId = await SeedTaskAsync(
+            store,
+            definition,
+            DurableJson.ToElement(new Dictionary<string, JsonElement> { ["phase"] = DurableJson.ToElement(true) }));
+
+        var outcome = await client.WaitForTaskAsync(taskId).WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal("failed", outcome.Status);
+        Assert.Contains("found Boolean", outcome.Error);
+    }
+
+    [Fact]
+    public async Task RunTaskAsync_ARunThatFaultsOutsideThePhaseHandler_SettlesTheStoreAndTheWaiter()
+    {
+        var store = DurableStore.CreateEphemeral();
+        var registry = new ExtensionRegistry();
+
+        // A checkpoint value that serializes to something a JSON object can hold but a
+        // phase name cannot: the read is the only thing that can fail here.
+        var definition = DurableTask.DefinePhases<Dictionary<string, int>, Dictionary<string, string>>(
+            "test.throwing",
+            () => new Dictionary<string, string> { ["phase"] = "step", ["n"] = "0" },
+            new Dictionary<string, Func<Dictionary<string, int>, Dictionary<string, string>, TaskRuntime, Task<TaskCommit>>>
+            {
+                ["step"] = (_, _, runtime) => runtime.CommitAsync(() => TaskCommit.Completed(DurableJson.ToElement(1))),
+            },
+            (_, _, runtime) => runtime.CommitAsync(() => TaskCommit.Aborted()));
+        registry.Install(new Extension("throwing", tasks: [definition]));
+
+        await using var harness = await DurableHarness.OpenAsync(store, registry);
+
+        var taskId = await SeedTaskAsync(
+            store,
+            definition,
+            DurableJson.ToElement(new Dictionary<string, JsonElement> { ["phase"] = DurableJson.ToElement(3.5) }));
+
+        var outcome = await harness.RunTaskAsync(taskId).WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal("failed", outcome.Status);
+        Assert.Equal(TaskStatus.Terminal, store.Task(taskId)!.Status);
+    }
+
+    [Fact]
+    public async Task WaitForTaskAsync_AFaultOutsideThePhaseLoop_SettlesInsteadOfHanging()
+    {
+        // The phase read cannot throw any more, so this needs a fault from elsewhere in the
+        // loop. Committing the failure for a bad phase is outside the handler's try: if the
+        // store throws there, the exception leaves RunTaskCoreAsync and only the settle in
+        // RunTaskAsync can stop the waiter hanging.
+        var provider = new FailOnceProvider();
+        var store = DurableStore.Create(new DurableStoreOptions { Provider = _ => provider });
+        var registry = new ExtensionRegistry();
+        var definition = CounterTask();
+        registry.Install(new Extension("counter", tasks: [definition]));
+
+        await using var client = new DurableClientBuilder()
+            .UseStore(store)
+            .UseRegistry(registry)
+            .UseClient(UnstartedClient())
+            .Build();
+
+        var taskId = await SeedTaskAsync(
+            store,
+            definition,
+            DurableJson.ToElement(new Dictionary<string, JsonElement> { ["phase"] = DurableJson.ToElement(0) }));
+        provider.FailPhaseCommit = true;
+
+        // Before the settle, this awaited a completion source nothing would ever settle:
+        // the guard is what turns that into a failure rather than a hung test run.
+        var outcome = await client.WaitForTaskAsync(taskId).WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal("failed", outcome.Status);
+        Assert.Equal("checkpoint storage failed", outcome.Error);
+    }
+
+    /// <summary>
+    /// An in-memory provider whose commit throws once the test arms it, so a fault can be
+    /// raised from outside the phase handlers.
+    /// </summary>
+    private sealed class FailOnceProvider : InMemoryStoreProvider
+    {
+        /// <summary>Armed after the task is seeded, so only the run under test fails.</summary>
+        public bool FailPhaseCommit { get; set; }
+
+        public override void Commit()
+        {
+            if (FailPhaseCommit)
+            {
+                FailPhaseCommit = false;
+                throw new InvalidOperationException("checkpoint storage failed");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Writes a task record without scheduling it, with an arbitrary initial checkpoint.
+    /// </summary>
+    private static async Task<string> SeedTaskAsync(
+        DurableStore store,
+        DurableTaskDefinition definition,
+        JsonElement checkpoint)
+    {
+        var record = await store.CommitAsync(tx => Task.FromResult(
+            tx.CreateTask(definition, DurableJson.ToElement(new Dictionary<string, int> { ["target"] = 1 }))));
+
+        var task = store.Task(record.Id)!;
+        task.Checkpoint = checkpoint;
+        store.Provider.UpdateTask(task);
+        await store.CommitAsync(_ => Task.CompletedTask);
+
+        return task.Id;
     }
 
     private static CopilotClient UnstartedClient() => new(new CopilotClientOptions

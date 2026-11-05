@@ -2382,6 +2382,28 @@ export class DurableTaskRunner {
       await this.store.commitAsync(() => undefined);
     }
 
+    try {
+      return await this.runPhasesAsync(taskId, record, definition, completion, cancellationToken);
+    } catch (error) {
+      // Nothing observes this run: it is started fire-and-forget by the create, start
+      // and resume paths. A fault that escapes the phase loop -- a store commit that
+      // rejects, say -- has to settle the completion source, or every waiter waits for
+      // an outcome that never comes.
+      const failure = error instanceof Error ? error : new Error(String(error));
+      this.failures.push(failure);
+      completion.resolve(new TaskOutcome("failed", null, failure.message));
+      throw failure;
+    }
+  }
+
+  /** Runs the phase loop, returning the task's outcome. */
+  private async runPhasesAsync(
+    taskId: string,
+    record: DurableTaskRecord,
+    definition: DurableTaskDefinition,
+    completion: Deferred<TaskOutcome>,
+    cancellationToken: AbortSignal,
+  ): Promise<TaskOutcome> {
     const runtime = new TaskRuntime(this.store, record, definition, cancellationToken);
     while (!cancellationToken.aborted) {
       // The task may have been aborted while it was waiting on its children. An abort
@@ -2391,7 +2413,13 @@ export class DurableTaskRunner {
         break;
       }
 
-      const phase = phaseOf(record.checkpoint);
+      const resolved = phaseOf(record.checkpoint);
+      if ("error" in resolved) {
+        await this.store.commitTaskCheckpointAsync(taskId, () => TaskCommit.failed(resolved.error));
+        break;
+      }
+
+      const phase = resolved.phase;
       const handler = definition.phases.get(phase);
       if (handler === undefined) {
         await this.store.commitTaskCheckpointAsync(taskId, () => TaskCommit.failed(`unknown phase ${phase}`));
@@ -2461,16 +2489,40 @@ export class DurableTaskRunner {
   }
 }
 
-/** The phase a checkpoint names, defaulting to `run`. */
-function phaseOf(checkpoint: JsonValue): string {
-  if (checkpoint !== null && typeof checkpoint === "object" && !Array.isArray(checkpoint)) {
-    const phase = (checkpoint as JsonObject)["phase"];
-    if (typeof phase === "string") {
-      return phase;
-    }
+/**
+ * The phase a checkpoint names, defaulting to `run`. A phase is the name of a handler,
+ * so a checkpoint that carries anything but a string is a definition error: it is
+ * reported rather than silently treated as `run`.
+ */
+function phaseOf(checkpoint: JsonValue): { phase: string } | { error: string } {
+  if (checkpoint === null || typeof checkpoint !== "object" || Array.isArray(checkpoint)) {
+    return { phase: "run" };
   }
 
-  return "run";
+  const phase = (checkpoint as JsonObject)["phase"];
+  if (phase === undefined || phase === null) {
+    return { phase: "run" };
+  }
+
+  return typeof phase === "string"
+    ? { phase }
+    : { error: `checkpoint phase must be a string, found ${jsonKindOf(phase)}` };
+}
+
+/** The JSON name of a parsed value's kind, for error messages. */
+function jsonKindOf(value: JsonValue): string {
+  if (value === null) return "Null";
+  if (Array.isArray(value)) return "Array";
+  switch (typeof value) {
+    case "number":
+      return "Number";
+    case "boolean":
+      return "Boolean";
+    case "object":
+      return "Object";
+    default:
+      return typeof value;
+  }
 }
 
 /** A promise with its resolver exposed. The counterpart of `TaskCompletionSource<T>`. */
