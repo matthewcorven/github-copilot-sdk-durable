@@ -33,7 +33,7 @@ application.
 | `infra/provision.sh` | `az deployment sub create` against `infra/main.bicep`, writes `.deployment.json`. |
 | `infra/deploy.sh` | Build + push both agent images, grant the roles Foundry needs, register both agent versions, wait for `active`, write `deployment.env`. |
 | `infra/invoke.sh` | One four-step run (coverage → synthesis → decision applied → final result) with every input/output saved. The decision step replays the accelerator backend's rules; it is not a human round-trip. |
-| `infra/teardown.sh` | Deletes the resource group on the subscription `provision.sh` recorded, waits, and treats a failed `az` call as a failure rather than as "nothing left". Idempotent. |
+| `infra/teardown.sh` | Deletes the resource group on the subscription `provision.sh` recorded, **purges the soft-deleted Cognitive Services account the delete leaves behind**, waits, and treats a failed `az` call as a failure rather than as "nothing left". Idempotent. |
 | `evidence/` | Captured transcripts. Index below. |
 
 ## Cost, and teardown
@@ -72,6 +72,20 @@ Everything is deleted by:
 ```
 
 which is what this issue ran last; see `evidence/teardown.md`.
+
+**Teardown has two halves, and the second one was added by D3.** Deleting the group frees
+the resources; the Cognitive Services account then sits in a *soft-deleted* list under a
+name that is still reserved, so re-running `provision.sh` with the same `NAME_PREFIX`
+fails preflight with `FlagMustBeSetForRestore`. `teardown.sh` now purges the deleted
+account and verifies the name is free. `PURGE=0` skips it for an operator restoring
+instead. D3 reproduced both the failure and the fix; see
+`../band-d3-outside-orchestrator/README.md`.
+
+**Re-provisioning under the same name does not yet work**, and that is a platform
+behaviour rather than a script bug: after a purge, a re-created account and project
+answered `Project not found` on its data plane for as long as it was probed (~15 min),
+while a deployment under a fresh `NAME_PREFIX` worked immediately. Until that is
+understood, re-creating this deployment means a fresh prefix.
 
 ## Running it
 
