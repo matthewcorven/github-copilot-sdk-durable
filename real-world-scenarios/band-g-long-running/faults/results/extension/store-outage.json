@@ -1,0 +1,23 @@
+{
+  "variant": "extension",
+  "fault": "store-outage",
+  "outcome": "failed safely",
+  "phase": "the scheduler stopped under a live run",
+  "detail": "The run was parked at ManagerApproval (Running, raised (none)) when the Durable Task Scheduler was stopped. The process trying to answer it exited 1, so the answer did not reach the run. With the scheduler restarted, the instance is (absent) with history:  and raised (none) — unchanged from before the outage, because the scheduler is the record and a stopped scheduler is not a lost one. What the outage costs this column is availability, not state; state lives in the substrate, which is the operational weight the band's comparison names.",
+  "evidence": "instance: i273298287; parked at Running; raised (none)\nscheduler stopped? yes\nanswering process: exit 1 — extension-app: Status(StatusCode=\"Unavailable\", Detail=\"Error connecting to subchannel.\", DebugException=\"System.Net.Sockets.SocketException: Connection refused\")\nafter: status (absent); raised (none)\n  history: ",
+  "measurements": {
+    "drive_exit": 1,
+    "status_at_gate": "Running",
+    "status_after": "(absent)",
+    "raised_before_outage": "(none)",
+    "raised_after": "none"
+  },
+  "harness": {
+    "dotnet": "10.0.402",
+    "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
+    "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
+    "commit": "7531adcd4366b82b1cc5477164d571faab8bae88",
+    "command": "./faults/extension.sh --fault store-outage"
+  },
+  "recordedAt": "2026-11-05T19:43:48.992095+00:00"
+}

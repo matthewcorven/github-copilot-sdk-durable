@@ -1,0 +1,22 @@
+{
+  "variant": "extension",
+  "fault": "duplicate-approval",
+  "outcome": "second delivery did not run the next step twice",
+  "phase": "two answers raised for the same port",
+  "detail": "The first answer was raised and delivered; a second answer for the same port was then raised (1 raise(s) recorded). Afterwards the run was Running, the raised events on the instance were ManagerApproval, and the number of tasks the orchestration scheduled was 2. The second event is recorded — it is a message, and the scheduler accepted it — but the orchestration did not schedule the post-approval step a second time: the framework's own orchestration state, not the harness, is what made the duplicate inert.",
+  "evidence": "instance: i1651831796; status at the gate: Running\nfirst answer: 1 delivered\nsecond raise(s): 1\nafter: status Running; raised ManagerApproval; tasks scheduled 2\nhistory: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > EventRaised > TaskScheduled > OrchestratorStarted > TaskCompleted",
+  "measurements": {
+    "second_raises": 1,
+    "raised_events": "ManagerApproval",
+    "tasks_scheduled": "2",
+    "status_after": "Running"
+  },
+  "harness": {
+    "dotnet": "10.0.402",
+    "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
+    "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
+    "commit": "7531adcd4366b82b1cc5477164d571faab8bae88",
+    "command": "./faults/extension.sh --fault duplicate-approval"
+  },
+  "recordedAt": "2026-11-05T19:42:08.206287+00:00"
+}

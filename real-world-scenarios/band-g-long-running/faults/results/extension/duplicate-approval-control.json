@@ -1,0 +1,22 @@
+{
+  "variant": "extension",
+  "fault": "duplicate-approval-control",
+  "outcome": "one delivery",
+  "phase": "one answer raised for the port (the control)",
+  "detail": "Control: one answer delivered. The run is Running, raised events ManagerApproval, and the orchestration scheduled 2 task(s). The duplicate run is measured against this: the same flow with one more event raised, and the same number of scheduled tasks.",
+  "evidence": "instance: i233235177; status at the gate: Running\nfirst answer: 1 delivered\nsecond raise(s): 0\nafter: status Running; raised ManagerApproval; tasks scheduled 2\nhistory: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > EventRaised > TaskScheduled > OrchestratorStarted > TaskCompleted",
+  "measurements": {
+    "second_raises": 0,
+    "raised_events": "ManagerApproval",
+    "tasks_scheduled": "2",
+    "status_after": "Running"
+  },
+  "harness": {
+    "dotnet": "10.0.402",
+    "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
+    "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
+    "commit": "7531adcd4366b82b1cc5477164d571faab8bae88",
+    "command": "./faults/extension.sh --fault duplicate-approval --fault-not-injected"
+  },
+  "recordedAt": "2026-11-05T19:42:12.447171+00:00"
+}

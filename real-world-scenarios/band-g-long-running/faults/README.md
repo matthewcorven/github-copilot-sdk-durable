@@ -1,17 +1,29 @@
 # Band G — fault evidence
 
-Six faults, run against **both** Band G variants, plus the comparison the band exists for. Every number in
-`faults/README.md`'s tables and in this directory's results comes from a run of these scripts; nothing is
-typed.
+Six faults, run against **all three** Band G implementations, plus the comparison the band exists for. Every
+number in the band README's tables and in this directory's results comes from a run of these scripts;
+nothing is typed.
+
+| Column | Driven by | Where it runs |
+| --- | --- | --- |
+| `baseline` — the file-checkpoint port (#176) | `run` / `resume`, and its OpenAI-compatible endpoint | in this repository |
+| `durable` — this band's variant (#177) | its own verbs, and `DURABLE_RUNTIME_PATH` | in this repository |
+| `extension` — the agent-framework durable extension | `extension/src`, against a Durable Task Scheduler | needs docker; see below |
 
 ```bash
-./faults/run-all.sh                  # both variants, every fault and control (~8 minutes)
+./faults/run-all.sh                  # all three columns, every fault and control (~20 minutes)
 ./faults/run-all.sh durable          # one variant
 ./faults/run-all.sh --no-controls    # the six faults only
 
 ./faults/kill-during-wait.sh --variant baseline
 ./faults/store-outage.sh  --variant durable
+./faults/extension.sh --fault kill-during-wait
 ```
+
+**A partial run never writes `results/`.** `run-all.sh durable` or `--no-controls` is a diagnostic, so it
+writes to `$SCRATCH_ROOT/partial-results/` and says where; only a complete run produces the committed tree.
+A partial run that overwrote the checked-in summary would leave the band's evidence describing a matrix
+nobody ran.
 
 Each script takes `--variant baseline|durable`; five of the six also take `--fault-not-injected`, which runs
 the same steps with the injection removed and records it as a **control**. A script exits `0` when it ran,
@@ -48,6 +60,34 @@ Both variants are built into `.scratch/band-g-faults/bin/` and **started as thei
 through `dotnet run`. `dotnet run file.cs` puts a `dotnet` host in front of the application, so the PID the
 shell starts is the host: `kill -9` would land on the wrapper and the application would keep running. That
 is not a detail — it is the difference between injecting a fault and illustrating one.
+
+## The middle column, and why it is not "not run" any more
+
+G2 and the first version of this harness both recorded the agent-framework durable extension as **not run**.
+That was false for a bad reason: the stated ground was that no prerelease `Microsoft.Agents.AI.DurableTask`
+package existed on NuGet. It has 41 prerelease versions (latest `1.16.0-preview.261029.1`, MIT, `net10.0`);
+the probe used a malformed feed URL. A claim that a thing cannot be done needs the same evidence as a claim
+that it was done.
+
+`extension.sh` runs the same six faults against it:
+
+```bash
+docker run -d -p 8080:8080 mcr.microsoft.com/dts/dts-emulator:latest    # the Durable Task Scheduler
+./faults/extension.sh --fault kill-during-wait
+```
+
+What that column can and cannot measure, said in the results rather than only here:
+
+| | |
+| --- | --- |
+| Measurable | whether a run survives its process, what a duplicate answer does, what a late answer does on a terminated run, that a stopped scheduler costs availability and not state |
+| **Not** measurable | **model calls.** The vendored sample's executors call no model, so the band's call-count comparison has no number here and none is borrowed from another column |
+| **Not** observable | **a child cascade.** The ports live inside one orchestration, so "children cancelled" cannot be claimed |
+
+Its answer to a port is an **event** (`RaiseEventAsync`), and its terminate did not surface as the framework's
+own terminal status on this emulator — `abort-mid-wait` records `abort acknowledged, run unchanged` and five
+3-second samples showing the status did not move. Those are findings about the substrate, recorded as
+measurements, not smoothed into the vocabulary of the other two columns.
 
 ## Why some rows are `not exercised`
 

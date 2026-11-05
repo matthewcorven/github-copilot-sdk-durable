@@ -20,3 +20,15 @@ durable late-approval-control 0
 durable abort-mid-wait 0
 durable store-outage 0
 durable store-outage-control 0
+extension kill-during-wait 0
+extension kill-during-wait-control 0
+extension restart-after-checkpoint 0
+extension restart-after-checkpoint-control 0
+extension duplicate-approval 0
+extension duplicate-approval-control 0
+extension late-approval 0
+extension late-approval-control 0
+extension abort-mid-wait 0
+extension abort-mid-wait-control 0
+extension store-outage 0
+extension store-outage-control 0

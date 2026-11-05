@@ -3,14 +3,14 @@
   "fault": "store-outage",
   "outcome": "failed safely",
   "phase": "the store made immutable while the run drove a recorded decision",
-  "detail": "The decision was on file before the outage ('alice approved') and the store file was made immutable with chflags uchg. The resume that would have applied it exited 70, so the commit that records the approved run did not happen. With the flag removed, the store still reads: the decision is still 'alice approved', the run is 'waiting' with verdict '(absent)', the ledger is unchanged at 3 call(s), the file is 31901 bytes before and 31901 after, and a fresh 'inspect' exited 0. The decision and the run agree, and the run did not advance on a write that failed.",
-  "evidence": "at the gate: waiting, 3 call(s)\ndecision before the outage: alice approved (3 call(s)); store 31901 bytes\ndrive under the outage (exit 70): store 31901 bytes\nafter the flag was removed: run waiting, verdict (absent), decision alice approved, 3 call(s), fresh inspect exit 0\nband-g-durable: System.UnauthorizedAccessException: Access to the path '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-178-work/.scratch/band-g-faults/durable/store-outage/store.jsonl' is denied.\n ---> System.IO.IOException: Operation not permitted",
+  "detail": "The decision was on file before the outage ('alice approved') and the store file was made immutable with chflags uchg. The resume that would have applied it exited 70, so the commit that records the approved run did not happen. With the flag removed, the store still reads: the decision is still 'alice approved', the run is 'waiting' with verdict '(absent)', the ledger is unchanged at 3 call(s), the file is 31903 bytes before and 31903 after, and a fresh 'inspect' exited 0. The decision and the run agree, and the run did not advance on a write that failed.",
+  "evidence": "at the gate: waiting, 3 call(s)\ndecision before the outage: alice approved (3 call(s)); store 31903 bytes\ndrive under the outage (exit 70): store 31903 bytes\nafter the flag was removed: run waiting, verdict (absent), decision alice approved, 3 call(s), fresh inspect exit 0\nband-g-durable: System.UnauthorizedAccessException: Access to the path '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-178-work/.scratch/band-g-faults/durable/store-outage/store.jsonl' is denied.\n ---> System.IO.IOException: Operation not permitted",
   "measurements": {
     "model_calls_at_gate": 3,
     "model_calls_after_outage": 3,
     "drive_exit": 70,
-    "store_bytes_before": "31901",
-    "store_bytes_after": "31901",
+    "store_bytes_before": "31903",
+    "store_bytes_after": "31903",
     "run_after_outage": "waiting",
     "verdict_after_outage": "(absent)",
     "decision_after_outage": "alice approved",
@@ -20,8 +20,8 @@
     "dotnet": "10.0.402",
     "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
     "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
-    "commit": "93c8ffa1f811c73a50267d2fd3e91d0f832d19a2",
+    "commit": "7531adcd4366b82b1cc5477164d571faab8bae88",
     "command": "./faults/store-outage.sh --variant durable"
   },
-  "recordedAt": "2026-11-05T18:38:10.685812+00:00"
+  "recordedAt": "2026-11-05T19:41:27.968782+00:00"
 }

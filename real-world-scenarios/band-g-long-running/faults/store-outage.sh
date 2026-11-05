@@ -189,9 +189,8 @@ decision before the outage: $DECISION_BEFORE ($CALLS_AFTER_APPROVE call(s)); sto
 drive under the outage (exit $drive_status): store $SIZE_AFTER_OUTAGE bytes
 after the flag was removed: run $TASK_AFTER_OUTAGE, verdict ${VERDICT_AFTER_OUTAGE:-(none)}, decision $DECISION_AFTER_OUTAGE, $CALLS_AFTER_OUTAGE call(s), fresh inspect exit $open_status
 $(grep -m2 -E 'band-g-durable:|UnauthorizedAccess|Operation not permitted' "$RUN_DIR/drive.log" 2>/dev/null)"
-  CALLS_AT_GATE_D="$(observed durable "$RUN_DIR" calls)"
   EXTRA="$(printf '{"model_calls_at_gate": %s, "model_calls_after_outage": %s, "drive_exit": %s, "store_bytes_before": "%s", "store_bytes_after": "%s", "run_after_outage": "%s", "verdict_after_outage": "%s", "decision_after_outage": "%s", "fresh_inspect_exit": %s}' \
-    "${CALLS_AT_GATE_D:-0}" "${CALLS_AFTER_OUTAGE:-0}" "$drive_status" "$SIZE_BEFORE" "$SIZE_AFTER_OUTAGE" "$OUTCOME_STATUS" "${VERDICT_AFTER_OUTAGE:-}" "$DECISION_AFTER_OUTAGE" "$open_status")"
+    "${CALLS_AT_GATE:-0}" "${CALLS_AFTER_OUTAGE:-0}" "$drive_status" "$SIZE_BEFORE" "$SIZE_AFTER_OUTAGE" "$OUTCOME_STATUS" "${VERDICT_AFTER_OUTAGE:-}" "$DECISION_AFTER_OUTAGE" "$open_status")"
 fi
 
 record_result "$VARIANT" "$FAULT" "$OBSERVED" "$PHASE" "$DETAIL" "$EVIDENCE" "$EXTRA"

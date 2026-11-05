@@ -1,0 +1,24 @@
+{
+  "variant": "extension",
+  "fault": "late-approval",
+  "outcome": "terminal state held",
+  "phase": "terminated while parked, then answered",
+  "detail": "The run was parked at ManagerApproval. The terminate call was acknowledged (1 acknowledgement(s)) and the runtime status sampled every 3s afterwards was: Running Running Running Running Running — so the status is Running, not a framework 'Terminated'. An answer for the same port was then raised (1 raise(s)); the run is Running and raised (none). What is measured is that the answer did not run a post-approval step on a run whose terminate was acknowledged: the instance did not move on the late event.",
+  "evidence": "instance: i2092729441; parked at Running\nterminated? yes; status before the late answer: Running\n  history before: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted\nlate answer raised: 1\nafter: status Running; raised (none)\n  history: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted",
+  "measurements": {
+    "status_at_gate": "Running",
+    "terminate_acknowledged": 1,
+    "status_samples_after_terminate": "Running Running Running Running Running",
+    "status_after_late_answer": "Running",
+    "late_raises": 1,
+    "raised_events": "(none)"
+  },
+  "harness": {
+    "dotnet": "10.0.402",
+    "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
+    "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
+    "commit": "7531adcd4366b82b1cc5477164d571faab8bae88",
+    "command": "./faults/extension.sh --fault late-approval"
+  },
+  "recordedAt": "2026-11-05T19:42:37.816087+00:00"
+}

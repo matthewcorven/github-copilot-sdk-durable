@@ -21,7 +21,7 @@ FAULTS = [
     ("abort-mid-wait", "children cancelled, state final"),
     ("store-outage", "no half-committed decision"),
 ]
-VARIANTS = ["baseline", "durable"]
+VARIANTS = ["baseline", "durable", "extension"]
 
 
 def load(results_dir, variant, name):
@@ -140,15 +140,15 @@ def render(results_dir, status_file, markdown):
         add("Fault matrix — outcome per fault per variant")
     add("")
     if markdown:
-        add("| Fault | Records | baseline | durable |")
-        add("| --- | --- | --- | --- |")
+        add("| Fault | Records | baseline | durable | extension |")
+        add("| --- | --- | --- | --- | --- |")
     for fault, records in FAULTS:
         row = []
         for variant in VARIANTS:
             doc = load(results_dir, variant, fault)
             row.append("**%s**" % doc["outcome"] if doc else "**missing**")
         if markdown:
-            add("| `%s` | %s | %s | %s |" % (fault, records, row[0], row[1]))
+            add("| `%s` | %s | %s | %s | %s |" % (fault, records, row[0], row[1], row[2]))
     add("")
 
     if markdown:

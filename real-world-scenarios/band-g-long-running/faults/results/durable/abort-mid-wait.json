@@ -20,8 +20,8 @@
     "dotnet": "10.0.402",
     "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
     "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
-    "commit": "93c8ffa1f811c73a50267d2fd3e91d0f832d19a2",
+    "commit": "7531adcd4366b82b1cc5477164d571faab8bae88",
     "command": "./faults/abort-mid-wait.sh --variant durable"
   },
-  "recordedAt": "2026-11-05T18:38:07.563464+00:00"
+  "recordedAt": "2026-11-05T19:41:24.818134+00:00"
 }

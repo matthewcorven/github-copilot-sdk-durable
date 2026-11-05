@@ -72,12 +72,9 @@ if [ "$VARIANT" = "baseline" ]; then
     # then the same confirmation, so the difference from kill-during-wait is what the stop is, not its
     # outcome.
     CALLS_BEFORE_STOP="$(count_calls "$RUN_DIR")"
-    kill -TERM "$pid" 2>/dev/null
-    wait_for_exit "$pid" 30 || stop_pid "$pid"
-    if kill -0 "$pid" 2>/dev/null; then
-      log "restart-after-checkpoint: the process survived the stop"
-      exit 1
-    fi
+    # The PID is the application itself (start_baseline_bg asserts that), so this stop lands on the process
+    # holding the model call — not on a shell wrapper with the application behind it.
+    stop_and_confirm "$pid" "$RUN_DIR" "the resumed process" || exit 1
     STOPPED_PID="$pid"
     touch "$RUN_DIR/release"
     PHASE_STOPPED="the resumed process, inside the writer's model call, after the plan and research turns"

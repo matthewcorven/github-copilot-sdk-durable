@@ -172,10 +172,11 @@ baseline_mode() {
   # The port writes nothing into a checkpoint directory it did not create, so the harness creates it. That
   # is also what keeps the directory inside the run's own scratch area rather than in $TMPDIR.
   mkdir -p "$dir/checkpoints"
-  CHECKPOINT_DIR="$dir/checkpoints" \
-  OPENAI_API_KEY="${OPENAI_API_KEY:-recorded}" \
-  OPENAI_BASE_URL="http://127.0.0.1:$ENDPOINT_PORT/v1" \
-  OPENAI_MODEL="${OPENAI_MODEL:-recorded}" \
+  env \
+    CHECKPOINT_DIR="$dir/checkpoints" \
+    OPENAI_API_KEY="${OPENAI_API_KEY:-recorded}" \
+    OPENAI_BASE_URL="http://127.0.0.1:$ENDPOINT_PORT/v1" \
+    OPENAI_MODEL="${OPENAI_MODEL:-recorded}" \
     "$BASELINE_OUT/BaselineCheckpoint" "$mode"
 }
 
@@ -212,22 +213,61 @@ durable_verb() {
 }
 
 # ── starting and killing a real process ───────────────────────────────────────────────────────
-# A process that has to be killable is started in the background by this shell and its PID recorded.
-# `$!` is the `dotnet` process the shell owns, so `kill -9` names the application and not a wrapper.
+# A process that has to be killable is started **as the binary**, never through a shell function.
+#
+# `baseline_mode … &` would background a *forked subshell*: `$!` is then that subshell, the binary is its
+# child, and `kill -TERM` on `$!` kills the wrapper while the application keeps running. That is not a
+# detail — a stop that leaves the application alive makes the whole "stopped, then a fresh process
+# continued it" claim unprovable, and a later `release` would let the survivor write to the same
+# checkpoint directory while the supposed successor ran. `assert_is_app` below is the guard: it fails the
+# run unless the PID the harness recorded really is the application.
 APP_PID=""
+
+assert_is_app() {
+  local pid="${1:-}" expected="$2"
+  [ -n "$pid" ] || { log "harness: assert_is_app with no pid"; return 1; }
+  local comm
+  comm="$(ps -p "$pid" -o comm= 2>/dev/null | tr -d ' ')"
+  local base
+  base="$(basename "$comm")"
+  if [ "$base" != "$expected" ]; then
+    log "harness: FAIL pid $pid is '$base', not '$expected'. A fault that kills this PID would be"
+    log "harness:      killing a shell wrapper while the application kept running."
+    return 1
+  fi
+  return 0
+}
+
+# Starts a binary in the background with the environment it needs. `env VAR=… binary &` makes `$!` the
+# binary itself, because `env` execs into it rather than forking.
 start_baseline_bg() {
   local dir="$1" mode="$2" name="$3"
-  baseline_mode "$dir" "$mode" >"$dir/$name.log" 2>&1 &
+  mkdir -p "$dir/checkpoints"
+  env \
+    CHECKPOINT_DIR="$dir/checkpoints" \
+    OPENAI_API_KEY="${OPENAI_API_KEY:-recorded}" \
+    OPENAI_BASE_URL="http://127.0.0.1:$ENDPOINT_PORT/v1" \
+    OPENAI_MODEL="${OPENAI_MODEL:-recorded}" \
+    "$BASELINE_OUT/BaselineCheckpoint" "$mode" >"$dir/$name.log" 2>&1 &
   APP_PID=$!
   echo "$APP_PID" > "$dir/$name.pid"
+  assert_is_app "$APP_PID" BaselineCheckpoint
 }
 
 start_durable_bg() {
   local dir="$1" name="$2"
   shift 2
-  durable_verb "$dir" "$@" >"$dir/$name.log" 2>&1 &
+  [ -n "$DURABLE_RUNTIME" ] || DURABLE_RUNTIME="$(durable_runtime "$dir")"
+  env \
+    FAULT_PAUSE_ON="${PAUSE_ON:-}" \
+    FAULT_PAUSE_COUNT="${PAUSE_COUNT:-1}" \
+    FAULT_MARKER="$dir" \
+    DURABLE_RUNTIME_PATH="$DURABLE_RUNTIME" \
+    REPLAY_FIXTURE="$RUNTIME_FIXTURE" \
+    "$DURABLE_OUT/band-g-durable" --run "$dir" "$@" >"$dir/$name.log" 2>&1 &
   APP_PID=$!
   echo "$APP_PID" > "$dir/$name.pid"
+  assert_is_app "$APP_PID" band-g-durable
 }
 
 # Kills the PID, waits for the operating system to confirm it is gone, and reports that it did. A
@@ -261,10 +301,41 @@ kill9() {
 stop_pid() {
   local pid="${1:-}"
   [ -n "$pid" ] || return 0
+  # Children are recorded before the parent is signalled: once it is gone they are reparented and
+  # `pgrep -P` finds nothing, so a reap after the fact is a no-op that looks like a cleanup.
+  local children
+  children="$(pgrep -P "$pid" 2>/dev/null || true)"
   kill -TERM "$pid" 2>/dev/null
   local deadline=$((SECONDS + 15))
   while kill -0 "$pid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do sleep 0.05; done
-  reap_children "$pid"
+  kill -9 "$pid" 2>/dev/null
+  local child
+  for child in $children; do
+    kill -TERM "$child" 2>/dev/null
+  done
+  sleep 0.2
+  for child in $children; do
+    kill -9 "$child" 2>/dev/null
+  done
+}
+
+# Stops a process and proves the *application* is gone, not merely that a PID is unassigned. The stop is
+# SIGTERM (a restart, not a kill), then SIGKILL if it does not go, then a check that the PID is gone **and**
+# that nothing else is still working in the run directory. A survivor here would keep writing to the store
+# while the successor read it, which is the failure this check exists to make impossible to miss.
+stop_and_confirm() {
+  local pid="$1" dir="$2" label="${3:-the process}"
+  kill -TERM "$pid" 2>/dev/null
+  if ! wait_for_exit "$pid" 30; then
+    log "harness: $label did not exit on SIGTERM; sending SIGKILL"
+    kill -9 "$pid" 2>/dev/null
+    wait_for_exit "$pid" 15 || { log "harness: FAIL $label ($pid) survived SIGKILL"; return 1; }
+  fi
+  if kill -0 "$pid" 2>/dev/null; then
+    log "harness: FAIL $label ($pid) is still alive after the stop"
+    return 1
+  fi
+  return 0
 }
 
 wait_for_exit() {

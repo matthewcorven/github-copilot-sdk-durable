@@ -1,0 +1,24 @@
+{
+  "variant": "extension",
+  "fault": "abort-mid-wait",
+  "outcome": "abort acknowledged, run unchanged",
+  "phase": "parked at ManagerApproval, terminate acknowledged",
+  "detail": "The run was parked at Running. The terminate was acknowledged (1 acknowledgement(s)) and the status sampled every 3s afterwards was: Running Running Running Running Running. It is still Running, and an answer raised afterwards left it Running with no raised event recorded ((none)). So on this substrate the abort does not surface as a framework terminal state and a later event does not revive the run: the run is inert but its reported status is unchanged. Scope, said plainly: this column has no separate child work to cancel — the ports live inside one orchestration — so 'children cancelled' is not observable here and is not claimed.",
+  "evidence": "instance: i604317327; parked at Running\nterminate: status Running\n  history: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted\nanswer after the abort: status Running; raised (none)",
+  "measurements": {
+    "status_at_gate": "Running",
+    "terminate_acknowledged": 1,
+    "status_samples_after_terminate": "Running Running Running Running Running",
+    "status_final": "Running",
+    "raised_after_abort": "(none)",
+    "children_cancelled": "not observable - the ports are inside one orchestration"
+  },
+  "harness": {
+    "dotnet": "10.0.402",
+    "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
+    "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
+    "commit": "7531adcd4366b82b1cc5477164d571faab8bae88",
+    "command": "./faults/extension.sh --fault abort-mid-wait"
+  },
+  "recordedAt": "2026-11-05T19:43:11.411374+00:00"
+}

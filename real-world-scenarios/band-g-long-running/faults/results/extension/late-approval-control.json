@@ -1,0 +1,24 @@
+{
+  "variant": "extension",
+  "fault": "late-approval-control",
+  "outcome": "answered before any terminal state",
+  "phase": "answered while parked (the control)",
+  "detail": "Control: no termination. The answer was raised while the run was Running and the run moved to Running, with history: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted. This is what the late answer is measured against: the same answer, arriving while the run can still use it.",
+  "evidence": "instance: i174095394; parked at Running\nterminated? no; status before the late answer: Running\n  history before: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted\nlate answer raised: 1\nafter: status Running; raised (none)\n  history: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted",
+  "measurements": {
+    "status_at_gate": "Running",
+    "terminate_acknowledged": 0,
+    "status_samples_after_terminate": "",
+    "status_after_late_answer": "Running",
+    "late_raises": 1,
+    "raised_events": "(none)"
+  },
+  "harness": {
+    "dotnet": "10.0.402",
+    "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
+    "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
+    "commit": "7531adcd4366b82b1cc5477164d571faab8bae88",
+    "command": "./faults/extension.sh --fault late-approval --fault-not-injected"
+  },
+  "recordedAt": "2026-11-05T19:42:46.430666+00:00"
+}

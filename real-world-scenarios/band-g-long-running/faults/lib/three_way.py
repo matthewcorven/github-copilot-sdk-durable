@@ -1,10 +1,14 @@
 """Renders the Band G three-way comparison, taking every measured cell from the fault results.
 
-The band's comparison table has three columns and only two of them were run. This script exists so the
-boundary between the two cannot drift: a cell that cites a fault result is read from
-`results/<variant>/<fault>.json` and printed with the numbers that result recorded, and the middle column
-is printed with the same "Not run here" marking G2 gave it. Nothing in the table is typed by hand, and a
-measured cell whose result is missing fails the script rather than quietly reading as prose.
+The band's comparison table has three columns and **all three were run**. This script exists so a cell can
+never drift from the result behind it: a measured cell is read from `results/<variant>/<fault>.json` and
+printed with the numbers that result recorded, and a fault with no result for a column is an error rather
+than a sentence. Nothing in the table is typed by hand.
+
+`extension` is the third column: the agent-framework durable extension on the Durable Task Scheduler,
+driven by `faults/extension.sh`. Its results live in `results/extension/`. Where that column cannot supply
+a measurement — its vendored sample calls no model — the cell says so, in the cell, instead of borrowing
+one from another column.
 
     python3 lib/three_way.py <results-dir> [--md]
 """
@@ -40,69 +44,104 @@ def main(argv):
     abort_d = load(results, "durable", "abort-mid-wait")
     outage_d = load(results, "durable", "store-outage")
     od = outage_d["measurements"]
+    ext_kill = load(results, "extension", "kill-during-wait")
+    ext_restart = load(results, "extension", "restart-after-checkpoint")
+    ext_dup = load(results, "extension", "duplicate-approval")
+    ext_late = load(results, "extension", "late-approval")
+    ext_abort = load(results, "extension", "abort-mid-wait")
+    ext_outage = load(results, "extension", "store-outage")
 
     rb = restart_b["measurements"]
     rd = restart_d["measurements"]
     lb = late_b["measurements"]
     ld = late_d["measurements"]
 
+    xk = ext_kill["measurements"]
+    xr = ext_restart["measurements"]
+
     rows = [
         (
             "**Restart/resume**",
-            "**Yes, measured.** `kill-during-wait`: %s; `restart-after-checkpoint`: %s after %s calls in the stopped process."
-            % (kill_b["outcome"], restart_b["outcome"], rb["model_calls_stopped_process"]),
-            NOT_RUN + " Documented: completed steps are not repeated after a restart. The durable-extension "
-            "sample was not stood up (no prerelease package on NuGet — see the band README).",
+            "**Yes, measured.** `kill-during-wait`: " + kill_b["outcome"]
+            + "; `restart-after-checkpoint`: " + restart_b["outcome"]
+            + " after " + str(rb["model_calls_stopped_process"]) + " calls in the stopped process.",
+            "**Yes, measured.** `kill-during-wait`: " + ext_kill["outcome"]
+            + "; `restart-after-checkpoint`: " + ext_restart["outcome"]
+            + " — a fresh process, its own worker, finished the parked run (status after: "
+            + xr["status_after_restart"] + ").",
             "**Yes, measured.** `kill-during-wait`: " + kill_d["outcome"]
             + "; `restart-after-checkpoint`: " + restart_d["outcome"] + ".",
         ),
         (
             "**Re-does model calls on resume**",
-            "**Yes, measured.** The stopped resumed process made %s calls; the fresh resume made %s more for the same turns, contents identical by request shape."
-            % (rb["model_calls_stopped_process"], rb["model_calls_second_process"]),
-            NOT_RUN + " Documented: replay does not re-run completed agent executions.",
-            "**No, measured.** The resume added **%s** calls and served the re-entered step from the memo (%s memo hit(s))."
-            % (rd["calls_added_by_resume"], rd["memo_hits"]),
+            "**Yes, measured.** The stopped resumed process made " + str(rb["model_calls_stopped_process"])
+            + " calls; the fresh resume made " + str(rb["model_calls_second_process"])
+            + " more for the same turns.",
+            "**Not measurable here.** " + xr["model_calls"]
+            + ". The band's call-count comparison therefore has no number for this column, and none is borrowed.",
+            "**No, measured.** The resume added **" + str(rd["calls_added_by_resume"])
+            + "** calls and served the re-entered step from the memo (" + str(rd["memo_hits"]) + " memo hit(s)).",
         ),
         (
             "**Domain state transactional**",
-            "**No.** The checkpoint is the workflow's state; a completed turn inside a process is not in it, which is what the call count above shows.",
-            NOT_RUN + " Documented as partial: workflow and conversation state are checkpointed, a side effect is not.",
-            "**Within the run.** A step's checkpoint, its memo and its ledger entry commit together: `store-outage` refused the commit (exit %s), left the run '%s' with the decision still '%s', and the store file byte-identical at %s bytes."
-            % (od["drive_exit"], od["run_after_outage"], od["decision_after_outage"], od["store_bytes_after"]),
+            "**No.** The checkpoint is the workflow's state; a completed turn inside a process is not in it, "
+            "which is what the call count above shows.",
+            "**In the substrate.** State lives in the Durable Task Scheduler, not in the process: stopping the "
+            "process mid-run lost nothing (`kill-during-wait`: " + ext_kill["outcome"] + "). Stopping the "
+            "*scheduler* is a different matter — see operational weight.",
+            "**Within the run.** A step's checkpoint, its memo and its ledger entry commit together: "
+            "`store-outage` refused the commit (exit " + str(od["drive_exit"]) + "), left the run '"
+            + od["run_after_outage"] + "' with the decision still '" + od["decision_after_outage"]
+            + "', and the store file identical in size before and after ("
+            + str(od["store_bytes_before"]) + " -> " + str(od["store_bytes_after"])
+            + " bytes): a refused commit left no partial write. The exact byte count is run-variable; its "
+            "equality is not.",
         ),
         (
             "**What a decision is**",
-            "**A request/response pair, not a value.** `duplicate-approval`: %s — a second resume approves again. `late-approval`: %s — the finished gate checkpoint is still answerable."
-            % (dup_b["outcome"], late_b["outcome"]),
-            NOT_RUN + " An external event on an orchestration instance, with a timer for the timeout.",
-            "**A first-writer-wins document.** `duplicate-approval`: %s, and the refusal did not come from the terminal guard (%s). `late-approval`: %s — %s."
-            % (dup_d["outcome"], dup_d["measurements"]["second_refused_by_terminal_guard"], late_d["outcome"], ld["late_approval_note"]),
+            "**A request/response pair, not a value.** `duplicate-approval`: " + dup_b["outcome"]
+            + " — a second resume approves again. `late-approval`: " + late_b["outcome"]
+            + " — the finished gate checkpoint is still answerable.",
+            "**An event on the orchestration instance.** `duplicate-approval`: " + ext_dup["outcome"]
+            + " — the second event is recorded but schedules no second step. `late-approval`: " + ext_late["outcome"]
+            + ".",
+            "**A first-writer-wins document.** `duplicate-approval`: " + dup_d["outcome"]
+            + ", and the refusal did not come from the terminal guard ("
+            + dup_d["measurements"]["second_refused_by_terminal_guard"] + "). `late-approval`: "
+            + late_d["outcome"] + " — " + ld["late_approval_note"] + ".",
         ),
         (
             "**A decision after a terminal state**",
-            "**Applied again.** `late-approval`: %s. There is no terminal record to refuse it." % late_b["outcome"],
-            NOT_RUN + " The runtime refuses an event raised after completion; not exercised.",
-            "**Held.** `late-approval`: %s — %s." % (late_d["outcome"], ld["late_approval_note"]),
+            "**Applied again.** `late-approval`: " + late_b["outcome"]
+            + ". There is no terminal record to refuse it.",
+            "**Not moved.** `late-approval`: " + ext_late["outcome"]
+            + " — a late answer on a terminated run ran no post-approval step.",
+            "**Held.** `late-approval`: " + late_d["outcome"] + " — " + ld["late_approval_note"] + ".",
         ),
         (
             "**Abort mid-wait**",
-            "**Not exercised.** %s" % abort_b["detail"].split(" So there is")[0].strip(),
-            NOT_RUN + " Orchestration termination exists; a cascade over child work is not described.",
-            "**Cascades, measured.** %s — the parent's handler saw the child already terminal (%s)."
-            % (abort_d["outcome"], abort_d["measurements"]["children_observed"]),
+            "**Not exercised.** " + abort_b["detail"].split(" So there is")[0].strip(),
+            "**Not the same shape.** `abort-mid-wait`: " + ext_abort["outcome"]
+            + " — termination is the scheduler's call, and the ports live inside one orchestration, so a "
+            "child cascade is not observable here.",
+            "**Cascades, measured.** " + abort_d["outcome"]
+            + " — the parent's handler saw the child already terminal ("
+            + abort_d["measurements"]["children_observed"] + ").",
         ),
         (
             "**Operational weight**",
             "A directory on disk, one writer (the framework's store refuses a second).",
-            NOT_RUN + " DTS + emulator, per the documented prerequisites.",
+            "**The heaviest of the three.** A scheduler (or its emulator) is a prerequisite even for one run: "
+            "`docker run mcr.microsoft.com/dts/dts-emulator`. Stopping it under a live run failed the client "
+            "(`store-outage`: " + ext_outage["outcome"] + ", exit " + str(ext_outage["measurements"]["drive_exit"])
+            + "), which is an availability cost the other two columns do not have.",
             "A store file, one writer. Measured only in that shape: no server, no scheduler.",
         ),
     ]
 
     out = []
     add = out.append
-    add("| | File checkpoint (baseline, #176) | Durable Task (agent-framework-durable-extension) | This variant (#177) |")
+    add("| | File checkpoint (baseline, #176) | Durable Task extension on DTS (`extension/`) | This variant (#177) |")
     add("| --- | --- | --- | --- |")
     for row in rows:
         add("| %s | %s | %s | %s |" % row)

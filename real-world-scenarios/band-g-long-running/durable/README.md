@@ -62,7 +62,8 @@ All five are exercised by `./evidence.sh`; the captured output is in
    memo's whole contribution, stated as a number. **Scope, stated plainly:** the kill point is *before*
    the gate, which is the case the baseline also avoids by not having run those steps yet — so this
    measures the memo **within this variant**, not against the baseline. The baseline-relative claim is
-   in the three-way table, and it is marked as likely rather than measured.
+   in the three-way table, and it is **measured**: `faults/restart-after-checkpoint.sh` stops the
+   baseline after the plan and research calls and a fresh process makes **2 more** for the same steps.
 3. **A decision cannot be overwritten by a late wakeup or a duplicate approval.** The decision is a
    durable document and the first write wins: a second caller finds the first and returns it
    (`Gate.cs`, `GateCommands.RecordAsync`). All three captures are needed, because the two refusals are
@@ -210,14 +211,31 @@ least one — `LateJoinExampleTests.BarrierReadinessFailuresCleanupAndSourceMuta
 flake that fails on repeated runs of its own, with and without this change. The counts move by one or
 two between runs for that reason. Nothing here should be read as "the suite was green".
 
-**Not executed.** The middle column. The Durable Task extension's `DurableAIAgent`, `WaitForExternalEvent`
-and Durable Task Scheduler were not installed, run, or measured — Docker is available on this machine,
-but standing up the emulator, a Functions host, and a configured model was out of scope for a
-comparison whose conclusion is "it already does this". Every claim about it above is documentation, and
-is marked as such. **G3 (#178) looked for a cheaper way in and did not find one:** a prerelease
-`Microsoft.Agents.AI.DurableTask` package does not exist on NuGet (asked the feed's flat container and its
-search endpoint), so "install the prerelease and drive the same six faults" was not an option that could
-have been taken honestly. The marking stands, and the fault results in `faults/` carry it too.
+**Executed, after being wrongly declared impossible.** The middle column now runs. G3 originally recorded
+it as "not run" on the stated ground that no prerelease `Microsoft.Agents.AI.DurableTask` package existed on
+NuGet. **That was false** — the package has 41 prerelease versions, latest `1.16.0-preview.261029.1`, MIT,
+`net10.0` — and the mistake was a malformed feed URL (the `Microsoft.Agents.AI` family was probed; the
+`.ai` in this package's id was dropped). A claim that a thing cannot be done needs the same evidence as a
+claim that it was done, and this one had none.
+
+What it took to run it, in full:
+
+```bash
+docker pull mcr.microsoft.com/dts/dts-emulator:latest          # the Durable Task Scheduler emulator
+docker run -d -p 8080:8080 mcr.microsoft.com/dts/dts-emulator:latest
+dotnet add package Microsoft.Agents.AI.DurableTask --prerelease  # 1.16.0-preview.261029.1
+export DURABLE_TASK_SCHEDULER_CONNECTION_STRING="Endpoint=http://localhost:8080;TaskHub=default;Authentication=None"
+```
+
+The vendored sample in `../extension/upstream/` (byte-identical to `microsoft/agent-framework-durable-extension`
+@ `3ffe3fb`, MIT) completes end-to-end against that emulator: three `RequestPort` pauses, answered, then
+`Expense reimbursed at …`. `../extension/src` drives the same workflow through verbs, and
+`../faults/extension.sh` runs the faults against it.
+
+**So the middle column is no longer "not run", and the marking has moved to what is actually true:** it runs,
+and the *comparison* against it is partial — the vendored sample's executors call no model, so the band's
+model-call counts have no measurement in that column and none is invented; and its abort has no child tree
+to observe. Those are the residuals, and they are narrower than the false claim they replace.
 
 **Not executed.** A live model. No endpoint was configured.
 

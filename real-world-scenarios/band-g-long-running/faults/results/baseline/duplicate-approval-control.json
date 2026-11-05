@@ -3,8 +3,8 @@
   "fault": "duplicate-approval-control",
   "outcome": "applied once",
   "phase": "one resume process against the gate checkpoint (the control)",
-  "detail": "Control: the approval delivered once. The resume exited 0, approved the plan, and wrote checkpoint 9c3de011a9074c759f993fcfdb46f63b (2 checkpoint file(s), 2 model call(s)). This is what the double delivery is measured against: one approval, one run.",
-  "evidence": "gate checkpoint: ba704b907d6a4c0e8c0686b9aecae8c1; calls before the first delivery: 2\nfirst delivery (exit 0): checkpoint 9c3de011a9074c759f993fcfdb46f63b, 2 file(s), 2 model call(s), approved checkpoint present: yes\nsecond delivery: (not run)",
+  "detail": "Control: the approval delivered once. The resume exited 0, approved the plan, and wrote checkpoint 5731e6b2a42c4bcd9aa1a93861e56427 (2 checkpoint file(s), 2 model call(s)). This is what the double delivery is measured against: one approval, one run.",
+  "evidence": "gate checkpoint: d82f86663c1e4bc6b4229e10bcb37880; calls before the first delivery: 2\nfirst delivery (exit 0): checkpoint 5731e6b2a42c4bcd9aa1a93861e56427, 2 file(s), 2 model call(s), approved checkpoint present: yes\nsecond delivery: (not run)",
   "measurements": {
     "model_calls_at_gate": 2,
     "checkpoints_after_first": "2",
@@ -17,8 +17,8 @@
     "dotnet": "10.0.402",
     "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
     "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
-    "commit": "93c8ffa1f811c73a50267d2fd3e91d0f832d19a2",
+    "commit": "7531adcd4366b82b1cc5477164d571faab8bae88",
     "command": "./faults/duplicate-approval.sh --variant baseline --fault-not-injected"
   },
-  "recordedAt": "2026-11-05T18:35:52.845881+00:00"
+  "recordedAt": "2026-11-05T19:39:07.692547+00:00"
 }
