@@ -232,7 +232,7 @@ public class TaskResumeTests
         var outcome = await client.WaitForTaskAsync(taskId).WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("failed", outcome.Status);
-        Assert.Contains("found True", outcome.Error);
+        Assert.Contains("found Boolean", outcome.Error);
     }
 
     [Fact]
@@ -264,6 +264,58 @@ public class TaskResumeTests
 
         Assert.Equal("failed", outcome.Status);
         Assert.Equal(TaskStatus.Terminal, store.Task(taskId)!.Status);
+    }
+
+    [Fact]
+    public async Task WaitForTaskAsync_AFaultOutsideThePhaseLoop_SettlesInsteadOfHanging()
+    {
+        // The phase read cannot throw any more, so this needs a fault from elsewhere in the
+        // loop. Committing the failure for a bad phase is outside the handler's try: if the
+        // store throws there, the exception leaves RunTaskCoreAsync and only the settle in
+        // RunTaskAsync can stop the waiter hanging.
+        var provider = new FailOnceProvider();
+        var store = DurableStore.Create(new DurableStoreOptions { Provider = _ => provider });
+        var registry = new ExtensionRegistry();
+        var definition = CounterTask();
+        registry.Install(new Extension("counter", tasks: [definition]));
+
+        await using var client = new DurableClientBuilder()
+            .UseStore(store)
+            .UseRegistry(registry)
+            .UseClient(UnstartedClient())
+            .Build();
+
+        var taskId = await SeedTaskAsync(
+            store,
+            definition,
+            DurableJson.ToElement(new Dictionary<string, JsonElement> { ["phase"] = DurableJson.ToElement(0) }));
+        provider.FailPhaseCommit = true;
+
+        // Before the settle, this awaited a completion source nothing would ever settle:
+        // the guard is what turns that into a failure rather than a hung test run.
+        var outcome = await client.WaitForTaskAsync(taskId).WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal("failed", outcome.Status);
+        Assert.Equal("checkpoint storage failed", outcome.Error);
+    }
+
+    /// <summary>
+    /// An in-memory provider whose commit throws once the test arms it, so a fault can be
+    /// raised from outside the phase handlers.
+    /// </summary>
+    private sealed class FailOnceProvider : InMemoryStoreProvider
+    {
+        /// <summary>Armed after the task is seeded, so only the run under test fails.</summary>
+        public bool FailPhaseCommit { get; set; }
+
+        public override void Commit()
+        {
+            if (FailPhaseCommit)
+            {
+                FailPhaseCommit = false;
+                throw new InvalidOperationException("checkpoint storage failed");
+            }
+        }
     }
 
     /// <summary>

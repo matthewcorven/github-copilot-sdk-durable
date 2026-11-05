@@ -5327,8 +5327,19 @@ internal sealed class DurableRuntime : IAsyncDisposable
 
         return element.ValueKind == JsonValueKind.String
             ? (element.GetString() ?? "run", null)
-            : (null, $"checkpoint phase must be a string, found {element.ValueKind}");
+            : (null, $"checkpoint phase must be a string, found {JsonKind(element.ValueKind)}");
     }
+
+    /// <summary>
+    /// The JSON name of a value's kind. <see cref="JsonValueKind.ToString"/> says
+    /// "True"/"False" for booleans, which is not a JSON type name and would make this
+    /// message differ from the ports'.
+    /// </summary>
+    private static string JsonKind(JsonValueKind kind) => kind switch
+    {
+        JsonValueKind.True or JsonValueKind.False => "Boolean",
+        _ => kind.ToString(),
+    };
 
     /// <summary>
     /// Waits for child tasks to finish, then resumes the waiting parent. The parent
