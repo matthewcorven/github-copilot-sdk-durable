@@ -1,0 +1,28 @@
+{
+  "variant": "durable",
+  "fault": "duplicate-delivery-control",
+  "outcome": "control: delivered once",
+  "holder": "return_agent",
+  "holderAtFault": "return_agent",
+  "holderAtEnd": "return_agent",
+  "phase": "the closing request was delivered once and nothing was killed (the control)",
+  "detail": "Control: the closing request delivered once, in one process, with nothing killed. The store holds one specialist output per turn — {\"Order 1234 is currently being processed and will ship in 2 business days.\": 1, \"Refund processed successfully for order 1234.\": 1, \"Return initiated successfully for order 1234. You will receive return instructions via email.\": 2} — across 4 turn(s), and the run ended with return_agent holding control. The fault run is compared to exactly this multiset, so a result it holds twice is that specialist's tool run a second time and nothing else.",
+  "evidence": "tool results: {\"Order 1234 is currently being processed and will ship in 2 business days.\": 1, \"Refund processed successfully for order 1234.\": 1, \"Return initiated successfully for order 1234. You will receive return instructions via email.\": 2}; completed turns: 4; holder after: return_agent",
+  "harness": {
+    "dotnet": "10.0.402",
+    "endpoint": "https://openrouter.ai/api/v1",
+    "model": "harness default (scripted routing)",
+    "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/duplicate-delivery.sh --variant durable --fault-not-injected",
+    "commit": "8caeb53427c9b9b8ad8cf029eab590344d664dc7",
+    "apiKeyFrom": "OPENAI_API_KEY"
+  },
+  "recordedAt": "2026-11-05T18:41:24.175384+00:00",
+  "observations": {
+    "toolResults": {
+      "Order 1234 is currently being processed and will ship in 2 business days.": 1,
+      "Refund processed successfully for order 1234.": 1,
+      "Return initiated successfully for order 1234. You will receive return instructions via email.": 2
+    },
+    "completedTurns": 4
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "variant": "durable",
+  "fault": "store-outage-control",
+  "outcome": "control: completed",
+  "holder": "return_agent",
+  "holderAtFault": "return_agent",
+  "holderAtEnd": "return_agent",
+  "phase": "the store was left in place (the control)",
+  "detail": "Control: nothing was moved. The process finished the run with return_agent holding control and the store's /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/.scratch/band-f-faults/durable/store-outage-control/state/store.jsonl held 191 record(s), 0 torn. This is what the outage run is compared against: whatever is short there is the outage's doing.",
+  "evidence": "holder after: return_agent; 191 record(s), 0 torn",
+  "harness": {
+    "dotnet": "10.0.402",
+    "endpoint": "https://openrouter.ai/api/v1",
+    "model": "harness default (scripted routing)",
+    "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/store-outage.sh --variant durable --fault-not-injected",
+    "commit": "8caeb53427c9b9b8ad8cf029eab590344d664dc7",
+    "apiKeyFrom": "OPENAI_API_KEY"
+  },
+  "recordedAt": "2026-11-05T18:43:57.987682+00:00",
+  "observations": {
+    "toolResults": {
+      "Order 1234 is currently being processed and will ship in 2 business days.": 1,
+      "Refund processed successfully for order 1234.": 1,
+      "Return initiated successfully for order 1234. You will receive return instructions via email.": 2
+    }
+  }
+}

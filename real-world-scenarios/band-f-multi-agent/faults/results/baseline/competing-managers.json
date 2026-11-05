@@ -1,0 +1,32 @@
+{
+  "variant": "baseline",
+  "fault": "competing-managers",
+  "outcome": "refused: the second manager",
+  "holder": "return_agent",
+  "holderAtFault": "return_agent",
+  "holderAtEnd": "triage_agent",
+  "phase": "nothing is queued and triage_agent was the last agent to speak",
+  "detail": "A second coordinator was started on the same state while the first was serving turn 0. It was refused by the framework checkpoint store's lock at open, after 0ms and before it could commit anything: \"Unhandled exception. System.InvalidOperationException: The store at '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/.scratch/band-f-faults/baseline/competing-managers/state' is already in use by another process.\". The first manager was still running when the refusal was reported and stayed the only writer; return_agent kept control of the turn it had (specialist tool results at that moment: {}), and the run went on to 5 turn(s) with 3 delegation record(s) and {\"Order 1234 is currently being processed and will ship in 2 business days.\": 1, \"Refund processed successfully for order 1234.\": 1, \"Return initiated successfully for order 1234. You will receive return instructions via email.\": 1} specialist tool results, ending with triage_agent holding control. the baseline has no verifier. The refusal names no pid: the framework's store lock says the directory is in use and stops there, so the winner is defined by who holds the lock rather than by anything a reader could look up.",
+  "evidence": "first manager pid 7130 alive when the second was refused: yes; second manager exit 134 after 0ms; refusal read from its own output: Unhandled exception. System.InvalidOperationException: The store at '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/.scratch/band-f-faults/baseline/competing-managers/state' is already in use by another process.; holder at refusal: return_agent; tool results at refusal: {}; holder at the end: triage_agent; holders across the run: unavailable",
+  "harness": {
+    "dotnet": "10.0.402",
+    "endpoint": "https://openrouter.ai/api/v1",
+    "model": "openai/gpt-4o-mini",
+    "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/competing-managers.sh --variant baseline",
+    "commit": "8caeb53427c9b9b8ad8cf029eab590344d664dc7",
+    "apiKeyFrom": "OPENAI_API_KEY"
+  },
+  "recordedAt": "2026-11-05T18:37:39.793560+00:00",
+  "observations": {
+    "secondManagerExit": 134,
+    "secondManagerMillis": 0,
+    "refused": true,
+    "firstAliveAtRefusal": true,
+    "toolResultsBefore": {},
+    "toolResultsAfter": {
+      "Order 1234 is currently being processed and will ship in 2 business days.": 1,
+      "Refund processed successfully for order 1234.": 1,
+      "Return initiated successfully for order 1234. You will receive return instructions via email.": 1
+    }
+  }
+}

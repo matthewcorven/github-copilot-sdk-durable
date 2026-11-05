@@ -1,0 +1,26 @@
+{
+  "variant": "baseline",
+  "fault": "restart-after-checkpoint",
+  "outcome": "restart failed; control stops at refund_agent",
+  "holder": "refund_agent",
+  "holderAtFault": "refund_agent",
+  "holderAtEnd": "return_agent",
+  "phase": "the last handoff is queued at HandoffEnd, so return_agent is the agent that held control",
+  "detail": "The process was stopped with SIGTERM at turn 1 delegated to refund_agent and nothing produced. The restarted process gave control to refund_agent — the first agent to act in a checkpoint it wrote afterwards — and its newest checkpoint then names return_agent. the specialist tool results the checkpointed conversation held went from {} at the stop to {} after the restart. The restart did not complete: attempt 1 aborted with the framework's \"Expected exactly one update for key 'SharedState'\"; attempt 2 aborted with the framework's \"Expected exactly one update for key 'SharedState'\" — the framework aborts every resume of a workflow that still has work, and the port's resume has no way past it. The port's own resume line named triage_agent; the state it moved is what says refund_agent acted.",
+  "evidence": "stopped cleanly (pid 5212, SIGTERM, confirmed gone) at turn 1 delegated to refund_agent and nothing produced; frozen state: holder refund_agent, fingerprint checkpoints:6/authors:3/last:75725e1d6c0c49deb135410043a658b9, tool results {}; first action after the restart: refund_agent spoke in checkpoint turn 6 at 712de1af42cd438092fd87cb0e961e48; the specialist tool results the checkpointed conversation held went from {} at the stop to {} after the restart; the baseline has no verifier, so a replay is read off the conversation its checkpoints hold; recovery needed 2 process(es) (attempt 1 aborted with the framework's \"Expected exactly one update for key 'SharedState'\"; attempt 2 aborted with the framework's \"Expected exactly one update for key 'SharedState'\"); port-reported resume: triage_agent",
+  "harness": {
+    "dotnet": "10.0.402",
+    "endpoint": "https://openrouter.ai/api/v1",
+    "model": "openai/gpt-4o-mini",
+    "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/restart-after-checkpoint.sh --variant baseline",
+    "commit": "8caeb53427c9b9b8ad8cf029eab590344d664dc7",
+    "apiKeyFrom": "OPENAI_API_KEY"
+  },
+  "recordedAt": "2026-11-05T18:36:57.231352+00:00",
+  "observations": {
+    "processes": 2,
+    "holderAtStop": "refund_agent",
+    "actedFirst": "refund_agent",
+    "portReportedResume": "triage_agent"
+  }
+}

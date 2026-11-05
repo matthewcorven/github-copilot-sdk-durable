@@ -1,0 +1,26 @@
+{
+  "variant": "baseline",
+  "fault": "restart-after-checkpoint-control",
+  "outcome": "restart failed; control stops at triage_agent",
+  "holder": "triage_agent",
+  "holderAtFault": "triage_agent",
+  "holderAtEnd": "refund_agent",
+  "phase": "a handoff is queued at refund_agent's executor, so refund_agent is about to run",
+  "detail": "The process was stopped with SIGTERM at turn 1 under the coordinator, no delegation committed. The restarted process gave control to triage_agent — the first agent to act in a checkpoint it wrote afterwards — and its newest checkpoint then names refund_agent. the specialist tool results the checkpointed conversation held went from {} at the stop to {} after the restart. The restart did not complete: attempt 1 aborted with the framework's \"Expected exactly one update for key 'SharedState'\" — the framework aborts every resume of a workflow that still has work, and the port's resume has no way past it.",
+  "evidence": "stopped cleanly (pid 5707, SIGTERM, confirmed gone) at turn 1 under the coordinator, no delegation committed; frozen state: holder triage_agent, fingerprint checkpoints:4/authors:1/last:794976153c1a45d7835fe61c41aa985a, tool results {}; first action after the restart: triage_agent spoke in checkpoint turn 4 at 6d0cc8784d23498aab73918d3abff36a; the specialist tool results the checkpointed conversation held went from {} at the stop to {} after the restart; the baseline has no verifier, so a replay is read off the conversation its checkpoints hold; recovery needed 2 process(es) (attempt 1 aborted with the framework's \"Expected exactly one update for key 'SharedState'\"); port-reported resume: triage_agent",
+  "harness": {
+    "dotnet": "10.0.402",
+    "endpoint": "https://openrouter.ai/api/v1",
+    "model": "openai/gpt-4o-mini",
+    "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/restart-after-checkpoint.sh --variant baseline --fault-not-injected",
+    "commit": "8caeb53427c9b9b8ad8cf029eab590344d664dc7",
+    "apiKeyFrom": "OPENAI_API_KEY"
+  },
+  "recordedAt": "2026-11-05T18:37:05.923537+00:00",
+  "observations": {
+    "processes": 2,
+    "holderAtStop": "triage_agent",
+    "actedFirst": "triage_agent",
+    "portReportedResume": "triage_agent"
+  }
+}

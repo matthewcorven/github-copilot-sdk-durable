@@ -1,0 +1,26 @@
+{
+  "variant": "baseline",
+  "fault": "store-outage",
+  "outcome": "no half-transition; the store's path stopped resolving",
+  "holder": "triage_agent",
+  "holderAtFault": "triage_agent",
+  "holderAtEnd": "triage_agent",
+  "phase": "the newest checkpoint the surviving index names",
+  "detail": "The framework store's index was moved aside while the process held it open at the handoff (return_agent held turn 0). The live process exited on its own. The moved index survived intact — 20 index entr(y|ies), 0 torn, 20 whose checkpoint document is present — and the checkpoint documents it names are still present, so the state before the outage is readable: the checkpoint its last entry names holds triage_agent in control. There is no half-transition in the surviving index: the checkpoint documents are written whole, so the worst case is one entry that a reader of the moved index cannot see. After the outage, the live path holds no index at all, while the moved index grew by 15 entr(y|ies) because the port writes through the handle it opened before the outage — so nothing was lost, and the file the store's own path names is simply absent. The port does not expose a way to resume a completed run (its resume aborts in the framework), so the post-outage reading is the state itself rather than a process started on it; control after the outage was triage_agent, read from the checkpoint the surviving index names last.",
+  "evidence": "outage at the handoff: held by return_agent; moved /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/.scratch/band-f-faults/baseline/store-outage/state/index.jsonl aside with 5 record(s) in it; live process: exited on its own; moved file afterwards: 20 record(s); live path present: no; live output: [control] termination condition fired on turn 4 (the agent's closing message contains \"welcome\")  <scratch>/baseline/store-outage/state ; moved file: 20 index entr(y|ies), 0 torn, 20 whose checkpoint document is present; holder read from the moved state: triage_agent; holder after recovery: triage_agent; the baseline has no verifier",
+  "harness": {
+    "dotnet": "10.0.402",
+    "endpoint": "https://openrouter.ai/api/v1",
+    "model": "openai/gpt-4o-mini",
+    "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/store-outage.sh --variant baseline",
+    "commit": "8caeb53427c9b9b8ad8cf029eab590344d664dc7",
+    "apiKeyFrom": "OPENAI_API_KEY"
+  },
+  "recordedAt": "2026-11-05T18:38:06.997691+00:00",
+  "observations": {
+    "holderAtOutage": "return_agent",
+    "survivedHolder": "triage_agent",
+    "recoveredHolder": "triage_agent",
+    "liveProcess": "exited"
+  }
+}
