@@ -1,0 +1,5 @@
+bin/
+obj/
+
+# Python bytecode from the evidence readers.
+__pycache__/

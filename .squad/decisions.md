@@ -822,3 +822,51 @@ both; GraphQL showed 70/70 edges and proved nothing about whether work could sta
 
 **Rule:** After filing a dependency graph, run the consumer — not a query that confirms what was written.
 `issue_queue.py --mode status` is the acceptance test, and "all N issues available" is the failure signal.
+
+### 2026-11-05T05:30:00Z: The Durable layer commits a turn's tool records only when the turn returns — a dead turn leaves no record of its work
+**By:** core-engineer (Band B, PR #190 review follow-up)
+**What:** PR #190's evidence and header attributed a gap to `lib/Durable.cs` that the layer partly
+covers. `RecordToolCheckpoint` (`lib/Durable.cs:4271`) writes a per-call record on every completed
+tool call into `durable.checkpoint`, which is `DocumentHistory.Rewindable` (`lib:4590`), so a
+*finished* turn's calls stay readable through `DurableStore.Documents` / `DocumentState.Versions`
+(`lib:2072`, `lib:110`). The claim "no evidence in the store distinguishes 'the turn did nothing
+yet' from 'the turn had written four of five files'" was wrong for a run that finished, and so was
+"would need a durable 'tool intent' record the layer writes before each tool execution". The first
+correction then over-swung: it said a dead turn's work is "observable" because those records exist.
+They do not exist for a dead turn — nothing is committed at the call — so the record now states
+both halves.
+**References:** #150, #148, PR #190, real-world-scenarios/band-b-local-job-agent/evidence/durable-kill-and-resume.md §3c, durable/ralph-loop-durable.cs
+**Why:**
+#### Position
+
+The real gap is narrower and has two parts, both now demonstrated rather than asserted:
+
+1. **Tool records are committed only when the turn returns.** `RecordToolCheckpoint` queues one
+   per completed call (`CheckpointAsync` → `QueueCheckpointAsync`, `lib:4074`) and returns; the only
+   drain is `CheckpointBarrierAsync` (`lib:4150`), which `SubmitAsync` reaches at `lib:4246` *after*
+   `if (result is not null)`. Neither the `catch` (`lib:4251`) nor the `finally` (`lib:4259`) drains
+   it. A cancelled or failed turn therefore commits **no** tool record — not a partial list — and
+   the queue is discarded with the conversation. `STOP_MID_TURN=1` reproduces it end to end: the
+   dead conversation (`c37`) has one `durable.admission` at `admitted` and **no**
+   `durable.checkpoint` document at all, while every conversation whose turn returned ends its
+   history at `turn`.
+2. **There is no replay.** The SDK will not continue a half-finished turn, and the layer offers no
+   per-tool-call resume.
+
+The honest one-liner is: **what a dead turn leaves is an admission and the loop's own
+`turn-started` checkpoint — not a record of its work.** The work is therefore neither observable
+after the fact nor replayable: the store can say the turn was issued, and nothing about what it did.
+Closing that needs two things, and the first is the one a durable host notices: a record written
+*before* each call and settled after it, so an interrupted call can be told from one that never
+started (a cursor, not a history drained at success); and per-tool-call replay in the SDK. Both are
+feature requests, not a scenario fix.
+
+#### Why this matters beyond this PR
+
+`.github/copilot-instructions.md` requires a *reproduced* gap before a scenario may claim one. The
+previous text claimed a gap that source inspection contradicts, which is exactly the error class
+that makes the program's conclusions wrong: a reader would have filed a layer issue for something
+the layer already does, and missed the thing it actually does not do.
+**Rule:** Before attributing a limitation to `lib/`, read the write path, not just the public
+surface. A public getter existing does not mean the data is committed at the moment you need it —
+and a record existing does not mean it can be replayed.
