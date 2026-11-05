@@ -2,13 +2,15 @@
   "variant": "durable",
   "fault": "restart-after-checkpoint-control",
   "outcome": "resumed",
-  "phase": "committed at queued when the process was stopped (SIGTERM while waiting on the runtime, then the process was confirmed gone)",
-  "detail": "The restart resumed 1 task(s) from the committed phase and finished at done with 9 entries (task terminal). The committed checkpoint was ahead of the last completed turn, so the remaining work ran and the finished part did not.",
-  "evidence": "clean stop: SIGTERM while waiting on the runtime, then the process was confirmed gone; store after the stop: complete; resumed tasks: 1; restarts=1; session.send frames across both processes: 2; before: queued/0 entries []; after: done/9 entries [phase; intent:Validate home enquiry; phase; intent:Searching listings; tool:1 match(es); phase; phase; answer:The report is written an; report:The report is written an]",
+  "phase": "committed at queued when the process was stopped (SIGTERM while waiting on the runtime; wait reported: died of signal 15 (SIGTERM is 15); no shutdown hook ran (exit 143))",
+  "detail": "The restart resumed 1 task(s) from the committed checkpoint (queued, 0 entries) and finished at done with 9 entries (task terminal, exit 0). The checkpoint was honoured — the finished part was not re-run from the start — but the pass that was cut off was sent again, so the transcript carries 3 repeated entr(y/ies) relative to the control. Replay of the interrupted turn is not eliminated by the checkpoint; only work before the checkpoint is.",
+  "evidence": "stop: SIGTERM while waiting on the runtime; wait reported: died of signal 15 (SIGTERM is 15); no shutdown hook ran (exit 143); store after the stop: complete; lock sidecar after the stop: present; resumed tasks: 1; resume exit: 0; restarts=1; session.send frames across both processes: 2; repeated entries after the restart: 3; before: queued/0 entries []; after: done/9 entries [phase; intent:Validate home enquiry; phase; intent:Searching listings; tool:1 match(es); phase; phase; answer:The report is written an; report:The report is written an]",
   "harness": {
     "dotnet": "dotnet",
     "runtime": "tools/ReplayRuntime",
-    "command": "./faults/restart-after-checkpoint.sh --variant durable --fault-not-injected"
+    "command": "./faults/restart-after-checkpoint.sh --variant durable --fault-not-injected",
+    "script": "restart-after-checkpoint.sh",
+    "commit": "4ab32e3371a4738eac5ac1c1c6ee7fd64d9b2cc8"
   },
-  "recordedAt": "2026-11-05T15:16:44.688423+00:00"
+  "recordedAt": "2026-11-05T17:18:55.701691+00:00"
 }

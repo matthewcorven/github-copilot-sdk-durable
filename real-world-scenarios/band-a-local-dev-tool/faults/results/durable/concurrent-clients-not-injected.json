@@ -8,7 +8,9 @@
   "harness": {
     "dotnet": "dotnet",
     "runtime": "tools/ReplayRuntime",
-    "command": "./faults/concurrent-clients.sh --variant durable --fault-not-injected"
+    "command": "./faults/concurrent-clients.sh --variant durable --fault-not-injected",
+    "script": "concurrent-clients.sh",
+    "commit": "4ab32e3371a4738eac5ac1c1c6ee7fd64d9b2cc8"
   },
-  "recordedAt": "2026-11-05T15:17:01.156255+00:00"
+  "recordedAt": "2026-11-05T17:19:46.268046+00:00"
 }

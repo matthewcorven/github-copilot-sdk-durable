@@ -186,6 +186,12 @@ result cites, and the before/after controls are in `faults/results/summary.txt` 
 
 Three of these rows deserve to be read carefully rather than as wins:
 
+- **"resumed" does not mean "replayed nothing".** The Durable variant resumes from the committed
+  checkpoint, but the turn that was cut off left no answer, so the new process sends it again and the
+  intents that turn had already committed are committed a second time. The fault results show it
+  (`validating/2` → `done/10` with one intent twice, against 9 entries and one copy for the control), and
+  `durable/evidence/durable-restart-and-concurrency.md` documents the same effect. What the checkpoint
+  guarantees is that work *before* it is not redone and nothing durable is lost.
 - **`duplicate-delivery` is a tie at "doubled".** Neither variant deduplicates a repeated delivery: the
   baseline holds two agents, the Durable variant holds two conversations, two admissions and two
   searches. The Durable variant is not better here and the table does not claim it is.

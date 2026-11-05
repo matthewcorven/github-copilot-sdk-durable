@@ -33,6 +33,10 @@ FAULT="concurrent-clients"
 PORT="$(port_for "$VARIANT" "$FAULT")"
 FAULT_COMMAND="./faults/concurrent-clients.sh --variant $VARIANT$( [ "$INJECT" = "1" ] || echo ' --fault-not-injected' )"
 export FAULT_COMMAND
+# The script that owns this result, so summarise.py can tell a result written by this code from a stale
+# or hand-edited file.
+FAULT_SCRIPT="$(basename "${BASH_SOURCE[0]}")"
+export FAULT_SCRIPT
 
 require_tools || exit 1
 REASON="$(driver_unavailable_reason)"
@@ -55,7 +59,9 @@ if [ "$VARIANT" = "baseline" ]; then
   # relay. The first enquiry is held inside a tool call, so the second click lands while the first agent
   # is mid-turn — two run tasks inside the same dictionary at the same moment, which is the race.
   if [ "$INJECT" = "1" ]; then pause_at session.tools.handlePendingToolCall; fi
-  PID="$(start_variant baseline "$RUN_DIR" "$PORT" concurrent.json)"
+  start_variant baseline "$RUN_DIR" "$PORT" concurrent.json
+  PID="${STARTED_PID}"
+  PID="${STARTED_PID}"
   track_pid "$PID"
   wait_for_port "$PORT" || { log "concurrent-clients: baseline never served"; exit 1; }
   if [ "$INJECT" = "1" ]; then
@@ -133,10 +139,14 @@ else
     # The first enquiry is held inside a tool call, so the second is submitted while the first is blocked
     # in a turn rather than merely queued behind it. Both are then released together.
     pause_at session.tools.handlePendingToolCall
-    PID="$(start_headless "$RUN_DIR" concurrent.json --enquiry "$FIRST" --enquiry "$SECOND")"
+    start_headless "$RUN_DIR" concurrent.json --enquiry "$FIRST" --enquiry "$SECOND"
+    PID="${STARTED_PID}"
+    PID="${STARTED_PID}"
   else
     # The control: sequential submission, one enquiry at a time, by running the driver twice.
-    PID="$(start_headless "$RUN_DIR" concurrent.json --enquiry "$FIRST")"
+    start_headless "$RUN_DIR" concurrent.json --enquiry "$FIRST"
+    PID="${STARTED_PID}"
+    PID="${STARTED_PID}"
   fi
   track_pid "$PID"
   if [ "$INJECT" = "1" ]; then
@@ -144,11 +154,22 @@ else
     log "concurrent-clients: the first enquiry is blocked inside a tool call; releasing it"
     release_gate "$RUN_DIR"
   fi
-  wait_headless "$RUN_DIR" 300 || { log "concurrent-clients: the run did not finish"; stop_variant_and_clear "$RUN_DIR"; }
+  # A run that does not end is a harness error: there is no observation to classify.
+  if ! wait_headless "$RUN_DIR" 300; then
+    log "concurrent-clients: the run did not finish within 300s; that is a harness error"
+    stop_variant_and_clear "$RUN_DIR"
+    exit 1
+  fi
   if [ "$INJECT" = "0" ]; then
-    PID="$(start_headless "$RUN_DIR" concurrent.json --enquiry "$SECOND")"
+    start_headless "$RUN_DIR" concurrent.json --enquiry "$SECOND"
+    PID="${STARTED_PID}"
+    PID="${STARTED_PID}"
     track_pid "$PID"
-    wait_headless "$RUN_DIR" 300 || { log "concurrent-clients-control: the second run did not finish"; stop_variant_and_clear "$RUN_DIR"; }
+    if ! wait_headless "$RUN_DIR" 300; then
+      log "concurrent-clients-control: the second run did not finish within 300s; that is a harness error"
+      stop_variant_and_clear "$RUN_DIR"
+      exit 1
+    fi
   fi
   read -r DOCS TASKS TERMINAL ENTRIES CROSSED <<<"$("$PYTHON" -c '
 import json, sys

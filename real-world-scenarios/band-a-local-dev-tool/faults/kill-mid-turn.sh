@@ -3,10 +3,15 @@
 #
 #   ./faults/kill-mid-turn.sh --variant baseline|durable [--fault-not-injected]
 #
-# The injection point is the gate holding `session.send`: the prompt has been sent, the answer has not
-# come back, and the application is blocked waiting for it. At that instant the process is killed with
-# `kill -9`, by the PID the shell started. Nothing about the kill is simulated. The observation is made
-# afterwards, by a different process.
+# The injection point is the gate holding a tool result: the prompt has been sent, the turn's first tool
+# call has committed, the answer has not come back, and the application is blocked waiting for the runtime.
+# At that instant the process is killed with `kill -9`, by the PID the shell started. Nothing about the
+# kill is simulated. The observation is made afterwards, by a different process.
+#
+# What the resume guarantees, and what the result says: work before the committed checkpoint is not
+# redone. The interrupted turn is not replayed — nothing durable records that it produced an answer — so it
+# is sent again, and the intents it already committed are committed a second time. The result reports the
+# repeated-entry count against the control rather than calling the transcript exact.
 #
 #   --fault-not-injected is the before/after control. It runs the same steps and releases the held turn
 #   instead of killing, so the result must show the enquiry finishing. A control that also lost the
@@ -33,6 +38,10 @@ FAULT="kill-mid-turn"
 PORT="$(port_for "$VARIANT" "$FAULT")"
 FAULT_COMMAND="./faults/kill-mid-turn.sh --variant $VARIANT$( [ "$INJECT" = "1" ] || echo ' --fault-not-injected' )"
 export FAULT_COMMAND
+# The script that owns this result, so summarise.py can tell a result written by this code from a stale
+# or hand-edited file.
+FAULT_SCRIPT="$(basename "${BASH_SOURCE[0]}")"
+export FAULT_SCRIPT
 
 require_tools || exit 1
 REASON="$(driver_unavailable_reason)"
@@ -53,7 +62,9 @@ if [ "$VARIANT" = "baseline" ]; then
   pause_at session.tools.handlePendingToolCall
   FAULTS_PAUSE_COUNT=2
   export FAULTS_PAUSE_COUNT
-  PID="$(start_variant baseline "$RUN_DIR" "$PORT" enquiry.json)"
+  start_variant baseline "$RUN_DIR" "$PORT" enquiry.json
+  PID="${STARTED_PID}"
+  PID="${STARTED_PID}"
   track_pid "$PID"
   wait_for_port "$PORT" || { log "kill-mid-turn: baseline never served on $PORT"; tail -5 "$RUN_DIR/server.log" >&2; exit 1; }
   cat > "$RUN_DIR/spec.json" <<'JSON'
@@ -81,7 +92,9 @@ else
   pause_at session.tools.handlePendingToolCall
   FAULTS_PAUSE_COUNT=2
   export FAULTS_PAUSE_COUNT
-  PID="$(start_headless "$RUN_DIR" enquiry.json --enquiry "Looking for a 3-bed family home near good schools in the suburbs")"
+  start_headless "$RUN_DIR" enquiry.json --enquiry "Looking for a 3-bed family home near good schools in the suburbs"
+  PID="${STARTED_PID}"
+  PID="${STARTED_PID}"
   track_pid "$PID"
 fi
 
@@ -189,7 +202,9 @@ if [ "$VARIANT" = "baseline" ]; then
   # The 2nd tool result is already past in this run; the restart starts no enquiry, so nothing is held.
   FAULTS_PAUSE_ON=""
   export FAULTS_PAUSE_ON
-  PID2="$(start_variant baseline "$RUN_DIR" "$PORT" enquiry.json)"
+  start_variant baseline "$RUN_DIR" "$PORT" enquiry.json
+  PID2="${STARTED_PID}"
+  PID2="${STARTED_PID}"
   track_pid "$PID2"
   wait_for_port "$PORT" || { log "kill-mid-turn: the restarted baseline never served"; exit 1; }
   cat > "$RUN_DIR/spec-observe.json" <<'JSON'
@@ -201,7 +216,6 @@ JSON
   }
   # The counts are lifted verbatim from the page after the restart, so the sentence below is a reading
   # of the page rather than a re-derivation of it.
-  CARD_COUNT="$(json_get "$RUN_DIR/observe.json" final.dashboard.processing)"
   CARD_COUNT="$("$PYTHON" -c '
 import json, sys
 final = (json.load(open(sys.argv[1])) or {}).get("final") or {}
@@ -223,13 +237,25 @@ else
   FAULTS_PAUSE_ON=""
   FAULTS_PAUSE_COUNT=1
   export FAULTS_PAUSE_ON FAULTS_PAUSE_COUNT
-  PID2="$(start_headless "$RUN_DIR" enquiry.json --resume)"
+  start_headless "$RUN_DIR" enquiry.json --resume
+  PID2="${STARTED_PID}"
+  PID2="${STARTED_PID}"
   track_pid "$PID2"
+  # A resume that does not finish is a harness error, not a fault outcome. `resumed tasks:` is printed
+  # before the task is awaited, so grepping it would call a hung process "resumed"; the observation is
+  # only valid once the process has exited and its status is known.
   if ! wait_headless "$RUN_DIR" 240; then
-    log "kill-mid-turn: the resuming process did not finish; killing it"
+    log "kill-mid-turn: the resuming process did not finish within 240s; that is a harness error"
     stop_variant_and_clear "$RUN_DIR"
+    exit 1
+  fi
+  RESUME_EXIT="$(headless_status)"
+  if [ "$(grep -c '^disposed\.' "$RUN_DIR/server.log" 2>/dev/null || true)" = "0" ]; then
+    log "kill-mid-turn: the resuming process exited (${RESUME_EXIT}) without reaching its disposal line; that is a harness error"
+    exit 1
   fi
   RESUMED_COUNT="$(grep -o 'resumed tasks:  *[0-9]*' "$RUN_DIR/server.log" 2>/dev/null | grep -o '[0-9]*$' | head -1)"
+  REPEATED="$(store_repeats "$RUN_DIR/store.jsonl")"
   RESUMED_LINE="$(grep -E 'resumes: the enquiry is committed at phase' "$RUN_DIR/server.log" 2>/dev/null | head -1)"
   RESUMED_PHASE="$(printf '%s' "$RESUMED_LINE" | sed -E 's/.*committed at phase ([a-z_]+).*/\1/')"
   AFTER_PHASE="$(store_get "$RUN_DIR/store.jsonl" band-a.enquiry phase)"
@@ -257,17 +283,17 @@ PY
     OBSERVED="resumed"
     if [ "$INJECT" = "0" ]; then
       PHASE="an uninterrupted model turn (the control)"
-      DETAIL="Control: the same steps without the kill. The gate's held turn was released and the enquiry finished with task $AFTER_TASK at phase $AFTER_PHASE, $AFTER_ENTRIES transcript entries, report ${REPORT_LEN} characters. This is what the killed run is compared against."
+      DETAIL="Control: the same steps without the kill. The gate's held turn was released and the enquiry finished with task $AFTER_TASK at phase $AFTER_PHASE, $AFTER_ENTRIES transcript entries, ${REPEATED:-0} repeated entr(y/ies), report ${REPORT_LEN} characters. This is what the killed run is compared against, and its repeated-entry count is the baseline the killed run's is read against."
     else
       PHASE="committed at ${RESUMED_PHASE:-$AFTER_KILL_PHASE} when the process was killed"
-      DETAIL="The kill left a committed document at phase $AFTER_KILL_PHASE with $AFTER_KILL_ENTRIES entries and task status $AFTER_KILL_TASK. A new process resumed $RESUMED_COUNT task(s) at phase ${RESUMED_PHASE:-?} and finished with task $AFTER_TASK at phase $AFTER_PHASE, $AFTER_ENTRIES entries, restarts=$AFTER_RESTARTS, report ${REPORT_LEN} characters. The turn that was cut off was re-sent, not replayed: it left no answer to reuse."
+      DETAIL="The kill left a committed document at phase $AFTER_KILL_PHASE with $AFTER_KILL_ENTRIES entries and task status $AFTER_KILL_TASK. A new process resumed $RESUMED_COUNT task(s) at phase ${RESUMED_PHASE:-?} and finished with task $AFTER_TASK at phase $AFTER_PHASE, $AFTER_ENTRIES entries, restarts=$AFTER_RESTARTS, exit $RESUME_EXIT, report ${REPORT_LEN} characters. The turn that was cut off committed no answer, so the new process sends it again: the pass is re-sent and its earlier intents are committed a second time — ${REPEATED:-0} repeated entr(y/ies) against the control. What the resume guarantees is that everything before the committed checkpoint is not redone; it does not make the interrupted turn happen once."
     fi
   else
     OBSERVED="lost"
     PHASE="committed at $AFTER_KILL_PHASE when the process was killed"
     DETAIL="A new process resumed nothing (resumed=$RESUMED_COUNT); the store it opened was not continued: task ${AFTER_TASK:-none}, phase ${AFTER_PHASE:-none}."
   fi
-  EVIDENCE="$(grep -E 'resumed tasks:|resumes:|finished:|enquiry .* settled' "$RUN_DIR/server.log" 2>/dev/null | head -8)"
+  EVIDENCE="$(grep -E 'resumed tasks:|resumes:|finished:|enquiry .* settled' "$RUN_DIR/server.log" 2>/dev/null | head -8); resume exit=${RESUME_EXIT:-n/a}; repeated entries after the resume=${REPEATED:-0}; entries after=${AFTER_ENTRIES:-?}"
 fi
 
 record_result "$VARIANT" "$FAULT" "$OBSERVED" "$PHASE" "$DETAIL" "$EVIDENCE"

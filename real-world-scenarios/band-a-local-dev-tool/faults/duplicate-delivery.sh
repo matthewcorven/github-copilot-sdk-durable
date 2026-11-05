@@ -35,6 +35,10 @@ FAULT="duplicate-delivery"
 PORT="$(port_for "$VARIANT" "$FAULT")"
 FAULT_COMMAND="./faults/duplicate-delivery.sh --variant $VARIANT$( [ "$INJECT" = "1" ] || echo ' --fault-not-injected' )"
 export FAULT_COMMAND
+# The script that owns this result, so summarise.py can tell a result written by this code from a stale
+# or hand-edited file.
+FAULT_SCRIPT="$(basename "${BASH_SOURCE[0]}")"
+export FAULT_SCRIPT
 
 require_tools || exit 1
 REASON="$(driver_unavailable_reason)"
@@ -51,7 +55,9 @@ ENQUIRY="Need a downtown condo with parking, 1-2 bedrooms"
 if [ "$INJECT" = "1" ]; then PHASE="the same enquiry delivered twice"; else PHASE="the same enquiry delivered once (the control)"; fi
 
 if [ "$VARIANT" = "baseline" ]; then
-  PID="$(start_variant baseline "$RUN_DIR" "$PORT" enquiry.json)"
+  start_variant baseline "$RUN_DIR" "$PORT" enquiry.json
+  PID="${STARTED_PID}"
+  PID="${STARTED_PID}"
   track_pid "$PID"
   wait_for_port "$PORT" || { log "duplicate-delivery: baseline never served"; exit 1; }
   if [ "$INJECT" = "1" ]; then
@@ -107,22 +113,37 @@ print(" | ".join(card.get("title") or "" for card in (final.get("cards") or []))
   fi
   EVIDENCE="cards=$CARDS [$TITLES]; session.send frames=$SENT; processing=$(json_get "$RUN_DIR/observe.json" final.dashboard.processing); completed=$(json_get "$RUN_DIR/observe.json" final.dashboard.completed); rejected=$(json_get "$RUN_DIR/observe.json" final.dashboard.rejected)"
 else
-  # The Durable variant is delivered twice through the same page path: the sample entry double clicked,
-  # which calls `AppState.RunAgentAsync` twice. Its command line would have had to be given the same
-  # `--enquiry` twice, which is a different question (two enquiries that happen to read alike), so the
-  # page is used so the duplicate shares the enquiry text *and* the click path.
-  PID="$(start_headless "$RUN_DIR" enquiry.json)"
+  # The Durable variant is delivered twice the same way a customer would: the page's sample entry double
+  # clicked, so Blazor dispatches two `SubmitEnquiry` calls and both share the click path as well as the
+  # text. Its command line would have been the other question — two enquiries given the same string — and
+  # `Headless.VerifyIsolation` refuses that by design (see the crash finding below), so the page is what
+  # measures what this fault is named for.
+  start_variant durable "$RUN_DIR" "$PORT" enquiry.json
+  PID="${STARTED_PID}"
+  PID="${STARTED_PID}"
   track_pid "$PID"
-  # The headless run needs no browser, but a duplicate needs two deliveries, and its command line can
-  # send the same text twice — which is exactly what a double-submitted form does.
-  stop_variant_and_clear "$RUN_DIR"
+  wait_for_port "$PORT" || { log "duplicate-delivery: the Durable variant never served"; exit 1; }
   if [ "$INJECT" = "1" ]; then
-    PID="$(start_headless "$RUN_DIR" enquiry.json --enquiry "$ENQUIRY" --enquiry "$ENQUIRY")"
+    cat > "$RUN_DIR/spec.json" <<JSON
+{"actions": [
+  {"kind": "submit-twice", "text": "$ENQUIRY"},
+  {"kind": "wait", "ms": 6000},
+  {"kind": "snapshot", "label": "after the double delivery"}
+]}
+JSON
   else
-    PID="$(start_headless "$RUN_DIR" enquiry.json --enquiry "$ENQUIRY")"
+    cat > "$RUN_DIR/spec.json" <<JSON
+{"actions": [
+  {"kind": "submit", "text": "$ENQUIRY"},
+  {"kind": "wait", "ms": 6000},
+  {"kind": "snapshot", "label": "after a single delivery"}
+]}
+JSON
   fi
-  track_pid "$PID"
-  wait_headless "$RUN_DIR" 300 || { log "duplicate-delivery: the run did not finish"; stop_variant_and_clear "$RUN_DIR"; }
+  drive "$RUN_DIR" "$PORT" "$RUN_DIR/spec.json" "$RUN_DIR/observe.json" || {
+    log "duplicate-delivery: the Durable page could not be driven"
+    exit 1
+  }
   read -r TASKS ADMISSIONS DOCS ENTRIES SEARCHES <<<"$("$PYTHON" -c '
 import json, sys
 tasks, admissions, docs, entries, searches = set(), 0, set(), 0, 0
@@ -150,24 +171,33 @@ for conversation, value in values.items():
     searches += sum(1 for e in (value.get("entries") or []) if e.get("kind") == "tool")
 print(len(tasks), admissions, len(docs), entries, searches)
 ' "$RUN_DIR/store.jsonl")"
-  SUBMITTED="$(grep -o 'submitted [0-9]* enquiries' "$RUN_DIR/server.log" 2>/dev/null | grep -o '[0-9]*' | head -1)"
   TRANSCRIPT="$(store_transcript "$RUN_DIR/store.jsonl")"
-  if [ "${TASKS:-0}" -ge 2 ]; then
-    [ "$INJECT" = "1" ] && OBSERVED="doubled" || OBSERVED="not injected: one delivery, doubled"
-    DETAIL="Two deliveries of the same enquiry produced $DOCS enquiry documents, $ADMISSIONS model admissions and $SEARCHES search tool call(s), across $ENTRIES transcript entries. The variant has no identity for an enquiry to deduplicate on, so the second delivery is a second conversation: the search and the report happen twice, and the store keeps both documents intact — nothing was corrupted, but nothing was reused either."
-  elif [ "${TASKS:-0}" = "1" ]; then
-    if [ "$INJECT" = "1" ]; then
-      OBSERVED="deduplicated"
-      DETAIL="Two deliveries produced $DOCS enquiry document and $ADMISSIONS model admission: the second delivery was absorbed, so the effects did not double."
-    else
-      OBSERVED="control: single delivery"
-      DETAIL="Control: one delivery produced $DOCS enquiry document, $ADMISSIONS model admission, $SEARCHES search tool call and $ENTRIES transcript entries. The same steps delivered twice produced two of each, so the doubling is attributable to the duplicate delivery and not to the run."
-    fi
+  # The server's own account, because a page that looks right can hide a process that threw. The cross-talk
+  # assertion is what fires when two documents carry the same enquiry text, and it ends the process.
+  # A page that looks right can hide a process that threw, so the server's own output is read. A web host
+  # does not print the headless driver's "disposed." line, so its absence here means nothing; an exception
+  # does.
+  CRASH_COUNT="$(grep -Ec 'Unhandled exception|cross-talk:|An unhandled error' "$RUN_DIR/server.log" 2>/dev/null || true)"
+  CRASH_TEXT="$(grep -E 'Unhandled exception|cross-talk:|An unhandled error' "$RUN_DIR/server.log" 2>/dev/null | head -1)"
+  CARD_COUNT="$("$PYTHON" -c '
+import json, sys
+final = (json.load(open(sys.argv[1])) or {}).get("final") or {}
+print(len(final.get("cards") or []))
+' "$RUN_DIR/observe.json")"
+  if [ "${CRASH_COUNT:-0}" -gt 0 ]; then
+    OBSERVED="crashed"
+    DETAIL="Two deliveries of one enquiry created $DOCS documents and $ADMISSIONS model admissions, and the process threw: $CRASH_TEXT. The side effects doubled and the process did not survive them."
+  elif [ "$INJECT" = "0" ]; then
+    OBSERVED="control: single delivery"
+    DETAIL="Control: one delivery produced $CARD_COUNT card, $DOCS enquiry document, $ADMISSIONS model admission, $SEARCHES search tool call and $ENTRIES transcript entries. The same steps delivered twice produced two of each, so the doubling is attributable to the duplicate delivery and not to the run."
+  elif [ "${TASKS:-0}" -ge 2 ]; then
+    OBSERVED="doubled"
+    DETAIL="Two deliveries of the same enquiry produced $CARD_COUNT cards, $DOCS enquiry documents, $ADMISSIONS model admissions and $SEARCHES search tool call(s), across $ENTRIES transcript entries. The variant has no identity for an enquiry to deduplicate on, so the second delivery is a second conversation: the search and the report happen twice, and the store keeps both documents intact — nothing was corrupted, but nothing was reused either."
   else
     OBSERVED="lost"
-    DETAIL="The deliveries produced $DOCS enquiry documents; nothing was recorded."
+    DETAIL="The deliveries produced $DOCS enquiry documents and $CARD_COUNT cards; nothing was recorded."
   fi
-  EVIDENCE="deliveries=$([ "$INJECT" = "1" ] && echo 2 || echo 1); submitted=$SUBMITTED; enquiry documents=$DOCS; task records=$TASKS; admissions=$ADMISSIONS; search tool calls=$SEARCHES; transcript of the last document=$TRANSCRIPT"
+  EVIDENCE="deliveries=$([ "$INJECT" = "1" ] && echo 2 || echo 1); cards=$CARD_COUNT; enquiry documents=$DOCS; task records=$TASKS; admissions=$ADMISSIONS; search tool calls=$SEARCHES; exception/cross-talk lines=$CRASH_COUNT [${CRASH_TEXT:-none}]; transcript of the last document=$TRANSCRIPT; the headless driver path cannot express this fault at all: Headless.VerifyIsolation throws when two documents carry the same enquiry text, so the duplicate is delivered through the page, as a customer would"
 fi
 
 record_result "$VARIANT" "$FAULT" "$OBSERVED" "$PHASE" "$DETAIL" "$EVIDENCE"

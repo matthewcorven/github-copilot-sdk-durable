@@ -19,6 +19,15 @@ FAULTS = [
 ]
 VARIANTS = ["baseline", "durable"]
 
+# Which script owns each result name. `-control` and `-not-injected` are the same script as their fault, so
+# a result that says it came from a different script is stale or hand-edited and must not be rendered as
+# evidence.
+def owning_script(name):
+    for fault in FAULTS:
+        if name == fault or name == fault + "-control" or name == fault + "-not-injected":
+            return fault + ".sh"
+    return None
+
 
 def load(results_dir, variant, fault):
     path = os.path.join(results_dir, variant, fault + ".json")
@@ -41,8 +50,29 @@ def label(name, outcome):
     return outcome
 
 
+def check(name, variant, doc, checkout):
+    """Everything a result has to be before it may be rendered as evidence."""
+    found = []
+    if doc is None:
+        return found
+    expected = owning_script(name)
+    recorded = (doc.get("harness") or {}).get("script") or ""
+    if expected and recorded and recorded != expected:
+        found.append("%s / %s: harness.script is %r but the fault %r is owned by %r" % (variant, name, recorded, name, expected))
+    elif expected and not recorded:
+        found.append("%s / %s: harness.script is missing; the result cannot be attributed to a script" % (variant, name))
+    commit = (doc.get("harness") or {}).get("commit") or ""
+    if commit and checkout and commit != checkout:
+        found.append(
+            "%s / %s: recorded at %s but the checkout is %s; the numbers describe different code"
+            % (variant, name, commit[:12], checkout[:12])
+        )
+    return found
+
+
 def main():
     results_dir, status_file = sys.argv[1:3]
+    checkout = os.environ.get("FAULTS_COMMIT") or (sys.argv[3] if len(sys.argv) > 3 else "")
     problems = []
 
     print("## Fault matrix — outcome per fault per variant")
@@ -57,6 +87,7 @@ def main():
                 problems.append("%s / %s: no result file" % (variant, fault))
                 row.append("**missing**")
             else:
+                problems.extend(check(fault, variant, doc, checkout))
                 row.append("**%s**" % (doc.get("outcome")))
         print("| `%s` | %s | %s |" % (fault, row[0], row[1]))
     print()
@@ -99,6 +130,7 @@ def main():
                 control = control or load(results_dir, variant, name)
             if doc is None or control is None:
                 continue
+            problems.extend(check(fault + "-control", variant, control, checkout))
             print(
                 "| `%s` | %s | %s | %s | %s | %s |"
                 % (
@@ -110,6 +142,14 @@ def main():
                     short(doc.get("phase"), 50),
                 )
             )
+    print()
+
+    print("## Provenance")
+    print()
+    if checkout:
+        print("Checked out at `%s`; every result's `harness.commit` is compared against it." % checkout[:12])
+    else:
+        print("No checkout commit was supplied, so results were not checked for staleness.")
     print()
 
     print("## Harness status")

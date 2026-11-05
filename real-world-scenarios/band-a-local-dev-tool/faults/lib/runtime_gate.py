@@ -66,6 +66,24 @@ CHILD = subprocess.Popen(
     bufsize=1,
 )
 
+# The gate and the runtime are children of the application, so `kill -9` on the application reparents
+# them instead of ending them: they would outlive the run and hold the fixture open. Recording both PIDs
+# where the harness can read them is what lets the reap be by PID, without matching on a path (which would
+# also match a reviewer tailing a log).
+if MARKER_DIR:
+    try:
+        with open(os.path.join(MARKER_DIR, "pids"), "a", encoding="utf-8") as handle:
+            handle.write("%d\n%d\n" % (os.getpid(), CHILD.pid))
+    except OSError:
+        pass
+
+
+def reap_children():
+    try:
+        CHILD.kill()
+    except Exception:
+        pass
+
 
 def read_frame(stream):
     length = None
@@ -135,5 +153,8 @@ while True:
 
     write_frame(CHILD.stdin, body)
 
-CHILD.stdin.close()
+try:
+    CHILD.stdin.close()
+except Exception:
+    pass
 CHILD.wait()

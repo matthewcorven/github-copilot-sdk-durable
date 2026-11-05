@@ -20,8 +20,15 @@ set -uo pipefail
 HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BAND_DIR="$(cd "$HARNESS_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$BAND_DIR/../.." && pwd)"
-RESULTS_DIR="$HARNESS_DIR/results"
+# Where results land. The checked-in directory is the evidence, so a run only writes there when it is
+# told to promote; a plain run writes into a directory of its own and prints the command that would
+# promote it. That is what stops a machine without Playwright from silently replacing five measured
+# baseline rows with "not exercised".
+RESULTS_DIR="${FAULTS_RESULTS_DIR:-$HARNESS_DIR/results}"
+CHECKED_IN_RESULTS="$HARNESS_DIR/results"
 SCRATCH_ROOT="${FAULTS_SCRATCH:-$REPO_ROOT/.scratch/band-a-faults}"
+COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+export FAULTS_COMMIT="$COMMIT"
 
 DOTNET="${DOTNET:-/opt/homebrew/bin/dotnet}"
 PYTHON="${PYTHON:-python3}"
@@ -123,71 +130,92 @@ start_variant() {
   write_gate "$rundir/copilot" "$FIXTURES/$fixture" "$rundir/runtime.log"
 
   if [ "$variant" = "baseline" ]; then
-    (
-      cd "$out"
-      COPILOT_CLI_PATH="$rundir/copilot" \
-      ASPNETCORE_ENVIRONMENT=Production \
-      ASPNETCORE_URLS="http://127.0.0.1:$port" \
-      FAULTS_PAUSE_ON="${FAULTS_PAUSE_ON:-}" \
-      FAULTS_MARKER="$rundir" \
-      REPLAY_MARKER_PATH="$rundir/replay.log" \
-      Logging__LogLevel__Default=Warning \
-        "$DOTNET" "$assembly" >"$rundir/server.log" 2>&1 &
-      echo $! > "$rundir/pid"
-    )
-  else
-    (
-      cd "$out"
-      BAND_A_STORE="$store" \
-      BAND_A_FIXTURE="$FIXTURES/$fixture" \
-      DURABLE_RUNTIME_PATH="$rundir/copilot" \
-      ASPNETCORE_ENVIRONMENT=Production \
-      ASPNETCORE_URLS="http://127.0.0.1:$port" \
-      FAULTS_PAUSE_ON="${FAULTS_PAUSE_ON:-}" \
-      FAULTS_MARKER="$rundir" \
-      REPLAY_MARKER_PATH="$rundir/replay.log" \
-      Logging__LogLevel__Default=Warning \
-        "$DOTNET" "$assembly" "${extra[@]+"${extra[@]}"}" >"$rundir/server.log" 2>&1 &
-      echo $! > "$rundir/pid"
-    )
-  fi
-  cat "$rundir/pid"
-}
-
-# Starts the Durable variant in its command-line mode: no web host, no port. `Headless.TryRun` runs the
-# same AppState the page injects, which is the path the variant's own evidence uses, so a fault script
-# does not need a browser for it. Extra arguments are the headless driver's own flags.
-start_headless() {
-  local rundir="$1" fixture="$2"
-  shift 2
-  local out="$rundir/app"
-  write_gate "$rundir/copilot" "$FIXTURES/$fixture" "$rundir/runtime.log"
-  (
-    cd "$out"
-    BAND_A_STORE="${FAULTS_STORE:-$rundir/store.jsonl}" \
-    BAND_A_FIXTURE="$FIXTURES/$fixture" \
-    DURABLE_RUNTIME_PATH="$rundir/copilot" \
+    # Started by this shell, not in a subshell: `wait` must be able to report this process's status, and
+    # `kill -9` must reach the application rather than a shell that has already exited.
+    pushd "$out" >/dev/null || return 1
+    COPILOT_CLI_PATH="$rundir/copilot" \
+    ASPNETCORE_ENVIRONMENT=Production \
+    ASPNETCORE_URLS="http://127.0.0.1:$port" \
     FAULTS_PAUSE_ON="${FAULTS_PAUSE_ON:-}" \
     FAULTS_MARKER="$rundir" \
     REPLAY_MARKER_PATH="$rundir/replay.log" \
     Logging__LogLevel__Default=Warning \
-      "$DOTNET" BandADurable.dll "$@" >"$rundir/server.log" 2>&1 &
+      "$DOTNET" "$assembly" >"$rundir/server.log" 2>&1 &
     echo $! > "$rundir/pid"
-  )
-  cat "$rundir/pid"
+    popd >/dev/null || true
+  else
+    pushd "$out" >/dev/null || return 1
+    BAND_A_STORE="$store" \
+    BAND_A_FIXTURE="$FIXTURES/$fixture" \
+    DURABLE_RUNTIME_PATH="$rundir/copilot" \
+    ASPNETCORE_ENVIRONMENT=Production \
+    ASPNETCORE_URLS="http://127.0.0.1:$port" \
+    FAULTS_PAUSE_ON="${FAULTS_PAUSE_ON:-}" \
+    FAULTS_MARKER="$rundir" \
+    REPLAY_MARKER_PATH="$rundir/replay.log" \
+    Logging__LogLevel__Default=Warning \
+      "$DOTNET" "$assembly" "${extra[@]+"${extra[@]}"}" >"$rundir/server.log" 2>&1 &
+    echo $! > "$rundir/pid"
+    popd >/dev/null || true
+  fi
+  STARTED_PID="$(cat "$rundir/pid")"
+  echo "harness: started $variant as pid $STARTED_PID"
 }
 
-# Waits until the headless driver has disposed its store, or the timeout. A headless run finishes and
-# exits; this is how a caller observes its end rather than sleeping a fixed time.
+# Starts the Durable variant in its command-line mode, and leaves the PID in STARTED_PID.
+#
+# Call it as a statement, not as `PID=$(start_headless ...)`: a command substitution runs the function in
+# a subshell, so the background job would belong to that subshell and `wait` in the caller would report 127
+# instead of the application's status. STARTED_PID exists for exactly that reason.
+start_headless() {
+  local rundir="$1" fixture="$2"
+  shift 2
+  local out="$rundir/app"
+  local log="$rundir/server.log"
+  write_gate "$rundir/copilot" "$FIXTURES/$fixture" "$rundir/runtime.log"
+  # The application is started by *this* shell, not inside a subshell: `wait` can only report the exit
+  # status of a job the shell owns, and `kill -9 "$!"` must reach the application rather than a wrapper
+  # that has already exited. The directory change is undone immediately afterwards.
+  pushd "$out" >/dev/null || return 1
+  BAND_A_STORE="${FAULTS_STORE:-$rundir/store.jsonl}" \
+  BAND_A_FIXTURE="$FIXTURES/$fixture" \
+  DURABLE_RUNTIME_PATH="$rundir/copilot" \
+  FAULTS_PAUSE_ON="${FAULTS_PAUSE_ON:-}" \
+  FAULTS_MARKER="$rundir" \
+  REPLAY_MARKER_PATH="$rundir/replay.log" \
+  Logging__LogLevel__Default=Warning \
+    "$DOTNET" BandADurable.dll "$@" >"$log" 2>&1 &
+  echo $! > "$rundir/pid"
+  popd >/dev/null || true
+  STARTED_PID="$(cat "$rundir/pid")"
+  echo "harness: started headless as pid $STARTED_PID"
+}
+
+# Waits until the headless driver exits, then reports the application's *own* exit status.
+#   0  the process exited on its own — whatever the status was, the caller reads it from $HEADLESS_STATUS
+#   1  the process was still running when the timeout expired (it was stopped, and the status is then
+#      meaningless)
+# The status is left in HEADLESS_STATUS as well, because a caller that wants to distinguish "finished
+# cleanly" from "crashed after the fault" must not confuse it with this function's return value.
+HEADLESS_STATUS=""
 wait_headless() {
   local rundir="$1" seconds="${2:-180}"
-  local pid deadline
+  local pid deadline status
+  HEADLESS_STATUS=""
   pid="$(cat "$rundir/pid" 2>/dev/null || true)"
+  [ -n "$pid" ] || { HEADLESS_STATUS="no-process"; return 0; }
   deadline=$((SECONDS + seconds))
-  while [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do sleep 0.2; done
-  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then return 1; fi
+  while kill -0 "$pid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do sleep 0.2; done
+  if kill -0 "$pid" 2>/dev/null; then return 1; fi
+  # `wait` is what surfaces the exit code; a process started with `&` in a subshell would report 127.
+  wait "$pid" 2>/dev/null
+  status=$?
+  HEADLESS_STATUS="$status"
   return 0
 }
+
+# The exit status left by the most recent `wait_headless`, or "not-observed" when there is none.
+headless_status() { echo "${HEADLESS_STATUS:-not-observed}"; }
 
 wait_for_port() {
   local port="$1" attempts="${2:-160}" i=0
@@ -214,16 +242,31 @@ kill_tree() {
 
 # Stops a variant but leaves its scratch directory: a script that means to resume the same store must not
 # have the store removed underneath it.
+#
+# Only the process tree is reaped. Matching on the run's path would also match a reviewer tailing the
+# log, an editor holding the file, or a second invocation of the same fault — a diagnostic that kills
+# someone else's process is worse than a stray one. `FAULTS_REAP_PATH=1` restores the path sweep for a
+# caller who wants it, and `KEEP=1` makes the trap leave everything alone.
 stop_variant_keep() {
-  local rundir="$1" pid
+  local rundir="$1" pid helper
   pid="$(cat "$rundir/pid" 2>/dev/null || true)"
+  # The gate records itself and its runtime so they can be reaped by PID. They matter because `kill -9` on
+  # the application reparents them: the tree walk cannot find a child whose parent is already gone.
+  if [ -f "$rundir/pids" ]; then
+    while read -r helper; do
+      [ -n "$helper" ] && kill -9 "$helper" 2>/dev/null || true
+    done < "$rundir/pids"
+    rm -f "$rundir/pids"
+  fi
   kill_tree "$pid"
-  local stray
-  for stray in $(pgrep -f "$rundir" 2>/dev/null || true); do
-    [ "$stray" = "$$" ] && continue
-    kill -9 "$stray" 2>/dev/null || true
-  done
-  rm -f "$rundir/pid"
+  if [ "${FAULTS_REAP_PATH:-0}" = "1" ]; then
+    local stray
+    for stray in $(pgrep -f "$rundir" 2>/dev/null || true); do
+      [ "$stray" = "$$" ] && continue
+      kill -9 "$stray" 2>/dev/null || true
+    done
+  fi
+  rm -f "$rundir/pid" "$rundir/inflight" "$rundir/release"
 }
 
 # Stops a variant and clears the artefacts of a run that will not be continued: the store, its lock
@@ -233,15 +276,48 @@ stop_variant_and_clear() {
   rm -rf "$1/store.jsonl" "$1/store.jsonl.lock" "$1/store.jsonl.lock.owner" "$1/inflight" "$1/release"
 }
 
-# SIGTERM then wait: the clean stop `restart-after-checkpoint` needs, and deliberately not what
-# `kill-mid-turn` uses.
+# Stops a variant with SIGTERM and reports what actually ended it.
+#
+#   STOP_SIGNAL  the signal sent, or "none" when there was no process
+#   STOP_EXIT    the status `wait` reported (128+N when the process died of signal N, so 143 is SIGTERM)
+#   STOP_HOW     "died of signal 15", "no shutdown hook to observe, shell reported 0", "exited N",
+#                "survived SIGTERM and was killed", or "no process"
+#
+# Nothing here claims the stop was orderly. The application registers no handler, so SIGTERM ends it the
+# way SIGKILL would minus the reaping; what makes the store complete is the per-commit fsync, not the
+# signal. Reporting the distinction is the point: a caller may say "the store was complete" only if it
+# checked, and may never say "the process shut down cleanly" unless STOP_EXIT says so.
 stop_cleanly() {
   local rundir="$1" pid
+  STOP_SIGNAL="none"
+  STOP_EXIT=""
+  STOP_HOW="no process"
   pid="$(cat "$rundir/pid" 2>/dev/null || true)"
   [ -n "$pid" ] || return 0
   kill -TERM "$pid" 2>/dev/null || true
+  STOP_SIGNAL="SIGTERM"
   local deadline=$((SECONDS + 20))
   while kill -0 "$pid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do sleep 0.2; done
+  if kill -0 "$pid" 2>/dev/null; then
+    STOP_HOW="survived SIGTERM and was killed"
+    kill_tree "$pid"
+    STOP_EXIT="not-observed"
+  else
+    wait "$pid" 2>/dev/null
+    STOP_EXIT=$?
+    if [ -z "$STOP_EXIT" ]; then
+      STOP_EXIT="not-observed"
+    elif [ "$STOP_EXIT" -gt 128 ] 2>/dev/null; then
+      STOP_HOW="died of signal $((STOP_EXIT - 128)) (SIGTERM is 15); no shutdown hook ran"
+    elif [ "$STOP_EXIT" = "0" ]; then
+      # 0 does not mean "a clean shutdown": it is what a shell reports for a job it has already reaped, and
+      # what a process that was killed after signalling exits with. The honest statement is what was
+      # observed, not a shutdown the application never performs.
+      STOP_HOW="status 0 reported by the shell, which is not evidence of an orderly stop (the application registers no handler)"
+    else
+      STOP_HOW="exited $STOP_EXIT"
+    fi
+  fi
   stop_variant_keep "$rundir"
 }
 
@@ -502,11 +578,56 @@ INNER
 )" "$store"
 }
 
+# How many transcript entries repeat a (kind, text) pair that already appeared. The number is the measured
+# form of "the run repeated itself": a resumed pass that re-sends an interrupted turn commits that turn's
+# intents and tool results a second time, and this counts them rather than calling the transcript exact.
+store_repeats() {
+  local store="$1"
+  "$PYTHON" -c "$(cat <<'INNER'
+import collections, json, sys
+last = None
+try:
+    handle = open(sys.argv[1], encoding="utf-8")
+except OSError:
+    print(0)
+    raise SystemExit(0)
+for line in handle:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        record = json.loads(line)
+    except ValueError:
+        continue
+    payload = record.get("payload") or {}
+    if record.get("type") == "document-version" and payload.get("kind") == "band-a.enquiry":
+        last = payload.get("value") or {}
+entries = (last or {}).get("entries") or []
+seen = collections.Counter((e.get("kind"), (e.get("text") or "")[:40]) for e in entries)
+print(sum(count - 1 for count in seen.values() if count > 1))
+INNER
+)" "$store"
+}
+
+# Writes one result. A result may not silently downgrade a measured row: replacing a non-"not exercised"
+# outcome with "not exercised" is refused unless FAULTS_ALLOW_DOWNGRADE=1, because that is what a run on a
+# machine that lacks a capability would otherwise do to the checked-in evidence.
 write_result() {
   local variant="$1" fault="$2" json="$3"
+  local path="$RESULTS_DIR/$variant/$fault.json"
   mkdir -p "$RESULTS_DIR/$variant"
-  printf '%s\n' "$json" > "$RESULTS_DIR/$variant/$fault.json"
-  log "harness: wrote faults/results/$variant/$fault.json"
+  if [ -f "$path" ] && [ "${FAULTS_ALLOW_DOWNGRADE:-0}" != "1" ]; then
+    local before after
+    before="$("$PYTHON" -c 'import json,sys; print((json.load(open(sys.argv[1])) or {}).get("outcome",""))' "$path" 2>/dev/null || true)"
+    after="$("$PYTHON" -c 'import json,sys; print((json.loads(sys.argv[1]) or {}).get("outcome",""))' "$json" 2>/dev/null || true)"
+    if [ "$after" = "not exercised" ] && [ -n "$before" ] && [ "$before" != "not exercised" ]; then
+      log "harness: refusing to replace a measured '$before' result at $path with 'not exercised'"
+      log "harness: set FAULTS_ALLOW_DOWNGRADE=1 to record the loss of capability deliberately"
+      return 1
+    fi
+  fi
+  printf '%s\n' "$json" > "$path"
+  log "harness: wrote $path"
 }
 
 # The one way a result is recorded. `detail` says what was observed; `evidence` carries the raw
@@ -528,12 +649,21 @@ print(json.dumps({
         "dotnet": os.environ.get("DOTNET", "dotnet"),
         "runtime": os.environ.get("FAULTS_RUNTIME", "tools/ReplayRuntime"),
         "command": os.environ.get("FAULT_COMMAND", ""),
+        "script": os.environ.get("FAULT_SCRIPT", ""),
+        "commit": os.environ.get("FAULTS_COMMIT", "unknown"),
     },
     "recordedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
 }, indent=2, ensure_ascii=False))
 PY
 )"
   write_result "$variant" "$fault" "$json"
+}
+
+# "Not exercised" still writes a result — the absence is a finding — but it takes the downgrade guard with
+# it, so a machine that lacks Playwright cannot replace a measured baseline row by accident.
+record_not_exercised_result() {
+  local variant="$1" fault="$2" phase="$3" reason="$4"
+  record_not_exercised "$variant" "$fault" "$phase" "$reason"
 }
 
 record_not_exercised() {
@@ -559,8 +689,13 @@ cleanup_all() {
   local pid dir
   for pid in ${CLEANUP_PIDS[@]+"${CLEANUP_PIDS[@]}"}; do kill_tree "$pid"; done
   for dir in ${CLEANUP_DIRS[@]+"${CLEANUP_DIRS[@]}"}; do
-    [ -f "$dir/pid" ] && stop_variant_and_clear "$dir"
-    if [ "${KEEP:-0}" != "1" ]; then
+    if [ "${KEEP:-0}" = "1" ]; then
+      # KEEP is the promise that a failure can be inspected afterwards: the store is the thing worth
+      # inspecting, so the process is stopped and nothing else is touched.
+      [ -f "$dir/pid" ] && stop_variant_keep "$dir"
+      log "harness: kept $dir"
+    else
+      [ -f "$dir/pid" ] && stop_variant_and_clear "$dir"
       rm -rf "$dir"
     fi
   done

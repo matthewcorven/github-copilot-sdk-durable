@@ -3,12 +3,14 @@
   "fault": "kill-mid-turn",
   "outcome": "lost",
   "phase": "a model turn in flight (a tool result held by the gate, the answer not yet received)",
-  "detail": "The enquiry was mid-turn when pid 74779 was killed. A new process, same port, same working directory, shows 0 cards: processing 0, completed 0, rejected 0. Nothing resumes: the agent lived in a Dictionary<string, Agent> that died with the process, and the SDK session id was never retained.",
-  "evidence": "killed pid 74779 (kill -9, confirmed gone); restart: same directory /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-146-work/.scratch/band-a-faults/baseline/kill-mid-turn/app, same port 5211; observed cards=0 processing=0 completed=0 rejected=0",
+  "detail": "The enquiry was mid-turn when pid 10785 was killed. A new process, same port, same working directory, shows 0 cards: processing 0, completed 0, rejected 0. Nothing resumes: the agent lived in a Dictionary<string, Agent> that died with the process, and the SDK session id was never retained.",
+  "evidence": "killed pid 10785 (kill -9, confirmed gone); restart: same directory /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-146-work/.scratch/band-a-faults/baseline/kill-mid-turn/app, same port 5211; observed cards=0 processing=0 completed=0 rejected=0",
   "harness": {
     "dotnet": "dotnet",
     "runtime": "tools/ReplayRuntime",
-    "command": "./faults/kill-mid-turn.sh --variant baseline"
+    "command": "./faults/kill-mid-turn.sh --variant baseline",
+    "script": "kill-mid-turn.sh",
+    "commit": "4ab32e3371a4738eac5ac1c1c6ee7fd64d9b2cc8"
   },
-  "recordedAt": "2026-11-05T15:14:28.097247+00:00"
+  "recordedAt": "2026-11-05T17:16:50.448141+00:00"
 }

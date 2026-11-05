@@ -84,11 +84,10 @@ async function main() {
 
   try {
     await page.goto(spec.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForFunction(
-      () => document.body && document.body.innerText.toUpperCase().includes('DASHBOARD'),
-      null,
-      { timeout: 30000 }
-    );
+    // Both variants render the same top-right add button; it is the entry point every step needs, so its
+    // presence is the readiness signal. (The dashboard panel is not a marker the Durable variant renders,
+    // so waiting for its label would make the driver single-variant.)
+    await page.waitForSelector(spec.readySelector || 'div.absolute.top-3.right-8 > button', { timeout: 30000 });
     // The interactive circuit connects after the server render; the click handlers only exist once it
     // has, so the driver starts from a page that can actually be clicked.
     await page

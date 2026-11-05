@@ -8,7 +8,9 @@
   "harness": {
     "dotnet": "dotnet",
     "runtime": "tools/ReplayRuntime",
-    "command": "./faults/duplicate-delivery.sh --variant baseline"
+    "command": "./faults/duplicate-delivery.sh --variant baseline",
+    "script": "duplicate-delivery.sh",
+    "commit": "4ab32e3371a4738eac5ac1c1c6ee7fd64d9b2cc8"
   },
-  "recordedAt": "2026-11-05T15:15:19.976403+00:00"
+  "recordedAt": "2026-11-05T17:17:37.053498+00:00"
 }

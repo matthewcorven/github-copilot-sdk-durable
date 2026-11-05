@@ -4,11 +4,13 @@
   "outcome": "completed",
   "phase": "a model turn in flight, store left in place (the control)",
   "detail": "Control: nothing was moved. The enquiry finished with task terminal at phase done, 5380 bytes and 28 records in the store before the release and 21740 bytes after. This is what the outage run is compared against.",
-  "evidence": "before: validating/2 entries, 5380 bytes, 28 records [phase; intent:Validate home enquiry]; after the outage: live path present with 79 records, tail complete, lock absent, owner note absent; nothing was moved; no restored copy in the control; process exit=0; resume exit=n/a; resume output: none; process output: task t11 finished: completed\ndisposed.",
+  "evidence": "before: validating/2 entries, 5380 bytes, 28 records [phase; intent:Validate home enquiry]; after the outage: live path present with 79 records, tail complete, lock absent, owner note absent; nothing was moved; no restored copy in the control; no resume of a restored copy in the control; application exit status=0 (wait's value; 0 means it exited on its own, not that it succeeded), reached 'disposed.'=yes; resume exit=n/a; resume output: none; process output: enquiry dfb62e99 settled at done\ntask t11 finished: completed\ndisposed.",
   "harness": {
     "dotnet": "dotnet",
     "runtime": "tools/ReplayRuntime",
-    "command": "./faults/store-outage.sh --variant durable --fault-not-injected"
+    "command": "./faults/store-outage.sh --variant durable --fault-not-injected",
+    "script": "store-outage.sh",
+    "commit": "4ab32e3371a4738eac5ac1c1c6ee7fd64d9b2cc8"
   },
-  "recordedAt": "2026-11-05T15:17:10.734791+00:00"
+  "recordedAt": "2026-11-05T17:19:53.672935+00:00"
 }

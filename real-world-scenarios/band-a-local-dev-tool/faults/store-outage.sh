@@ -42,6 +42,10 @@ FAULT="store-outage"
 PORT="$(port_for "$VARIANT" "$FAULT")"
 FAULT_COMMAND="./faults/store-outage.sh --variant $VARIANT$( [ "$INJECT" = "1" ] || echo ' --fault-not-injected' )"
 export FAULT_COMMAND
+# The script that owns this result, so summarise.py can tell a result written by this code from a stale
+# or hand-edited file.
+FAULT_SCRIPT="$(basename "${BASH_SOURCE[0]}")"
+export FAULT_SCRIPT
 
 require_tools || exit 1
 
@@ -65,7 +69,9 @@ STORE="$RUN_DIR/store.jsonl"
 if [ "$INJECT" = "1" ]; then PHASE="a model turn in flight, store removed mid-write"; else PHASE="a model turn in flight, store left in place (the control)"; fi
 
 pause_at session.tools.handlePendingToolCall
-PID="$(start_headless "$RUN_DIR" enquiry.json --enquiry "Looking for a 3-bed family home near good schools in the suburbs")"
+start_headless "$RUN_DIR" enquiry.json --enquiry "Looking for a 3-bed family home near good schools in the suburbs"
+PID="${STARTED_PID}"
+PID="${STARTED_PID}"
 track_pid "$PID"
 
 wait_for_marker "$RUN_DIR" inflight 90 || {
@@ -104,13 +110,20 @@ else
 fi
 
 release_gate "$RUN_DIR"
-wait_headless "$RUN_DIR" 240
-RUN_STATUS=$?
+# `wait_headless` reports whether the process ended at all; the status it leaves in HEADLESS_STATUS is the
+# application's own exit code, which is what "did it exit successfully after the outage" has to be answered
+# from.
+if ! wait_headless "$RUN_DIR" 240; then
+  log "store-outage: the application did not finish within 240s; that is a harness error"
+  stop_variant_and_clear "$RUN_DIR"
+  exit 1
+fi
+RUN_STATUS="$(headless_status)"
+RUN_DISPOSED="$(grep -c '^disposed\.' "$RUN_DIR/server.log" 2>/dev/null || true)"
 
 # --- observe -----------------------------------------------------------------------------------
 # The application's own account of what happened, from its log.
 PROCESS_OUTPUT="$(grep -Ei 'exception|failed|refused|error|disposed|finished|settled|unable|could not' "$RUN_DIR/server.log" 2>/dev/null | head -12)"
-SERVER_EXIT="$(grep -c . "$RUN_DIR/server.log" 2>/dev/null || true)"
 
 # The file system's account.
 if [ -f "$STORE" ]; then
@@ -234,18 +247,49 @@ print(phase, entries)
     NEW_ENTRIES=0
     NEW_TEXT="the live path was not recreated"
   fi
-  # And a new process opening the moved file, to say what the store would report to an operator who
-  # restored it. `--resume` on a copy, so the original observation file is untouched.
+  # What an operator restoring the moved file can still read is a question about the moved file *as it was
+  # left by the outage*. It is copied first and measured on the copy, because the resume appends to the file
+  # it opens — reading after the resume would report the resume's work as if it had been recoverable.
   cp "$RUN_DIR/store.removed.jsonl" "$RUN_DIR/store.recovered.jsonl"
+  RETAINED="$("$PYTHON" -c '
+import json, sys
+phase, entries, tasks = "none", 0, 0
+for line in open(sys.argv[1], encoding="utf-8"):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        record = json.loads(line)
+    except ValueError:
+        continue
+    payload = record.get("payload") or {}
+    if record.get("type") == "task":
+        tasks += 1
+    if record.get("type") == "document-version" and payload.get("kind") == "band-a.enquiry":
+        value = payload.get("value") or {}
+        entries = len(value.get("entries") or [])
+        phase = {0: "queued", 1: "validating", 2: "searching", 3: "writing_report",
+                 4: "rejected_garbage", 5: "rejected_no_matches", 6: "done"}.get(value.get("phase"), value.get("phase"))
+print(phase, entries, tasks)
+' "$RUN_DIR/store.recovered.jsonl")"
+  read -r RESTORED_PHASE RESTORED_ENTRIES RESTORED_TASKS <<<"$RETAINED"
+
+  # Then the same file is opened by a new process, to say what the application would do with what an
+  # operator restored. Its own store is read separately, because it is a different file by then.
   FAULTS_STORE="$RUN_DIR/store.recovered.jsonl"
   export FAULTS_STORE
-  PID2="$(start_headless "$RUN_DIR" enquiry.json --resume)"
+  start_headless "$RUN_DIR" enquiry.json --resume
+  PID2="${STARTED_PID}"
+  PID2="${STARTED_PID}"
   track_pid "$PID2"
-  wait_headless "$RUN_DIR" 240
-  RESUME_STATUS=$?
-  # The store the resume wrote is its own; the observation of what an operator can recover is the copy it
-  # started from, so that is what is read back below.
-  RECOVERED_AFTER="$("$PYTHON" -c '
+  if ! wait_headless "$RUN_DIR" 240; then
+    log "store-outage: the resume of the restored copy did not finish; that is a harness error"
+    stop_variant_and_clear "$RUN_DIR"
+    exit 1
+  fi
+  RESUME_STATUS="$(headless_status)"
+  RESUME_TEXT="$(grep -Ei 'resumed|finished|failed|exception|disposed|could not|no store' "$RUN_DIR/server.log" 2>/dev/null | tail -8)"
+  AFTER_RESUME="$("$PYTHON" -c '
 import json, sys
 phase, entries, tasks = "none", 0, 0
 for line in open(sys.argv[1], encoding="utf-8"):
@@ -266,8 +310,7 @@ for line in open(sys.argv[1], encoding="utf-8"):
                  4: "rejected_garbage", 5: "rejected_no_matches", 6: "done"}.get(value.get("phase"), value.get("phase"))
 print(phase, entries, tasks)
 ' "$FAULTS_STORE")"
-  read -r RESTORED_PHASE RESTORED_ENTRIES RESTORED_TASKS <<<"$RECOVERED_AFTER"
-  RESUME_TEXT="$(grep -Ei 'resumed|finished|failed|exception|disposed|could not|no store' "$RUN_DIR/server.log" 2>/dev/null | tail -8)"
+  read -r RESUMED_STORE_PHASE RESUMED_STORE_ENTRIES RESUMED_STORE_TASKS <<<"$AFTER_RESUME"
   unset FAULTS_STORE
 fi
 
@@ -278,10 +321,10 @@ if [ "$OUTAGE" = "0" ]; then
 elif [ "$KEPT_BAD" = "0" ] && [ "$KEPT_ENTRIES" -ge "$BEFORE_ENTRIES" ] 2>/dev/null; then
   if [ "$LIVE_FILE" = "absent (the application did not recreate it)" ]; then
     OUTCOME="failed safely"
-    DETAIL="The store was moved aside mid-turn. The process finished ($( [ "$RUN_STATUS" = "0" ] && echo 'exit 0' || echo "exit $RUN_STATUS")) without recreating the path: $LIVE_FILE. Every record the process had committed before the outage is intact in the moved file — $KEPT_GOOD readable records, $KEPT_BAD torn, phase $KEPT_PHASE with $KEPT_ENTRIES transcript entries — so nothing that was durable was lost, and nothing was written to a path that no longer named the store. The lock sidecar is $LOCK_PRESENT and the owner note is $OWNER_PRESENT."
+    DETAIL="The store was moved aside mid-turn. The process exited with status $RUN_STATUS (its own exit code, not a liveness poll) without recreating the path: $LIVE_FILE. Every record the process had committed before the outage is intact in the moved file — $KEPT_GOOD readable records, $KEPT_BAD torn, phase $KEPT_PHASE with $KEPT_ENTRIES transcript entries — so nothing that was durable was lost, and nothing was written to a path that no longer named the store. The lock sidecar is $LOCK_PRESENT and the owner note is $OWNER_PRESENT."
   else
     OUTCOME="failed safely, with a split store"
-    DETAIL="The store was moved aside mid-turn. The application did not fail: it wrote a new file at the same path, so $NEW_TEXT, while the moved file still holds the committed prefix intact ($KEPT_GOOD records, $KEPT_BAD torn, phase $KEPT_PHASE, $KEPT_ENTRIES entries, $BEFORE_TRANSCRIPT). Nothing was lost, but the state is now in two files: an operator reading the live path sees a different enquiry history from the one the process held a moment before the outage, and restoring the moved file would be a second store rather than a merge. The application fails safe in the sense that it reports no corruption and keeps writing; it does not fail loudly, and it does not tell anyone the old file was gone."
+    DETAIL="The store was moved aside mid-turn. The application did not stop writing: it created a new file at the same path, so $NEW_TEXT, while the moved file still holds the committed prefix intact ($KEPT_GOOD records, $KEPT_BAD torn, phase $KEPT_PHASE, $KEPT_ENTRIES entries, $BEFORE_TRANSCRIPT). Nothing was lost, but the state is now in two files: an operator reading the live path sees a different enquiry history from the one the process held a moment before the outage, and restoring the moved file would be a second store rather than a merge. The application fails safe in the sense that it reports no corruption and keeps writing; it does not fail loudly, and it does not tell anyone the old file was gone."
   fi
 elif [ "$KEPT_BAD" -gt 0 ]; then
   OUTCOME="corrupted"
@@ -293,9 +336,13 @@ fi
 
 MOVED_TEXT="moved file: $REMOVED_BYTES bytes, phase $KEPT_PHASE, $KEPT_ENTRIES entries, $KEPT_GOOD records, $KEPT_BAD torn"
 if [ "$OUTAGE" = "0" ]; then MOVED_TEXT="nothing was moved"; fi
-RESTORED_TEXT="restored copy after a resume: phase ${RESTORED_PHASE:-n/a}, ${RESTORED_ENTRIES:-0} entries, ${RESTORED_TASKS:-0} task records"
-if [ "$OUTAGE" = "0" ]; then RESTORED_TEXT="no restored copy in the control"; fi
-EVIDENCE="before: $BEFORE_PHASE/$BEFORE_ENTRIES entries, $BEFORE_BYTES bytes, $BEFORE_LINES records [$BEFORE_TRANSCRIPT]; after the outage: live path $LIVE_FILE with $LIVE_LINES records, tail $TAIL_OK, lock $LOCK_PRESENT, owner note $OWNER_PRESENT${NEW_TEXT:+; $NEW_TEXT}; $MOVED_TEXT; $RESTORED_TEXT; process exit=$RUN_STATUS; resume exit=${RESUME_STATUS:-n/a}; resume output: ${RESUME_TEXT:-none}; process output: ${PROCESS_OUTPUT:-none}"
+RESTORED_TEXT="copy of the moved file as the outage left it: phase ${RESTORED_PHASE:-n/a}, ${RESTORED_ENTRIES:-0} entries, ${RESTORED_TASKS:-0} task records"
+RESUMED_TEXT="that copy after a resume of it: phase ${RESUMED_STORE_PHASE:-n/a}, ${RESUMED_STORE_ENTRIES:-0} entries, ${RESUMED_STORE_TASKS:-0} task records"
+if [ "$OUTAGE" = "0" ]; then
+  RESTORED_TEXT="no restored copy in the control"
+  RESUMED_TEXT="no resume of a restored copy in the control"
+fi
+EVIDENCE="before: $BEFORE_PHASE/$BEFORE_ENTRIES entries, $BEFORE_BYTES bytes, $BEFORE_LINES records [$BEFORE_TRANSCRIPT]; after the outage: live path $LIVE_FILE with $LIVE_LINES records, tail $TAIL_OK, lock $LOCK_PRESENT, owner note $OWNER_PRESENT${NEW_TEXT:+; $NEW_TEXT}; $MOVED_TEXT; $RESTORED_TEXT; $RESUMED_TEXT; application exit status=$RUN_STATUS (wait's value; 0 means it exited on its own, not that it succeeded), reached 'disposed.'=$([ "${RUN_DISPOSED:-0}" = "0" ] && echo no || echo yes); resume exit=${RESUME_STATUS:-n/a}; resume output: ${RESUME_TEXT:-none}; process output: ${PROCESS_OUTPUT:-none}"
 
 record_result "$VARIANT" "$FAULT" "$OUTCOME" "$PHASE" "$DETAIL" "$EVIDENCE"
 exit 0
