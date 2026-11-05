@@ -1,0 +1,11 @@
+{
+  "agent_session_id": "6f7126f7d83a2944490c5d2e5a7c2b25881de9173f0bae349437abaffe5c01e",
+  "created_at": 1793882817,
+  "expires_at": 1796474890,
+  "last_accessed_at": 1793882890,
+  "status": "active",
+  "version_indicator": {
+    "agent_version": "1",
+    "type": "version_ref"
+  }
+}
