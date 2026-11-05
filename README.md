@@ -67,6 +67,7 @@ In-depth technical reports, design notes, and audits are available in [`docs/`](
 - [**Architecture Design Document**](docs/DESIGN.md): The foundational specification and concept mapping between Pi Durable and the GitHub Copilot SDK (.NET).
 - [**Sandbox Capability Matrix**](docs/SANDBOX_MATRIX.md): What the durable sandbox policy can express and what each host's backend enforces.
 - [**Sandbox CI**](docs/SANDBOX_CI.md): The advisory sandbox job's platform matrix, what each CI level proves, and the degrade-don't-fail rule.
+- [**Real-world Matrix**](docs/REAL_WORLD_MATRIX.md): Durable against first-party reference applications, band by band, every cell a measurement with a link to its evidence file.
 
 ---
 
