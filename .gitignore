@@ -43,3 +43,7 @@ node_modules/
 # $TMPDIR so they do not. `.copilot/` is already ignored globally, above.
 real-world-scenarios/band-a-local-dev-tool/baseline/properties.db
 real-world-scenarios/band-a-local-dev-tool/baseline/properties.db-*
+
+# Python bytecode from the fault harness's readers.
+__pycache__/
+*.pyc
