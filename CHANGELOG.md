@@ -51,6 +51,15 @@ See [`docs/RELEASING.md`](docs/RELEASING.md) for the release procedure.
 
 ### Changed
 
+- **`ResumeAsync` now re-enters tasks left `Waiting`, and recovers their recorded wait.** Two
+  caller-visible changes, both on the same operation. A task left `Waiting` on its children is
+  now included in the resume, so a caller that counted outcomes sees more of them — the
+  pre-fix behaviour was `Expected: 2, Actual: 1` for a parent and its child. And a task
+  re-entered while `Waiting` now finishes the children its checkpoint names before running its
+  next phase, where it previously ran that phase against children that had not started. Both
+  matter to any host whose workflow suspends on child work across a process boundary; the
+  type-level surface and the store wire format are unchanged, so an existing store reads as
+  before. Changed in C#, TypeScript, and Python together. (#203)
 - `DurableHarnessOptions.EnableFileHooks` documentation now states that it controls
   repository-origin hooks only and that user-level hooks still run inside the sandbox. (#16)
 
