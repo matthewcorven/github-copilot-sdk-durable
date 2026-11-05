@@ -1,0 +1,6 @@
+# Runtime artefacts from deploy/invoke; never committed.
+.deployment.json
+.agent-version.json
+.agent-version-*.json
+.build/
+deployment.env
