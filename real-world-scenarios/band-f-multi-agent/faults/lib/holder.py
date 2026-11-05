@@ -549,10 +549,10 @@ def main(argv):
     if len(argv) >= 4 and argv[1] == "--index-holder":
         print(json.dumps(baseline_from_index(argv[2], argv[3]), indent=2))
         return 0
-    if len(argv) >= 4 and argv[1] == "--authors":
+    if len(argv) >= 3 and argv[1] == "--authors":
         print(json.dumps(_authors(newest_document(argv[2]))))
         return 0
-    if len(argv) >= 4 and argv[1] == "--checkpoint-count":
+    if len(argv) >= 3 and argv[1] == "--checkpoint-count":
         print(len(_baseline_checkpoints(argv[2])))
         return 0
     if len(argv) >= 5 and argv[1] == "--first-after-baseline":

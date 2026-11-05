@@ -12,13 +12,13 @@
     "dotnet": "10.0.402",
     "endpoint": "https://openrouter.ai/api/v1",
     "model": "openai/gpt-4o-mini",
-    "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/kill-mid-delegation.sh --variant baseline --fault-not-injected",
-    "commit": "146fc94fa310fd338e09be901d918fa3215dd465",
+    "command": "./kill-mid-delegation.sh --variant baseline --fault-not-injected",
+    "commit": "d77bde00b03af0517811f32474a7c5f9caa08ad6",
     "apiKeyFrom": "OPENROUTER_API_KEY",
     "portKeyFrom": "OPENROUTER_API_KEY",
     "portKeySubstituted": true
   },
-  "recordedAt": "2026-11-05T21:00:35.443758+00:00",
+  "recordedAt": "2026-11-05T21:33:16.362028+00:00",
   "observations": {
     "processes": 1,
     "holderAtPoint": "return_agent"

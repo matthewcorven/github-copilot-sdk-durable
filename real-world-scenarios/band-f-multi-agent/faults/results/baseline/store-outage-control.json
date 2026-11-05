@@ -6,19 +6,19 @@
   "holderAtFault": "return_agent",
   "holderAtEnd": "triage_agent",
   "phase": "the store was left in place (the control)",
-  "detail": "Control: nothing was moved. The process finished the run with triage_agent holding control and the framework store's index reached 20 checkpoint(s). This is what the outage run is compared against.",
-  "evidence": "holder after: triage_agent; 20 checkpoint(s) indexed",
+  "detail": "Control: nothing was moved. The process finished the run with triage_agent holding control and the framework store's index reached 18 checkpoint(s). This is what the outage run is compared against.",
+  "evidence": "holder after: triage_agent; 18 checkpoint(s) indexed",
   "harness": {
     "dotnet": "10.0.402",
     "endpoint": "https://openrouter.ai/api/v1",
     "model": "openai/gpt-4o-mini",
     "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/store-outage.sh --variant baseline --fault-not-injected",
-    "commit": "146fc94fa310fd338e09be901d918fa3215dd465",
+    "commit": "d77bde00b03af0517811f32474a7c5f9caa08ad6",
     "apiKeyFrom": "OPENROUTER_API_KEY",
     "portKeyFrom": "OPENROUTER_API_KEY",
     "portKeySubstituted": true
   },
-  "recordedAt": "2026-11-05T21:02:29.422459+00:00",
+  "recordedAt": "2026-11-05T21:20:16.369322+00:00",
   "observations": {
     "toolResults": {
       "Order 1234 is currently being processed and will ship in 2 business days.": 1,
