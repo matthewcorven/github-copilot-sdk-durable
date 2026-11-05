@@ -49,6 +49,18 @@ See [`docs/RELEASING.md`](docs/RELEASING.md) for the release procedure.
   versus advisory, what `SandboxFilesystemPolicyDetails` does and does not report, and the
   host-hook limitation above. (#16)
 
+### Fixed
+
+- **A checkpoint whose `phase` is not a string hangs the host instead of failing the task.**
+  `RunTaskCoreAsync` read the phase with `JsonElement.GetString()`, which throws on a number, and the
+  read sat *before* the `try` that turns a handler failure into `TaskCommit.Failed`. The exception
+  escaped the run, nothing observed the faulted task, and every waiter for it blocked forever while
+  the store kept it `Running`. The phase is now type-checked and an unreadable one commits a failed
+  task naming the kind it found; a fault that still escapes the core loop settles the completion
+  source before re-throwing, so a waiter gets a failed outcome rather than a hang. TypeScript and
+  Python silently fell back to `"run"` for the same input, which would run a phase the checkpoint did
+  not name; both now report the same failure. (#193)
+
 ### Changed
 
 - `DurableHarnessOptions.EnableFileHooks` documentation now states that it controls
