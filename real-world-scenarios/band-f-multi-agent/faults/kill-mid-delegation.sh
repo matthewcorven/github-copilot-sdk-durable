@@ -132,7 +132,7 @@ else
   else
     RECOVERY_NOTE="The recovery did not complete: $RECOVERY_ERRORS — the framework aborts every resume of a workflow that still has work, and the port's resume has no way past it."
   fi
-  DETAIL="The process was killed with SIGKILL while $AT_KILL_HOLDER held control; a handoff was queued at that agent's executor. $RECOVERY_NOTE Control after recovery was $(describe_recovery "$RECOVERED_HOLDER" "$FIRST_AGENT"), read from the framework checkpoint rather than from the port's log. The run's newest checkpoint afterwards names ${END_HOLDER:-nothing}, which is where the port ended and not what this fault asks."
+  DETAIL="The process was killed with SIGKILL while $AT_KILL_HOLDER held control; a handoff was queued at that agent's executor. $RECOVERY_NOTE The first agent to act in the recovered process was ${FIRST_AGENT:-none}: control after recovery was $(describe_recovery "${FIRST_AGENT:-$RECOVERED_HOLDER}" "$FIRST_AGENT"), read from the framework checkpoint rather than from the port's log. The run's newest checkpoint afterwards names ${END_HOLDER:-nothing}, which is where the port ended rather than what this fault asks."
   if [ -n "$REPORTED" ] && [ "$REPORTED" != "$FIRST_AGENT" ]; then
     DETAIL="$DETAIL The port's own resume line named $REPORTED as holding control; the framework then ran $FIRST_AGENT first, and the state is what moved, so $FIRST_AGENT is the answer."
   fi
