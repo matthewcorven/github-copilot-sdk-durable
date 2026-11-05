@@ -1,0 +1,14 @@
+{
+  "variant": "durable",
+  "fault": "kill-mid-turn",
+  "outcome": "resumed",
+  "phase": "inside phase 2 (classify), at least one PR classified, the state write 4 phases away",
+  "detail": "The run was killed with kill -9 (pid 89780, confirmed gone) inside Phase 2. The committed run record named phase 'classify' and the task was unfinished (id=t2 status=1 phase=classify attempts=1 commented=0 memos=0 outcome=None), so the new process resumed at 'classify' — the phase the kill cut short — and finished with 13 comment(s) posted by the resume and the run at 'save'. The classification done before the kill was read back from the committed PR documents; the phase was not re-run from the top.",
+  "evidence": "classification lines at the first check=6, in the log after the fault=6; kill pid=89780; first exit=137; first comments posted=0; first state=classify; first task=id=t2 status=1 phase=classify attempts=1 commented=0 memos=0 outcome=None; second exit=0; second cold start=0 resumed=1 at phase=classify; second comments posted=13; committed triaged=[101,102,103,104,105,106,107,109,111,112,113,114,115]; second run says: run:        completed — 13 triaged, 13 commented, 2 in cooldown, 1 not ours, 1 not open",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "none (Band C has no model and no recorded runtime)",
+    "command": "./faults/kill-mid-turn.sh --variant durable"
+  },
+  "recordedAt": "2026-11-05T17:12:23.898776+00:00"
+}

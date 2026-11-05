@@ -1,0 +1,27 @@
+{
+  "variant": "durable",
+  "fault": "cooldown-desync",
+  "outcome": "not doubled",
+  "phase": "run 2 stopped between posting its comments and committing its state; run 3, 61m later, over the same state",
+  "detail": "Run 2 posted 13 comment(s) and stopped before the phase committed (id=t2 status=1 phase=comment attempts=1 commented=0 memos=13 outcome=None; the comment ledger held 13 entries). Run 3 resumed the same task at 'comment' rather than starting cold, found the comments already recorded, and posted 0 new one(s) while adopting 13: the run record is what did not commit, and it did not need to — each comment was memoized as it was made, and the ledger outlived the process that made it. Run 3 finished the run at 'save'. Run 4, a new generation of the finished task (what a later scheduled run is), posted 0 and adopted 13: the guard outlived the task, not just the process.",
+  "evidence": "run1 exit=n/a last phase=n/a posted=0 state=none; run2 exit=42 last phase=comment each triaged  posted=13 state after=comment task=id=t2 status=1 phase=comment attempts=1 commented=0 memos=13 outcome=None ledger=13; run3 at 2026-11-05T13:31:00Z exit=0 cold start=0 run gate=0 resumed=1 at phase=comment posted=0 adopted=13; state after run3=save; run3 read: n/a n/a; PRs with two comments=[]; run3 says: run:        completed — 13 triaged, 13 commented, 2 in cooldown, 1 not ours, 1 not open; run4 exit=0 posted=0 adopted=13",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "none (Band C has no model and no recorded runtime)",
+    "command": "./faults/cooldown-desync.sh --variant durable"
+  },
+  "recordedAt": "2026-11-05T17:12:53.618630+00:00",
+  "observations": {
+    "run2_comments_posted": 13,
+    "run3_comments_posted": 0,
+    "run3_comments_adopted": 13,
+    "prs_with_two_comments": 0,
+    "prs_doubled": [],
+    "run3_cold_start": false,
+    "run3_run_gate": false,
+    "run3_resumed": true,
+    "ledger_entries_before_run3": 13,
+    "run4_comments_posted": 0,
+    "run4_comments_adopted": 13
+  }
+}

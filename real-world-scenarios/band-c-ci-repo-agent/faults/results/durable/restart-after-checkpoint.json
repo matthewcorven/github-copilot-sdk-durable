@@ -1,0 +1,14 @@
+{
+  "variant": "durable",
+  "fault": "restart-after-checkpoint",
+  "outcome": "resumed",
+  "phase": "after Phase 5 (baseline: labels.json written, then SIGTERM; durable: committed at phase 'comment', then the seam's exit 42)",
+  "detail": "The run was stopped after the batch phase committed: the seam committed the run record at phase 'comment' and exited 42 (id=t2 status=1 phase=comment attempts=1 commented=0 memos=0 outcome=None). The restart resumed that task at 'comment' rather than starting over: it posted 13 new comment(s) and adopted 0 already-committed one(s), reached 'save run state' and finished with the run record at 'save'. The phase it re-entered is the one the stop left, so the restart is exact: the committed phases did not run again.",
+  "evidence": "first exit=0; first last phase=batch and label; first posted=0 adopted=0; state before restart=comment; task before restart=id=t2 status=1 phase=comment attempts=1 commented=0 memos=0 outcome=None; second exit=0; second cold start=0 resumed=1 at phase=comment; second posted=13 adopted=0; second output dir=/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-156-work/.scratch/band-c-faults/durable/restart-after-checkpoint/outputs/second; state after=save; second run says: run:        completed — 13 triaged, 13 commented, 2 in cooldown, 1 not ours, 1 not open",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "none (Band C has no model and no recorded runtime)",
+    "command": "./faults/restart-after-checkpoint.sh --variant durable"
+  },
+  "recordedAt": "2026-11-05T17:12:30.302471+00:00"
+}

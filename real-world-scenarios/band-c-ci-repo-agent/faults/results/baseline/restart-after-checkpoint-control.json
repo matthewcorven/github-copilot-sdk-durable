@@ -1,0 +1,14 @@
+{
+  "variant": "baseline",
+  "fault": "restart-after-checkpoint-control",
+  "outcome": "control: completed",
+  "phase": "the control: the baseline is not stopped at all — it has no commit point to stop before or after",
+  "detail": "Control: the same two runs with nothing stopped — the first finished and committed its state (13 comment(s)), and the restart read that state and stopped at the run gate (0 comment(s) by the restart). This is the one control the baseline can be given: stopping it at any phase produces the same result, because it has no commit point to be before or after — and that absence is what the fault records. Against this pair, the fault run's cold start and its 0 re-posted comment(s) are the cost of the stop the baseline cannot survive.",
+  "evidence": "first exit=0; first last phase=save run state; first posted=13 adopted=0; state before restart=done (the state snapshot only exists once Phase 8 has committed); task before restart=n/a; second exit=0; second cold start=0 resumed=0; second posted=0 adopted=0; second output dir=/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-156-work/.scratch/band-c-faults/baseline/restart-after-checkpoint-control/outputs/second; state after=done (the state snapshot only exists once Phase 8 has committed); second run says:   run gate:   would have triaged 13 PR(s); no comments, no labels, no report, no state write.",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "none (Band C has no model and no recorded runtime)",
+    "command": "./faults/restart-after-checkpoint.sh --variant baseline --fault-not-injected"
+  },
+  "recordedAt": "2026-11-05T17:12:11.056644+00:00"
+}

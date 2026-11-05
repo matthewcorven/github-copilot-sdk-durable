@@ -1,0 +1,27 @@
+{
+  "variant": "baseline",
+  "fault": "cooldown-desync-control",
+  "outcome": "control: not doubled",
+  "phase": "run 2 completes and commits its state; run 3, 61m later, over the same state (the control)",
+  "detail": "Control: the same three runs with the Phase 8 seam removed — run 2 committed its state (memory/pr-triage at 'done (the state snapshot only exists once Phase 8 has committed)'). Run 3, 61 minutes later, therefore read run 2's state, found it past the cooldown and triaged again, posting 0 comment(s): 0 PR(s) hold two comments. The duplicate is still there — the baseline has no identity for a comment — and that is the honest reading: removing the missing state write does not remove the duplicate, it only moves which run is inside the cooldown. What the fault adds is that the failed run's own comments are attributable to nobody. The control proves the harness's three-run shape is not what produced the fault row's numbers; it does not prove the baseline is otherwise safe.",
+  "evidence": "run1 exit=0 last phase=save run state posted=13 state=done (the state snapshot only exists once Phase 8 has committed); run2 exit=0 last phase=save run state posted=13 state after=done (the state snapshot only exists once Phase 8 has committed); run3 at 2026-11-05T13:31:00Z exit=0 cold start=0 run gate=1 resumed=0 posted=0 adopted=0; state after run3=done (the state snapshot only exists once Phase 8 has committed); run3 read: loaded memory/pr-triage:pr-triage-latest prior run:  2026-11-05T13:30:00Z triaged 13 PR(s); PRs with two comments=[]; run3 says:   run gate:   would have triaged 13 PR(s); no comments, no labels, no report, no state write.",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "none (Band C has no model and no recorded runtime)",
+    "command": "./faults/cooldown-desync.sh --variant baseline --fault-not-injected"
+  },
+  "recordedAt": "2026-11-05T17:12:20.872405+00:00",
+  "observations": {
+    "run2_comments_posted": 13,
+    "run3_comments_posted": 0,
+    "run3_comments_adopted": 0,
+    "prs_with_two_comments": 0,
+    "prs_doubled": [],
+    "run3_cold_start": false,
+    "run3_run_gate": true,
+    "run3_resumed": false,
+    "ledger_entries_before_run3": 0,
+    "run4_comments_posted": 0,
+    "run4_comments_adopted": 0
+  }
+}

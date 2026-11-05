@@ -1,0 +1,14 @@
+{
+  "variant": "baseline",
+  "fault": "concurrent-clients",
+  "outcome": "doubled, no conflict detected",
+  "phase": "two writers overlapping: the first held after Phase 5, the second run to completion while it is held",
+  "detail": "The first process was held with SIGSTOP after Phase 5 (labels.json written) and before its Phase 8 state write while the second ran to completion over the same repository, then resumed. Both posted all thirteen comments (13 and 13), each exited 0 and 0, and memory/pr-triage ended with 2 commit(s). No process detected the other: Phase 8 reads its parent at Phase 8, so the compare-and-swap only ever sees the write immediately before it, and the second writer's state replaced the first's with no error. The state ends at 'done (the state snapshot only exists once Phase 8 has committed)' — one run's answer for a repository two runs triaged.",
+  "evidence": "held at=after Phase 5 (labels.json written) and before its Phase 8 state write stopped state=T; first exit=0 posted=13; second exit=0 posted=13 refused_at_store=0 gated_by_cooldown=0; state=done (the state snapshot only exists once Phase 8 has committed); commit(s)/generation=2",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "none (Band C has no model and no recorded runtime)",
+    "command": "./faults/concurrent-clients.sh --variant baseline"
+  },
+  "recordedAt": "2026-11-05T17:12:14.283665+00:00"
+}

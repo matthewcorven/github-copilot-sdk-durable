@@ -1,0 +1,14 @@
+{
+  "variant": "durable",
+  "fault": "duplicate-delivery-control",
+  "outcome": "control: single delivery",
+  "phase": "the same triage run delivered once (the control)",
+  "detail": "Control: one process over the repository, same fixture, same clock. It posted 13 comment(s) — one per PR — and left the state at 'save' (1 commit(s) / generation). The duplicate run's second process posted 0 more; the difference between the pair is what a second delivery costs.",
+  "evidence": "deliveries=1; first exit=0 posted=13; second exit=n/a posted=0 refused_at_store=0 gated_by_cooldown=0 update_ref_failed=0; state=save; commit(s)/generation=1; triaged in the committed state=[101,102,103,104,105,106,107,109,111,112,113,114,115]",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "none (Band C has no model and no recorded runtime)",
+    "command": "./faults/duplicate-delivery.sh --variant durable --fault-not-injected"
+  },
+  "recordedAt": "2026-11-05T17:12:38.561625+00:00"
+}

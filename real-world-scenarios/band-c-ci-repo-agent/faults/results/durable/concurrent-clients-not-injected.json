@@ -1,0 +1,14 @@
+{
+  "variant": "durable",
+  "fault": "concurrent-clients-not-injected",
+  "outcome": "control: not doubled",
+  "phase": "the same two runs one after the other, no overlap (the control)",
+  "detail": "Control: the same two runs one after the other. The first posted 13 comment(s) and the second posted 0; nothing overlapped. Baseline: the second read the state and stopped at the run gate. Durable: the first had finished, so the store was free and the second ran as a new generation.",
+  "evidence": "held at=phase 2 (classify) stopped state=T; first exit=0 posted=13; second exit=0 posted=0 refused_at_store=0 gated_by_cooldown=0; state=save; commit(s)/generation=1",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "none (Band C has no model and no recorded runtime)",
+    "command": "./faults/concurrent-clients.sh --variant durable --fault-not-injected"
+  },
+  "recordedAt": "2026-11-05T17:12:44.377879+00:00"
+}

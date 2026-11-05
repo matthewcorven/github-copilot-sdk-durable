@@ -1,0 +1,115 @@
+## Fault matrix — outcome per fault per variant
+
+| Fault | baseline | durable |
+| --- | --- | --- |
+| `kill-mid-turn` | **lost** | **resumed** |
+| `restart-after-checkpoint` | **lost** | **resumed** |
+| `duplicate-delivery` | **doubled** | **refused, not doubled** |
+| `concurrent-clients` | **doubled, no conflict detected** | **refused, not doubled** |
+| `store-outage` | **failed loudly, effects kept, state lost** | **failed safely, with a split store** |
+| `cooldown-desync` | **doubled** | **not doubled** |
+
+## The headline: `cooldown-desync` in numbers
+
+| Variant | run 2 comments | run 3 comments posted | run 3 comments adopted | PRs holding two comments | run 3 resumed |
+| --- | --- | --- | --- | --- | --- |
+| baseline | 13 | 13 | 0 | 13 | no |
+| durable | 13 | 0 | 13 | 0 | yes |
+
+- baseline, PRs with two comments: #101, #102, #103, #104, #105, #106, #107, #109, #111, #112, #113, #114, #115
+
+## What each result observed
+
+### `kill-mid-turn`
+
+| Variant | Outcome | Phase | Detail |
+| --- | --- | --- | --- |
+| baseline | **lost** | inside phase 2 (classify), at least one PR classified, the state write 4 phases… | The run was killed with kill -9 (pid 88257, confirmed gone) inside Phase 2 (its log shows 52 classification line(s) by the time the kill was confirmed), and had posted 13 comment(s) and written no state. A new process, same repository, same clock, is a cold start: it re-classified all 13 PRs from #101 and posted 13 comment(s). Nothing continued the interrupted run, because the baseline has no record of one — its only state is the whole-file snapshot Phase 8 writes at the end, and the kill was four phases before that. |
+| durable | **resumed** | inside phase 2 (classify), at least one PR classified, the state write 4 phases… | The run was killed with kill -9 (pid 89780, confirmed gone) inside Phase 2. The committed run record named phase 'classify' and the task was unfinished (id=t2 status=1 phase=classify attempts=1 commented=0 memos=0 outcome=None), so the new process resumed at 'classify' — the phase the kill cut short — and finished with 13 comment(s) posted by the resume and the run at 'save'. The classification done before the kill was read back from the committed PR documents; the phase was not re-run from the top. |
+
+### `restart-after-checkpoint`
+
+| Variant | Outcome | Phase | Detail |
+| --- | --- | --- | --- |
+| baseline | **lost** | after Phase 5 (baseline: labels.json written, then SIGTERM; durable: committed … | The run was stopped with SIGTERM (confirmed gone) after Phase 5 had written labels.json and while Phase 6 was posting comments (13 posted before the signal). The restart over the same repository is a cold start: it loaded nothing, re-ran all eight phases and posted 13 comment(s). Nothing was resumed, because a whole-file snapshot written at the end of Phase 8 is the baseline's only state and this run never reached it. The restart is not exact — there was nothing to be exact about. |
+| durable | **resumed** | after Phase 5 (baseline: labels.json written, then SIGTERM; durable: committed … | The run was stopped after the batch phase committed: the seam committed the run record at phase 'comment' and exited 42 (id=t2 status=1 phase=comment attempts=1 commented=0 memos=0 outcome=None). The restart resumed that task at 'comment' rather than starting over: it posted 13 new comment(s) and adopted 0 already-committed one(s), reached 'save run state' and finished with the run record at 'save'. The phase it re-entered is the one the stop left, so the restart is exact: the committed phases did not run again. |
+
+### `duplicate-delivery`
+
+| Variant | Outcome | Phase | Detail |
+| --- | --- | --- | --- |
+| baseline | **doubled** | the same triage run delivered twice: two live processes over one repository | Two live processes over one repository each read it as a cold start and each posted all thirteen comments: 13 from the first and 13 from the second, so thirteen PRs got two comments each. Both processes exited successfully (0 and 0) and memory/pr-triage now carries 2 commit(s): the second write used the parent it read at Phase 8, not at Phase 1, so the compare-and-swap never saw a conflict and neither run reports an error. The duplicate is entirely silent. Nothing in the baseline has an identity for a comment or a run, so the only record of the duplicate is the branch's history, which no next run reads. |
+| durable | **refused, not doubled** | the same triage run delivered twice: two live processes over one repository | The first process took the store's exclusive lock; the second was refused at the open (exit 3, 'cannot open the store') before it read the fixture, so it posted 0 comment(s) and wrote no state. 13 comment(s) exist, one per PR, from the one process that proceeded. The duplicate was not deduplicated after the fact — it was prevented. What that costs is also in the record: a refused run does nothing and does not queue, so a delivery that means to wait has to retry, and the refusal is per store file rather than per repository. |
+
+### `concurrent-clients`
+
+| Variant | Outcome | Phase | Detail |
+| --- | --- | --- | --- |
+| baseline | **doubled, no conflict detected** | two writers overlapping: the first held after Phase 5, the second run to comple… | The first process was held with SIGSTOP after Phase 5 (labels.json written) and before its Phase 8 state write while the second ran to completion over the same repository, then resumed. Both posted all thirteen comments (13 and 13), each exited 0 and 0, and memory/pr-triage ended with 2 commit(s). No process detected the other: Phase 8 reads its parent at Phase 8, so the compare-and-swap only ever sees the write immediately before it, and the second writer's state replaced the first's with no error. The state ends at 'done (the state snapshot only exists once Phase 8 has committed)' — one run's answer for a repository two runs triaged. |
+| durable | **refused, not doubled** | two writers overlapping: the first held after Phase 5, the second run to comple… | The first process took the store's exclusive lock before it printed its first line and held it while it was paused at phase 2 (classify); the second was refused at the open (exit 3, 'cannot open the store') and did nothing at all — no read of the fixture, no comments. 13 comment(s) exist from the one run that proceeded. The refusal is what the band's requirement asks for, and it is a refusal rather than a queue: the second process does not wait for the lock and does not retry, so a caller that wants it to proceed has to start it again. The guarantee is per store file, not per repository; two different store paths would both proceed (that is the durable variant's own stage 5b control). |
+
+### `store-outage`
+
+| Variant | Outcome | Phase | Detail |
+| --- | --- | --- | --- |
+| baseline | **failed loudly, effects kept, state lost** | after Phase 7's outputs exist, before Phase 8 commits; repo.git moved aside | repo.git was moved aside after Phase 7 had written its outputs and while Phase 8 was about to commit. Phase 8's git call ran against a path that no longer named a repository and the run failed with exit 1 (baseline: git failed: git hash-object -w --stdin: fatal: not a git repository: '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-156-work/.scratch/band-c-faults/baseline/store-outage/repo.git' ). The effects are on disk — 13 comment(s), labels.json, the report — and the state is gone: no memory/pr-triage branch in the moved repository (0 commit(s) on it, state 'none'), and the path itself no longer exists. That is failing loudly and it is also the reason the baseline is in this band: the outage is discovered, but only after the comments were posted, and what it costs is exactly the cooldown-desync window. |
+| durable | **failed safely, with a split store** | in flight (Phase 1 committed, Phase 2 running); the store file moved aside | The store file was moved aside while the run held its handle. The process did not fail: exit 0, final phase 'save run state', 13 comment(s) posted, and it recreated the path, so the live store now holds 'save' with its own history while the moved file still holds the committed prefix it had at the outage ('classify', 7667 bytes, 1 generation(s) of state, triage list []). Nothing that was committed was lost — every record in the moved file is readable and the run record it holds is the one that was committed — but the state is now in two files, and an operator reading the live path is reading a history that never existed while the run was alive. The application fails safe in the sense that it reports no corruption and keeps running; it does not fail loudly, and it does not tell anyone the file it was writing had gone. |
+
+### `cooldown-desync`
+
+| Variant | Outcome | Phase | Detail |
+| --- | --- | --- | --- |
+| baseline | **doubled** | run 2 stopped between posting its comments and committing its state; run 3, 61m… | Run 2 posted 13 comment(s) and its state write did not happen (done (the state snapshot only exists once Phase 8 has committed); memory/pr-triage was left where run 1 put it), so run 3 — 61 minutes later, past the cooldown — read the state run 1 wrote (prior run:  2026-11-05T12:00:00Z triaged 13 PR(s)), decided the previous run was old enough to triage again, and posted the same 13 comment(s) a second time: 13 PR(s) hold two comments, posted by two runs, with nothing in the state recording that the first posting happened. There is no duplicate detection to fail: the baseline has no record of a comment at all, and the run gate it does have is driven by a timestamp the failed run never wrote. |
+| durable | **not doubled** | run 2 stopped between posting its comments and committing its state; run 3, 61m… | Run 2 posted 13 comment(s) and stopped before the phase committed (id=t2 status=1 phase=comment attempts=1 commented=0 memos=13 outcome=None; the comment ledger held 13 entries). Run 3 resumed the same task at 'comment' rather than starting cold, found the comments already recorded, and posted 0 new one(s) while adopting 13: the run record is what did not commit, and it did not need to — each comment was memoized as it was made, and the ledger outlived the process that made it. Run 3 finished the run at 'save'. Run 4, a new generation of the finished task (what a later scheduled run is), posted 0 and adopted 13: the guard outlived the task, not just the process. |
+
+## Before/after controls
+
+Each control runs the same steps with the injection removed. The fault and its control differ only
+in whether the fault happened, so a difference between them is attributable to it.
+
+| Fault | Variant | Control outcome | Fault outcome | Control phase | Fault phase |
+| --- | --- | --- | --- | --- | --- |
+| `kill-mid-turn` | baseline | control: completed | lost | inside phase 2 (classify), uninterrupted (the con… | inside phase 2 (classify), at least one PR classi… |
+| `kill-mid-turn` | durable | control: completed | resumed | inside phase 2 (classify), uninterrupted (the con… | inside phase 2 (classify), at least one PR classi… |
+| `restart-after-checkpoint` | baseline | control: completed | lost | the control: the baseline is not stopped at all —… | after Phase 5 (baseline: labels.json written, the… |
+| `restart-after-checkpoint` | durable | control: resumed | resumed | the control: committed at phase 'classify', then … | after Phase 5 (baseline: labels.json written, the… |
+| `duplicate-delivery` | baseline | control: single delivery | doubled | the same triage run delivered once (the control) | the same triage run delivered twice: two live pro… |
+| `duplicate-delivery` | durable | control: single delivery | refused, not doubled | the same triage run delivered once (the control) | the same triage run delivered twice: two live pro… |
+| `concurrent-clients` | baseline | control: not doubled | doubled, no conflict detected | the same two runs one after the other, no overlap… | two writers overlapping: the first held after Pha… |
+| `concurrent-clients` | durable | control: not doubled | refused, not doubled | the same two runs one after the other, no overlap… | two writers overlapping: the first held after Pha… |
+| `store-outage` | baseline | control: completed | failed loudly, effects kept, state lost | after Phase 7's outputs exist, before Phase 8 com… | after Phase 7's outputs exist, before Phase 8 com… |
+| `store-outage` | durable | control: completed | failed safely, with a split store | in flight (Phase 1 committed, Phase 2 running); t… | in flight (Phase 1 committed, Phase 2 running); t… |
+| `cooldown-desync` | baseline | control: not doubled | doubled | run 2 completes and commits its state; run 3, 61m… | run 2 stopped between posting its comments and co… |
+| `cooldown-desync` | durable | control: not doubled | not doubled | run 2 completes and commits its state; run 3, 61m… | run 2 stopped between posting its comments and co… |
+
+## Harness status
+
+- `baseline` kill-mid-turn: exit 0
+- `baseline` kill-mid-turn-control: exit 0
+- `baseline` restart-after-checkpoint: exit 0
+- `baseline` restart-after-checkpoint-control: exit 0
+- `baseline` duplicate-delivery: exit 0
+- `baseline` duplicate-delivery-control: exit 0
+- `baseline` concurrent-clients: exit 0
+- `baseline` concurrent-clients-control: exit 0
+- `baseline` store-outage: exit 0
+- `baseline` store-outage-control: exit 0
+- `baseline` cooldown-desync: exit 0
+- `baseline` cooldown-desync-control: exit 0
+- `durable` kill-mid-turn: exit 0
+- `durable` kill-mid-turn-control: exit 0
+- `durable` restart-after-checkpoint: exit 0
+- `durable` restart-after-checkpoint-control: exit 0
+- `durable` duplicate-delivery: exit 0
+- `durable` duplicate-delivery-control: exit 0
+- `durable` concurrent-clients: exit 0
+- `durable` concurrent-clients-control: exit 0
+- `durable` store-outage: exit 0
+- `durable` store-outage-control: exit 0
+- `durable` cooldown-desync: exit 0
+- `durable` cooldown-desync-control: exit 0
+
+## Not exercised, and why
+
+- none
+
