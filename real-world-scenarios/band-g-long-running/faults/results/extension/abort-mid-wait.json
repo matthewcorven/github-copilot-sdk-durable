@@ -4,7 +4,7 @@
   "outcome": "cancelled",
   "phase": "parked at ManagerApproval, terminated",
   "detail": "The run was parked at ManagerApproval (Running, 1 completed step(s)). The terminate was acknowledged (1 acknowledgement(s)) and the runtime status sampled every 3s afterwards was: Running Running Running Running Running, ending Running. A later answer was delivered by a live worker ('delivered' printed 0 time(s)); the run ended Terminated with history: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > ExecutionTerminated > EventRaised > ExecutionCompleted > TaskScheduled — 1 completed step(s) before the answer and 1 after, and an ExecutionTerminated in the history. So the orchestration stopped and the answer did not run the step after the port. Scope: this column has no separate child work to cancel — the ports live inside one orchestration — so 'children cancelled' is not observable here and is not claimed.",
-  "evidence": "instance: i3247210153; parked at Running\nterminate: acknowledged 1 time(s); status Running\n  history before the answer: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted\nanswer raised with a worker: 'delivered' printed 0 time(s)\nafter: status Terminated; raised ManagerApproval; advanced 0\n  history: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > ExecutionTerminated > EventRaised > ExecutionCompleted > TaskScheduled",
+  "evidence": "instance: i746912212; parked at Running\nterminate: acknowledged 1 time(s); status Running\n  history before the answer: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted\nanswer raised with a worker: 'delivered' printed 0 time(s)\nafter: status Terminated; raised ManagerApproval; advanced 0\n  history: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > ExecutionTerminated > EventRaised > ExecutionCompleted > TaskScheduled",
   "measurements": {
     "scheduler_image_digest": "sha256:82ceb7df2fdfc2e22b0013c7b87b7a8e443bcd220d4fb37c32ced8ee23438719",
     "status_at_gate": "Running",
@@ -21,8 +21,8 @@
     "dotnet": "10.0.402",
     "runtime": "Durable Task Scheduler emulator (docker image mcr.microsoft.com/dts/dts-emulator:latest) + Microsoft.DurableTask.Client/Worker.AzureManaged 1.28.0",
     "model": "none — the vendored sample's executors call no model; no call count exists in this column",
-    "commit": "bb3c4ef673b2f0d99f2638b0d8771f5c25d5d7d6",
+    "commit": "d9d475d2136d8d8fe86a05b12d8737c06b697c5e",
     "command": "./faults/extension.sh --fault abort-mid-wait"
   },
-  "recordedAt": "2026-11-05T20:10:26.819385+00:00"
+  "recordedAt": "2026-11-05T20:15:36.500654+00:00"
 }

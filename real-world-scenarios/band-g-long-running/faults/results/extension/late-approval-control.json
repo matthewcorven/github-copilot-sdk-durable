@@ -4,7 +4,7 @@
   "outcome": "no terminate, answer advanced the run",
   "phase": "answered while parked with no terminate (the control)",
   "detail": "Control: the same steps with no terminate. The answer was delivered by a live worker ('delivered' printed 1 time(s)) and the run advanced — status Running, 2 completed step(s) against 1 at the gate, history: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > EventRaised > TaskScheduled > OrchestratorStarted > TaskCompleted. This is what the late answer is measured against: the same answer, on a run that was not terminated, does run the next step.",
-  "evidence": "instance: i610215666; parked at Running\nterminate: not injected; status before the answer: Running\n  status samples: (none)\n  history before: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted\nanswer raised with a worker: 1 raise(s), 'delivered' printed 1 time(s)\nafter: status Running; raised ManagerApproval; advanced 1\n  history: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > EventRaised > TaskScheduled > OrchestratorStarted > TaskCompleted",
+  "evidence": "instance: i540019063; parked at Running\nterminate: not injected; status before the answer: Running\n  status samples: (none)\n  history before: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted\nanswer raised with a worker: 1 raise(s), 'delivered' printed 1 time(s)\nafter: status Running; raised ManagerApproval; advanced 1\n  history: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > EventRaised > TaskScheduled > OrchestratorStarted > TaskCompleted",
   "measurements": {
     "scheduler_image_digest": "sha256:82ceb7df2fdfc2e22b0013c7b87b7a8e443bcd220d4fb37c32ced8ee23438719",
     "status_at_gate": "Running",
@@ -20,8 +20,8 @@
     "dotnet": "10.0.402",
     "runtime": "Durable Task Scheduler emulator (docker image mcr.microsoft.com/dts/dts-emulator:latest) + Microsoft.DurableTask.Client/Worker.AzureManaged 1.28.0",
     "model": "none — the vendored sample's executors call no model; no call count exists in this column",
-    "commit": "bb3c4ef673b2f0d99f2638b0d8771f5c25d5d7d6",
+    "commit": "d9d475d2136d8d8fe86a05b12d8737c06b697c5e",
     "command": "./faults/extension.sh --fault late-approval --fault-not-injected"
   },
-  "recordedAt": "2026-11-05T20:10:02.555446+00:00"
+  "recordedAt": "2026-11-05T20:15:12.352375+00:00"
 }

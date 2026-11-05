@@ -3,8 +3,8 @@
   "fault": "kill-during-wait",
   "outcome": "wait survived",
   "phase": "blocked in the wait for the gate's verdict; process killed, wait still on record",
-  "detail": "The kill landed on pid 6739 (the host process blocked in the wait for the gate's verdict) with the store reading: task waiting, gate phase wait. A fresh process re-entered the run and returned at the gate again — task waiting, gate phase wait, 3 call(s), unchanged from 3 — so the wait survived the death of the only process that was in it. It then accepted a decision (alice approved) and finished the run: terminal with verdict approved, 4 call(s). The wait is a checkpoint the gate committed, not a call the killed process held.",
-  "evidence": "killed pid 6739 (kill -9, confirmed gone) at: the host process blocked in the wait for the gate's verdict\nbefore: task waiting, gate phase wait, 3 call(s)\nafter resume (exit 0): task waiting, gate phase wait, 3 call(s)\ndecision (exit 0): alice approved\nafter finishing (exit 0): task terminal, verdict approved, 4 call(s)\ngate:       t59 Running\nmodel:      3 calls [plan, research, write], 0 memo hits",
+  "detail": "The kill landed on pid 17384 (the host process blocked in the wait for the gate's verdict) with the store reading: task waiting, gate phase wait. A fresh process re-entered the run and returned at the gate again — task waiting, gate phase wait, 3 call(s), unchanged from 3 — so the wait survived the death of the only process that was in it. It then accepted a decision (alice approved) and finished the run: terminal with verdict approved, 4 call(s). The wait is a checkpoint the gate committed, not a call the killed process held.",
+  "evidence": "killed pid 17384 (kill -9, confirmed gone) at: the host process blocked in the wait for the gate's verdict\nbefore: task waiting, gate phase wait, 3 call(s)\nafter resume (exit 0): task waiting, gate phase wait, 3 call(s)\ndecision (exit 0): alice approved\nafter finishing (exit 0): task terminal, verdict approved, 4 call(s)\ngate:       t59 Running\nmodel:      3 calls [plan, research, write], 0 memo hits",
   "measurements": {
     "model_calls_before_kill": 3,
     "model_calls_after_resume": 3,
@@ -15,8 +15,8 @@
     "dotnet": "10.0.402",
     "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
     "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
-    "commit": "bb3c4ef673b2f0d99f2638b0d8771f5c25d5d7d6",
+    "commit": "d9d475d2136d8d8fe86a05b12d8737c06b697c5e",
     "command": "./faults/kill-during-wait.sh --variant durable"
   },
-  "recordedAt": "2026-11-05T20:06:46.992922+00:00"
+  "recordedAt": "2026-11-05T20:11:56.163537+00:00"
 }
