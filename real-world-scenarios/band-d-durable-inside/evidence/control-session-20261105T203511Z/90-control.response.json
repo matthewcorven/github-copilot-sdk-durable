@@ -1,0 +1,85 @@
+{
+  "agent_reference": {
+    "name": "durable-inside-agent",
+    "type": "agent_reference",
+    "version": "1"
+  },
+  "agent_session_id": "cd33a4fc3a7472467d4b3343179bcc0eb7cc9862fe76a728bcc77e29df14810",
+  "background": false,
+  "completed_at": 1793910932,
+  "created_at": 1793910927,
+  "id": "caresp_0f648349f8664ad000SLgqiIJMz6GLlhWK3EK7sz57jnbe67CV",
+  "model": "",
+  "object": "response",
+  "output": [
+    {
+      "agent_reference": null,
+      "arguments": "{\"request_id\":\"PA-D2-0001\"}{\"request_id\":\"PA-D2-0001\"}",
+      "call_id": "call_C2BBSzoPODo93P3ffJOPVuei",
+      "id": "fc_0f648349f8664ad000Ge405zrskMuQNtSltBqQWKG69pTd1UAu",
+      "name": "working_state",
+      "response_id": "caresp_0f648349f8664ad000SLgqiIJMz6GLlhWK3EK7sz57jnbe67CV",
+      "status": "completed",
+      "type": "function_call"
+    },
+    {
+      "agent_reference": null,
+      "call_id": "call_C2BBSzoPODo93P3ffJOPVuei",
+      "id": "fco_0f648349f8664ad000X0eK0Vi4JLqxzOLyimqIIhXmBVHXE8WH",
+      "output": "{\n \"approval\": null,\n \"approvalTask\": null,\n \"assessment\": null,\n \"decidedAt\": null,\n \"decidedBy\": null,\n \"decision\": null,\n \"phase\": null,\n \"requestId\": \"PA-D2-0001\",\n \"resumedCount\": null,\n \"storePath\": \"/home/session/durable/working-state.jsonl\"\n}",
+      "response_id": "caresp_0f648349f8664ad000SLgqiIJMz6GLlhWK3EK7sz57jnbe67CV",
+      "status": "completed",
+      "type": "function_call_output"
+    },
+    {
+      "agent_reference": null,
+      "arguments": "{}{}",
+      "call_id": "call_yy9ehl49KW9ZlQ2ohSPexSa4",
+      "id": "fc_0f648349f8664ad0000laOUMF6APJJ3tkvhq3Wenkq85dwudqP",
+      "name": "store_report",
+      "response_id": "caresp_0f648349f8664ad000SLgqiIJMz6GLlhWK3EK7sz57jnbe67CV",
+      "status": "completed",
+      "type": "function_call"
+    },
+    {
+      "agent_reference": null,
+      "call_id": "call_yy9ehl49KW9ZlQ2ohSPexSa4",
+      "id": "fco_0f648349f8664ad000qyH51u4eiQd8tLnF6EZ074cAdIxkGJ44",
+      "output": "{\n \"bytes\": 0,\n \"container\": {\n  \"/\": {\n   \"exists\": true,\n   \"writable\": true\n  },\n  \"/app\": {\n   \"exists\": true,\n   \"writable\": true\n  },\n  \"/files\": {\n   \"exists\": false\n  },\n  \"/home/session\": {\n   \"exists\": true,\n   \"writable\": true\n  },\n  \"/tmp\": {\n   \"exists\": true,\n   \"writable\": true\n  },\n  \"home\": \"/home/session\",\n  \"markerPath\": \"/home/session/d2-marker\",\n  \"storePath\": \"/home/session/durable/working-state.jsonl\",\n  \"userId\": 0\n },\n \"documents\": [],\n \"files\": {\n  \"directory\": \"/home/session/durable\",\n  \"files\": [\n   {\n    \"bytes\": 38,\n    \"mtime\": \"2026-11-05T20:35:26Z\",\n    \"name\": \"working-state.jsonl.lock\"\n   }\n  ],\n  \"pid\": 5\n },\n \"raw\": \"\",\n \"sha256\": \"no-file\",\n \"storePath\": \"/home/session/durable/working-state.jsonl\",\n \"tasks\": []\n}",
+      "response_id": "caresp_0f648349f8664ad000SLgqiIJMz6GLlhWK3EK7sz57jnbe67CV",
+      "status": "completed",
+      "type": "function_call_output"
+    },
+    {
+      "agent_reference": null,
+      "content": [
+        {
+          "annotations": [],
+          "logprobs": [],
+          "text": "```json\n{\n  \"phase\": null,\n  \"approval\": null,\n  \"approvalTask\": null,\n  \"storePath\": \"/home/session/durable/working-state.jsonl\"\n}\n```\n\nThe store is empty. Store path: `/home/session/durable/working-state.jsonl`.\n\nStore report summary:\n- documents: 0\n- tasks: 0",
+          "type": "output_text"
+        }
+      ],
+      "id": "msg_0f648349f8664ad000CvZikfpmrlQLINe8d2OhAkV2rw6WJNIV",
+      "response_id": "caresp_0f648349f8664ad000SLgqiIJMz6GLlhWK3EK7sz57jnbe67CV",
+      "role": "assistant",
+      "status": "completed",
+      "type": "message"
+    }
+  ],
+  "parallel_tool_calls": false,
+  "response_id": "caresp_0f648349f8664ad000SLgqiIJMz6GLlhWK3EK7sz57jnbe67CV",
+  "status": "completed",
+  "usage": {
+    "input_tokens": 3751,
+    "input_tokens_details": {
+      "cache_write_tokens": 0,
+      "cached_tokens": 0
+    },
+    "output_tokens": 183,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 3934
+  }
+}

@@ -7,8 +7,8 @@
 }
 ```
 
-The store is empty.
+The store is empty. Store path: `/home/session/durable/working-state.jsonl`.
 
-- Documents: 0
-- Tasks: 0
-- Store path: `/home/session/durable/working-state.jsonl`
+Store report summary:
+- documents: 0
+- tasks: 0

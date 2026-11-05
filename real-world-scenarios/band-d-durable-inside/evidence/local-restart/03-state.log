@@ -11,10 +11,10 @@
  "storePath": "<scratch>/working-state.jsonl",
  "task": {
   "checkpoint": {
-   "deadline": 1793984801.926668,
+   "deadline": 1793997420.6816819,
    "phase": "await",
    "requestId": "LOCAL-1",
-   "requestedAt": 1793898401.926668
+   "requestedAt": 1793911020.6816819
   },
   "id": "t4",
   "memos": {},

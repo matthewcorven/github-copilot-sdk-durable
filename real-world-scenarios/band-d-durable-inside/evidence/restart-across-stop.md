@@ -5,9 +5,9 @@ a container restart and resumes at the approval, not before it.** This file is t
 for it, captured from one run against the deployed agent. Every block below is pasted
 unedited from the run directory, except where a line is marked as elided.
 
-- Run: `run-20261105T170223Z/` — four turns, 7 s + 6 s + 7 s + 8 s of billed session
+- Run: `run-20261105T203358Z/` — four turns, 7 s + 6 s + 7 s + 8 s of billed session
   compute (from each Response's own `created_at`/`completed_at`).
-- `agent_session_id`: `8c508ac2e432d512ca5b6002a9a35b4384d69046f95a5eef66dba8372b05579` — the **same
+- `agent_session_id`: `b34699f92021c4e3a04d0eda60edfac6e4dcfe8fcdb28cac480204ae83aeabe` — the **same
   id on all four turns**, asserted by `infra/invoke.sh` rather than observed by eye (§0).
 - Agent version: **1** on all four turns, also asserted. A version change mid-run would
   mean the restart crossed images, and "the same agent resumed" would be a weaker claim
@@ -23,7 +23,7 @@ Two checks in `infra/invoke.sh`, because both failure modes happened while this 
 being built and neither is visible in a transcript:
 
 ```
-   session confirmed: 8c508ac2e432d512ca5b6002a9a35b4384d69046f95a5eef66dba8372b05579
+   session confirmed: b34699f92021c4e3a04d0eda60edfac6e4dcfe8fcdb28cac480204ae83aeabe
    agent version: 1
 ```
 
@@ -47,10 +47,10 @@ The first turn creates the session. Nothing has been written yet, and the agent 
 ```
 -- POST ask
    9s, exit 0
-   status: completed | id: caresp_…  | session: 8c508ac2e432d512ca5b6002a9a35b4384d69046f95a5eef66dba8372b05579
+   status: completed | id: caresp_…  | session: b34699f92021c4e3a04d0eda60edfac6e4dcfe8fcdb28cac480204ae83aeabe
 ```
 
-The tool output, verbatim (`run-20261105T170223Z/10-ask.tools.txt`, elided only in repeated
+The tool output, verbatim (`run-20261105T203358Z/10-ask.tools.txt`, elided only in repeated
 JSON keys):
 
 ```
@@ -91,7 +91,7 @@ OUTPUT call_…
  "approvalTaskId": "t4",
  "awaitingEvent": "external:approval/PA-D2-0001",
  "created": true,
- "deadline": 1793984575.504916,
+ "deadline": 1793997250.6636398,
  "note": "the approval is a durable task parked on an external event; nothing is held open",
  "phase": "awaiting-approval",
  "requestId": "PA-D2-0001"
@@ -105,17 +105,17 @@ CALL working_state {"request_id":"PA-D2-0001"}
 OUTPUT call_…
 {
  "approval": {
-  "deadline": 1793984575.504916,
+  "deadline": 1793997250.6636398,
   "decision": "",
   "reviewer": "",
   "state": "pending"
  },
  "approvalTask": {
   "checkpoint": {
-   "deadline": 1793984575.504916,
+   "deadline": 1793997250.6636398,
    "phase": "await",
    "requestId": "PA-D2-0001",
-   "requestedAt": 1793898175.504916
+   "requestedAt": 1793910850.6636398
   },
   "id": "t4",
   "restarts": 0,
@@ -137,8 +137,8 @@ Four things to read off it:
 - `status: "WAITING"` and `waitingOn: ["external:approval/PA-D2-0001"]` — the approval is a
   task record parked on a name nothing in the store produces. There is no coroutine, no
   timer and no open request behind it; the response completed in 7 s.
-- `deadline: 1793984575.504916` — written into the checkpoint, not recomputed on read.
-- `requestedAt: 1793898175.504916` — the instant of the park.
+- `deadline: 1793997250.6636398` — written into the checkpoint, not recomputed on read.
+- `requestedAt: 1793910850.6636398` — the instant of the park.
 - `deadline − requestedAt` = **86400.0 s exactly**, the 24 hours
   `durable_state.APPROVAL_DEADLINE_SECONDS` declares, computed once from one instant. The
   criterion that checkpoints stay identical will quote these two numbers.
@@ -146,10 +146,10 @@ Four things to read off it:
 ## 3. `stop` — the container goes away
 
 ```
--- stop session 8c508ac2e432d512ca5b6002a9a35b4384d69046f95a5eef66dba8372b05579
+-- stop session b34699f92021c4e3a04d0eda60edfac6e4dcfe8fcdb28cac480204ae83aeabe
    stop exit: 0
    (empty body: the action was accepted; the session object below is the proof)
-   session-after-stop: status=idle created=1793898161 last_accessed=1793898184
+   session-after-stop: status=idle created=1793910839 last_accessed=1793910857
 ```
 
 `POST …/sessions/{id}:stop` answers **202 with an empty body**, so that is not evidence on
@@ -158,18 +158,41 @@ its own. The script captures the session object immediately afterwards
 
 ```json
 {
-  "agent_session_id": "8c508ac2e432d512ca5b6002a9a35b4384d69046f95a5eef66dba8372b05579",
-  "created_at": 1793898161,
-  "expires_at": 1796490184,
-  "last_accessed_at": 1793898184,
+  "agent_session_id": "b34699f92021c4e3a04d0eda60edfac6e4dcfe8fcdb28cac480204ae83aeabe",
+  "created_at": 1793910839,
+  "expires_at": 1796502857,
+  "last_accessed_at": 1793910857,
   "status": "idle",
-  "stopped_at": 1793898184,
+  "stopped_at": 1793910857,
   "version_indicator": { "agent_version": "1", "type": "version_ref" }
 }
 ```
 
 `status: idle` with a `stopped_at` is the platform saying the container is not running.
 `created_at` is unchanged from §1's session — stopping does not create a new session.
+
+Two invariants hold in this capture and in §4's, which is what makes them live reads rather
+than a copy pasted twice:
+
+- `expires_at − last_accessed_at` is **2 592 000** — exactly 30 days, to the second: the window
+  D1 measured, renewed by the access this call itself made. In the same run, `ask`'s response
+  is 6 s and `assess`'s 5 s, and the stop is served at 1793910857, 4 s after the last turn;
+- `created_at` is **1793910839** in both, so the window slid forward and the session did not
+  restart.
+
+**What is not captured, and why.** No session object is taken right after `ask` or right
+after `assess`, and none after `decide`. An earlier version of this script took all three, and
+two of them — `11-session-after-ask.json` and `21-session-after-assess.json` — came back from
+that earlier run **byte-identical to each other**, including `last_accessed_at`, although the
+assess turn had run 12 s later. (That run's ids were `1793898161` for the access and
+`1793898173` for the assess turn; both files hashed `e50b23b0…`.)
+
+That cannot be a live `GET` after the assess turn: `last_accessed_at` is the platform's last
+*access*, and it does not appear to move for a turn until the next one is served. A capture
+that cannot be distinguished from a copy is not evidence, so those files are deleted and the
+script no longer emits them. The two that remain bracket the transition the
+platform performs itself, and their `stopped_at` / `status` / `last_accessed_at` are the
+platform's own change.
 
 ## 4. `resume` — a new process reads the park, and re-enters at it
 
@@ -182,7 +205,7 @@ The request, verbatim (`40-resume.request.json`):
 {
  "input": "Request PA-D2-0001 again. This container was stopped and restarted. Read your durable working state with working_state, then call resume_work, and tell me: which approval task you found, what status it was in, the exact deadline value stored with it, and whether anything about this request had to be redone. Quote the values, do not summarise them.",
  "stream": false,
- "agent_session_id": "8c508ac2e432d512ca5b6002a9a35b4384d69046f95a5eef66dba8372b05579"
+ "agent_session_id": "b34699f92021c4e3a04d0eda60edfac6e4dcfe8fcdb28cac480204ae83aeabe"
 }
 ```
 
@@ -193,17 +216,17 @@ CALL working_state {"request_id":"PA-D2-0001"}
 OUTPUT call_…
 {
  "approval": {
-  "deadline": 1793984575.504916,
+  "deadline": 1793997250.6636398,
   "decision": "",
   "reviewer": "",
   "state": "pending"
  },
  "approvalTask": {
   "checkpoint": {
-   "deadline": 1793984575.504916,
+   "deadline": 1793997250.6636398,
    "phase": "await",
    "requestId": "PA-D2-0001",
-   "requestedAt": 1793898175.504916
+   "requestedAt": 1793910850.6636398
   },
   "id": "t4",
   "restarts": 0,
@@ -236,10 +259,10 @@ OUTPUT call_…
 
 This is the claim, and it is four separate facts:
 
-1. **`deadline: 1793984575.504916` is byte-identical to §2.** A container that was not running
+1. **`deadline: 1793997250.6636398` is byte-identical to §2.** A container that was not running
    when it was written read it back unchanged. A deadline recomputed at resume would be
    `now + 86400` and would differ; this one did not move.
-2. **`requestedAt: 1793898175.504916` is byte-identical too** — the park time, not the resume
+2. **`requestedAt: 1793910850.6636398` is byte-identical too** — the park time, not the resume
    time. If the run had re-entered the `park` phase, this value would have been rewritten.
 3. **`assessment: "Coverage criteria are met."` came back**, so the assessment step was not
    redone: the resumed turn read the value the stopped container committed.
@@ -253,9 +276,9 @@ park again, because no answer exists yet: `taskId: t4`, `result: null`, `error: 
 the same run settled as `failed / "task did not finish"`, which reads as "this work cannot
 continue" for a task the next event can still wake (`durable/GAP.md` §"The reproduction").
 
-`created_at`/`completed_at` on the four Responses are `1793898165→1793898172` (ask),
-`1793898173→1793898179` (assess), `1793898195→1793898202` (resume) and
-`1793898203→1793898211` (decide): the gap between 1793898179 and 1793898195 is the stop and
+`created_at`/`completed_at` on the four Responses are `1793910843→1793910848` (ask),
+`1793910849→1793910854` (assess), `1793910868→1793910874` (resume) and
+`1793910875→1793910887` (decide): the gap between 1793910854 and 1793910868 is the stop and
 the five-second settle, and nothing was running for the rest of the 24-hour window the
 approval was open.
 
@@ -269,10 +292,10 @@ Session continuity, for the record (`41-session-after-resume.json`):
 
 ```json
 {
-  "agent_session_id": "8c508ac2e432d512ca5b6002a9a35b4384d69046f95a5eef66dba8372b05579",
-  "created_at": 1793898161,
-  "expires_at": 1796490192,
-  "last_accessed_at": 1793898192,
+  "agent_session_id": "b34699f92021c4e3a04d0eda60edfac6e4dcfe8fcdb28cac480204ae83aeabe",
+  "created_at": 1793910839,
+  "expires_at": 1796502864,
+  "last_accessed_at": 1793910864,
   "status": "active",
   "version_indicator": { "agent_version": "1", "type": "version_ref" }
 }
@@ -308,17 +331,17 @@ Followed by `working_state` on the same turn:
 ```
 {
  "approval": {
-  "deadline": 1793984575.504916,
+  "deadline": 1793997250.6636398,
   "decision": "approved",
   "reviewer": "Dr. Chen",
   "state": "answered"
  },
  "approvalTask": {
   "checkpoint": {
-   "deadline": 1793984575.504916,
+   "deadline": 1793997250.6636398,
    "phase": "await",
    "requestId": "PA-D2-0001",
-   "requestedAt": 1793898175.504916
+   "requestedAt": 1793910850.6636398
   },
   "id": "t4",
   "restarts": 1,
@@ -326,7 +349,7 @@ Followed by `working_state` on the same turn:
   "waitingOn": []
  },
  "assessment": "Coverage criteria are met.",
- "decidedAt": "2026-11-05T17:03:24Z",
+ "decidedAt": "2026-11-05T20:34:36Z",
  "decidedBy": "Dr. Chen",
  "decision": "approved",
  "phase": "decided",
@@ -350,24 +373,31 @@ definition.
 The final `store_report` (`50-decide.tools.txt`):
 
 ```
-"bytes": 5886,
-"sha256": "ebc8735d09bd0fe9fe48c52c52e9025b36d00cefee369d120733375694fb0888",
+"bytes": 5898,
+"sha256": "f257d23ab62616a535fa9ee330f20bf8069e21e83f9c46d60177b5e71b46b442",
 "files": {
  "directory": "/home/session/durable",
  "files": [
-  { "bytes": 5886, "mtime": "2026-11-05T17:03:24Z", "name": "working-state.jsonl" },
-  { "bytes": 38, "mtime": "2026-11-05T17:03:15Z", "name": "working-state.jsonl.lock" }
+  { "bytes": 5898, "mtime": "2026-11-05T20:34:36Z", "name": "working-state.jsonl" },
+  { "bytes": 38, "mtime": "2026-11-05T20:34:25Z", "name": "working-state.jsonl.lock" }
  ],
- "pid": 6
+ "pid": 5
 }
 ```
 
-The `working-state.jsonl` text, 24 JSONL records: every task record, quoted as the checkpoints
+`pid` is **not** evidence of a restart, and this file does not use it as any. It is 5 in
+the first turn, in the last, and in the control's separate session: it is the image's entry
+point, not a per-container process id. One earlier capture showed 5 then 6, and that
+difference was read as the restart — it was coincidence, and `evidence/container-filesystem.md`
+§4 records the correction. What carries the restart is the `agent_session_id`, the unchanged
+`created_at`, and the byte-identical park timestamps — all asserted or quoted above.
+
+The `working-state.jsonl` text, 25 JSONL records: every task record, quoted as the checkpoints
 this file relies on:
 
 ```
 {"v":1,"seq":4,"type":"task","payload":{"id":"t4","name":"d2.approval-task","input":{"requestId":"PA-D2-0001"},"checkpoint":{"phase":"park"},"status":0,"restarts":0,"waitingOn":[],"memos":{}}}
-… task status 2  checkpoint {"phase":"await","requestId":"PA-D2-0001","deadline":1793984575.504916,"requestedAt":1793898175.504916}  waitingOn ["external:approval/PA-D2-0001"]  memos {}
+… task status 2  checkpoint {"phase":"await","requestId":"PA-D2-0001","deadline":1793997250.6636398,"requestedAt":1793910850.6636398}  waitingOn ["external:approval/PA-D2-0001"]  memos {}
 … task status 1  checkpoint (same)  waitingOn []  memos {"external-event":{"decision":"approved","reason":"…","reviewer":"Dr. Chen"}}
 … task status 1  checkpoint (same)  restarts 1  memos {"external-event":…}
 … task status 4  checkpoint (same)  waitingOn []  restarts 1  memos {"external-event":…}
@@ -395,8 +425,8 @@ The two documents:
 | `d2.approval@PA-D2-0001` | 2 | `e5`, `e14` | parked → pending, answered |
 
 ```json
-e5  {"requestId":"PA-D2-0001","state":"pending","deadline":1793984575.504916,"requestedAt":1793898175.504916,"decision":"","reviewer":"","reason":""}
-e14 {"requestId":"PA-D2-0001","state":"answered","deadline":1793984575.504916,"requestedAt":1793898175.504916,"decision":"approved","reviewer":"Dr. Chen","reason":"…"}
+e5  {"requestId":"PA-D2-0001","state":"pending","deadline":1793997250.6636398,"requestedAt":1793910850.6636398,"decision":"","reviewer":"","reason":""}
+e14 {"requestId":"PA-D2-0001","state":"answered","deadline":1793997250.6636398,"requestedAt":1793910850.6636398,"decision":"approved","reviewer":"Dr. Chen","reason":"…"}
 ```
 
 `d2.approval` is `Rewindable`, so the park the stopped container wrote and the answer the
@@ -410,11 +440,16 @@ drift that makes a restart look like a second park.)
 ## 7. The control — a fresh session has no store
 
 `./infra/invoke.sh --control` posts stage 1's question with **no** `agent_session_id`, so the
-platform starts a new container (`evidence/control-session-*/`):
+platform starts a new container (`evidence/control-session-20261105T203511Z/`):
 
 ```
-   status: completed | session: 6f319a3fb3b91497e1b39605deea765638bd33983bb64229ea883a9689257cc
+   status: completed | session: cd33a4fc3a7472467d4b3343179bcc0eb7cc9862fe76a728bcc77e29df14810
 ```
+
+The control run makes two ask-turns: the first creates the session it then leaves, and the
+second — the actual control — is posted without a session id and lands on
+`cd33a4fc…`, which is neither the run's session (`b34699f9…`) nor the one the first turn
+created.
 
 ```
 OUTPUT …
@@ -430,14 +465,17 @@ OUTPUT …
 ```
 
 The control names **the same store path** — `/home/session/durable/working-state.jsonl` — and
-reports it empty, with `sha256: "no-file"`. That pair is the argument:
+reports it empty, with `sha256: "no-file"`, `"documents": []`, `"tasks": []`. Its directory
+listing holds only the lock sidecar (`38` bytes), which is the store's *open*: nothing had
+been written. That pair is the argument:
 
 - the path is not per-container: the same path on a fresh sandbox is a different, empty file;
 - so the state §4 read was not "whatever this container happens to have". It was written by
-  session `8c508ac2…` before the stop, and it survived because it lives on the platform's
+  session `b34699f9…` before the stop, and it survived because it lives on the platform's
   session volume and nowhere else.
 
-The control's assistant message puts it plainly: `The store is empty.` / `- Documents: 0`.
+The control's own assertions came from the tool, not the prose: `bytes: 0`, `documents: []`,
+`tasks: []`, `sha256: "no-file"`, and a `files` listing with the lock and no store.
 
 ## 8. The same restart without a platform
 
@@ -447,14 +485,14 @@ this claim reproducible for someone with no subscription. Captured in
 `evidence/local-restart/`:
 
 ```
-LOCAL assess: {"approvalTaskId": "t4", "deadline": 1793984801.926668, "deadlineIso": "2026-11-06T17:06:41Z", "event": "external:approval/LOCAL-1", …}
-LOCAL task:   {"checkpoint": {"deadline": 1793984801.926668, "phase": "await", "requestId": "LOCAL-1", "requestedAt": 1793898401.926668}, "status": "WAITING", "waitingOn": ["external:approval/LOCAL-1"]}
+LOCAL assess: {"approvalTaskId": "t4", "deadline": 1793997420.6816819, "deadlineIso": "2026-11-06T20:37:00Z", "event": "external:approval/LOCAL-1", …}
+LOCAL task:   {"checkpoint": {"deadline": 1793997420.6816819, "phase": "await", "requestId": "LOCAL-1", "requestedAt": 1793911020.6816819}, "status": "WAITING", "waitingOn": ["external:approval/LOCAL-1"]}
 04 (resume, no answer): "settled": {"status": "pending", "taskId": "t4"}, "resumedCount": 1
 05 (deliver):           {"woken": ["t4"]}
 06 (resume, answered):  "phase": "decided", "decision": "approved", "decidedBy": "Dr Okoro", "resumedCount": 2,
                         task {"status": "TERMINAL", "restarts": 1, "waitingOn": [],
                               "memos": {"external-event": {"decision": "approved", "reason": "criteria met", "reviewer": "Dr Okoro"}}}
-07 (marker):            "writtenAt": "2026-11-05T17:06:42Z", "writtenByPid": 59155
+07 (marker):            "writtenAt": "2026-11-05T20:37:01Z", "writtenByPid": 38354
 ```
 
 `deadline − requestedAt` is again exactly 86400.0 s, and both are the same in the document
@@ -463,7 +501,7 @@ checked without the platform in the way.
 
 `07-marker-read.json` reads a file **process A wrote** (`writtenByPid` is A's pid), so the
 directory survived every process boundary. The store's digest differs across the run
-(`2f34698…` after process A, `40a4c45…` after process D) because processes wrote to it — which
+(`a1c8455…` after process A, `e0ee9db…` after process D) because processes wrote to it — which
 is the difference between a surviving file and a frozen one.
 
 ## 9. What this does not prove

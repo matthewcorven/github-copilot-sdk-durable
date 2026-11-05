@@ -8,3 +8,7 @@ deployment.env
 
 # Scratch left by a probe that failed before it could clean up.
 .scratch-*
+
+# Python bytecode from a local run.
+__pycache__/
+*.pyc

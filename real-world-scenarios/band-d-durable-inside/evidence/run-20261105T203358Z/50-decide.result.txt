@@ -1,0 +1,127 @@
+Done.
+
+Quoted tool returns:
+
+`record_approval` returned:
+```json
+{
+  "finalPhase": "decided",
+  "note": "the task resumed at the step after the approval",
+  "requestId": "PA-D2-0001",
+  "settled": {
+    "error": null,
+    "result": {
+      "decision": "approved",
+      "reason": "coverage criteria met; PET-avid nodule meets imaging criteria",
+      "reviewer": "Dr. Chen"
+    },
+    "status": "completed",
+    "taskId": "t4"
+  },
+  "wokenTasks": [
+    "t4"
+  ]
+}
+```
+
+`working_state` returned:
+```json
+{
+  "approval": {
+    "deadline": 1793997250.6636398,
+    "decision": "approved",
+    "reviewer": "Dr. Chen",
+    "state": "answered"
+  },
+  "approvalTask": {
+    "checkpoint": {
+      "deadline": 1793997250.6636398,
+      "phase": "await",
+      "requestId": "PA-D2-0001",
+      "requestedAt": 1793910850.6636398
+    },
+    "id": "t4",
+    "restarts": 1,
+    "status": "TERMINAL",
+    "waitingOn": []
+  },
+  "assessment": "Coverage criteria are met.",
+  "decidedAt": "2026-11-05T20:34:36Z",
+  "decidedBy": "Dr. Chen",
+  "decision": "approved",
+  "phase": "decided",
+  "requestId": "PA-D2-0001",
+  "resumedCount": 1,
+  "storePath": "/home/session/durable/working-state.jsonl"
+}
+```
+
+`store_report` returned, in relevant part:
+```json
+{
+  "documents": [
+    {
+      "kind": "d2.work-state",
+      "latest": {
+        "approvalTaskId": "t4",
+        "assessment": "Coverage criteria are met.",
+        "decidedAt": "2026-11-05T20:34:36Z",
+        "decidedBy": "Dr. Chen",
+        "decision": "approved",
+        "phase": "decided",
+        "requestId": "PA-D2-0001",
+        "resumedCount": 1
+      },
+      "ownerId": "PA-D2-0001",
+      "versions": 4
+    },
+    {
+      "kind": "d2.approval",
+      "latest": {
+        "deadline": 1793997250.6636398,
+        "decision": "approved",
+        "reason": "coverage criteria met; PET-avid nodule meets imaging criteria",
+        "requestId": "PA-D2-0001",
+        "requestedAt": 1793910850.6636398,
+        "reviewer": "Dr. Chen",
+        "state": "answered"
+      },
+      "ownerId": "PA-D2-0001",
+      "versions": 2
+    }
+  ],
+  "tasks": [
+    {
+      "checkpoint": {
+        "deadline": 1793997250.6636398,
+        "phase": "await",
+        "requestId": "PA-D2-0001",
+        "requestedAt": 1793910850.6636398
+      },
+      "id": "t4",
+      "memos": {
+        "external-event": {
+          "decision": "approved",
+          "reason": "coverage criteria met; PET-avid nodule meets imaging criteria",
+          "reviewer": "Dr. Chen"
+        }
+      },
+      "name": "d2.approval-task",
+      "outcome": {
+        "error": null,
+        "status": "completed"
+      },
+      "restarts": 1,
+      "status": "TERMINAL",
+      "waitingOn": []
+    }
+  ]
+}
+```
+
+Final requested values:
+- Final phase: `"decided"`
+- Decision: `"approved"`
+- Reviewer: `"Dr. Chen"`
+- Approval task status: `"TERMINAL"`
+- Approval task checkpoint phase: `"await"`

@@ -1,14 +1,16 @@
 # Teardown — captured
 
 `infra/teardown.sh` was the last thing this issue ran. Below: what existed before, the
-invocation that deleted it, the repeat that proves a repeat is harmless, the repeated
-purge, and a subscription-wide check that does not assume the resource group.
+invocation that deleted it, the repeat that proves a repeat is harmless, a subscription-wide
+check that does not assume the resource group — and the three cases review called out, each
+**exercised rather than reasoned about**: a second grave in the same group, an operator whose
+default subscription has moved, and the subscription id the script prints.
 
 ## What existed before the final teardown
 
-The **published run** (`evidence/run-20261105T170223Z/`) ran against a deployment whose record
-was removed before teardown, on purpose: a teardown must work without it. Its names came from
-the group itself:
+The published run and the teardown below are both from the final deployment. Its names came
+from a `RUN_STAMP`, so they are `xszmrm5jdx654`-suffixed; the record-less arm is the one
+exercised earlier and described under "The moved-default case".
 
 ```
 $ az group show -n rg-bandd-durable --query '{name:name,location:location,state:properties.provisioningState}' -o json
@@ -19,12 +21,12 @@ $ az group show -n rg-bandd-durable --query '{name:name,location:location,state:
 }
 
 $ az resource list -g rg-bandd-durable --query '[].name' -o tsv
-crlrnkp5x77yrzc
-aif-lrnkp5x77yrzc
-log-lrnkp5x77yrzc
-aif-lrnkp5x77yrzc/durableinside
-appi-lrnkp5x77yrzc
-Failure Anomalies - appi-lrnkp5x77yrzc
+crxszmrm5jdx654
+log-xszmrm5jdx654
+aif-xszmrm5jdx654
+aif-xszmrm5jdx654/durableinside
+appi-xszmrm5jdx654
+Failure Anomalies - appi-xszmrm5jdx654
 ```
 
 Five objects are the Bicep deployment; the sixth is the alert rule Application Insights creates
@@ -35,6 +37,7 @@ Agent Service registration inside the Foundry project, and deleting the group is
 
 ```
 $ ./infra/teardown.sh
+teardown: subscription from <scenario>/.deployment.json
 teardown: subscription BizSpark (de345105-…)
 teardown: resource groups
   rg-bandd-durable: deleting
@@ -45,37 +48,29 @@ teardown: waiting for deletion to finish
   [4] rg-bandd-durable: still present
   [5] rg-bandd-durable: still present
   [6] rg-bandd-durable: still present
-  [7] rg-bandd-durable: gone
+  [7] rg-bandd-durable: still present
+  [8] rg-bandd-durable: gone
 teardown: verification
   rg-bandd-durable: absent, no resources remain
 teardown: nothing named for this deployment remains anywhere in the subscription
   none
-teardown: foundry account soft-delete record
-  no foundryAccountName recorded; nothing to purge
+teardown: foundry account soft-delete records in rg-bandd-durable
+  aif-xszmrm5jdx654 (eastus2): purging [recorded in .deployment.json]
+  no soft-delete record remains for rg-bandd-durable
 
 teardown complete. A second run is harmless (the group and the account record are already absent).
 EXIT=0
 ```
 
-The purge step reports `no foundryAccountName recorded` because `.deployment.json` was gone —
-so the account was purged explicitly, and the next invocation (below) found no grave left:
+## The repeat — nothing left to do, still exit 0
 
-```
-$ az cognitiveservices account purge -n aif-lrnkp5x77yrzc -g rg-bandd-durable -l eastus2
-(purged; no output)
-$ az cognitiveservices account list-deleted --query "[].name" -o tsv
-(no output)
-$ az group exists -n rg-bandd-durable
-false
-```
-
-That gap is why `teardown.sh` now falls back to the **resource-group-scoped** soft-deleted
-listing when the record is missing, instead of skipping the purge.
-
-## The repeat — with the fallback, and nothing left to do
+The acceptance test for an idempotent teardown: a second invocation deletes nothing, purges
+nothing that exists (the recorded account's purge is a no-op on an already-purged grave, and
+the sweep finds none), and exits 0.
 
 ```
 $ ./infra/teardown.sh
+teardown: subscription from <scenario>/.deployment.json
 teardown: subscription BizSpark (de345105-…)
 teardown: resource groups
   rg-bandd-durable: already absent
@@ -86,8 +81,7 @@ teardown: verification
 teardown: nothing named for this deployment remains anywhere in the subscription
   none
 teardown: foundry account soft-delete records in rg-bandd-durable
-  no .deployment.json record; looking the graves up by resource group
-  none
+  aif-xszmrm5jdx654 (eastus2): purging [recorded in .deployment.json]
   no soft-delete record remains for rg-bandd-durable
 
 teardown complete. A second run is harmless (the group and the account record are already absent).
@@ -103,12 +97,14 @@ $ az group exists -n rg-bandd-durable
 false
 
 $ az resource list --subscription de345105-… \
-    --query "[?starts_with(name, 'aif-lrnkp5x77yrzc') || starts_with(name, 'crlrnkp5x77yrzc') || \
-              starts_with(name, 'appi-lrnkp5x77yrzc')].id" -o tsv
+    --query "[?starts_with(name, 'aif-xszmrm5jdx654') || starts_with(name, 'crxszmrm5jdx654') || \
+              starts_with(name, 'appi-xszmrm5jdx654')].id" -o tsv
 (no output — 0 lines)
 
 $ az cognitiveservices account list-deleted --query "[].name" -o tsv
-(no output — no soft-deleted Foundry account remains, from either deployment this issue made)
+(no output — no soft-deleted Foundry account remains anywhere in the subscription, from any
+deployment this issue made. Re-checked after the two-grave exercise and the moved-default
+exercise had been cleaned up.)
 ```
 
 ## The soft-delete grave
@@ -137,6 +133,107 @@ Three things came out of it, all landed rather than worked around by hand:
 
 **Deleting a resource group is not the whole of a Foundry teardown**, and `az resource list`
 cannot see the difference. That is a finding worth carrying to the matrix.
+
+## The multi-grave sweep, and the two ways a sweep can lie
+
+An earlier revision purged the **recorded** account only and consulted the group-scoped
+listing only when `.deployment.json` was missing. Review called that out, and it is wrong for
+a reason this issue's own evidence shows: one teardown can leave more than one grave. Rather
+than assert it, the case was constructed — two accounts in one group, group deleted:
+
+```
+$ az cognitiveservices account create -n aif-grave-a -g rg-bandd-durable … --kind AIServices
+$ az cognitiveservices account create -n aif-grave-b -g rg-bandd-durable … --kind AIServices
+$ az group delete -n rg-bandd-durable --yes
+$ az cognitiveservices account list-deleted --query "[].{name:name,rg:resourceGroup}" -o tsv
+aif-grave-a	None
+aif-grave-b	None
+```
+
+`rg: None` is the point. The soft-deleted record has **no `resourceGroup` field**; the group
+is only inside the ARM `id`:
+
+```
+/subscriptions/…/locations/eastus2/resourceGroups/rg-bandd-durable/deletedAccounts/aif-grave-b
+```
+
+So a sweep written as `[?resourceGroup=='$RG']` matches nothing, and `az` does not complain —
+it exits 0 with an empty list, and the teardown reads that as "no grave". Measured:
+
+**Before** (record present, old query shape) — exits 0 and leaves both:
+
+```
+$ ./.old-teardown.sh
+teardown: subscription BizSpark (de345105-…)
+teardown: resource groups
+  rg-bandd-durable: already absent
+EXIT=0
+$ az cognitiveservices account list-deleted --query '[].name' -o tsv
+aif-grave-a
+aif-grave-b
+```
+
+**After the first fix** (`[?resourceGroup==…]` plus a sweep) — worse in an instructive way:
+it purged only `aif-grave-a`, exited 0, and `aif-grave-b` was still reserved. The sweep was
+in the code and the filter matched nothing.
+
+**After the second fix** (`[?contains(id, '/resourceGroups/$RG/')]`, always run, every grave
+purged, recorded name as a fast path) — both gone:
+
+```
+$ ./infra/teardown.sh
+teardown: foundry account soft-delete records in rg-bandd-durable
+  aif-grave-a (eastus2): purging [recorded in .deployment.json]
+  aif-grave-b (eastus2): purging [found by resource group]
+  no soft-delete record remains for rg-bandd-durable
+EXIT=0
+$ az cognitiveservices account list-deleted --query "[?contains(id, '/resourceGroups/rg-bandd-durable/')].name" -o tsv
+(no output)
+```
+
+The remaining soft-deleted account in the subscription at that point,
+`aif-mxv7i27um4pks`, belongs to `rg-bandd-d3` (another band) and was correctly left alone —
+a sweep that purged by name prefix would have taken it.
+
+## The moved-default case, exercised rather than reasoned about
+
+The purge calls originally lacked `"${AZ_SUB[@]}"`, which is the pinning this script's header
+exists for. The operator-with-a-moved-default case was run, not argued:
+
+```
+$ az account set --subscription 5b9bde89-…      # the *wrong* subscription becomes default
+$ SUBSCRIPTION_ID=de345105-… WAIT=1 ./.old-teardown.sh
+teardown: targeting de345105-…
+teardown: subscription BizSpark (de345105-…)
+…
+teardown: foundry account soft-delete records in rg-bandd-durable
+  no .deployment.json record; looking the graves up by resource group
+ERROR: (SubscriptionNotFound) The subscription '5b9bde89-…' could not be found.
+teardown.sh: the soft-deleted account list failed; refusing to report anything.
+OLD_EXIT=1
+```
+
+That exit is safe but only by luck: the query failed. The dangerous arm is the record path,
+where the recorded name is purged against the *wrong* subscription, finds nothing, and the
+script prints a clean teardown. The same invocation with the fix:
+
+```
+$ SUBSCRIPTION_ID=de345105-… ./infra/teardown.sh
+…
+teardown: foundry account soft-delete records in rg-bandd-durable
+  aif-grave-test (eastus2): purging [recorded in .deployment.json]
+  no soft-delete record remains for rg-bandd-durable
+EXIT=0
+```
+
+Every `az` call in the purge section now carries the pinned subscription, and the default was
+restored to BizSpark afterwards.
+
+## What the script prints, and why it is truncated
+
+`teardown.sh` prints `${SUB:0:8}-…`, not the GUID. Its output is pasted into this file, and
+the full id in every block would make the sentence six lines above false. Every `az` call
+still uses the untruncated `"$SUB"`; only the echo is short.
 
 ## What this teardown does not claim
 

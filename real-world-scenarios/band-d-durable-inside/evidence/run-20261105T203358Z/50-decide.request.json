@@ -1,5 +1,5 @@
 {
  "input": "The medical director has reviewed request PA-D2-0001 and decided: approved. Reviewer 'Dr. Chen', reason 'coverage criteria met; PET-avid nodule meets imaging criteria'. Use record_approval with those values, then read working_state and store_report and report the final phase, the decision, the reviewer, the approval task's status and its checkpoint phase. Quote what the tools returned.",
  "stream": false,
- "agent_session_id": "8c508ac2e432d512ca5b6002a9a35b4384d69046f95a5eef66dba8372b05579"
+ "agent_session_id": "b34699f92021c4e3a04d0eda60edfac6e4dcfe8fcdb28cac480204ae83aeabe"
 }

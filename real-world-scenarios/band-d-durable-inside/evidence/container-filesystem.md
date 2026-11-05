@@ -59,7 +59,7 @@ make:
 ## 2. What survives a stop — the same path, a different file
 
 The store path is `/home/session/durable/working-state.jsonl`. The control run
-(`control-session-20261105T165116Z/90-control.tools.txt`) opens a **new** session and asks
+(`control-session-20261105T203511Z/90-control.tools.txt`) opens a **new** session and asks
 for the same path:
 
 ```json
@@ -113,14 +113,24 @@ The Durable JSONL store holds an exclusive lock for its lifetime, as the sidecar
 there:
 
 ```
-ask     (session's first turn)   last_accessed 1793898161
-                                 files: [ working-state.jsonl.lock, 38 bytes ]       ← the open took the lock
-assess  (after the writes)       doc versions grow; the file is written
-stop    (1793898184)             status idle
+ask     (session's first turn)   files: [ working-state.jsonl.lock 38 @ 20:34:02 ], pid 5
+                                 ← the open takes the lock; the store file is not created yet
+assess  (after the writes)       the store file appears and the documents grow
+stop    (1793910857)             status idle
 resume  (new container)          same path, same task `t4`, same deadline
-decide  (final)                  files: [ working-state.jsonl 5886 @ 17:03:24,
-                                          working-state.jsonl.lock 38 @ 17:03:15 ], pid 6
+decide  (final)                  files: [ working-state.jsonl 5898 @ 20:34:36,
+                                          working-state.jsonl.lock 38 @ 20:34:25 ], pid 5
 ```
+
+The pid is **5** in the first turn, in the last, and in the control's separate session: it is
+the *image's* entry point, not a process id that distinguishes containers, so it is **not**
+evidence of a restart. An earlier capture of this scenario showed two different pids across
+the stop, which was read as the restart; it was not, and this paragraph replaces that claim.
+
+What does move is the lock's mtime — 20:34:02 when the first container opened the store,
+20:34:25 when the resumed one did — and that, with the `last_accessed_at` on the session
+object, is where the restart is visible. Neither is on its own: the mtime says a process
+opened the store again, and the session object says the platform resumed the same session.
 
 Two things worth recording:
 

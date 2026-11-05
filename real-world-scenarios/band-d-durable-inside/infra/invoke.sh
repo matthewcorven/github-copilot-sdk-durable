@@ -160,7 +160,9 @@ assert_same_version() { # label response-json
 import json, sys
 label, path, expected = sys.argv[1:4]
 actual = str((json.load(open(path)).get("agent_reference") or {}).get("version") or "")
-if expected and actual != expected:
+if not expected:
+    raise SystemExit(f"{label}: no expected agent version; the guard cannot verify a restart without one")
+if actual != expected:
     raise SystemExit(
         f"{label}: every turn in this run must use one agent version; this one ran {actual}, "
         f"the run started on {expected}")
@@ -191,10 +193,18 @@ tools_of "$OUT_DIR/10-ask.response.json" > "$OUT_DIR/10-ask.tools.txt"
 SESSION="$(session_id_of "$OUT_DIR/10-ask.response.json")"
 printf '%s\n' "$SESSION" > "$OUT_DIR/10-session-id.txt"
 echo "   session id: $SESSION"
+# The version every turn must share. Captured here, asserted on every following turn: a
+# run that straddles two versions is two images pretending to be one restart.
 VERSION="$(python3 -c "import json;d=json.load(open('$OUT_DIR/10-ask.response.json'));print((d.get('agent_reference') or {}).get('version') or '')")"
+[ -n "$VERSION" ] || { echo "invoke.sh: the first response reports no agent version; a run that cannot pin the version cannot claim a restart." >&2; exit 1; }
 printf '%s\n' "$VERSION" > "$OUT_DIR/10-agent-version.txt"
 assert_same_version "ask" "$OUT_DIR/10-ask.response.json"
-session_get "session-after-ask" "$SESSION" "$OUT_DIR/11-session-after-ask.json"
+# No `session-after-ask` capture. `last_accessed_at` is the platform's last *access*, and a
+# turn does not appear to move it until the next one is served: a GET taken right after
+# `ask` and one taken right after `assess` came back byte-identical in the first version of
+# this script, which cannot be a live read and would make the capture a forgery. The
+# session objects that can be trusted here are the ones taken around the stop and the
+# resume, where the state change is the platform's own (`31` and `41`).
 
 if [ "$CONTROL" = "1" ]; then
   # The control: the same question with no agent_session_id, so the platform starts a
@@ -237,7 +247,8 @@ assert_same_session "assess" "$OUT_DIR/20-assess.response.json"
 assert_same_version "assess" "$OUT_DIR/20-assess.response.json"
 text_of "$OUT_DIR/20-assess.response.json" > "$OUT_DIR/20-assess.result.txt"
 tools_of "$OUT_DIR/20-assess.response.json" > "$OUT_DIR/20-assess.tools.txt"
-session_get "session-after-assess" "$SESSION" "$OUT_DIR/21-session-after-assess.json"
+# No session object here, and none after `ask`: see the note on the `ask` stage. The two
+# that are kept (`31`, `41`) bracket the state change the platform itself performs.
 
 # -- 3. stop ------------------------------------------------------------------
 echo "-- stop session $SESSION"
@@ -296,7 +307,8 @@ assert_same_session "decide" "$OUT_DIR/50-decide.response.json"
 assert_same_version "decide" "$OUT_DIR/50-decide.response.json"
 text_of "$OUT_DIR/50-decide.response.json" > "$OUT_DIR/50-decide.result.txt"
 tools_of "$OUT_DIR/50-decide.response.json" > "$OUT_DIR/50-decide.tools.txt"
-session_get "session-after-decide" "$SESSION" "$OUT_DIR/51-session-after-decide.json"
+# No session object here: it would come back identical to `41`, for the reason
+# `last_accessed_at` moves only when the next request is served.
 
 # -- every capture, in one place ----------------------------------------------
 for response in "$OUT_DIR"/1*-response.json "$OUT_DIR"/2*-response.json "$OUT_DIR"/4*-response.json "$OUT_DIR"/5*-response.json; do

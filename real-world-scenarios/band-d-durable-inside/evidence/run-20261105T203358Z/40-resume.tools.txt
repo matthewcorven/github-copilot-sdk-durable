@@ -1,30 +1,19 @@
 -- tool calls and their outputs, in order --
-CALL record_assessment {"request_id":"PA-D2-0001","assessment":"Coverage criteria are met."}{"request_id":"PA-D2-0001","assessment":"Coverage criteria are met."}
-OUTPUT call_Q9emlN8uUBeT91ZdM4IRabSB
-{
- "approvalTaskId": "t4",
- "awaitingEvent": "external:approval/PA-D2-0001",
- "created": true,
- "deadline": 1793984575.504916,
- "note": "the approval is a durable task parked on an external event; nothing is held open",
- "phase": "awaiting-approval",
- "requestId": "PA-D2-0001"
-}
 CALL working_state {"request_id":"PA-D2-0001"}{"request_id":"PA-D2-0001"}
-OUTPUT call_VjxumdIwrzTFWm4X9ZaKbE3U
+OUTPUT call_OKeU2yMmUROUTqVYOnMP9eeT
 {
  "approval": {
-  "deadline": 1793984575.504916,
+  "deadline": 1793997250.6636398,
   "decision": "",
   "reviewer": "",
   "state": "pending"
  },
  "approvalTask": {
   "checkpoint": {
-   "deadline": 1793984575.504916,
+   "deadline": 1793997250.6636398,
    "phase": "await",
    "requestId": "PA-D2-0001",
-   "requestedAt": 1793898175.504916
+   "requestedAt": 1793910850.6636398
   },
   "id": "t4",
   "restarts": 0,
@@ -41,4 +30,23 @@ OUTPUT call_VjxumdIwrzTFWm4X9ZaKbE3U
  "requestId": "PA-D2-0001",
  "resumedCount": 0,
  "storePath": "/home/session/durable/working-state.jsonl"
+}
+CALL resume_work {"request_id":"PA-D2-0001"}{"request_id":"PA-D2-0001"}
+OUTPUT call_qBhJY8D7vi33HgcwaNBYszal
+{
+ "approval": {
+  "decision": "",
+  "reviewer": "",
+  "state": "pending"
+ },
+ "decision": "",
+ "phase": "awaiting-approval",
+ "requestId": "PA-D2-0001",
+ "resumedCount": 1,
+ "settled": {
+  "error": null,
+  "result": null,
+  "status": "pending",
+  "taskId": "t4"
+ }
 }

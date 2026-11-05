@@ -5,13 +5,13 @@ Durable layer inside the container** while Foundry keeps the transcript. The ban
 narrow and it is demonstrated end to end: **a human approval that parks on an external event
 survives a container restart and resumes at the approval, not before it.**
 
-**What is proven, from one run that happened** (`evidence/run-20261105T170223Z/`):
+**What is proven, from one run that happened** (`evidence/run-20261105T203358Z/`):
 
 | | |
 | --- | --- |
-| The approval is a durable task, not a loop | `status: WAITING`, `waitingOn: ["external:approval/PA-D2-0001"]`, `restarts: 0`; the turn that parked it took 6 s, and nothing was held open afterwards |
-| The deadline is durable | `1793984575.504916` written before the stop, read back **byte-identical** afterwards, `requestedAt` too |
-| The restart is the same session | `agent_session_id 8c508ac2…` on all four turns, **asserted in the script**; `status: idle` → `active`; `created_at` unchanged |
+| The approval is a durable task, not a loop | `status: WAITING`, `waitingOn: ["external:approval/PA-D2-0001"]`, `restarts: 0`; the turn that parked it took 5 s, and nothing was held open afterwards |
+| The deadline is durable | `1793997250.6636398` written before the stop, read back **byte-identical** afterwards, `requestedAt` too |
+| The restart is the same session | `agent_session_id b34699f9…` on all four turns, **asserted in the script**; `status: idle` → `active`; `created_at` unchanged; `expires_at − last_accessed_at` exactly 2 592 000 on both captures |
 | It resumes **at** the approval | `resume_work` settled `pending` at task `t4`; the completed run re-entered `checkpoint.phase: "await"` and never `park`; the store's five task records all carry the same deadline |
 | The decision is one commit | `record_approval` woke `t4`, which completed with the approval document answered and the work state `decided`, `decidedBy: "Dr. Chen"` |
 | A fresh session has nothing | the control names **the same store path** and reports `sha256: "no-file"`, 0 documents, 0 tasks |
@@ -166,28 +166,51 @@ work: measured by stashing the change and re-running the suite on the unmodified
 
 ## Cost, and teardown
 
+**Capacity is carried forward from D1, not measured here.** The template sets `CAPACITY_K=50`
+for gpt-5.4 and nothing in this scenario measured whether it needs that: a deployment's
+capacity is a quota reservation, and this run had no instrument that could tell whether 20 K
+would have been enough. So the number is D1's, unchanged, and the README does not claim
+otherwise.
+
+What *is* measured is the traffic, from the four Responses' own `usage` in the published run:
+
+| Stage | input tokens | output tokens | total | wall clock |
+| --- | --- | --- | --- | --- |
+| `ask` | 3 751 | 187 | 3 938 | 5 s |
+| `assess` | 3 909 | 219 | 4 128 | 5 s |
+| `resume` | 3 967 | 214 | 4 181 | 6 s |
+| `decide` | 6 651 | 1 161 | 7 812 | 12 s |
+| **total** | **18 278** | **1 781** | **20 059** | **28 s** |
+
+No cached input tokens on any turn (`cached_tokens: 0` throughout) and no reasoning tokens,
+so the input side is what scales: each turn re-sends the conversation, and `decide` is the
+largest because its turn makes three tool calls — `record_approval`, `working_state`,
+`store_report` — and re-sends the whole prior exchange, including `store_report`'s 5.9 KB of
+store text, on the model calls after the first. At gpt-5.4
+GlobalStandard list prices that is a few US cents for the whole run — the same shape as D1's
+single-digit cents for its coverage turn, without D1's MCP round-trips.
+
 | Resource | What it costs |
 | --- | --- |
-| gpt-5.4 GlobalStandard, 50 K TPM | per 1K tokens; capacity held at D1's 50 |
-| `durable-inside-agent`, 1 CPU / 2 GiB | billed per second of active session; `idle_timeout_seconds: 900` is stated in the registration so the window is not an inferred default |
+| gpt-5.4 GlobalStandard, 50 K TPM | per 1K tokens; **capacity is D1's 50, carried forward — not measured** |
+| `durable-inside-agent`, 1 CPU / 2 GiB | billed per second of active session; 28 s of turns in the published run, plus a 5 s stop gap; `idle_timeout_seconds: 900` is stated in the registration so the window is not an inferred default |
 | Container registry (Basic) | cents per day plus ~1 GB of layers |
 | Log Analytics + App Insights | per GB; every tool call's stdout lands here |
 
-The runs are small next to D1's: this agent does no tool-using fan-out, so a turn is a couple
-of model calls plus five cheap local tool calls. What would scale is the number of requests
-per session, not the size of any one — the store is 5.9 KB after a whole workflow.
+What would scale is the number of requests per session, not the size of any one — the store
+is 5.9 KB after a whole workflow.
 
 **Teardown is mandatory and is the last thing that ran.** `infra/teardown.sh` deletes the
-group, waits, verifies with a subscription-wide check, **and purges the account's soft-delete
-record**, then a second invocation proves the repeat is harmless. Captured in
+group, waits, verifies with a subscription-wide check, **purges every soft-deleted account in
+the group**, then a second invocation proves the repeat is harmless. Captured in
 `evidence/teardown.md`.
 
 ## Evidence index
 
 | Path | What it is |
 | --- | --- |
-| `evidence/run-20261105T170223Z/` | The complete run: four requests and Responses, four session objects, the post-stop object, and the tool outputs verbatim for each stage |
-| `evidence/control-session-20261105T165116Z/` | The fresh-session control: same store path, empty |
+| `evidence/run-20261105T203358Z/` | The complete run: the four requests and Responses, the post-stop and post-resume session objects, and the tool outputs verbatim for each stage |
+| `evidence/control-session-20261105T203511Z/` | The fresh-session control: same store path, empty |
 | `evidence/restart-across-stop.md` | The run read back, with the guards, the byte-identical deadline, the store's five task records, and the limits |
 | `evidence/container-filesystem.md` | What the container's filesystem actually does: writable paths, `/files` absent, `$HOME` per-session, the lock sidecar, and three build-time findings |
 | `evidence/local-restart/` | The same restart as four local processes, with the survival marker and both store digests |

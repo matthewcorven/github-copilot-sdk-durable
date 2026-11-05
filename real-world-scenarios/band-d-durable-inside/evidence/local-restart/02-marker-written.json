@@ -1,6 +1,6 @@
 {
  "/": {
-  "error": "OSError: [Errno 30] Read-only file system: '/.d2-write-probe-59155'",
+  "error": "OSError: [Errno 30] Read-only file system: '/.d2-write-probe-38354'",
   "exists": true,
   "writable": false
  },
@@ -28,8 +28,8 @@
   "tasks": [
    "t4"
   ],
-  "writtenAt": "2026-11-05T17:06:42Z",
-  "writtenByPid": 59155
+  "writtenAt": "2026-11-05T20:37:01Z",
+  "writtenByPid": 38354
  },
  "storePath": "<scratch>/working-state.jsonl",
  "userId": 501

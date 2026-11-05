@@ -1,7 +1,0 @@
-I found approval task `"t4"`.
-
-Its status in durable working state was `"WAITING"`.
-
-The exact deadline value stored with it was `"1793984575.504916"`.
-
-Whether anything had to be redone: `"No"`. After restart, `resume_work` returned `"status": "pending"` for task `"t4"`, and the request remained in phase `"awaiting-approval"` with assessment `"Coverage criteria are met."` already present.

@@ -66,11 +66,15 @@ PY
 fi
 SUB="${SUB:-$DEFAULT_SUB}"
 if [ "$SUB" != "$DEFAULT_SUB" ]; then
-  echo "teardown: targeting $SUB (the current az default is $DEFAULT_SUB)"
+  echo "teardown: targeting ${SUB:0:8}-… (the current az default is ${DEFAULT_SUB:0:8}-…)"
 fi
 AZ_SUB=(--subscription "$SUB")
 
-echo "teardown: subscription $(az account show --subscription "$SUB" --query name -o tsv) ($SUB)"
+# The id is printed truncated. The script's output gets pasted into evidence, and six
+# characters distinguish subscriptions for a human reader; committing the full GUID buys
+# nothing. Every az call below uses the untruncated "$SUB".
+SUB_SHOWN="${SUB:0:8}-…"
+echo "teardown: subscription $(az account show --subscription "$SUB" --query name -o tsv) ($SUB_SHOWN)"
 
 group_exists() {
   local out
@@ -164,23 +168,61 @@ fi
 
 # --- purge the Foundry account's soft-deleted record ---------------------------
 #
-# The account's name is the record's `.deployment.json`, but a teardown must not depend on
-# a file the operator may have removed: the soft-deleted listing carries the resource group
-# each grave belongs to, so that is the fallback key. Either way the answer is checked, not
-# assumed - a grave that survives makes re-provisioning the same name fail.
+# A group delete is not the whole of a Foundry teardown: the account survives as a
+# soft-deleted record under its name, and re-provisioning that name fails with
+# FlagMustBeSetForRestore (../evidence/teardown.md, "The soft-delete grave").
+#
+# Two rules, both learned the hard way:
+#
+#   * EVERY az call here carries "${AZ_SUB[@]}". The pinning at the top of this script
+#     exists because an operator's default subscription can move; an unpinned
+#     `list-deleted` would read the wrong subscription, find no grave, and let the script
+#     report a clean teardown over a reserved account. That is the same error-as-absence
+#     conflation the group check above refuses.
+#   * The group-scoped listing is ALWAYS consulted, not only when the record is missing.
+#     A teardown can leave more than one grave: this issue's own evidence has two accounts
+#     in one group. The recorded name is a fast path to the right location, never a
+#     substitute for the sweep.
 
 purge_one() { # account location why
   local account="$1" location="$2" why="$3"
   echo "  $account ($location): purging [$why]"
   local out
-  out="$(az cognitiveservices account purge -n "$account" -g "$RG" -l "$location" 2>&1)" || {
+  out="$(az cognitiveservices account purge -n "$account" -g "$RG" -l "$location" \
+    "${AZ_SUB[@]}" 2>&1)" || {
     echo "teardown.sh: 'az cognitiveservices account purge -n $account' failed; refusing to report anything." >&2
     printf '%s\n' "$out" | sed 's/^/    /' >&2
     exit 1
   }
 }
 
+# Every soft-deleted account whose resource group is $RG. A failed query aborts: an empty
+# list is only ever produced by a query that succeeded.
+#
+# The record carries no `resourceGroup` field - the group is inside the ARM `id`:
+#
+#   /subscriptions/…/locations/eastus2/resourceGroups/rg-bandd-durable/deletedAccounts/aif-grave-b
+#
+# so the match is on the id. Filtering on a non-existent `resourceGroup` property matches
+# nothing, and `az query` does not complain: it exits 0 with an empty list, which the
+# teardown would then read as "no grave". Measured, not assumed: the first version of this
+# sweep used `[?resourceGroup=='$RG']`, purged only the recorded account, exited 0, and left
+# `aif-grave-b` reserved (../evidence/teardown.md, "The multi-grave sweep").
+group_graves() {
+  local out
+  out="$(az cognitiveservices account list-deleted \
+    --query "[?contains(id, '/resourceGroups/$RG/')].{name:name,location:location}" \
+    -o tsv "${AZ_SUB[@]}")" || {
+    echo "teardown.sh: the soft-deleted account list failed; refusing to report anything." >&2
+    exit 1
+  }
+  printf '%s\n' "$out"
+}
+
 echo "teardown: foundry account soft-delete records in $RG"
+
+# The recorded account, if there is a record. Its location saves a guess; the sweep below
+# is what makes the purge complete regardless.
 ACCOUNT=""
 LOCATION=""
 if [ -f "$RECORD" ]; then
@@ -195,32 +237,28 @@ PY
 EOF
 fi
 
+GRAVES="$(group_graves)"
+SEEN=" "
 if [ -n "$ACCOUNT" ] && [ "$ACCOUNT" != "-" ]; then
-  purge_one "$ACCOUNT" "$LOCATION" "from .deployment.json"
+  purge_one "$ACCOUNT" "$LOCATION" "recorded in .deployment.json"
+  SEEN="$SEEN$ACCOUNT "
 else
-  echo "  no .deployment.json record; looking the graves up by resource group"
-  GRAVES="$(az cognitiveservices account list-deleted \
-    --query "[?resourceGroup=='$RG'].{name:name,location:location}" -o tsv)" || {
-    echo "teardown.sh: the soft-deleted account list failed; refusing to report anything." >&2
-    exit 1
-  }
-  if [ -n "${GRAVES//[$'\n']/}" ]; then
-    while IFS=$'\t' read -r name location; do
-      [ -n "$name" ] && purge_one "$name" "$location" "found by resource group"
-    done <<< "$GRAVES"
-  else
-    echo "  none"
-  fi
+  echo "  no .deployment.json record; the group-scoped sweep is the only source"
 fi
 
-REMAINING="$(az cognitiveservices account list-deleted \
-  --query "[?resourceGroup=='$RG'].name" -o tsv)" || {
-  echo "teardown.sh: the soft-deleted account list failed; refusing to report anything." >&2
-  exit 1
-}
+if [ -n "${GRAVES//[$'\n']/}" ]; then
+  while IFS=$'\t' read -r name location; do
+    [ -n "$name" ] || continue
+    case "$SEEN" in *" $name "*) continue ;; esac
+    purge_one "$name" "$location" "found by resource group"
+    SEEN="$SEEN$name "
+  done <<< "$GRAVES"
+fi
+
+REMAINING="$(group_graves)" || exit 1
 if [ -n "${REMAINING//[$'\n']/}" ]; then
   echo "  soft-deleted account(s) still present in $RG:" >&2
-  printf '%s\n' "$REMAINING" | sed 's/^/    /' >&2
+  printf '%s\n' "$REMAINING" | sed 's/^/    /' | cut -f1 >&2
   echo "  re-provisioning those names will fail until they are purged" >&2
   STATUS=2
 else
