@@ -1,0 +1,85 @@
+{
+  "agent_reference": {
+    "name": "durable-inside-agent",
+    "type": "agent_reference",
+    "version": "1"
+  },
+  "agent_session_id": "b34699f92021c4e3a04d0eda60edfac6e4dcfe8fcdb28cac480204ae83aeabe",
+  "background": false,
+  "completed_at": 1793910874,
+  "created_at": 1793910868,
+  "id": "caresp_0ef345fdaee5603e00GNy5TXzla4z3pBj4AUQc6tbSJXyxedZG",
+  "model": "",
+  "object": "response",
+  "output": [
+    {
+      "agent_reference": null,
+      "arguments": "{\"request_id\":\"PA-D2-0001\"}{\"request_id\":\"PA-D2-0001\"}",
+      "call_id": "call_OKeU2yMmUROUTqVYOnMP9eeT",
+      "id": "fc_0ef345fdaee5603e00frkrZz7IdGFfzbnHGkKIrUQ2ColSR8ZZ",
+      "name": "working_state",
+      "response_id": "caresp_0ef345fdaee5603e00GNy5TXzla4z3pBj4AUQc6tbSJXyxedZG",
+      "status": "completed",
+      "type": "function_call"
+    },
+    {
+      "agent_reference": null,
+      "call_id": "call_OKeU2yMmUROUTqVYOnMP9eeT",
+      "id": "fco_0ef345fdaee5603e00HpIQylmVA0QL64rx8JNllt48WlXGMZUs",
+      "output": "{\n \"approval\": {\n  \"deadline\": 1793997250.6636398,\n  \"decision\": \"\",\n  \"reviewer\": \"\",\n  \"state\": \"pending\"\n },\n \"approvalTask\": {\n  \"checkpoint\": {\n   \"deadline\": 1793997250.6636398,\n   \"phase\": \"await\",\n   \"requestId\": \"PA-D2-0001\",\n   \"requestedAt\": 1793910850.6636398\n  },\n  \"id\": \"t4\",\n  \"restarts\": 0,\n  \"status\": \"WAITING\",\n  \"waitingOn\": [\n   \"external:approval/PA-D2-0001\"\n  ]\n },\n \"assessment\": \"Coverage criteria are met.\",\n \"decidedAt\": \"\",\n \"decidedBy\": \"\",\n \"decision\": \"\",\n \"phase\": \"awaiting-approval\",\n \"requestId\": \"PA-D2-0001\",\n \"resumedCount\": 0,\n \"storePath\": \"/home/session/durable/working-state.jsonl\"\n}",
+      "response_id": "caresp_0ef345fdaee5603e00GNy5TXzla4z3pBj4AUQc6tbSJXyxedZG",
+      "status": "completed",
+      "type": "function_call_output"
+    },
+    {
+      "agent_reference": null,
+      "arguments": "{\"request_id\":\"PA-D2-0001\"}{\"request_id\":\"PA-D2-0001\"}",
+      "call_id": "call_qBhJY8D7vi33HgcwaNBYszal",
+      "id": "fc_0ef345fdaee5603e008AEhr8h0XYubC54nWPgHtoEnkpL3a2o8",
+      "name": "resume_work",
+      "response_id": "caresp_0ef345fdaee5603e00GNy5TXzla4z3pBj4AUQc6tbSJXyxedZG",
+      "status": "completed",
+      "type": "function_call"
+    },
+    {
+      "agent_reference": null,
+      "call_id": "call_qBhJY8D7vi33HgcwaNBYszal",
+      "id": "fco_0ef345fdaee5603e00rMrGk3bqBlCHRgBfg6alUC9aRu5JHN7I",
+      "output": "{\n \"approval\": {\n  \"decision\": \"\",\n  \"reviewer\": \"\",\n  \"state\": \"pending\"\n },\n \"decision\": \"\",\n \"phase\": \"awaiting-approval\",\n \"requestId\": \"PA-D2-0001\",\n \"resumedCount\": 1,\n \"settled\": {\n  \"error\": null,\n  \"result\": null,\n  \"status\": \"pending\",\n  \"taskId\": \"t4\"\n }\n}",
+      "response_id": "caresp_0ef345fdaee5603e00GNy5TXzla4z3pBj4AUQc6tbSJXyxedZG",
+      "status": "completed",
+      "type": "function_call_output"
+    },
+    {
+      "agent_reference": null,
+      "content": [
+        {
+          "annotations": [],
+          "logprobs": [],
+          "text": "I found approval task `\"t4\"`.\n\nIts status in durable working state was `\"WAITING\"`.\n\nThe exact deadline value stored with it was `\"1793997250.6636398\"`.\n\nWhether anything had to be redone: `\"No.\"` The request remained in phase `\"awaiting-approval\"`, and after `resume_work` the task was still reported as `\"pending\"` with taskId `\"t4\"`.",
+          "type": "output_text"
+        }
+      ],
+      "id": "msg_0ef345fdaee5603e0051ZtRQha5xjBLpOork8wRkvkenoiX05k",
+      "response_id": "caresp_0ef345fdaee5603e00GNy5TXzla4z3pBj4AUQc6tbSJXyxedZG",
+      "role": "assistant",
+      "status": "completed",
+      "type": "message"
+    }
+  ],
+  "parallel_tool_calls": false,
+  "response_id": "caresp_0ef345fdaee5603e00GNy5TXzla4z3pBj4AUQc6tbSJXyxedZG",
+  "status": "completed",
+  "usage": {
+    "input_tokens": 3967,
+    "input_tokens_details": {
+      "cache_write_tokens": 0,
+      "cached_tokens": 0
+    },
+    "output_tokens": 214,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 4181
+  }
+}

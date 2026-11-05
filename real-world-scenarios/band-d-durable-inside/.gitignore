@@ -1,0 +1,14 @@
+# Runtime artefacts from deploy/invoke; never committed.
+.deployment.json
+.deployment.json.raw
+.agent-version.json
+.agent-version-*.json
+.build/
+deployment.env
+
+# Scratch left by a probe that failed before it could clean up.
+.scratch-*
+
+# Python bytecode from a local run.
+__pycache__/
+*.pyc

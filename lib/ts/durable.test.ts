@@ -2885,3 +2885,51 @@ test("actual SDK tool wire invokes winning override and wrapper", { skip: !proce
         v.value["eventId"] === "tool:call-0001")));
   } finally { await harness.disposeAsync(); store.dispose(); }
 });
+
+test("external event: a parked approval is woken in a later process at its checkpoint", async () => {
+  // In-memory store, so the "later process" is a second store over the same provider is not
+  // possible here: the JSONL case is covered by the persisted store below. This stage pins
+  // the run semantics: the park ends the run, the event wakes it, and the ask phase runs once.
+  const store = DurableStore.createEphemeral();
+  let asked = 0;
+  type Approval = { phase?: string; deadline?: string };
+  const definition = DurableTask.definePhases<null, Approval>("ts.approval", () => ({ phase: "ask" }), new Map([
+    ["ask", async (_input: null, _checkpoint: Approval, runtime) => {
+      asked++;
+      return runtime.commitAsync(() => TaskCommit.waitingForEvent(
+        { phase: "await", deadline: new Date(Date.now() + 900000).toISOString() }, "external:approval"));
+    }],
+    ["await", async (_input: null, _checkpoint: Approval, runtime) => {
+      const answer = await runtime.memoAsync(DurableStore.EXTERNAL_EVENT_MEMO_KEY);
+      return answer !== null
+        ? runtime.commitAsync(() => TaskCommit.completed(answer))
+        : runtime.commitAsync(() => TaskCommit.failed("approval deadline expired"));
+    }],
+  ]));
+  const registry = new ExtensionRegistry();
+  registry.install(new Extension("ts.approval", [], [], [definition]));
+  const harness = await DurableHarness.openAsync(store, registry);
+  try {
+    const task = await harness.createTaskAsync(definition, null);
+    const parked = await harness.waitForTaskAsync(task.id);
+    assert.equal(parked.status, "pending", "a parked task is not a failed one");
+    assert.equal(asked, 1);
+    assert.equal(store.task(task.id)?.status, TaskStatus.Waiting);
+    assert.deepEqual(store.task(task.id)?.waitingOn, ["external:approval"]);
+
+    const woken = await store.raiseEventAsync("external:approval", { decision: "approved" });
+    assert.deepEqual(woken, [task.id]);
+    assert.deepEqual(store.task(task.id)?.waitingOn, []);
+    assert.equal(store.task(task.id)?.status, TaskStatus.Running);
+    assert.deepEqual(store.task(task.id)?.memos[DurableStore.EXTERNAL_EVENT_MEMO_KEY], { decision: "approved" });
+
+    // A second delivery finds nobody parked and never overwrites the first answer.
+    assert.deepEqual(await store.raiseEventAsync("external:approval", { decision: "denied" }), []);
+    assert.deepEqual(store.task(task.id)?.memos[DurableStore.EXTERNAL_EVENT_MEMO_KEY], { decision: "approved" });
+
+    const outcome = await harness.waitForTaskAsync(task.id);
+    assert.equal(outcome.status, "completed");
+    assert.deepEqual(outcome.result, { decision: "approved" });
+    assert.equal(asked, 1, "the wake-up re-entered at the checkpoint the park wrote");
+  } finally { await harness.disposeAsync(); store.dispose(); }
+});

@@ -291,6 +291,15 @@ class TaskOutcome:
         return TaskOutcome("aborted")
 
 
+#: The prefix that marks a ``waiting_on`` entry as an external event, so the event namespace
+#: and the child-task namespace share one stored list without colliding.
+EXTERNAL_EVENT_PREFIX: Final[str] = "external:"
+
+#: The memo key an external event's payload is delivered under, read by a parked task with
+#: ``runtime.memo_async(DurableStore.EXTERNAL_EVENT_MEMO_KEY)``.
+EXTERNAL_EVENT_MEMO_KEY: Final[str] = "external-event"
+
+
 @dataclass(slots=True)
 class TaskCommit:
     """What a task phase asks the store to record when it returns."""
@@ -309,6 +318,23 @@ class TaskCommit:
     def waiting(checkpoint: Any, on: Sequence[str]) -> TaskCommit:
         """Continues the task, waiting on child tasks."""
         return TaskCommit(TaskStatus.WAITING, checkpoint=checkpoint, waiting_on=list(on))
+
+    @staticmethod
+    def waiting_for_event(checkpoint: Any, event_name: str) -> TaskCommit:
+        """Parks the task until an external event is delivered against the store.
+
+        The event is not a child task: nothing in the store produces it, so the run ends
+        with the task ``WAITING``, and :meth:`DurableStore.raise_event_async` is what makes
+        it runnable again.
+        """
+        if not event_name or not event_name.strip():
+            raise ValueError("An external event name is required.")
+        return TaskCommit(TaskStatus.WAITING, checkpoint=checkpoint, waiting_on=[event_name])
+
+    @staticmethod
+    def is_external_event(name: str) -> bool:
+        """Whether a ``waiting_on`` name is an external event rather than a child task id."""
+        return name.startswith(EXTERNAL_EVENT_PREFIX)
 
     @staticmethod
     def completed(result: Any = None) -> TaskCommit:
@@ -2075,6 +2101,69 @@ class DurableStore:
         """Reads a task record."""
         return self._provider.task(task_id)
 
+    async def raise_event_async(self, event_name: str, payload: Any) -> list[str]:
+        """Delivers an external event to every task parked on it.
+
+        A task parks with :meth:`TaskCommit.waiting_for_event`: it commits a ``WAITING``
+        checkpoint and ends the run, holding no invocation and no timer. This is the other
+        half of that commit, and it lives on the store because an event outlives the process
+        that parked on it -- the caller may be a different process over the same file.
+
+        The delivered payload is written as the task's memo :data:`EXTERNAL_EVENT_MEMO_KEY`,
+        and the task's ``waiting_on`` list drops the event, inside one transaction. The task
+        is left ``RUNNING``; the harness that owns the task runner calls ``resume_async`` (or
+        ``run_task_async``) to re-enter it at the checkpoint the park wrote. A second
+        delivery finds no waiter, and never overwrites a memo the task already holds.
+
+        Returns the ids of the tasks the event woke, in store order.
+        """
+        if not event_name or not event_name.strip():
+            raise ValueError("An external event name is required.")
+        if not TaskCommit.is_external_event(event_name):
+            raise ValueError(
+                f"An external event name is written '{EXTERNAL_EVENT_PREFIX}<name>'; "
+                f"'{event_name}' would be read back as a child task id."
+            )
+
+        async with self._gate:
+            waiting = [
+                task.id
+                for task in self._provider.tasks
+                if task.status is TaskStatus.WAITING and event_name in task.waiting_on
+            ]
+            if not waiting:
+                return []
+
+            self._provider.begin_transaction()
+            try:
+                woken: list[str] = []
+                for task_id in waiting:
+                    task = self._provider.task(task_id)
+                    if task is None:
+                        continue
+
+                    # The task's own state is part of the transaction, so a failure below
+                    # puts it back where it was rather than leaving it half-woken.
+                    self._provider.update_task(task)
+
+                    if EXTERNAL_EVENT_MEMO_KEY not in task.memos:
+                        task.memos[EXTERNAL_EVENT_MEMO_KEY] = DurableJson.clone(payload)
+
+                    task.waiting_on = [name for name in task.waiting_on if name != event_name]
+                    task.status = TaskStatus.RUNNING
+                    self._provider.update_task(task)
+                    woken.append(task_id)
+
+                self._provider.commit()
+            except BaseException:
+                self._provider.rollback()
+                raise
+
+            return woken
+
+    #: The memo key an external event's payload is delivered under.
+    EXTERNAL_EVENT_MEMO_KEY: ClassVar[str] = EXTERNAL_EVENT_MEMO_KEY
+
     def conversation(self, conversation_id: str) -> ConversationRecord | None:
         """Reads a conversation record."""
         return self._provider.conversation(conversation_id)
@@ -2173,6 +2262,10 @@ class DurableStore:
             if inspect.isawaitable(next_commit):
                 next_commit = await next_commit
 
+            # The task's own state is part of the commit. ``waiting_on`` is applied on both
+            # arms: a ``WAITING`` commit whose names were dropped is indistinguishable from
+            # ``RUNNING``, and the task would never be resumed by the name it parked on.
+            self._provider.update_task(task)
             self._apply_commit(task, next_commit)
             self._provider.update_task(task)
             self._provider.commit()
@@ -4261,10 +4354,11 @@ class DurableHarness:
         if self._closed and not admitted and not (self._is_active_task() and active is not None and record is not None
                                  and record.owner_task_id == active[1]):
             raise RuntimeError("The durable harness is closing.")
-        completion = self._task_completions.get(task_id)
-        if completion is None:
-            completion = asyncio.get_running_loop().create_future()
-            self._task_completions[task_id] = completion
+        # Each run gets its own completion: a task that parked and is woken runs again, and
+        # reusing the settled future would hand a caller the outcome of the run that ended
+        # before the event arrived.
+        completion = asyncio.get_running_loop().create_future()
+        self._task_completions[task_id] = completion
 
         async def run_core() -> TaskOutcome:
             token = _active_task.set((self, task_id))
@@ -4396,18 +4490,30 @@ class DurableHarness:
                     completion.set_result(commit.outcome)
                 break
 
-            # A task that is waiting on child tasks holds no invocation: it is resumed
-            # when its children finish.
+            # A task that is waiting on child tasks holds no invocation: it is resumed when
+            # its children finish. A task waiting on an external event holds no invocation
+            # either, but nothing in the store ever produces that event, so the run ends with
+            # the task still WAITING and ``raise_event_async`` is what makes it runnable
+            # again. Reading the event name as a child task id would find no task.
             if commit.status is TaskStatus.WAITING:
-                await self._wait_for_children_async(task_id, commit.waiting_on, cancellation)
+                children = [name for name in commit.waiting_on if not TaskCommit.is_external_event(name)]
+                if not children:
+                    break
+
+                await self._wait_for_children_async(task_id, children, cancellation)
                 continue
 
         final_record = self._store.task(task_id)
-        final = (
-            final_record.outcome
-            if final_record is not None and final_record.outcome is not None
-            else TaskOutcome.failed("task did not finish")
-        )
+        if final_record is not None and final_record.outcome is not None:
+            final = final_record.outcome
+        elif final_record is not None and final_record.status is TaskStatus.WAITING:
+            # The task parked on something outside the store, so the run ends without the
+            # task being over. "pending" is what the store already reports for a task with
+            # no outcome; it is not a failure, and a caller that treated it as one would
+            # fail a task the next event can still wake.
+            final = TaskOutcome.pending()
+        else:
+            final = TaskOutcome.failed("task did not finish")
         if not completion.done():
             completion.set_result(final)
         return final
@@ -4445,15 +4551,10 @@ class DurableHarness:
         if record.status is TaskStatus.TERMINAL:
             return record.outcome if record.outcome is not None else TaskOutcome.completed()
 
-        completion = self._task_completions.get(task_id)
-        if completion is None:
-            completion = asyncio.get_running_loop().create_future()
-            self._task_completions[task_id] = completion
-
         # A task runs once at a time. A second caller joins the run in flight instead of
-        # starting a competing one.
-        self._start_task(task_id, cancellation)
-        return await asyncio.shield(completion)
+        # starting a competing one, and a caller's own cancellation does not cancel the run.
+        run = self._task_run(task_id, cancellation)
+        return await asyncio.shield(run)
 
     async def abort_task_async(
         self,

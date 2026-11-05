@@ -227,7 +227,11 @@ public sealed class DurableTaskRecord
     /// <summary>Whether the task is background work that does not block its owner.</summary>
     public bool Background { get; set; }
 
-    /// <summary>The child tasks this task waits on.</summary>
+    /// <summary>
+    /// The child tasks, and the external events, this task waits on. A name in this list
+    /// is an external event when <see cref="TaskCommit.IsExternalEvent"/> says so; every
+    /// other name is a child task id.
+    /// </summary>
     public List<string> WaitingOn { get; set; } = [];
 
     /// <summary>Idempotency memos, so a rerun after a crash does not repeat an effect.</summary>
@@ -275,6 +279,40 @@ public sealed class TaskCommit
     /// <summary>Creates a commit that continues the task, waiting on child tasks.</summary>
     public static TaskCommit Waiting(JsonElement checkpoint, IEnumerable<string> on) =>
         new(TaskStatus.Waiting, checkpoint, null) { WaitingOn = on.ToList() };
+
+    /// <summary>
+    /// Creates a commit that parks the task until an external event is delivered against
+    /// the store. The event is not a child task: nothing in the store produces it, so the
+    /// run ends here with the task <see cref="TaskStatus.Waiting"/>, and
+    /// <see cref="DurableStore.RaiseEventAsync"/> is what makes it runnable again.
+    /// </summary>
+    /// <remarks>
+    /// A task waiting on an external event holds no invocation and no timer. The deadline is
+    /// the caller's business — put it in <paramref name="checkpoint"/> and use
+    /// <see cref="TaskRuntime.SleepUntilAsync"/> on the run the event starts — because a task
+    /// that nothing ever wakes must stay observable as waiting rather than disappear.
+    /// </remarks>
+    public static TaskCommit WaitingForEvent(JsonElement checkpoint, string eventName)
+    {
+        if (string.IsNullOrWhiteSpace(eventName))
+        {
+            throw new ArgumentException("An external event name is required.", nameof(eventName));
+        }
+
+        return new(TaskStatus.Waiting, checkpoint, null) { WaitingOn = [eventName] };
+    }
+
+    /// <summary>
+    /// Whether a name in <see cref="WaitingOn"/> is an external event rather than a child
+    /// task id. The prefix keeps the two namespaces apart in one stored list, so a store
+    /// written before external events existed reads back unchanged: every name it holds is
+    /// a child task.
+    /// </summary>
+    public static bool IsExternalEvent(string name) =>
+        name.StartsWith(ExternalEventPrefix, StringComparison.Ordinal);
+
+    /// <summary>The prefix that marks a <see cref="WaitingOn"/> entry as an external event.</summary>
+    public const string ExternalEventPrefix = "external:";
 
     /// <summary>Creates a commit that finishes the task successfully.</summary>
     public static TaskCommit Completed(JsonElement result) =>
@@ -2121,6 +2159,121 @@ public sealed class DurableStore : IDisposable
     /// <summary>Reads a task record.</summary>
     public DurableTaskRecord? Task(string id) => _provider.Task(id);
 
+    /// <summary>
+    /// Delivers an external event to every task parked on it, and returns the ids of the
+    /// tasks the event woke.
+    /// </summary>
+    /// <remarks>
+    /// A task parks on an event with <see cref="TaskCommit.WaitingForEvent"/>: it commits a
+    /// <see cref="TaskStatus.Waiting"/> checkpoint and ends the run, holding no invocation and
+    /// no timer. This is the other half of that commit, and it exists on the store because an
+    /// event outlives the process that parked on it — the caller may be a different process
+    /// over the same file, delivering the event that a stopped container was waiting for.
+    /// <para>
+    /// The event is the answer itself: the delivered payload is written as the task's memo
+    /// <see cref="ExternalEventMemoKey"/>, and the task's <see cref="DurableTaskRecord.WaitingOn"/>
+    /// list drops the event inside the same transaction that writes the memo. A reading
+    /// phase therefore cannot see the memo without the task having stopped waiting for it,
+    /// and a redelivery finds no waiter and writes nothing. A memo the task already holds is
+    /// never overwritten: the first delivery is the answer.
+    /// </para>
+    /// <para>
+    /// The task is left <see cref="TaskStatus.Running"/>, so the next run of the task runner
+    /// re-enters it at the checkpoint the caller wrote in <see cref="TaskCommit.WaitingForEvent"/>.
+    /// This method does not start that run: it knows nothing about the runner, and the host
+    /// that owns one calls <c>ResumeAsync</c> (or <c>RunTaskAsync</c>) after it returns.
+    /// </para>
+    /// </remarks>
+    /// <param name="eventName">The event name the task parked on.</param>
+    /// <param name="payload">The event's answer, stored as a memo on each task it wakes.</param>
+    /// <returns>The ids of the tasks the event woke, in store order.</returns>
+    public async Task<IReadOnlyList<string>> RaiseEventAsync(string eventName, JsonElement payload)
+    {
+        if (string.IsNullOrWhiteSpace(eventName))
+        {
+            throw new ArgumentException("An external event name is required.", nameof(eventName));
+        }
+
+        if (!TaskCommit.IsExternalEvent(eventName))
+        {
+            throw new ArgumentException(
+                $"An external event name is written '{TaskCommit.ExternalEventPrefix}<name>'; "
+                + $"'{eventName}' would be read back as a child task id.",
+                nameof(eventName));
+        }
+
+        await _gate.WaitAsync();
+        try
+        {
+            var waiting = _provider.Tasks
+                .Where(task => task.Status == TaskStatus.Waiting && task.WaitingOn.Contains(eventName))
+                .Select(task => task.Id)
+                .ToList();
+            if (waiting.Count == 0)
+            {
+                return [];
+            }
+
+            var transaction = new Transaction(this);
+            _provider.BeginTransaction();
+            List<string> woken;
+            try
+            {
+                woken = [];
+                foreach (var taskId in waiting)
+                {
+                    var task = _provider.Task(taskId);
+                    if (task is null)
+                    {
+                        continue;
+                    }
+
+                    // The task's own state is part of the transaction, so a failure below puts
+                    // it back where it was rather than leaving it half-woken.
+                    _provider.UpdateTask(task);
+
+                    // The first delivery is the answer. A second one is a duplicate, and the
+                    // task already has its reply.
+                    if (!task.Memos.ContainsKey(ExternalEventMemoKey))
+                    {
+                        task.Memos[ExternalEventMemoKey] = payload.Clone();
+                    }
+
+                    task.WaitingOn.RemoveAll(name => string.Equals(name, eventName, StringComparison.Ordinal));
+                    task.Status = TaskStatus.Running;
+                    _provider.UpdateTask(task);
+                    woken.Add(taskId);
+                }
+
+                _provider.Commit();
+            }
+            catch
+            {
+                _provider.Rollback();
+                throw;
+            }
+
+            return woken;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// The memo key an external event's payload is delivered under. A task parked on
+    /// <c>external:&lt;name&gt;</c> reads its answer with
+    /// <c>runtime.MemoAsync(DurableStore.ExternalEventMemoKey)</c>.
+    /// </summary>
+    /// <remarks>
+    /// It is one key rather than one per event because a task waits for one event at a time:
+    /// the checkpoint that names the event is the record of which event was asked, and the
+    /// memo is only the answer. A task that wants two answers asks twice, and reads the first
+    /// before it parks on the second.
+    /// </remarks>
+    public static string ExternalEventMemoKey => "external-event";
+
     /// <summary>Reads a conversation record.</summary>
     public ConversationRecord? Conversation(string id) => _provider.Conversation(id);
 
@@ -2220,10 +2373,23 @@ public sealed class DurableStore : IDisposable
             }
 
             var next = commit();
+
+            // The task's own state is part of the commit: the checkpoint, the status, the
+            // names it is waiting on, and the outcome are written together or not at all.
+            // WaitingOn is written on both arms of this overload pair: a commit that is
+            // `waiting` and whose names were dropped is indistinguishable from `running`,
+            // and the task would never be resumed by the name it parked on.
+            _provider.UpdateTask(task);
             task.Status = next.Status;
             if (next.Checkpoint is { } checkpoint)
             {
                 task.Checkpoint = checkpoint;
+            }
+
+            if (next.WaitingOn.Count > 0)
+            {
+                task.WaitingOn.Clear();
+                task.WaitingOn.AddRange(next.WaitingOn);
             }
 
             if (next.Outcome is { } outcome)
@@ -5223,9 +5389,32 @@ internal sealed class DurableRuntime : IAsyncDisposable
         return record;
     }
 
+    /// <summary>
+    /// The completion a run of a task settles. A task that parked and is woken runs again,
+    /// so each run gets its own completion: reusing the settled one would hand a caller the
+    /// outcome of a run that ended before the event arrived.
+    /// </summary>
+    private TaskCompletionSource<TaskOutcome> BeginCompletion(string taskId) =>
+        _taskCompletions[taskId] = new TaskCompletionSource<TaskOutcome>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>
+    /// Settles a task's completion and forgets it, so the next run of the task starts a new
+    /// one. Called once per run, at the point the run ends.
+    /// </summary>
+    private void EndCompletion(string taskId, TaskOutcome outcome, TaskCompletionSource<TaskOutcome> completion)
+    {
+        _taskCompletions.TryRemove(
+            new KeyValuePair<string, TaskCompletionSource<TaskOutcome>>(taskId, completion));
+        completion.TrySetResult(outcome);
+    }
+
     /// <summary>Runs a task to completion, resuming from its last checkpoint.</summary>
     internal async Task<TaskOutcome> RunTaskAsync(string taskId, CancellationToken cancellationToken = default)
     {
+        // A run already in flight keeps its completion; a task that parked has no run, so
+        // this one gets a fresh completion. The record is read first because "is a run in
+        // flight" is answered by the running table below, not by the completion cache.
         var completion = _taskCompletions.GetOrAdd(taskId, _ => new TaskCompletionSource<TaskOutcome>(
             TaskCreationOptions.RunContinuationsAsynchronously));
 
@@ -5278,7 +5467,7 @@ internal sealed class DurableRuntime : IAsyncDisposable
             var existing = record.Outcome is { } outcome
                 ? outcome.Deserialize<TaskOutcome>(DurableJson.Options)!
                 : new TaskOutcome("completed");
-            completion.TrySetResult(existing);
+            EndCompletion(taskId, existing, completion);
             return existing;
         }
 
@@ -5286,7 +5475,7 @@ internal sealed class DurableRuntime : IAsyncDisposable
         if (definition is null)
         {
             var unknown = new TaskOutcome("failed", Error: $"unknown task definition {record.Name}");
-            completion.TrySetResult(unknown);
+            EndCompletion(taskId, unknown, completion);
             return unknown;
         }
 
@@ -5357,24 +5546,51 @@ internal sealed class DurableRuntime : IAsyncDisposable
 
             if (commit.Outcome is { } outcome)
             {
-                completion.TrySetResult(outcome);
+                EndCompletion(taskId, outcome, completion);
                 break;
             }
 
             // A task that is waiting on child tasks holds no invocation: it is
-            // resumed when its children finish.
+            // resumed when its children finish. A task waiting on an external event
+            // holds no invocation either, but nothing in the store ever produces that
+            // event, so the run ends with the task still `waiting` and RaiseEventAsync
+            // is what makes it runnable again. Reading the event name as a child task id
+            // would find no task, and end it as failed instead of parked.
             if (commit.Status == TaskStatus.Waiting)
             {
-                var children = commit.WaitingOn;
+                var children = commit.WaitingOn
+                    .Where(name => !TaskCommit.IsExternalEvent(name))
+                    .ToList();
+                if (children.Count == 0)
+                {
+                    break;
+                }
+
                 await WaitForChildrenAsync(taskId, children, cancellationToken);
                 continue;
             }
         }
 
-        var final = Store.Task(taskId)?.Outcome is { } finalOutcome
-            ? finalOutcome.Deserialize<TaskOutcome>(DurableJson.Options)!
-            : new TaskOutcome("failed", Error: "task did not finish");
-        completion.TrySetResult(final);
+        var settled = Store.Task(taskId);
+        TaskOutcome final;
+        if (settled?.Outcome is { } finalOutcome)
+        {
+            final = finalOutcome.Deserialize<TaskOutcome>(DurableJson.Options)!;
+        }
+        else if (settled?.Status == TaskStatus.Waiting)
+        {
+            // The task parked on something outside the store -- an external event -- so the
+            // run ends without it being over. "Pending" is what the store already reports for
+            // a task with no outcome; it is not a failure, and a caller that treats it as one
+            // would fail a task that RaiseEventAsync can still wake.
+            final = new TaskOutcome("pending");
+        }
+        else
+        {
+            final = new TaskOutcome("failed", Error: "task did not finish");
+        }
+
+        EndCompletion(taskId, final, completion);
         return final;
     }
 

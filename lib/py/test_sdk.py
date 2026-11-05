@@ -19,6 +19,7 @@ from durable import (
     DurableClientBuilder,
     DurableConversation,
     DocumentDefinition, DocumentHistory, ForkPolicy, PromptSection, ForkIntent, ForkIntentState, FORK_DOCUMENT,
+    EXTERNAL_EVENT_MEMO_KEY,
     DurableRecoveryRequiredException,
 )
 from copilot.tools import Tool, ToolResult
@@ -3869,7 +3870,55 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
             store.close()
 
     @unittest.skipUnless(os.getenv("DURABLE_RUNTIME_PATH"), "Requires actual recorded runtime")
-    async def test_actual_sdk_tool_override_wrapper_and_checkpoint(self):
+    async def test_external_event_wakes_a_parked_approval_at_its_checkpoint(self):
+        store = DurableStore.create_ephemeral()
+        registry = ExtensionRegistry()
+        harness = DurableHarness(None, store, registry)
+        asked = 0
+
+        async def ask(_input, _checkpoint, runtime):
+            nonlocal asked
+            asked += 1
+            return await runtime.commit_async(lambda: TaskCommit.waiting_for_event(
+                {"phase": "await"}, "external:approval"))
+
+        async def await_phase(_input, _checkpoint, runtime):
+            answer = await runtime.memo_async(DurableStore.EXTERNAL_EVENT_MEMO_KEY) if hasattr(
+                DurableStore, "EXTERNAL_EVENT_MEMO_KEY") else await runtime.memo_async(EXTERNAL_EVENT_MEMO_KEY)
+            if answer is not None:
+                return await runtime.commit_async(lambda: TaskCommit.completed(answer))
+            return await runtime.commit_async(lambda: TaskCommit.failed("approval deadline expired"))
+
+        definition = DurableTask.define_phases("py.approval", lambda: {"phase": "ask"},
+            {"ask": ask, "await": await_phase})
+        registry.install(Extension("py.approval", tasks=[definition]))
+        try:
+            record = await harness.create_task_async(definition)
+            parked = await harness.wait_for_task_async(record.id)
+            self.assertEqual(parked.status, "pending", "a parked task is not a failed one")
+            self.assertEqual(asked, 1)
+            self.assertIs(store.task(record.id).status, TaskStatus.WAITING)
+            self.assertEqual(store.task(record.id).waiting_on, ["external:approval"])
+
+            woken = await store.raise_event_async("external:approval", {"decision": "approved"})
+            self.assertEqual(woken, [record.id])
+            self.assertEqual(store.task(record.id).waiting_on, [])
+            self.assertIs(store.task(record.id).status, TaskStatus.RUNNING)
+            self.assertEqual(store.task(record.id).memos[EXTERNAL_EVENT_MEMO_KEY], {"decision": "approved"})
+
+            # A second delivery finds nobody parked and never overwrites the first answer.
+            self.assertEqual(await store.raise_event_async("external:approval", {"decision": "denied"}), [])
+            self.assertEqual(store.task(record.id).memos[EXTERNAL_EVENT_MEMO_KEY], {"decision": "approved"})
+
+            outcome = await harness.wait_for_task_async(record.id)
+            self.assertEqual(outcome.status, "completed")
+            self.assertEqual(outcome.result, {"decision": "approved"})
+            self.assertEqual(asked, 1, "the wake-up re-entered at the checkpoint the park wrote")
+        finally:
+            harness.close()
+            store.close()
+
+
         calls = []
         async def read(invocation):
             self.assertEqual(invocation.arguments, {"path": "notes.txt"})

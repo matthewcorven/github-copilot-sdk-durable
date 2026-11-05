@@ -1,0 +1,11 @@
+-- 01-assess
+{
+ "approvalTaskId": "t4",
+ "created": true,
+ "deadline": 1793997420.6816819,
+ "deadlineIso": "2026-11-06T20:37:00Z",
+ "event": "external:approval/LOCAL-1",
+ "phase": "awaiting-approval",
+ "requestId": "LOCAL-1",
+ "storePath": "<scratch>/working-state.jsonl"
+}

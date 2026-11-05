@@ -14,6 +14,35 @@ See [`docs/RELEASING.md`](docs/RELEASING.md) for the release procedure.
 
 ### Added
 
+- **External events: a task that waits for something outside the store.**
+  `TaskCommit.WaitingForEvent(checkpoint, "external:<name>")` parks a task on a name nothing in
+  the store produces: the run ends with the task `Waiting`, holding no invocation and no timer,
+  and `DurableStore.RaiseEventAsync(name, payload)` is what makes it runnable again. The event's
+  payload is delivered as the task's memo `DurableStore.ExternalEventMemoKey`, and the task's
+  `WaitingOn` list drops the name, in one transaction; a second delivery wakes nobody and never
+  overwrites the first answer. `TaskCommit.IsExternalEvent(name)` and
+  `TaskCommit.ExternalEventPrefix` keep the event namespace and the child-task namespace apart
+  in one stored list, so a store written before this change reads back unchanged. Ported to
+  TypeScript (`TaskCommit.waitingForEvent` / `isExternalEvent` / `EXTERNAL_EVENT_PREFIX` /
+  `EXTERNAL_EVENT_MEMO_KEY`, `DurableStore.raiseEventAsync`) and Python
+  (`TaskCommit.waiting_for_event` / `is_external_event`, `DurableStore.raise_event_async`).
+  (#160)
+- **A parked task is reported as `pending`, not `failed`.** A run that ended because the task
+  parked on an external event settles with `TaskOutcome("pending")`; `failed` is reserved for a
+  run that had nowhere to continue. Every port agrees. (#160)
+
+### Fixed
+
+- **The non-transaction task commit dropped `WaitingOn`.** `TaskCommit.Waiting` through
+  `TaskRuntime.CommitAsync(Func<TaskCommit>)` wrote the checkpoint and the status but not the
+  names the task was waiting on, so a committing-to-wait path recorded a task that looked
+  running and could never be resumed by the name it parked on. The transaction overload already
+  wrote the list; both arms do now, in C#, TypeScript and Python. (#160)
+- **A settled task completion was reused for the next run.** The runner cached one completion
+  per task id, so a task that parked and was later woken handed its waiter the outcome of the
+  run that had ended before the event arrived. Each run now gets its own completion, and it is
+  dropped when the run settles. (#160)
+
 - **Durable sandbox policy.** `DurableSandboxPolicy` is a stored, per-conversation sandbox
   grant: `SandboxMcpServers`, `SandboxLspServers`, `Auth` (`Gh`, `Git`), `Credentials`
   (`EnvVars`), `Filesystem` (`ReadwritePaths`, `ReadonlyPaths`, `DeniedPaths`,

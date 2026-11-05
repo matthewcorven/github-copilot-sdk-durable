@@ -1,0 +1,85 @@
+{
+  "agent_reference": {
+    "name": "durable-inside-agent",
+    "type": "agent_reference",
+    "version": "1"
+  },
+  "agent_session_id": "b34699f92021c4e3a04d0eda60edfac6e4dcfe8fcdb28cac480204ae83aeabe",
+  "background": false,
+  "completed_at": 1793910854,
+  "created_at": 1793910849,
+  "id": "caresp_0434c7f9f60bb40e00QcaoV6fLqUi6ww7gm0eK9PWFYksR4d8S",
+  "model": "",
+  "object": "response",
+  "output": [
+    {
+      "agent_reference": null,
+      "arguments": "{\"request_id\":\"PA-D2-0001\",\"assessment\":\"Coverage criteria are met.\"}{\"request_id\":\"PA-D2-0001\",\"assessment\":\"Coverage criteria are met.\"}",
+      "call_id": "call_IWzV4Ypc9I1Fkpt9lWJmM7qn",
+      "id": "fc_0434c7f9f60bb40e00Htsovo52iUuAhn4bUtY0XoWbKxJvPlal",
+      "name": "record_assessment",
+      "response_id": "caresp_0434c7f9f60bb40e00QcaoV6fLqUi6ww7gm0eK9PWFYksR4d8S",
+      "status": "completed",
+      "type": "function_call"
+    },
+    {
+      "agent_reference": null,
+      "call_id": "call_IWzV4Ypc9I1Fkpt9lWJmM7qn",
+      "id": "fco_0434c7f9f60bb40e00zMrLhCRNy9WA0XFxAnn39hwZpLaeqzKO",
+      "output": "{\n \"approvalTaskId\": \"t4\",\n \"awaitingEvent\": \"external:approval/PA-D2-0001\",\n \"created\": true,\n \"deadline\": 1793997250.6636398,\n \"note\": \"the approval is a durable task parked on an external event; nothing is held open\",\n \"phase\": \"awaiting-approval\",\n \"requestId\": \"PA-D2-0001\"\n}",
+      "response_id": "caresp_0434c7f9f60bb40e00QcaoV6fLqUi6ww7gm0eK9PWFYksR4d8S",
+      "status": "completed",
+      "type": "function_call_output"
+    },
+    {
+      "agent_reference": null,
+      "arguments": "{\"request_id\":\"PA-D2-0001\"}{\"request_id\":\"PA-D2-0001\"}",
+      "call_id": "call_IFd6696cXfalbpLb3pix4v4U",
+      "id": "fc_0434c7f9f60bb40e00nD6GuX3RocQLKGEf6zOaEd4rAFYSCvH2",
+      "name": "working_state",
+      "response_id": "caresp_0434c7f9f60bb40e00QcaoV6fLqUi6ww7gm0eK9PWFYksR4d8S",
+      "status": "completed",
+      "type": "function_call"
+    },
+    {
+      "agent_reference": null,
+      "call_id": "call_IFd6696cXfalbpLb3pix4v4U",
+      "id": "fco_0434c7f9f60bb40e0015309hgXDquX2sz4qtz2yf0ixbwp8h2v",
+      "output": "{\n \"approval\": {\n  \"deadline\": 1793997250.6636398,\n  \"decision\": \"\",\n  \"reviewer\": \"\",\n  \"state\": \"pending\"\n },\n \"approvalTask\": {\n  \"checkpoint\": {\n   \"deadline\": 1793997250.6636398,\n   \"phase\": \"await\",\n   \"requestId\": \"PA-D2-0001\",\n   \"requestedAt\": 1793910850.6636398\n  },\n  \"id\": \"t4\",\n  \"restarts\": 0,\n  \"status\": \"WAITING\",\n  \"waitingOn\": [\n   \"external:approval/PA-D2-0001\"\n  ]\n },\n \"assessment\": \"Coverage criteria are met.\",\n \"decidedAt\": \"\",\n \"decidedBy\": \"\",\n \"decision\": \"\",\n \"phase\": \"awaiting-approval\",\n \"requestId\": \"PA-D2-0001\",\n \"resumedCount\": 0,\n \"storePath\": \"/home/session/durable/working-state.jsonl\"\n}",
+      "response_id": "caresp_0434c7f9f60bb40e00QcaoV6fLqUi6ww7gm0eK9PWFYksR4d8S",
+      "status": "completed",
+      "type": "function_call_output"
+    },
+    {
+      "agent_reference": null,
+      "content": [
+        {
+          "annotations": [],
+          "logprobs": [],
+          "text": "Committed the assessment and opened the human approval gate.\n\nFrom `working_state`, as returned:\n- approval task id: `t4`\n- task status: `WAITING`\n- waiting on: `[\"external:approval/PA-D2-0001\"]`\n- deadline: `1793997250.6636398`",
+          "type": "output_text"
+        }
+      ],
+      "id": "msg_0434c7f9f60bb40e00o8bfINGHqWUT4u4R1Tz2xvQRt1eUXOSM",
+      "response_id": "caresp_0434c7f9f60bb40e00QcaoV6fLqUi6ww7gm0eK9PWFYksR4d8S",
+      "role": "assistant",
+      "status": "completed",
+      "type": "message"
+    }
+  ],
+  "parallel_tool_calls": false,
+  "response_id": "caresp_0434c7f9f60bb40e00QcaoV6fLqUi6ww7gm0eK9PWFYksR4d8S",
+  "status": "completed",
+  "usage": {
+    "input_tokens": 3909,
+    "input_tokens_details": {
+      "cache_write_tokens": 0,
+      "cached_tokens": 0
+    },
+    "output_tokens": 219,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 4128
+  }
+}
