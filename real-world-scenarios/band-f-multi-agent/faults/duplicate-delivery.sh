@@ -179,19 +179,19 @@ TURNS_DELTA=$(( ${TURNS_AFTER:-0} - ${TURNS_BEFORE:-0} ))
 # The assertion: did the re-delivered turn produce a second output, or was the first reused?
 if [ "${VERSIONS_FOR_TURN:-0}" -gt 1 ] || [ "${REUSED:-0}" -gt 0 ]; then
   OUTCOME="doubled"
-  DOUBLED_VERDICT="$VERSIONS_FOR_TURN output version(s) for the re-delivered turn ${TURNS_AFTER:+and $REUSED reuse record(s)}"
+  DOUBLED_VERDICT="turn 3 committed $VERSIONS_FOR_TURN output version(s) with $REUSED reuse record(s), so the specialist's tool ran again for the re-delivered request"
 else
   OUTCOME="not doubled"
-  DOUBLED_VERDICT="one output version for the re-delivered turn and no reuse record — the request arrived twice and the tool ran once"
+  DOUBLED_VERDICT="turn 3 committed one output version and nothing was reused, so the request arrived twice and the specialist's tool ran once"
 fi
 
 if [ "$OUTCOME" = "doubled" ]; then
   MECHANISM="The second process found the delegation committed, its own checkpoint still naming $AFTER_HOLDER, and no output for the turn — so it produced. That is not a durability win: the variant has no memo for an output a process has already consumed, only one for a routing decision it has not yet acted on, so a second process after a kill produces again."
 else
-  MECHANISM="The second process produced nothing for the turn: the first had already committed it and the store answered for it, so the request was delivered twice and the tool ran once. What stopped the second run was the committed output, not an identity for the request — a delivery the variant has no record of would not have been deduplicated."
+  MECHANISM="The second process found the turn's output already committed, so it produced nothing. What stopped it was that committed output and not an identity for the request: the variant has no record that a delivery is a repeat."
 fi
 
-DETAIL="The first process was killed with SIGKILL while $BEFORE_HOLDER held turn 3 with nothing produced, and a second process resumed the same store (exit $DELIVERY_STATUS), so the request was delivered twice. On the per-turn count — how many outputs turn 3 committed, which is the finding — $DOUBLED_VERDICT. Control after recovery was $AFTER_HOLDER. $MECHANISM A third delivery to the now-finished run (exit ${REDELIVERY_STATUS:-?}) is recorded only as the separate fact that ${REDELIVERY_NOTE:-it was handled}; it is not part of this claim, because a finished run being a no-op says nothing about whether the variant could deduplicate a request. $VERIFY_NOTE."
+DETAIL="The first process was killed with SIGKILL while $BEFORE_HOLDER held turn 3 with nothing produced, and a second process resumed the same store (exit $DELIVERY_STATUS): the request was delivered twice. On the per-turn count, which is the finding, $DOUBLED_VERDICT. Control after recovery was $AFTER_HOLDER. $MECHANISM A third delivery to the now-finished run (exit ${REDELIVERY_STATUS:-?}) is recorded as one separate fact — ${REDELIVERY_NOTE:-it was handled} — and is not part of this claim: a finished run being a no-op says nothing about whether the variant could deduplicate a request. $VERIFY_NOTE."
 
 EVIDENCE="frozen after the first delivery (pid $killed, SIGKILL, confirmed gone) with holder $BEFORE_HOLDER and $TURNS_BEFORE completed turn(s); output versions for the re-delivered turn 3: 0 before, $VERSIONS_FOR_TURN after, $REUSED reuse record(s); third delivery exit ${REDELIVERY_STATUS:-?}: ${REDELIVERY_NOTE:-no refusal line}; whole-run specialist results before: $COUNTS_BEFORE, after: $SNAP_AFTER_COUNTS (delta $DOUBLED — reported, not decisive: return_agent answers turn 0 too, so its result appears twice in a no-fault run); completed turns: $TURNS_BEFORE then $TURNS_AFTER; second delivery exit: $DELIVERY_STATUS; holder after: $AFTER_HOLDER; $VERIFY_NOTE; holders across the run: $HOLDERS"
 

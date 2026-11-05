@@ -7,18 +7,18 @@
   "holderAtEnd": "refund_agent",
   "phase": "a handoff is queued at refund_agent's executor, so refund_agent is about to run",
   "detail": "The process was stopped with SIGTERM at turn 1 under the coordinator, no delegation committed, where the framework checkpoint named triage_agent. The restarted process gave control to triage_agent (resumed by triage_agent); its newest checkpoint then names refund_agent and the first agent to act in a checkpoint it wrote was triage_agent. the specialist tool results the checkpointed conversation held went from {} at the stop to {} after the restart. The restart did not complete: attempt 1 aborted with the framework's \"Expected exactly one update for key 'SharedState'\" — the framework aborts every resume of a workflow that still has work, and the port's resume has no way past it.",
-  "evidence": "stopped cleanly (pid 44531, SIGTERM, confirmed gone) at turn 1 under the coordinator, no delegation committed; frozen state: holder triage_agent, fingerprint checkpoints:4/authors:1/last:da2389df19b04a5a8d6e89dbeb5a6300, tool results {}; first action after the restart: triage_agent spoke in checkpoint turn 4 at a7f4b5164f4441aca9de322a8217252a; the specialist tool results the checkpointed conversation held went from {} at the stop to {} after the restart; the baseline has no verifier, so a replay is read off the conversation its checkpoints hold; recovery needed 2 process(es) (attempt 1 aborted with the framework's \"Expected exactly one update for key 'SharedState'\"); port-reported resume: triage_agent",
+  "evidence": "stopped cleanly (pid 91036, SIGTERM, confirmed gone) at turn 1 under the coordinator, no delegation committed; frozen state: holder triage_agent, fingerprint checkpoints:4/authors:1/last:60195b6afb474e4381adcf6c60aa57a0, tool results {}; first action after the restart: triage_agent spoke in checkpoint turn 4 at 84e22de1811f4a63b04c0ae8971d1b59; the specialist tool results the checkpointed conversation held went from {} at the stop to {} after the restart; the baseline has no verifier, so a replay is read off the conversation its checkpoints hold; recovery needed 2 process(es) (attempt 1 aborted with the framework's \"Expected exactly one update for key 'SharedState'\"); port-reported resume: triage_agent",
   "harness": {
     "dotnet": "10.0.402",
     "endpoint": "https://openrouter.ai/api/v1",
     "model": "openai/gpt-4o-mini",
     "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/restart-after-checkpoint.sh --variant baseline --fault-not-injected",
-    "commit": "169c3b52829cebc58b6bab75841f452810d0d75a",
+    "commit": "af07e26d66fcd9fdf488ce8242d1b6d3a07d3edc",
     "apiKeyFrom": "OPENROUTER_API_KEY",
     "portKeyFrom": "OPENROUTER_API_KEY",
     "portKeySubstituted": true
   },
-  "recordedAt": "2026-11-05T21:37:46.074420+00:00",
+  "recordedAt": "2026-11-05T22:06:09.640708+00:00",
   "observations": {
     "processes": 2,
     "holderAtStop": "triage_agent",

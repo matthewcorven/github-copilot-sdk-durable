@@ -7,18 +7,18 @@
   "holderAtEnd": "return_agent",
   "phase": "settle",
   "detail": "The process was stopped with SIGTERM at the commit where triage_agent held turn 1 and had produced nothing. The restarted process read that checkpoint, took control as resumed by refund_agent, and its first committed action was refund_agent delegated-from-memo turn 1 at e46. the specialist tool results went from {\"Return initiated successfully for order 1234. You will receive return instructions via email.\": 1} at the stop to {\"Order 1234 is currently being processed and will ship in 2 business days.\": 1, \"Refund processed successfully for order 1234.\": 1, \"Return initiated successfully for order 1234. You will receive return instructions via email.\": 2} after the restart; verify held every claim, so nothing the checkpoint recorded was written twice. Control after the restart was refund_agent, and the run finished in 1 process(es).",
-  "evidence": "stopped cleanly (pid 52211, SIGTERM, confirmed gone) at turn 1 under the coordinator, no delegation committed; frozen state: holder triage_agent, fingerprint seq:45/wire:3/tasks:1, tool results {\"Return initiated successfully for order 1234. You will receive return instructions via email.\": 1}; first action after the restart: refund_agent delegated-from-memo turn 1 at e46; the specialist tool results went from {\"Return initiated successfully for order 1234. You will receive return instructions via email.\": 1} at the stop to {\"Order 1234 is currently being processed and will ship in 2 business days.\": 1, \"Refund processed successfully for order 1234.\": 1, \"Return initiated successfully for order 1234. You will receive return instructions via email.\": 2} after the restart; verify held every claim, so nothing the checkpoint recorded was written twice; recovery needed 1 process(es); port-reported resume: (none); holders across the run: return_agent -> refund_agent -> order_agent -> return_agent",
+  "evidence": "stopped cleanly (pid 4318, SIGTERM, confirmed gone) at turn 1 under the coordinator, no delegation committed; frozen state: holder triage_agent, fingerprint seq:45/wire:3/tasks:1, tool results {\"Return initiated successfully for order 1234. You will receive return instructions via email.\": 1}; first action after the restart: refund_agent delegated-from-memo turn 1 at e46; the specialist tool results went from {\"Return initiated successfully for order 1234. You will receive return instructions via email.\": 1} at the stop to {\"Order 1234 is currently being processed and will ship in 2 business days.\": 1, \"Refund processed successfully for order 1234.\": 1, \"Return initiated successfully for order 1234. You will receive return instructions via email.\": 2} after the restart; verify held every claim, so nothing the checkpoint recorded was written twice; recovery needed 1 process(es); port-reported resume: (none); holders across the run: return_agent -> refund_agent -> order_agent -> return_agent",
   "harness": {
     "dotnet": "10.0.402",
     "endpoint": "https://openrouter.ai/api/v1",
     "model": "harness default (scripted routing)",
     "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/restart-after-checkpoint.sh --variant durable --fault-not-injected",
-    "commit": "169c3b52829cebc58b6bab75841f452810d0d75a",
+    "commit": "af07e26d66fcd9fdf488ce8242d1b6d3a07d3edc",
     "apiKeyFrom": "OPENROUTER_API_KEY",
     "portKeyFrom": null,
     "portKeySubstituted": null
   },
-  "recordedAt": "2026-11-05T21:43:04.156095+00:00",
+  "recordedAt": "2026-11-05T22:11:29.298495+00:00",
   "observations": {
     "processes": 1,
     "holderAtStop": "triage_agent",
