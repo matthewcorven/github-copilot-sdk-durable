@@ -1,0 +1,17 @@
+{
+ "task": {
+  "id": "t1",
+  "name": "band-d3.prior-auth",
+  "status": 1,
+  "restarts": 0,
+  "phase": "coverage"
+ },
+ "memos": {
+  "step/coverage/1188409be0bb45d0/d3-coverage-assessor@3:48d2a3c62ecbb105": {
+   "step": "coverage",
+   "agentIdentity": "d3-coverage-assessor@3:48d2a3c62ecbb105",
+   "outputChars": 1527
+  }
+ },
+ "result": null
+}

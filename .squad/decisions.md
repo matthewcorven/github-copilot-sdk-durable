@@ -994,3 +994,45 @@ now settles with the second run's outcome.
 The scenario PR carries the layer change as its own commit and pins to the layer's source tree, per
 `.github/copilot-instructions.md`'s development rule. It does not land until a release PR publishes the
 version the scenario will pin; `durable/PROVENANCE.md` states that sequence rather than implying it.
+### 2026-11-05T18:30:00Z: D3 — an agent's identity belongs in the memo key, read at call time, and a reserved name is a leftover
+
+**By:** core-engineer (Band D / D3, #161)
+
+**What:** D3 is a local durable orchestrator whose steps are Foundry agent calls. Two design
+calls it had to make, and one defect it found in D1's infra.
+
+1. **The agent identity is in the memo key**: `step/{step}/{inputDigest}/{name}@{version}:{digest[..16]}`,
+   where the digest is over the platform's *stored* definition, canonicalised. A key of
+   name+input only — the obvious one, kept as `MEMO_KEY_MODE=naive` — silently reuses a result
+   the previous definition produced after an edit. The evidence shows it: scenario D reused v1's
+   coverage assessment under the naive key while v2 was live; scenario E, same store, correct
+   key, called instead.
+
+2. **The identity is resolved at call time and pinned in the request**, not frozen into the task
+   input at creation. Freezing it makes requirement 3 vacuous — a run created before an edit
+   would keep using the old identity and never notice. `&agent_version=N` closes the gap between
+   "the definition I hashed" and "the definition that answered".
+
+3. **Memo is written before the checkpoint that advances the phase.** Band B commits the
+   checkpoint first and rebuilds a missing memo from it; that is right when the checkpoint
+   *carries* the result, and it is what D3 does when a checkpoint is the only record. But it
+   makes "the phase has not moved" and "the memo is written" independent, so a resumed phase has
+   nothing to consult. Writing the memo first makes a resumed phase a *hit*. The window before
+   the memo is not closed — a call that returns and loses its process is re-issued — and the
+   README states that rather than claiming exactly-once.
+
+**D1's teardown was not re-runnable, and that blocked requirement 4.** Deleting the resource group
+leaves the Cognitive Services account soft-deleted under a **still-reserved name**, so the next
+`provision.sh` fails `FlagMustBeSetForRestore`. D1 verified the group was gone and called that
+clean. `teardown.sh` now purges the deleted account, waits, and verifies the name is free; scope
+is limited to the groups being torn down, and `PURGE=0` opts out. **"Nothing left behind" has to
+cover the name, not just the resources** — a group delete that reserves a name has left something
+that stops the next person.
+
+**Why:** The memo-key judgement was the point of `model:high` on this issue: a naive key is not a
+performance bug, it is a correctness bug that reports work an agent did not do. And a teardown
+that cannot be followed by a provision is a teardown that only looks clean once — the cost rule
+this band exists to satisfy depends on being able to stand the deployment up again.
+
+**References:** #161, #159, #158, `real-world-scenarios/band-d3-outside-orchestrator/`,
+`real-world-scenarios/band-d-hosted-foundry-agent/infra/teardown.sh`

@@ -1,0 +1,5 @@
+# Runtime artefacts: the run and the local scratch area.
+.work/
+.count-now.json
+.agent-body.json
+__pycache__/

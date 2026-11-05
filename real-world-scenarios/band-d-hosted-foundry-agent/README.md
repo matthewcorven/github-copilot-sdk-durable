@@ -33,7 +33,7 @@ application.
 | `infra/provision.sh` | `az deployment sub create` against `infra/main.bicep`, writes `.deployment.json`. |
 | `infra/deploy.sh` | Build + push both agent images, grant the roles Foundry needs, register both agent versions, wait for `active`, write `deployment.env`. |
 | `infra/invoke.sh` | One four-step run (coverage → synthesis → decision applied → final result) with every input/output saved. The decision step replays the accelerator backend's rules; it is not a human round-trip. |
-| `infra/teardown.sh` | Deletes the resource group on the subscription `provision.sh` recorded, waits, and treats a failed `az` call as a failure rather than as "nothing left". Idempotent. |
+| `infra/teardown.sh` | Deletes the resource group on the subscription `provision.sh` recorded, **purges the soft-deleted Cognitive Services account the delete leaves behind**, and verifies three things: every group is absent, no soft-deleted account remains, and no resource **anywhere in the subscription** carries this deployment's `uniqueString`. Treats a failed `az` call as a failure rather than as "nothing left". Idempotent. |
 | `evidence/` | Captured transcripts. Index below. |
 
 ## Cost, and teardown
@@ -72,6 +72,30 @@ Everything is deleted by:
 ```
 
 which is what this issue ran last; see `evidence/teardown.md`.
+
+**Teardown verifies three different things, and the second and third were added by D3.**
+
+1. **Every group is absent** — the delete finished.
+2. **No soft-deleted account remains.** Deleting the group frees the resources, but the
+   Cognitive Services account then sits in a *soft-deleted* list under a name that is still
+   reserved, so re-running `provision.sh` with the same `NAME_PREFIX` fails preflight with
+   `FlagMustBeSetForRestore`. The purge is polled (60 × 10 s) across every group the run
+   touched, because a purge is asynchronous and a single re-read reports a *successful*
+   teardown as incomplete. `PURGE=0` skips it for an operator restoring instead.
+3. **No resource anywhere in the subscription carries this deployment's `uniqueString`.**
+   The first two are scoped to the group being deleted, which passes for a resource
+   created in a *different* group. The token is derived from the recorded account name,
+   never guessed, and the query runs with `--subscription` pinned like every other call.
+
+D3 reproduced each failure and its fix; see `../band-d3-outside-orchestrator/README.md`
+and that scenario's `evidence/teardown.md`, which includes the third check **firing**
+against a deliberately cross-group resource.
+
+**Re-provisioning under the same name does not yet work**, and that is a platform
+behaviour rather than a script bug: after a purge, a re-created account and project
+answered `Project not found` on its data plane for as long as it was probed (~15 min),
+while a deployment under a fresh `NAME_PREFIX` worked immediately. Until that is
+understood, re-creating this deployment means a fresh prefix.
 
 ## Running it
 

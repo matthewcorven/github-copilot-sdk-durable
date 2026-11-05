@@ -1,0 +1,5 @@
+$ ./count-calls.sh --since evidence/run/70-before-rerun.json
+  d3-coverage-assessor            1 →    1  (+0)
+  d3-decision-letter              1 →    1  (+0)
+  TOTAL                           2 →    2  (+0)
+exit=0

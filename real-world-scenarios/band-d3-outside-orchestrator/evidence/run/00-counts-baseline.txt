@@ -1,0 +1,4 @@
+$ ./count-calls.sh --baseline evidence/run/00-counts-baseline.json
+baseline written to evidence/run/00-counts-baseline.json
+  d3-coverage-assessor            0
+  d3-decision-letter              0

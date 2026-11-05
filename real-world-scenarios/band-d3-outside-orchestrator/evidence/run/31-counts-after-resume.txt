@@ -1,0 +1,9 @@
+$ ./count-calls.sh
+  d3-coverage-assessor            1 responses
+  d3-decision-letter              0 responses
+
+$ ./count-calls.sh --since evidence/run/21-counts-at-kill.json
+  d3-coverage-assessor            1 →    1  (+0)
+  d3-decision-letter              0 →    0  (+0)
+  TOTAL                           1 →    1  (+0)
+exit=0

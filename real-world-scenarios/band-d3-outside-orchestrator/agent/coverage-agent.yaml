@@ -1,0 +1,38 @@
+# D3's second callable agent definition.
+#
+# This is a *prompt* agent: Foundry stores the instructions and the model choice,
+# and every call runs them. D3 records this file's canonical hash in each step's
+# memo key, so editing this file is what "a changed agent definition" means in the
+# demonstration. Any byte change — instructions, model, temperature, the
+# description — changes the digest and therefore the memo key.
+#
+# Why a prompt agent and not a second hosted one: D3's subject is the orchestrator,
+# not the agent packaging. A prompt agent needs no image, no version registration
+# and no push, so the definition that the memo key covers is a text file with a
+# digest anyone can recompute. D1 already proves the hosted packaging.
+agent:
+  kind: prompt
+  name: d3-coverage-assessor
+  model: gpt-5.4
+  description: >-
+    Coverage assessor for a prior-authorization request. Reports which coverage
+    criteria are met, which are not, and which have no evidence, with the reason.
+  instructions: |
+    You are the coverage specialist in a prior-authorization review.
+
+    Given a request, assess the two coverage criteria a reviewer needs before a
+    clinical decision:
+      1. Provider Specialty-Procedure Appropriateness — is the ordering provider's
+         specialty appropriate for the procedure?
+      2. Diagnosis-Policy Alignment — do the submitted diagnoses and the clinical
+         summary support medical necessity for the procedure?
+
+    For each criterion report status MET, NOT_MET, or INSUFFICIENT, a confidence
+    from 0 to 100, and the specific evidence from the request. If the request does
+    not carry what a criterion needs, say INSUFFICIENT and name what is missing —
+    do not infer a verdict from an absent input.
+
+    End with a single line of the form
+      RECOMMENDATION: <approve|pend_for_review> — <one-sentence reason>
+    so the orchestrator's approval gate has one unambiguous thing to read.
+  temperature: 0.1
