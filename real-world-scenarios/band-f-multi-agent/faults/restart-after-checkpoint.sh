@@ -58,13 +58,31 @@ else
       "the application never opened its store: $(tail_log "$RUNDIR/.starter.log" 4 | tr '\n' ' ')"
     exit 0
   fi
+  # The baseline announces nothing, so the stop point is found by polling: one turn must finish and
+  # the newest checkpoint must name the specialist the stop is about. Under load that can take a while
+  # (a resumed model call plus checkpoint persistence), so the wait is generous — a timeout here
+  # would record `not exercised` for a fault that is merely slow, which would be a false absence.
+  # The baseline announces nothing, so the stop point is found by polling. A poll has a window between
+  # "the state says turn 1 is with the specialist" and the harness acting, and the run can consume a
+  # whole turn inside it. The window is closed by holding the process the moment the state is right and
+  # re-reading it while it is held: a stopped process cannot advance underneath the check.
   reached=0
-  for _ in $(seq 1 2000); do
+  for _ in $(seq 1 6000); do
     HOLDER_NOW="$(holder_now "$VARIANT" "$RUNDIR")"
     TURNS_DONE="$(baseline_log_count "$RUNDIR" turn_end)"
-    if [ "${TURNS_DONE:-0}" -eq 1 ] && [ "$HOLDER_NOW" = "$WANT_HOLDER" ]; then reached=1; break; fi
+    if [ "${TURNS_DONE:-0}" -eq 1 ] && [ "$HOLDER_NOW" = "$WANT_HOLDER" ]; then
+      if hold_and_confirm "$VARIANT" "$RUNDIR" >/dev/null; then
+        STILL="$(holder_now "$VARIANT" "$RUNDIR")"
+        STILL_TURNS="$(baseline_log_count "$RUNDIR" turn_end)"
+        if [ "$STILL" = "$WANT_HOLDER" ] && [ "${STILL_TURNS:-0}" -eq 1 ]; then
+          reached=1
+          break
+        fi
+        kill -CONT "$(cat "$RUNDIR/pid")" 2>/dev/null || true
+      fi
+    fi
     if [ -f "$RUNDIR/wrapper.pid" ] && ! kill -0 "$(cat "$RUNDIR/wrapper.pid")" 2>/dev/null; then break; fi
-    sleep 0.15
+    sleep 0.2
   done
   if [ "$reached" != "1" ]; then
     record_not_exercised "$VARIANT" "$RESULT_NAME" "the stop point was not reached" \

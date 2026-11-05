@@ -390,6 +390,29 @@ kill_and_confirm() {
   echo "$pid"
 }
 
+# Holds the application still (SIGSTOP), confirms it stopped, and prints its pid. A poll-based
+# injection point has a window between "the state says X" and "the harness acts"; on a variant with no
+# seam that window is closed by stopping the process the moment the state is right, then reading the
+# state again, then sending the real signal. SIGSTOP is the harness pausing the process, not the
+# process stopping itself.
+hold_and_confirm() {
+  local variant="$1" rundir="$2"
+  local pid; pid="$(cat "$rundir/pid" 2>/dev/null || true)"
+  [ -n "$pid" ] || return 1
+  kill -STOP "$pid" 2>/dev/null || return 1
+  local deadline=$((SECONDS + 10))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    # A stopped process still exists; what has to be confirmed is that it is no longer running, which
+    # its state reports as T (or P for a process stopped while tiny).
+    state="$(ps -o state= -p "$pid" 2>/dev/null | tr -d ' ')"
+    case "$state" in
+      T*|t*|P*) HELD_PID="$pid"; echo "$pid"; return 0 ;;
+    esac
+    sleep 0.1
+  done
+  return 1
+}
+
 # SIGTERM then wait, confirmed gone. The clean stop `restart-after-checkpoint` needs, and
 # deliberately not what `kill-mid-delegation` uses.
 stop_and_confirm() {
@@ -397,6 +420,9 @@ stop_and_confirm() {
   local pid; pid="$(cat "$rundir/pid" 2>/dev/null || true)"
   [ -n "$pid" ] || return 1
   kill -TERM "$pid" 2>/dev/null || true
+  # A process held with SIGSTOP cannot act on SIGTERM until it runs again, so the hold is released
+  # immediately. The signal is already queued, which is what makes the stop clean rather than a kill.
+  kill -CONT "$pid" 2>/dev/null || true
   local deadline=$((SECONDS + 30))
   while kill -0 "$pid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do sleep 0.1; done
   if kill -0 "$pid" 2>/dev/null; then
