@@ -111,6 +111,7 @@ def render():
         + f"\n| **Total** | | **{code_total}** | **{dur_total}** | **{code_total - dur_total}** |"
     )
     totals = {
+        "TABLE_REGIONS": str(len(REGIONS)),
         "TABLE_TOTAL": str(code_total),
         "TABLE_DUR": str(dur_total),
         "TABLE_APP": str(code_total - dur_total),
