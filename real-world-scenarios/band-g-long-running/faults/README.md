@@ -98,7 +98,14 @@ directory unless `KEEP=1`. A run that fails leaves no process and no store behin
 from nothing. The build output lives in the same scratch root and is rebuilt per harness run.
 
 `results/` and `fixtures/` are checked in; `.scratch/` is not (the repository's root `.gitignore` covers
-`.scratch/` anywhere). So re-running the harness leaves the tree clean apart from the results it rewrote.
+`.scratch/` anywhere), so a run leaves no untracked file behind.
+
+Every result is rewritten on every run, because `recordedAt` is the time it ran and `evidence` names the
+PIDs that were killed. **The outcomes are the reproducible part, not the bytes:** a second full run
+reproduces every outcome and every count, and differs only in timestamps, PIDs, and the checkpoint and
+session ids the framework allocates. That is what makes `checked-in results are what the scripts emit`
+checkable — re-run, then compare the outcome and measurement fields rather than the whole file. A
+reviewer doing that will see `git diff` on all 22 files and an empty diff on everything a table cites.
 
 ## Results
 
