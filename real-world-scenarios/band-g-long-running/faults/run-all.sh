@@ -134,12 +134,7 @@ fi
 {
   "$PYTHON" "$HERE/lib/summarise.py" "$RESULTS_DIR" "$STATUS_FILE" --md || exit 1
   echo
-  echo "## The band's three-way comparison, with the measured cells read from these results"
-  echo
-  echo "The middle column was not run. Its marking is the same one G2 gave it, and it is carried here so a"
-  echo "reader cannot infer a measurement that does not exist."
-  echo
-  "$PYTHON" "$HERE/lib/three_way.py" "$RESULTS_DIR" || exit 1
+  "$PYTHON" "$HERE/lib/three_way.py" "$RESULTS_DIR" --md || exit 1
 } > "$RESULTS_DIR/summary.md"
 log "wrote ${RESULTS_DIR#"$REPO_ROOT"/}/summary.txt and ${RESULTS_DIR#"$REPO_ROOT"/}/summary.md"
 

@@ -4,8 +4,9 @@
   "outcome": "no kill, run continued",
   "phase": "parked at ManagerApproval, with a process serving the answer (the control)",
   "detail": "Control: the same steps with no kill. The serving process delivered the answer itself (delivered line printed: 1), the run moved on to Running, and its history is: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > EventRaised > TaskScheduled > OrchestratorStarted > TaskCompleted. The fault run reaches the same place after a kill, so the kill cost a process and nothing else.",
-  "evidence": "instance: i166715867\nat the gate: Running; killed pid none (kill -9, confirmed gone)\nafter the kill: Running\nsuccessor process: 'delivered' printed 1 time(s); status Running; raised: ManagerApproval\nhistory: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > EventRaised > TaskScheduled > OrchestratorStarted > TaskCompleted\nraised:     ManagerApproval (1 of 1)\nserving:    a worker is running to deliver the answer\ndelivered:  ManagerApproval",
+  "evidence": "instance: i2759714719\nat the gate: Running; killed pid none (kill -9, confirmed gone)\nafter the kill: Running\nsuccessor process: 'delivered' printed 1 time(s); status Running; raised: ManagerApproval\nhistory: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > EventRaised > TaskScheduled > OrchestratorStarted > TaskCompleted\nraised:     ManagerApproval (1 of 1)\nserving:    a worker is running to deliver the answer\ndelivered:  ManagerApproval",
   "measurements": {
+    "scheduler_image_digest": "sha256:82ceb7df2fdfc2e22b0013c7b87b7a8e443bcd220d4fb37c32ced8ee23438719",
     "status_at_gate": "Running",
     "status_after_kill": "Running",
     "status_after_successor": "Running",
@@ -14,10 +15,10 @@
   },
   "harness": {
     "dotnet": "10.0.402",
-    "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
-    "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
-    "commit": "cfbea21cbbe3f29403b095d77ec80a9112745ea3",
+    "runtime": "Durable Task Scheduler emulator (docker image mcr.microsoft.com/dts/dts-emulator:latest) + Microsoft.DurableTask.Client/Worker.AzureManaged 1.28.0",
+    "model": "none — the vendored sample's executors call no model; no call count exists in this column",
+    "commit": "bb3c4ef673b2f0d99f2638b0d8771f5c25d5d7d6",
     "command": "./faults/extension.sh --fault kill-during-wait --fault-not-injected"
   },
-  "recordedAt": "2026-11-05T19:48:22.483140+00:00"
+  "recordedAt": "2026-11-05T20:09:07.727889+00:00"
 }

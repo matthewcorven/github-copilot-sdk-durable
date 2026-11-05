@@ -3,8 +3,8 @@
   "fault": "restart-after-checkpoint",
   "outcome": "resumed, completed work re-done",
   "phase": "stopped inside the writer's turn; a fresh process completed the run",
-  "detail": "The stop landed on pid 71122 (the resumed process, inside the writer's model call, after the plan and research turns) with 2 model call(s) already served to that process. A fresh resume against the same checkpoint directory exited 0 and wrote checkpoint c7e5556e6e3e4fddb8f5106008150cca (2 file(s) now, approved checkpoint present: yes). The second process issued 2 model call(s): the turns the stopped process had already completed inside its own process were not carried over by its checkpoint, only the workflow's own state was, so the work of the stopped process was re-done. The model is the recorded transcript, so the count is of calls made, not of answers invented.",
-  "evidence": "process 1: 2 model call(s); gate checkpoint 17cbb80271be4ef4b35bbc04975b1e3e\nstopped pid 71122 at: the resumed process, inside the writer's model call, after the plan and research turns; 2 model call(s) served to it\nsecond process (fresh resume, exit 0): 2 model call(s), shapes: system:687ce436|user:3c4e51a2|assistant:2f3d15ab|user:3bdbfc18|assistant:6010ea3c|user:314f85c5|user:a6ad27be system:687ce436|user:3c4e51a2|assistant:2f3d15ab|user:3bdbfc18|assistant:6010ea3c|user:314f85c5|user:0bb64012\nlatest checkpoint: c7e5556e6e3e4fddb8f5106008150cca; approved checkpoint present: yes; checkpoints on disk: 2",
+  "detail": "The stop landed on pid 5771 (the resumed process, inside the writer's model call, after the plan and research turns) with 2 model call(s) already served to that process. A fresh resume against the same checkpoint directory exited 0 and wrote checkpoint 52114762de054d649d9f11391bf8d4bc (2 file(s) now, approved checkpoint present: yes). The second process issued 2 model call(s): the turns the stopped process had already completed inside its own process were not carried over by its checkpoint, only the workflow's own state was, so the work of the stopped process was re-done. The model is the recorded transcript, so the count is of calls made, not of answers invented.",
+  "evidence": "process 1: 2 model call(s); gate checkpoint 2bf0f1cece2c4d3486ef8f80dfaf2efb\nstopped pid 5771 at: the resumed process, inside the writer's model call, after the plan and research turns; 2 model call(s) served to it\nsecond process (fresh resume, exit 0): 2 model call(s), shapes: system:687ce436|user:3c4e51a2|assistant:2f3d15ab|user:3bdbfc18|assistant:6010ea3c|user:314f85c5|user:a6ad27be system:687ce436|user:3c4e51a2|assistant:2f3d15ab|user:3bdbfc18|assistant:6010ea3c|user:314f85c5|user:0bb64012\nlatest checkpoint: 52114762de054d649d9f11391bf8d4bc; approved checkpoint present: yes; checkpoints on disk: 2",
   "measurements": {
     "model_calls_process_1": 2,
     "model_calls_stopped_process": 2,
@@ -14,8 +14,8 @@
     "dotnet": "10.0.402",
     "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
     "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
-    "commit": "cfbea21cbbe3f29403b095d77ec80a9112745ea3",
+    "commit": "bb3c4ef673b2f0d99f2638b0d8771f5c25d5d7d6",
     "command": "./faults/restart-after-checkpoint.sh --variant baseline"
   },
-  "recordedAt": "2026-11-05T19:45:34.785357+00:00"
+  "recordedAt": "2026-11-05T20:06:21.460032+00:00"
 }

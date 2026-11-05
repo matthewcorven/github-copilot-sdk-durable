@@ -251,7 +251,9 @@ start_baseline_bg() {
     "$BASELINE_OUT/BaselineCheckpoint" "$mode" >"$dir/$name.log" 2>&1 &
   APP_PID=$!
   echo "$APP_PID" > "$dir/$name.pid"
-  assert_is_app "$APP_PID" BaselineCheckpoint
+  # Bare `assert_is_app` would only *log* the failure and the run would continue with a wrapper PID — the
+  # guard has to be a guard.
+  assert_is_app "$APP_PID" BaselineCheckpoint || exit 1
 }
 
 start_durable_bg() {
@@ -267,7 +269,7 @@ start_durable_bg() {
     "$DURABLE_OUT/band-g-durable" --run "$dir" "$@" >"$dir/$name.log" 2>&1 &
   APP_PID=$!
   echo "$APP_PID" > "$dir/$name.pid"
-  assert_is_app "$APP_PID" band-g-durable
+  assert_is_app "$APP_PID" band-g-durable || exit 1
 }
 
 # Kills the PID, waits for the operating system to confirm it is gone, and reports that it did. A

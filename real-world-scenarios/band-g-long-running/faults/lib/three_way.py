@@ -26,6 +26,7 @@ def load(results_dir, variant, fault):
 
 
 def main(argv):
+    markdown = "--md" in argv
     args = [a for a in argv if a != "--md"]
     if len(args) != 1:
         sys.stderr.write("usage: three_way.py <results-dir> [--md]\n")
@@ -56,7 +57,6 @@ def main(argv):
     lb = late_b["measurements"]
     ld = late_d["measurements"]
 
-    xk = ext_kill["measurements"]
     xr = ext_restart["measurements"]
 
     rows = [
@@ -77,8 +77,8 @@ def main(argv):
             "**Yes, measured.** The stopped resumed process made " + str(rb["model_calls_stopped_process"])
             + " calls; the fresh resume made " + str(rb["model_calls_second_process"])
             + " more for the same turns.",
-            "**Not measurable here.** " + xr["model_calls"]
-            + ". The band's call-count comparison therefore has no number for this column, and none is borrowed.",
+            "**Not measurable here.** " + xr["model_calls_reason"]
+            + " The band's call-count comparison therefore has no number for this column, and none is borrowed.",
             "**No, measured.** The resume added **" + str(rd["calls_added_by_resume"])
             + "** calls and served the re-entered step from the memo (" + str(rd["memo_hits"]) + " memo hit(s)).",
         ),
@@ -86,9 +86,10 @@ def main(argv):
             "**Domain state transactional**",
             "**No.** The checkpoint is the workflow's state; a completed turn inside a process is not in it, "
             "which is what the call count above shows.",
-            "**In the substrate.** State lives in the Durable Task Scheduler, not in the process: stopping the "
-            "process mid-run lost nothing (`kill-during-wait`: " + ext_kill["outcome"] + "). Stopping the "
-            "*scheduler* is a different matter — see operational weight.",
+            "**In the substrate, and only as durable as it.** Stopping the process mid-run lost nothing "
+            "(`kill-during-wait`: " + ext_kill["outcome"] + "). Stopping the *scheduler* lost the run: "
+            "`store-outage`: " + ext_outage["outcome"] + " — the instance did not exist after a restart. "
+            "State is the scheduler's, and on the emulator that also means it is the emulator's lifetime.",
             "**Within the run.** A step's checkpoint, its memo and its ledger entry commit together: "
             "`store-outage` refused the commit (exit " + str(od["drive_exit"]) + "), left the run '"
             + od["run_after_outage"] + "' with the decision still '" + od["decision_after_outage"]
@@ -115,15 +116,19 @@ def main(argv):
             "**Applied again.** `late-approval`: " + late_b["outcome"]
             + ". There is no terminal record to refuse it.",
             "**Not moved.** `late-approval`: " + ext_late["outcome"]
-            + " — a late answer on a terminated run ran no post-approval step.",
+            + " — a late answer delivered by a live worker completed "
+            + str(ext_late["measurements"]["completed_steps_after_answer"]) + " step(s) against "
+            + str(ext_late["measurements"]["completed_steps_at_gate"]) + " at the gate.",
             "**Held.** `late-approval`: " + late_d["outcome"] + " — " + ld["late_approval_note"] + ".",
         ),
         (
             "**Abort mid-wait**",
             "**Not exercised.** " + abort_b["detail"].split(" So there is")[0].strip(),
-            "**Not the same shape.** `abort-mid-wait`: " + ext_abort["outcome"]
-            + " — termination is the scheduler's call, and the ports live inside one orchestration, so a "
-            "child cascade is not observable here.",
+            "**Stops, with no tree to cascade.** `abort-mid-wait`: " + ext_abort["outcome"]
+            + " — the run was terminated and an answer delivered by a live worker completed "
+            + str(ext_abort["measurements"]["completed_steps_after_answer"]) + " step(s) against "
+            + str(ext_abort["measurements"]["completed_steps_at_gate"]) + " at the gate, i.e. the step after "
+            "the port did not run. There is no child work: the ports live inside one orchestration.",
             "**Cascades, measured.** " + abort_d["outcome"]
             + " — the parent's handler saw the child already terminal ("
             + abort_d["measurements"]["children_observed"] + ").",
@@ -131,16 +136,22 @@ def main(argv):
         (
             "**Operational weight**",
             "A directory on disk, one writer (the framework's store refuses a second).",
-            "**The heaviest of the three.** A scheduler (or its emulator) is a prerequisite even for one run: "
-            "`docker run mcr.microsoft.com/dts/dts-emulator`. Stopping it under a live run failed the client "
-            "(`store-outage`: " + ext_outage["outcome"] + ", exit " + str(ext_outage["measurements"]["drive_exit"])
-            + "), which is an availability cost the other two columns do not have.",
+            "**The heaviest, and the least forgiving.** A scheduler (or its emulator) is a prerequisite even "
+            "for one run. Stopping it under a live run did not fail over: the run was gone when the scheduler "
+            "came back (`store-outage`: " + ext_outage["outcome"] + "). That is the cost the other two "
+            "columns do not have — their store is a file this harness can move and restore.",
             "A store file, one writer. Measured only in that shape: no server, no scheduler.",
         ),
     ]
 
     out = []
     add = out.append
+    if markdown:
+        add("## The band's three-way comparison, read from these results")
+        add("")
+        add("All three columns were run. Where a cell could not be measured in its column, the cell says so and")
+        add("does not borrow a number from another one.")
+        add("")
     add("| | File checkpoint (baseline, #176) | Durable Task extension on DTS (`extension/`) | This variant (#177) |")
     add("| --- | --- | --- | --- |")
     for row in rows:

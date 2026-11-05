@@ -3,20 +3,23 @@
   "fault": "duplicate-approval",
   "outcome": "second delivery did not run the next step twice",
   "phase": "two answers raised for the same port",
-  "detail": "The first answer was raised and delivered; a second answer for the same port was then raised (1 raise(s) recorded). Afterwards the run was Running, the raised events on the instance were ManagerApproval, and the number of tasks the orchestration scheduled was 2. The second event is recorded — it is a message, and the scheduler accepted it — but the orchestration did not schedule the post-approval step a second time: the framework's own orchestration state, not the harness, is what made the duplicate inert.",
-  "evidence": "instance: i331329743; status at the gate: Running\nfirst answer: 1 delivered\nsecond raise(s): 1\nafter: status Running; raised ManagerApproval; tasks scheduled 2\nhistory: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > EventRaised > TaskScheduled > OrchestratorStarted > TaskCompleted",
+  "detail": "The first answer was raised and delivered; a second answer for the same port was then raised (1 raise(s) recorded). Afterwards the run had completed 2 step(s) against 1 before the answers, the raised events were ManagerApproval, and the orchestration had scheduled 2 task(s). The second event is recorded — it is a message, and the scheduler accepted it — and the completed-step count is the measurable that shows it ran nothing: the post-approval work happened once.",
+  "evidence": "instance: i2448511120; status at the gate: Running\nfirst answer: 1 delivered\nsecond raise(s): 1\nafter: status Running; raised ManagerApproval; tasks scheduled 2\nhistory: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > EventRaised > TaskScheduled > OrchestratorStarted > TaskCompleted",
   "measurements": {
+    "scheduler_image_digest": "sha256:82ceb7df2fdfc2e22b0013c7b87b7a8e443bcd220d4fb37c32ced8ee23438719",
     "second_raises": 1,
     "raised_events": "ManagerApproval",
+    "completed_steps": 2,
+    "completed_steps_before_the_answers": 1,
     "tasks_scheduled": "2",
     "status_after": "Running"
   },
   "harness": {
     "dotnet": "10.0.402",
-    "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
-    "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
-    "commit": "cfbea21cbbe3f29403b095d77ec80a9112745ea3",
+    "runtime": "Durable Task Scheduler emulator (docker image mcr.microsoft.com/dts/dts-emulator:latest) + Microsoft.DurableTask.Client/Worker.AzureManaged 1.28.0",
+    "model": "none — the vendored sample's executors call no model; no call count exists in this column",
+    "commit": "bb3c4ef673b2f0d99f2638b0d8771f5c25d5d7d6",
     "command": "./faults/extension.sh --fault duplicate-approval"
   },
-  "recordedAt": "2026-11-05T19:48:43.643101+00:00"
+  "recordedAt": "2026-11-05T20:09:30.198585+00:00"
 }

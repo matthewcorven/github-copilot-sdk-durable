@@ -1,11 +1,12 @@
 {
   "variant": "extension",
   "fault": "store-outage",
-  "outcome": "failed safely",
-  "phase": "the scheduler stopped under a live run",
-  "detail": "The run was parked at ManagerApproval (Running, raised (none)) when the Durable Task Scheduler was stopped. The process trying to answer it exited 1, so the answer did not reach the run. With the scheduler restarted, the instance is (absent) with history:  and raised (none) — unchanged from before the outage, because the scheduler is the record and a stopped scheduler is not a lost one. What the outage costs this column is availability, not state; state lives in the substrate, which is the operational weight the band's comparison names.",
-  "evidence": "instance: i1155332184; parked at Running; raised (none)\nscheduler stopped? yes\nanswering process: exit 1 — extension-app: Status(StatusCode=\"Unavailable\", Detail=\"Error connecting to subchannel.\", DebugException=\"System.Net.Sockets.SocketException: Connection refused\")\nafter: status (absent); raised (none)\n  history: ",
+  "outcome": "lost with the scheduler",
+  "phase": "the scheduler stopped and restarted under a live run",
+  "detail": "The run was parked at ManagerApproval (Running) when the Durable Task Scheduler was stopped. The process trying to answer it exited 1. With the scheduler restarted, the instance reads '(absent)' with history '(empty)' and raised '(none)': the run did not survive the scheduler. On this substrate the scheduler is not just the transport, it is the state — a stopped scheduler is a lost run, and the emulator holds its state in memory. Narrowed to what was measured: this says what *this emulator* does, not what a production scheduler does.",
+  "evidence": "instance: i419012891; parked at Running; raised (none)\nscheduler stopped? yes\nanswering process: exit 1 — extension-app: Status(StatusCode=\"Unavailable\", Detail=\"Error connecting to subchannel.\", DebugException=\"System.Net.Sockets.SocketException: Connection refused\")\nafter: status (absent); raised (none)\n  history: ",
   "measurements": {
+    "scheduler_image_digest": "sha256:82ceb7df2fdfc2e22b0013c7b87b7a8e443bcd220d4fb37c32ced8ee23438719",
     "drive_exit": 1,
     "status_at_gate": "Running",
     "status_after": "(absent)",
@@ -14,10 +15,10 @@
   },
   "harness": {
     "dotnet": "10.0.402",
-    "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
-    "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
-    "commit": "cfbea21cbbe3f29403b095d77ec80a9112745ea3",
+    "runtime": "Durable Task Scheduler emulator (docker image mcr.microsoft.com/dts/dts-emulator:latest) + Microsoft.DurableTask.Client/Worker.AzureManaged 1.28.0",
+    "model": "none — the vendored sample's executors call no model; no call count exists in this column",
+    "commit": "bb3c4ef673b2f0d99f2638b0d8771f5c25d5d7d6",
     "command": "./faults/extension.sh --fault store-outage"
   },
-  "recordedAt": "2026-11-05T19:50:24.492950+00:00"
+  "recordedAt": "2026-11-05T20:10:46.416320+00:00"
 }

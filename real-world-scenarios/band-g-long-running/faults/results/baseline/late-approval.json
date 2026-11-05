@@ -3,8 +3,8 @@
   "fault": "late-approval",
   "outcome": "applied again",
   "phase": "approved after the run had already finished",
-  "detail": "The run finished on the first resume (checkpoint ab00778f031e479992bc496552b357ef, 2 model call(s)). The later resume — the same approval, in a new process against the same checkpoint directory — approved again: it printed 'Approving plan', issued 2 model call(s) and wrote checkpoint 3c90a9164dfd423b9d902dd58b0c3d70. There is no terminal state to overwrite, because the baseline has no terminal record and no guard: the gate checkpoint stays answerable and a late approval re-runs the workflow from it. What the baseline also does not have is any record that this was late — no decision document and nothing that refused.",
-  "evidence": "gate checkpoint: 474bbbb8c7bc4f46b9e84d0a9f4b3511\non-time resume (exit 0): latest ab00778f031e479992bc496552b357ef, 2 file(s), 2 model call(s), post-approval checkpoint: yes\nlate resume (exit 0): latest 3c90a9164dfd423b9d902dd58b0c3d70, 2 model call(s), 'Approving plan' printed 1 time(s)",
+  "detail": "The run finished on the first resume (checkpoint 7b49fe0e767841fda1014ad0e7d10916, 2 model call(s)). The later resume — the same approval, in a new process against the same checkpoint directory — approved again: it printed 'Approving plan', issued 2 model call(s) and wrote checkpoint 02361b164c1c49aba1021ec391717789. There is no terminal state to overwrite, because the baseline has no terminal record and no guard: the gate checkpoint stays answerable and a late approval re-runs the workflow from it. What the baseline also does not have is any record that this was late — no decision document and nothing that refused.",
+  "evidence": "gate checkpoint: c6a65c3387764d4e8841a3d06bd542a2\non-time resume (exit 0): latest 7b49fe0e767841fda1014ad0e7d10916, 2 file(s), 2 model call(s), post-approval checkpoint: yes\nlate resume (exit 0): latest 02361b164c1c49aba1021ec391717789, 2 model call(s), 'Approving plan' printed 1 time(s)",
   "measurements": {
     "ontime_exit": 0,
     "model_calls_ontime": 2,
@@ -17,8 +17,8 @@
     "dotnet": "10.0.402",
     "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
     "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
-    "commit": "cfbea21cbbe3f29403b095d77ec80a9112745ea3",
+    "commit": "bb3c4ef673b2f0d99f2638b0d8771f5c25d5d7d6",
     "command": "./faults/late-approval.sh --variant baseline"
   },
-  "recordedAt": "2026-11-05T19:45:46.412495+00:00"
+  "recordedAt": "2026-11-05T20:06:32.885827+00:00"
 }

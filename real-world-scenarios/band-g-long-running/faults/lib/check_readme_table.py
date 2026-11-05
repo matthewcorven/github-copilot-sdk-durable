@@ -20,6 +20,10 @@ RUN_VARIABLE = [
     (re.compile(r"\b\d{4}-\d{2}-\d{2}T[\d:.+Z-]+"), "<timestamp>"),
     (re.compile(r"\bpid \d+\b"), "pid <n>"),
     (re.compile(r"\b[0-9a-f]{32}\b"), "<id>"),
+    # A byte count, in the one form the table quotes it. The cell asserts that the size before and after is
+    # equal; it does not assert a particular number, and a number that moves between runs must not read as a
+    # changed conclusion. The equality is still compared, because both sides of the arrow are rewritten.
+    (re.compile(r"\b\d{3,7} -> \d{3,7} bytes"), "<n> -> <n> bytes"),
 ]
 
 

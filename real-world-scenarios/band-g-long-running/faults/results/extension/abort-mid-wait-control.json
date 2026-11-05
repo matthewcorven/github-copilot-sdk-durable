@@ -1,24 +1,28 @@
 {
   "variant": "extension",
   "fault": "abort-mid-wait-control",
-  "outcome": "abort acknowledged, run unchanged",
-  "phase": "parked at ManagerApproval, terminate acknowledged",
-  "detail": "The run was parked at Running. The terminate was acknowledged (1 acknowledgement(s)) and the status sampled every 3s afterwards was: Running Running Running Running Running. It is still Running, and an answer raised afterwards left it Running with no raised event recorded ((none)). So on this substrate the abort does not surface as a framework terminal state and a later event does not revive the run: the run is inert but its reported status is unchanged. Scope, said plainly: this column has no separate child work to cancel — the ports live inside one orchestration — so 'children cancelled' is not observable here and is not claimed.",
-  "evidence": "instance: i509529518; parked at Running\nterminate: status Running\n  history: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted\nanswer after the abort: status Running; raised (none)",
+  "outcome": "no abort, run advanced",
+  "phase": "not terminated (the control)",
+  "detail": "Control: the same steps with no terminate. The answer was delivered ('delivered' printed 1 time(s)), the run is Running with 2 completed step(s) against 1 at the gate, and an ExecutionTerminated absent from its history: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > EventRaised > TaskScheduled > OrchestratorStarted > TaskCompleted. This is what the abort run is measured against: without the terminate the same answer does run the step after the port.",
+  "evidence": "instance: i1308320129; parked at Running\nterminate: not injected; status Running\n  history before the answer: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted\nanswer raised with a worker: 'delivered' printed 1 time(s)\nafter: status Running; raised ManagerApproval; advanced 1\n  history: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > EventRaised > TaskScheduled > OrchestratorStarted > TaskCompleted",
   "measurements": {
+    "scheduler_image_digest": "sha256:82ceb7df2fdfc2e22b0013c7b87b7a8e443bcd220d4fb37c32ced8ee23438719",
     "status_at_gate": "Running",
-    "terminate_acknowledged": 1,
-    "status_samples_after_terminate": "Running Running Running Running Running",
+    "completed_steps_at_gate": 1,
+    "completed_steps_after_answer": 2,
+    "execution_terminated_in_history": 0,
+    "terminate_acknowledged": 0,
+    "status_samples_after_terminate": "",
+    "delivered_by_a_live_worker": 1,
     "status_final": "Running",
-    "raised_after_abort": "(none)",
     "children_cancelled": "not observable - the ports are inside one orchestration"
   },
   "harness": {
     "dotnet": "10.0.402",
-    "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
-    "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
-    "commit": "cfbea21cbbe3f29403b095d77ec80a9112745ea3",
+    "runtime": "Durable Task Scheduler emulator (docker image mcr.microsoft.com/dts/dts-emulator:latest) + Microsoft.DurableTask.Client/Worker.AzureManaged 1.28.0",
+    "model": "none — the vendored sample's executors call no model; no call count exists in this column",
+    "commit": "bb3c4ef673b2f0d99f2638b0d8771f5c25d5d7d6",
     "command": "./faults/extension.sh --fault abort-mid-wait --fault-not-injected"
   },
-  "recordedAt": "2026-11-05T19:50:09.705349+00:00"
+  "recordedAt": "2026-11-05T20:10:34.031436+00:00"
 }
