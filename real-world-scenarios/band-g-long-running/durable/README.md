@@ -189,8 +189,9 @@ nothing.
 ## What was executed, and what was not
 
 **Executed.** All six flows in `evidence.sh`, from a clean checkout, on this machine: `dotnet` 10.0.402
-at `/opt/homebrew/bin/dotnet`, the repository's recorded runtime, no model endpoint. Twenty-six claims
-checked, all held.
+at `/opt/homebrew/bin/dotnet`, the repository's recorded runtime, no model endpoint. Thirty claims
+checked, all held — a number counted from the script (`grep -c '^  claim \|^  rejects '`), not from
+memory.
 
 The suites, with an honest caveat about the counts:
 
