@@ -1,0 +1,10 @@
+checkpoint directory: /var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-f-checkpoints.D5XBwG
+control-transfer log: /var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-f-checkpoints.D5XBwG/control-transfer.jsonl
+model endpoint: https://openrouter.ai/api/v1 (model openai/gpt-4o-mini)
+
+=== Resuming from checkpoint 156a4dcecfce4e0287dc65f51189b4f2 (session 2b7771f5f5394204940adf7f29691a5b) ===
+
+[control] session 2b7771f5f5394204940adf7f29691a5b
+[control] resumed with refund_agent holding control; skipping 4 completed turn(s)
+
+/var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-f-checkpoints.D5XBwG
