@@ -1,0 +1,104 @@
+Foundry Local for Android v0.1.6 — asset verification and AAR inspection
+Recorded 2026-11-05T12:05:57Z on Darwin arm64
+
+=== downloads (github.com/microsoft/FoundryLocalAndroid/releases/download/v0.1.6/) ===
+$ shasum -a 256 <asset>
+7dc74260d2dbd16c2c3c02bcd9de1d852bb89366f71a63ea9813fe764c2665c1  foundry-local-ipc-sdk-0.1.6.aar
+6a8ba85433fca1f48535986f529702fb43ad8d83bcd5df30f30a6c7969474e87  foundry-local-embedded-sdk-0.1.6.aar
+f18ec4ba34d49b0ed91f22e5277c36734d4dba536afbc0aa3c83ec49c56c362d  foundry-local-android-sdk-license-0.1.6.txt
+6687afbd77ff947e0951bc4f9464ac57e7f787c8a6f9cefbcdf5adcca2f08c40  foundry-local-android-third-party-notices-0.1.6.md
+
+Release SHA-256 (release body, https://github.com/microsoft/FoundryLocalAndroid/releases/tag/v0.1.6):
+  7dc74260d2dbd16c2c3c02bcd9de1d852bb89366f71a63ea9813fe764c2665c1  foundry-local-ipc-sdk-0.1.6.aar
+  6a8ba85433fca1f48535986f529702fb43ad8d83bcd5df30f30a6c7969474e87  foundry-local-embedded-sdk-0.1.6.aar
+
+All four match: the two AARs against the published SHA-256, the license and notices
+against the release assets' own digests reported by the GitHub API.
+
+=== IPC AAR vs embedded AAR ===
+$ unzip -l foundry-local-ipc-sdk-0.1.6.aar | tail -2
+---------                     -------
+   487039                     33 files
+$ unzip -l foundry-local-embedded-sdk-0.1.6.aar | tail -2
+---------                     -------
+122399630                     34 files
+
+$ unzip -l foundry-local-embedded-sdk-0.1.6.aar | grep -E 'jni/.*\.so'
+ 20389528  08-31-2026 18:40   jni/arm64-v8a/Microsoft.AI.Foundry.Local.Core.so
+  1374336  08-31-2026 18:40   jni/arm64-v8a/libc++_shared.so
+  2643152  08-31-2026 18:40   jni/arm64-v8a/libcrypto.so
+    43688  08-31-2026 18:40   jni/arm64-v8a/libfoundry_local_jni.so
+    63064  08-31-2026 18:40   jni/arm64-v8a/libonnxruntime-genai-jni.so
+  5629600  08-31-2026 18:40   jni/arm64-v8a/libonnxruntime-genai.so
+ 27408600  08-31-2026 18:40   jni/arm64-v8a/libonnxruntime.so
+   111648  08-31-2026 18:40   jni/arm64-v8a/libonnxruntime4j_jni.so
+   583424  08-31-2026 18:40   jni/arm64-v8a/libssl.so
+ 19736856  08-31-2026 18:40   jni/x86_64/Microsoft.AI.Foundry.Local.Core.so
+  1337488  08-31-2026 18:40   jni/x86_64/libc++_shared.so
+  2853336  08-31-2026 18:40   jni/x86_64/libcrypto.so
+    42968  08-31-2026 18:40   jni/x86_64/libfoundry_local_jni.so
+    61736  08-31-2026 18:40   jni/x86_64/libonnxruntime-genai-jni.so
+  5946976  08-31-2026 18:40   jni/x86_64/libonnxruntime-genai.so
+ 33204920  08-31-2026 18:40   jni/x86_64/libonnxruntime.so
+   100016  08-31-2026 18:40   jni/x86_64/libonnxruntime4j_jni.so
+   588320  08-31-2026 18:40   jni/x86_64/libssl.so
+
+The IPC AAR contains no native libraries and no classes that would run inference:
+it carries AIDL declarations and a thin client. The embedded AAR carries the ONNX
+runtime for arm64-v8a and x86_64 only.
+
+=== IPC AAR manifest (extracted, AndroidManifest.xml, strings) ===
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ~ Copyright (c) Microsoft Corporation.
+  ~ Licensed under the MIT License.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.microsoft.foundrylocal" >
+
+    <uses-sdk android:minSdkVersion="33" />
+
+    <queries>
+        <package android:name="com.microsoft.foundrylocal.app" />
+    </queries>
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application>
+
+        <!-- initOrder=100 ensures factory registers before default-order providers -->
+        <provider
+            android:name="com.microsoft.foundrylocal.adapter.IpcSdkInitProvider"
+            android:authorities="${applicationId}.foundrylocal-ipc-init"
+            android:exported="false"
+            android:initOrder="100" />
+
+        <service
+            android:name="com.microsoft.foundrylocal.services.DownloadForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="false" />
+    </application>
+
+</manifest>
+=== IPC AAR proguard.txt ===
+-keep class com.microsoft.foundrylocal.** { *; }
+-keepclassmembers class com.microsoft.foundrylocal.** { *; }
+-keepclasseswithmembers class * { native <methods>; }
+
+=== Public Kotlin API surface, decompiled from classes.jar constant pools ===
+FoundryLocalManagerFactory: create(Context, Configuration, Function0<Unit> onDisconnected, Continuation)
+FoundryLocalManager:      getCatalog, getVersionInfo, checkCompatibility, getAPIVersion, close,
+                          isConnected, reconnect, isServiceRunning
+Catalog:                  listModels, getModel, getModelInfo, getCachedModels, getLoadedModels,
+                          getCacheLocation, setCacheLocation
+Model:                    getInfo, download(progress, contentIntent, timeoutMinutes), load, unload,
+                          isDownloading, isCached, isLoaded, removeFromCache, createChatClient, createAudioClient
+ChatClient:               completeChat(request): suspend -> ChatCompletion
+                          completeChatStreaming(request): Flow<ChatCompletionChunk>
+
+onDisconnected is a Kotlin Function0<Unit> — a plain no-argument callback with a Unit
+return. It carries no payload: the processor cannot tell a service crash from a reboot
+or a version mismatch by its argument alone.
