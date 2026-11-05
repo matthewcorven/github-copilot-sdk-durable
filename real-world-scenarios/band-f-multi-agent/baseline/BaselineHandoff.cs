@@ -2,12 +2,13 @@
 // to C# with the .NET port of the same Handoff orchestration (Microsoft.Agents.AI.Workflows).
 //
 // The port keeps the sample's shape: one triage/coordinator agent, three specialists that own a
-// single tool each, a mesh of handoff edges with the triage agent as the start agent, a scripted
-// user-response cycle, and the framework's own file-backed checkpoint store.
+// single tool each, a mesh of handoff edges with the triage agent as the start agent, the sample's
+// "welcome" termination condition, and a scripted user-response cycle.
 //
-// What it adds is observation, not orchestration: every change of the agent that holds control is
-// written to stdout and to a JSONL control-transfer log, so a later fault run can assert which
-// agent was in control and where to resume from.
+// The sample has no checkpoint manager (grep -ci checkpoint on either vendored .py file returns 0).
+// Checkpointing here is the port's addition, as is the observation: every change of the agent that
+// holds control is written to stdout and to a JSONL control-transfer log, so a later fault run can
+// assert which agent was in control and where to resume from.
 //
 // Usage:
 //   dotnet run BaselineHandoff.cs -- run
@@ -110,22 +111,35 @@ AIAgent returns = Agent(
 // The sample passes participants to HandoffBuilder and designates the triage agent as the start
 // agent, without declaring edges. That is the mesh topology: every participant may hand off to
 // every other participant. The .NET builder produces the same topology from AddParticipants alone.
+//
+// The termination condition is the sample's predicate, line for line: the workflow terminates when
+// the last message of the conversation contains "welcome" (upstream handoff_simple.py,
+// `termination_condition=`). In this package the condition governs *autonomous continuation*, and
+// this workflow is not autonomous, so the port also honours the sample's observable effect - its
+// request/response loop stops instead of asking for another user turn - in its own scripted loop.
 Workflow BuildWorkflow() =>
     new HandoffWorkflowBuilder(triage)
         .AddParticipants([refund, order, returns])
+        .WithTerminationCondition(conversation =>
+            conversation.Count > 0 &&
+            conversation[^1].Text.Contains("welcome", StringComparison.OrdinalIgnoreCase))
         .Build();
 
 // The same JSON options in both processes, with the reflection resolver because the workflow
 // snapshots types that have no source-generated type info. There is no AOT target here.
 JsonSerializerOptions JsonOptions = new() { TypeInfoResolver = new DefaultJsonTypeInfoResolver() };
 
-// The sample's scripted responses, verbatim, plus one final turn so the run also shows control
-// returning to the coordinator after the specialist has answered.
+// The sample's scripted responses, verbatim and in the sample's order, with one extra turn inserted
+// before the sample's closing "thanks". The insertion is the port's only change to the script: the
+// sample's three responses never send the user to the order-status specialist, so the extra turn is
+// what shows the third specialist and a second route from the coordinator. It comes before "thanks"
+// because the sample's termination condition ends the conversation on that closing message.
 string[] ScriptedResponses =
 [
     "My order 1234 arrived damaged and the packaging was destroyed. I'd like to return it.",
+    "Please also process a refund for order 1234.",
+    "One more thing: what is the status of order 1234?",
     "Thanks for resolving this.",
-    "One more thing: please also process a refund for order 1234.",
 ];
 
 string[] agentIds = [triage.Id, refund.Id, order.Id, returns.Id];
@@ -203,6 +217,7 @@ await using (run)
 
     int turn = alreadySent;
     string? turnCheckpoint = null;
+    string? lastAgentText = null;
     int status = 0;
 
     while (turn < userMessages.Count)
@@ -222,6 +237,19 @@ await using (run)
             break;
         }
 
+        // The sample's termination condition, as the sample observes it: the conversation closed, so
+        // the loop stops rather than sending another user turn. RunStatus.Ended is the framework's own
+        // signal for the autonomous path and is checked as well, so either shape ends the loop.
+        bool closed = lastAgentText?.Contains("welcome", StringComparison.OrdinalIgnoreCase) == true;
+        if (closed || await run.GetStatusAsync() is RunStatus.Ended)
+        {
+            Console.WriteLine(
+                $"[control] termination condition fired on turn {turn} " +
+                (closed ? "(the agent's closing message contains \"welcome\")" : "(the workflow ended)"));
+            log.Terminated(turn);
+            break;
+        }
+
         turn++;
     }
 
@@ -230,6 +258,7 @@ await using (run)
     async Task SendTurnAsync(string userMessage)
     {
         turnCheckpoint = null;
+        lastAgentText = null;
         List<string> holdersThisTurn = [];
         string? handoffFrom = null;
 
@@ -269,7 +298,7 @@ await using (run)
                     break;
 
                 case WorkflowOutputEvent output when output.Data is List<ChatMessage> conversation:
-                    PrintConversation(conversation);
+                    lastAgentText = PrintConversation(conversation) ?? lastAgentText;
                     break;
 
                 case WorkflowErrorEvent error:
@@ -296,10 +325,14 @@ await using (run)
         }
     }
 
-    void PrintConversation(List<ChatMessage> conversation)
+    // Prints the sample's conversation snapshot and returns the last agent utterance, which is
+    // what the sample's termination condition inspects.
+    string? PrintConversation(List<ChatMessage> conversation)
     {
         Console.WriteLine();
         Console.WriteLine("=== Final Conversation Snapshot ===");
+
+        string? lastAgent = null;
         foreach (ChatMessage message in conversation)
         {
             string text = message.Text;
@@ -310,9 +343,14 @@ await using (run)
             }
 
             Console.WriteLine($"- {message.AuthorName ?? message.Role.ToString().ToLowerInvariant()}: {text}");
+            if (message.Role != ChatRole.User)
+            {
+                lastAgent = text;
+            }
         }
 
         Console.WriteLine("===================================");
+        return lastAgent;
     }
 }
 
@@ -361,6 +399,9 @@ internal sealed class ControlLog
             File.WriteAllText(_path, string.Empty);
         }
     }
+
+    public void Terminated(int afterTurn) =>
+        Write(new ControlRecord("terminated", afterTurn, null, null, null, null, null));
 
     public void Resumed(string sessionId, string holder, int completedTurns) =>
         Write(new ControlRecord("resumed", completedTurns, sessionId, holder, null, null, null));

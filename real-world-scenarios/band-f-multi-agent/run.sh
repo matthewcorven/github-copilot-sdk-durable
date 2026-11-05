@@ -3,9 +3,12 @@
 # that holds control. The workflow checkpoints itself with the framework's file-backed store, so the
 # same directory can also be resumed by `./run.sh --resume <dir>` (see below).
 #
+# The checkpoint directory is the handoff artifact for a later resume, so a successful run keeps it
+# and prints it as the last line of stdout. Pass --clean (or CLEAN=1) to remove a directory this
+# script created once the run has succeeded; a directory it did not create is never removed.
+#
 # Scratch directories: this script never empties or deletes a directory it did not create. Every
-# directory it creates is marked with an empty `.band-f-scratch` file, and it removes such a
-# directory only when the run succeeded and KEEP is not 1.
+# directory it creates is marked with an empty `.band-f-scratch` file.
 #   - CHECKPOINT_DIR unset: a fresh directory is created under the OS temp dir and marked.
 #   - CHECKPOINT_DIR set, path does not exist: it is created and marked.
 #   - CHECKPOINT_DIR set, path exists but is empty: it is used as it is and left unmarked, so this
@@ -24,12 +27,13 @@
 #   OPENAI_MODEL    default gpt-4o
 #   CHECKPOINT_DIR  default: a fresh scratch directory under the OS temp dir
 #   CONTROL_LOG     default: $CHECKPOINT_DIR/control-transfer.jsonl
-#   KEEP=1          keep the checkpoint directory and its control-transfer log even on failure
+#   CLEAN=1         remove a scratch directory this script created after a successful run
 #
-# The last line of stdout is the checkpoint directory, so a caller can chain a resume:
+# The last line of stdout is the checkpoint directory and it survives the process, so a caller can
+# chain a resume with no other channel:
 #   CKPT="$(./run.sh | tail -1)" && ./run.sh --resume "$CKPT"
 #
-# Usage: ./run.sh [-h|--help] [--resume <checkpoint-dir>]
+# Usage: ./run.sh [-h|--help] [--clean] [--resume <checkpoint-dir>]
 
 set -uo pipefail
 
@@ -41,19 +45,32 @@ usage() {
 }
 
 MODE="run"
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  usage
-  exit 0
-elif [[ "${1:-}" == "--resume" ]]; then
-  if [[ -z "${2:-}" ]]; then
-    echo "run.sh: --resume needs a checkpoint directory" >&2
-    exit 2
-  fi
-  MODE="resume"
-  CHECKPOINT_DIR="$2"
-elif [[ -n "${1:-}" ]]; then
-  echo "run.sh: unknown argument '$1'. Use --help." >&2
-  exit 2
+ARGS=("$@")
+if [[ ${#ARGS[@]} -gt 0 ]]; then
+  for ((i = 0; i < ${#ARGS[@]}; i++)); do
+    case "${ARGS[$i]}" in
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      --clean)
+        CLEAN=1
+        ;;
+      --resume)
+        if [[ -z "${ARGS[$((i + 1))]:-}" ]]; then
+          echo "run.sh: --resume needs a checkpoint directory" >&2
+          exit 2
+        fi
+        MODE="resume"
+        CHECKPOINT_DIR="${ARGS[$((i + 1))]}"
+        i=$((i + 1))
+        ;;
+      *)
+        echo "run.sh: unknown argument '${ARGS[$i]}'. Use --help." >&2
+        exit 2
+        ;;
+    esac
+  done
 fi
 
 if [[ -z "${OPENAI_API_KEY:-}" ]]; then
@@ -108,10 +125,11 @@ fi
 
 export CHECKPOINT_DIR
 
-# A failed run keeps the checkpoint directory (and its control-transfer log) so the failure can be
-# read back; a successful one removes it unless it was a directory this script did not create.
+# The directory is kept on both outcomes so the run's control-transfer log can be read back and so
+# the printed path is resumable. Only an explicit --clean/CLEAN=1 removes a scratch directory this
+# script created; a directory it did not create is never removed.
 cleanup() {
-  if [[ $1 -eq 0 && "$SCRATCH" == "1" && "${KEEP:-0}" != "1" ]]; then
+  if [[ $1 -eq 0 && "$SCRATCH" == "1" && "${CLEAN:-0}" == "1" ]]; then
     rm -rf "$CHECKPOINT_DIR"
   fi
 }

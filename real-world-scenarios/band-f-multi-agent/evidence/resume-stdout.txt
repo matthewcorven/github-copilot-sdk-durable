@@ -1,10 +1,10 @@
-checkpoint directory: /var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-f-checkpoints.D5XBwG
-control-transfer log: /var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-f-checkpoints.D5XBwG/control-transfer.jsonl
+checkpoint directory: /var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-f-checkpoints.4m5AgL
+control-transfer log: /var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-f-checkpoints.4m5AgL/control-transfer.jsonl
 model endpoint: https://openrouter.ai/api/v1 (model openai/gpt-4o-mini)
 
-=== Resuming from checkpoint 156a4dcecfce4e0287dc65f51189b4f2 (session 2b7771f5f5394204940adf7f29691a5b) ===
+=== Resuming from checkpoint b21f3875b5f04a33963600ea9375f9c5 (session bf5854168f7642e19a964b948b12893c) ===
 
-[control] session 2b7771f5f5394204940adf7f29691a5b
-[control] resumed with refund_agent holding control; skipping 4 completed turn(s)
+[control] session bf5854168f7642e19a964b948b12893c
+[control] resumed with triage_agent holding control; skipping 5 completed turn(s)
 
-/var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-f-checkpoints.D5XBwG
+/var/folders/g2/v7hw2fhs2mjd_5dxggk52cn00000gn/T/band-f-checkpoints.4m5AgL
