@@ -15,8 +15,8 @@
     "dotnet": "10.0.402",
     "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
     "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
-    "commit": "1248b281f843f32002b29a949b3f5d2b92f0b555",
+    "commit": "93c8ffa1f811c73a50267d2fd3e91d0f832d19a2",
     "command": "./faults/kill-during-wait.sh --variant durable --fault-not-injected"
   },
-  "recordedAt": "2026-11-05T18:34:18.014205+00:00"
+  "recordedAt": "2026-11-05T18:37:43.306711+00:00"
 }

@@ -3,15 +3,15 @@
   "fault": "late-approval-control",
   "outcome": "approved in time",
   "phase": "approved inside the run (the control)",
-  "detail": "Control: the approval delivered on time. The resume exited 0 and the run finished — checkpoint c2da3c5252254525883e2ee26132a426, 2 checkpoint file(s), 2 model call(s), a post-approval checkpoint present: yes. This is what the late approval is measured against: the same approval, on time, is what finishes the run.",
-  "evidence": "gate checkpoint: 4d11b9a870e045f08ba9c8538f4ac6cc\non-time resume (exit 0): latest c2da3c5252254525883e2ee26132a426, 2 file(s), 2 model call(s), post-approval checkpoint: yes\nlate resume (exit n/a): latest (n/a), (n/a) model call(s), 'Approving plan' printed n/a time(s)",
+  "detail": "Control: the approval delivered on time. The resume exited 0 and the run finished — checkpoint 3c54dd4f42564471852fae4ed137872d, 2 checkpoint file(s), 2 model call(s), a post-approval checkpoint present: yes. This is what the late approval is measured against: the same approval, on time, is what finishes the run.",
+  "evidence": "gate checkpoint: bc857248e72142659a5bf8038060896c\non-time resume (exit 0): latest 3c54dd4f42564471852fae4ed137872d, 2 file(s), 2 model call(s), post-approval checkpoint: yes\nlate resume (exit n/a): latest (n/a), (n/a) model call(s), 'Approving plan' printed n/a time(s)",
   "measurements": {},
   "harness": {
     "dotnet": "10.0.402",
     "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
     "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
-    "commit": "1248b281f843f32002b29a949b3f5d2b92f0b555",
+    "commit": "93c8ffa1f811c73a50267d2fd3e91d0f832d19a2",
     "command": "./faults/late-approval.sh --variant baseline --fault-not-injected"
   },
-  "recordedAt": "2026-11-05T18:32:33.233277+00:00"
+  "recordedAt": "2026-11-05T18:35:57.999272+00:00"
 }

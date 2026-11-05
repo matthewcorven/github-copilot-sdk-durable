@@ -172,6 +172,9 @@ def render(results_dir, status_file, markdown):
     for fault, _ in FAULTS:
         add(("### " if markdown else "") + "`%s`" % fault)
         add("")
+        if markdown:
+            add("| Variant | Outcome | Phase | Calls | Detail |")
+            add("| --- | --- | --- | --- | --- |")
         for variant in VARIANTS:
             doc = load(results_dir, variant, fault)
             if doc is None:
@@ -179,8 +182,6 @@ def render(results_dir, status_file, markdown):
                 problems.append("%s / %s: no result file" % (variant, fault))
                 continue
             if markdown:
-                add("| Variant | Outcome | Phase | Calls | Detail |")
-                add("| --- | --- | --- | --- | --- |")
                 add("| %s | **%s** | %s | %s | %s |" % (
                     variant, doc["outcome"], esc(doc.get("phase"), 70), esc(calls(doc), 60), esc(doc.get("detail"))))
             else:
