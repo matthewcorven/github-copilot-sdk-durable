@@ -18,6 +18,7 @@ band publishes has to treat restart/resume as a tie unless it shows a concrete d
 | `run.sh` | Process 1: run to the gate, record the checkpoint id, exit. |
 | `resume.sh` | Process 2: resume from the recorded checkpoint, approve, complete. |
 | `evidence/baseline-restart-resume.md` | Captured stdout of both processes, with the commands that produced them. |
+| `faults/` | Six faults against this baseline and against the Durable variant, with controls and model-call counts. See **Fault evidence** below, or `faults/README.md`. |
 
 ## Pinned source
 
@@ -72,6 +73,29 @@ vendored as a sibling reference but is not ported; Band F (#171) covers the Hand
 - **Clearing the checkpoint directory on startup.** The sample deletes `*.json` in its checkpoint
   directory so each invocation starts clean. Here the directory is a scratch directory created by
   `run.sh`, which is a stronger version of the same guarantee, and `resume.sh` must not delete it.
+
+## Fault evidence
+
+`faults/` runs six faults against both variants and records one JSON result per fault per variant, plus a
+control for each. Nothing in that directory changes the baseline; it is driven through `run`, `resume`, and
+the OpenAI-compatible endpoint the port already reads.
+
+| Fault | baseline | durable |
+| --- | --- | --- |
+| `kill-during-wait` | **lost** — the kill lands inside a model call in the process that has not reached the gate, and no gate checkpoint exists afterwards, so the baseline's own `resume` has nothing to continue | **wait survived** — the process blocked in the wait is killed; the wait is a committed child task, and a fresh process finds it still on record and finishes the run |
+| `restart-after-checkpoint` | **resumed, completed work re-done** — the second process issued 2 model calls again for the turns the stopped process had already made | **resumed, no calls repeated** — the resume added 0 calls and served the re-entered step from the memo |
+| `duplicate-approval` | **doubled** — a second `resume` against the same gate checkpoint approves again and runs the post-approval work a second time | **second delivery refused** — the second approve finds the decision on file and is told so |
+| `late-approval` | **applied again** — the approval arrives after the run finished; the gate checkpoint is still answerable, so it re-runs | **terminal state held** — the gate's durable deadline passed in a different process, and a later approval is refused as late |
+| `abort-mid-wait` | **not exercised** — the port has no abort verb and no abort tree (re-checked on every run) | **cancelled** — the parent's abort handler saw the child already terminal, and a later approval is refused |
+| `store-outage` | **failed safely, gate still answerable** — the immutable checkpoint directory refuses the commit, the resume fails cleanly, and the gate is still there to be answered again | **failed safely** — the store refuses the append, the run does not advance, and the decision and the run still agree |
+
+Two of those six are not a loss for the baseline and should not be read as one: it fails cleanly on a store
+outage and it has nothing to abort. One is a tie in outcome and not in mechanism: both resume, and the
+count is what differs. The counts are in `faults/results/` and rendered in `faults/results/summary.md`.
+
+```bash
+./faults/run-all.sh          # both variants, every fault and control
+```
 
 ## Prerequisites
 
