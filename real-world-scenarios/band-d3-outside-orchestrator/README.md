@@ -17,7 +17,7 @@ letter    →  call the decision-letter agent (memoised, one service invocation)
 | # | Requirement | Evidence |
 | --- | --- | --- |
 | 1 | Two agent calls per run, one a human gate | `evidence/run/30-resume-at-gate.log` — coverage and letter are real calls; the gate is a file a person writes |
-| 2 | `kill -9` between calls, restart, no repeated call | `evidence/run/20-kill-and-resume.log` — PID gone, then **+0** from the platform's own counter |
+| 2 | `kill -9` between calls, restart, no repeated call | `evidence/run/20-kill.log` — PID gone, then **+0** from the platform's own counter |
 | 3 | A changed definition is a new step | `evidence/memo-key/00-transcript.txt` — five scenarios, five passed assertions |
 | 4 | Reuse D1's deployment | `deploy-agents.sh` reads D1's `.deployment.json`; it provisions nothing |
 | 5 | Nothing left behind | `evidence/teardown.md` |
@@ -39,8 +39,8 @@ the *old* agent produced and reports a run the current agent never performed. Th
 
 ```
 D  CONTROL — a store written by v1, v2 live, NAIVE key   → 0 calls  (WRONG)
-   D's store reports the coverage step as produced by d3-coverage-assessor@17:48d2a3c…
-   while the platform was running d3-coverage-assessor@18:548932c6…
+   D's store reports the coverage step as produced by d3-coverage-assessor@3:48d2a3c…
+   while the platform was running d3-coverage-assessor@4:548932c6…
 E  a copy of D's store, identity key                     → 1 call   (the key, corrected)
 ```
 
@@ -52,8 +52,9 @@ a dependency that can move under a running workflow, so it is resolved when the 
 The version is also **pinned in the request** (`&agent_version=N`). That closes the gap
 between "the definition I hashed" and "the definition that answered": a version registered
 between the read and the call would otherwise run while the memo record named the older
-identity. `evidence/run/80-last-responses.json` shows the platform agreeing — coverage
-responses carry `agent_reference.version = "18"`, the letter's `"2"`.
+identity. The platform's own response objects carry the agreement: each run's
+`agent_reference.version` equals the version in the memo key it settled under
+(`evidence/run/60-store-report.json` against `evidence/memo-key/01-summary.txt`).
 
 ## Requirement 2: the kill, and what the counter is
 
@@ -65,32 +66,46 @@ because the default page is 20 and a count that stops growing at 20 reads as "no
 calls" forever. That trap is recorded here because it was hit while building this: the
 first counts were silently capped.
 
+Every line below is the terminal's own output, in `evidence/run/20-kill.log` and
+`30-resume-at-gate.log`. The `$` lines are the commands; nothing between them was typed.
+
 ```
-$ ps -p 22896 -o pid=,stat=,command=
-22896 S    …/runfile/orchestrator-…/bin/debug/orchestrator
-$ kill -9 22896                                    # exit 0
-$ ps -p 22896 >/dev/null && echo alive || echo gone  → gone
-$ pgrep -f 'runfile/orchestrator' | wc -l             → 0
+$ ps -p 21917 -o pid=,stat=,command=
+21917 S    …/runfile/orchestrator-…/bin/debug/orchestrator
+
+$ kill -9 21917
+exit=0
+
+$ sleep 1; ps -p 21917 -o pid=,stat=,command=
+exit=1
+
+$ pgrep -f "runfile/orchestrator" | wc -l
+       0
 ```
 
-The restart resumed the same task at `gate`, read the coverage memo, and made **no call**:
+`ps -p` **exits 1** and prints nothing; `pgrep` exits 1 and matches nothing. Those exit
+codes are the proof, not the absence of text. On macOS a pid can briefly still be listed
+in state `Z`/`?E` after its parent has not reaped it — a dead process, not a live one —
+which is why the check is `pgrep`'s exit status rather than a `ps` line.
+
+The restart resumed the same task **at the gate**, read the coverage memo, and made no
+call (`evidence/run/30-resume-at-gate.log` — a different file from the post-completion
+rerun at `70-rerun-finished.log`, which reports `phase: letter`):
 
 ```
 task:       resuming durable task t1 (restarts before this process: 0)
 phase:      gate
 memos:      1 on record
-  step/coverage/1188409be0bb45d0/d3-coverage-assessor@18:d8f2c9f08a26c347
+  step/coverage/1188409be0bb45d0/d3-coverage-assessor@1:48d2a3c62ecbb105
 
-$ ./count-calls.sh --since evidence/run/21-counts-after-kill.json
-  d3-coverage-assessor           45 →   45  (+0)
-  d3-decision-letter              1 →    1  (+0)
+$ ./count-calls.sh --since evidence/run/21-counts-at-kill.json
+  d3-coverage-assessor            1 →    1  (+0)
+  d3-decision-letter              0 →    0  (+0)
+  TOTAL                           1 →    1  (+0)
 ```
 
-Whole run, across two processes and one `kill -9`: **+2** — one per agent, no more.
-The `ps` line above is honest about macOS: immediately after the kill, `ps` can still list
-the dead PID with state `Z`/`?E` — a zombie, not a live process. `pgrep` returns nothing
-and `ps -p` exits non-zero, which is the check that matters. A "restart" over a process
-that was never killed is the failure mode requirement 2 names; this is what rules it out.
+Whole run, across two processes and one `kill -9`: **+2** — one per agent, no more
+(`evidence/run/51-delta-whole-run.txt`).
 
 Re-running the *finished* run is the second control: `evidence/run/71-rerun-delta.txt`
 shows `+0` for both agents.
@@ -123,8 +138,19 @@ deployment. `provision.sh`, `deploy.sh` and `teardown.sh` are D1's, run unchange
 for the teardown fix below.
 
 **D3's only cloud objects are two agent registrations inside D1's project, and they go
-with D1's resource group.** `evidence/teardown.md` records the teardown and the
-`az resource list` verification.
+with D1's resource group.** `evidence/teardown.md` records two teardowns (`bandd-d3` and
+`bandd-d3b`), with three verification layers and independent checks outside the script.
+
+Teardown now verifies three different mistakes, because they are different:
+
+| Check | The mistake it catches |
+| --- | --- |
+| each group is absent | the delete did not finish |
+| no soft-deleted account remains | the delete worked but the **name** is still reserved, so `provision.sh` cannot run |
+| no resource anywhere in the subscription carries this deployment's uniqueString | something was created **outside** the group and a group-scoped check would call it clean |
+
+The third exists because the first two are both scoped to the group this run deleted —
+the shape that reads "clean" for a leftover in a different group.
 
 ## What this found in D1's scripts, and fixed
 
@@ -143,12 +169,22 @@ blocked requirement 4 outright:
    ```
 
    D1's teardown verified the *group* was gone and called that clean; the account record
-   outlived it. `teardown.sh` now purges the deleted account, waits for the purge, and
-   reports "no soft-deleted cognitive account, name is free for re-provisioning" — so
-   "nothing left behind" covers the name, not just the resources. `PURGE=0` skips it for
-   an operator restoring instead.
+   outlived it. `teardown.sh` now purges the deleted account and reports "no soft-deleted
+   cognitive account, name is free for re-provisioning" — so "nothing left behind" covers
+   the name, not just the resources. `PURGE=0` skips it for an operator restoring instead.
+   The purge is **polled** (60 × 10 s) across every group the run touched: a purge is
+   asynchronous, and D1's evidence shows the record listed four more times over ~40 s, so
+   a single re-read would report `STATUS=2` on a teardown that actually succeeded.
 
-2. **`deploy.sh` re-registering with an unchanged image is not the only way to get a new
+2. **The verification had become group-scoped only.** Every check in the rewritten
+   `teardown.sh` was scoped to the group being deleted, which passes for a resource
+   created in a *different* group — and the proof D1 committed had in fact run a
+   name-scoped `az resource list` over the whole subscription, so the script was weaker
+   than the evidence claimed for it. That check is now in the script, using the
+   deployment's own `uniqueString` (derived from the recorded account name, not guessed)
+   and `--subscription "$SUB"`. This is the fix the judge was right to demand.
+
+3. **`deploy.sh` re-registering with an unchanged image is not the only way to get a new
    version.** Not a defect in D1 — noted because it matters here: every `deploy-agents.sh`
    run creates a new version, which is the documented behaviour and is what the memo-key
    demonstration uses.
@@ -159,9 +195,9 @@ project's data plane returned `Project not found` for as long as it was probed (
 minutes, `GET /agents`, `POST /agents/{name}/versions`, and a fresh project name on the
 same account), while a deployment under a **new** prefix worked immediately. So reuse
 across teardown cycles currently means *re-running provision with a fresh `NAME_PREFIX`*,
-and D3's run used `NAME_PREFIX=bandd-d3`. That is a platform behaviour D1 could not have
-seen — it never re-provisioned — and it is worth knowing before anyone tries to make
-these scripts re-creatable under one name.
+and D3's run used `NAME_PREFIX=bandd-d3`, then `bandd-d3b` when the re-run needed a clean
+one. That is platform behaviour D1 could not have seen — it never re-provisioned — and it
+is worth knowing before anyone tries to make these scripts re-creatable under one name.
 
 ## A live trap in the layer, avoided on purpose
 

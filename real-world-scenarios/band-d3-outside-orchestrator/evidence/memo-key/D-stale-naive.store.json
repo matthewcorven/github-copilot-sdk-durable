@@ -9,8 +9,8 @@
  "memos": {
   "step/coverage/1188409be0bb45d0": {
    "step": "coverage",
-   "agentIdentity": "d3-coverage-assessor@17:48d2a3c62ecbb105",
-   "outputChars": 1571
+   "agentIdentity": "d3-coverage-assessor@3:48d2a3c62ecbb105",
+   "outputChars": 1565
   }
  },
  "result": null

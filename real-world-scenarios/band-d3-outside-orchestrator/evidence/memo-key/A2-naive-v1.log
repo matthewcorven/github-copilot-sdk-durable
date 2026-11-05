@@ -6,7 +6,7 @@ memo key:   NAIVE (name+input only — the control)
 [coverage] resolving the agent the platform is running now
 task:       new durable task t1 (request memo-key-A2-naive-v1)
 ------------------------------------------------------------------------------
-[coverage] identity d3-coverage-assessor@17:48d2a3c62ecbb105
+[coverage] identity d3-coverage-assessor@3:48d2a3c62ecbb105
 [coverage] memo miss step/coverage/1188409be0bb45d0 — calling the agent
 [coverage] settled; memo step/coverage/1188409be0bb45d0 written
 [coverage] STOP_AFTER_COVERAGE=stuck: the phase is not advanced.

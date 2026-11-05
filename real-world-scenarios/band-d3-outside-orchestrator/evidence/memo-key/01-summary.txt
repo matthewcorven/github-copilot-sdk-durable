@@ -1,7 +1,21 @@
-Scenario       key mode  calls  key used                                              produced by                              memo result
-A-miss-v1      identity  +1     step/coverage/1188409be0bb45d0/d3-coverage-assessor@17:48d2a3c62ecbb105 d3-coverage-assessor@17:48d2a3c62ecbb105 miss
-A2-naive-v1    naive     +1     step/coverage/1188409be0bb45d0                         d3-coverage-assessor@17:48d2a3c62ecbb105 miss
-B-hit-v1       identity  +0     step/coverage/1188409be0bb45d0/d3-coverage-assessor@17:48d2a3c62ecbb105 d3-coverage-assessor@17:48d2a3c62ecbb105 hit
-C-miss-v2      identity  +1     step/coverage/1188409be0bb45d0/d3-coverage-assessor@18:d8f2c9f08a26c347 d3-coverage-assessor@18:d8f2c9f08a26c347 miss
-D-stale-naive  naive     +0     step/coverage/1188409be0bb45d0                         d3-coverage-assessor@17:48d2a3c62ecbb105 hit
-E-fixed        identity  +1     step/coverage/1188409be0bb45d0/d3-coverage-assessor@18:d8f2c9f08a26c347 d3-coverage-assessor@18:d8f2c9f08a26c347 miss
+Scenario       key mode  calls  memo
+A-miss-v1      identity  +1     miss
+A2-naive-v1    naive     +1     miss
+B-hit-v1       identity  +0     hit
+C-miss-v2      identity  +1     miss
+D-stale-naive  naive     +0     hit
+E-fixed        identity  +1     miss
+
+key used and agent, read from each scenario's own log:
+  A-miss-v1      step/coverage/1188409be0bb45d0/d3-coverage-assessor@3:48d2a3c62ecbb105
+                 produced d3-coverage-assessor@3:48d2a3c62ecbb105
+  A2-naive-v1    step/coverage/1188409be0bb45d0
+                 produced d3-coverage-assessor@3:48d2a3c62ecbb105
+  B-hit-v1       step/coverage/1188409be0bb45d0/d3-coverage-assessor@3:48d2a3c62ecbb105
+                 produced d3-coverage-assessor@3:48d2a3c62ecbb105
+  C-miss-v2      step/coverage/1188409be0bb45d0/d3-coverage-assessor@4:d8f2c9f08a26c347
+                 produced d3-coverage-assessor@4:d8f2c9f08a26c347
+  D-stale-naive  step/coverage/1188409be0bb45d0
+                 produced d3-coverage-assessor@3:48d2a3c62ecbb105
+  E-fixed        step/coverage/1188409be0bb45d0/d3-coverage-assessor@4:d8f2c9f08a26c347
+                 produced d3-coverage-assessor@4:d8f2c9f08a26c347

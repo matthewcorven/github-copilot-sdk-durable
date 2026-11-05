@@ -1,1 +1,3 @@
+$ ./gate.sh pend_for_review "Dr. A. Reviewer, utilization management" "Provider specialty is not in the request; obtain it before a determination."
 wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/.scratch/band-d3/gate/decision.json
+exit=0

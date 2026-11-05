@@ -9,13 +9,13 @@
  "memos": {
   "step/coverage/1188409be0bb45d0": {
    "step": "coverage",
-   "agentIdentity": "d3-coverage-assessor@17:48d2a3c62ecbb105",
-   "outputChars": 1571
+   "agentIdentity": "d3-coverage-assessor@3:48d2a3c62ecbb105",
+   "outputChars": 1565
   },
-  "step/coverage/1188409be0bb45d0/d3-coverage-assessor@18:d8f2c9f08a26c347": {
+  "step/coverage/1188409be0bb45d0/d3-coverage-assessor@4:d8f2c9f08a26c347": {
    "step": "coverage",
-   "agentIdentity": "d3-coverage-assessor@18:d8f2c9f08a26c347",
-   "outputChars": 1652
+   "agentIdentity": "d3-coverage-assessor@4:d8f2c9f08a26c347",
+   "outputChars": 1570
   }
  },
  "result": null

@@ -14,9 +14,10 @@ memos:      1 on record
 memos:      1 on record — a phase that re-enters looks these up before it calls anything
 ------------------------------------------------------------------------------
 [coverage] resolving the agent the platform is running now
-[coverage] identity d3-coverage-assessor@18:d8f2c9f08a26c347
-[coverage] memo miss step/coverage/1188409be0bb45d0/d3-coverage-assessor@18:d8f2c9f08a26c347 — calling the agent
-[coverage] settled; memo step/coverage/1188409be0bb45d0/d3-coverage-assessor@18:d8f2c9f08a26c347 written
+[foundry] transport failure on GET agents/d3-coverage-assessor/versions?api-version=v1 (Connection refused (aif-gkr52qggxgbu6.services.ai.azure.com:443)); retrying (attempt 2)
+[coverage] identity d3-coverage-assessor@4:d8f2c9f08a26c347
+[coverage] memo miss step/coverage/1188409be0bb45d0/d3-coverage-assessor@4:d8f2c9f08a26c347 — calling the agent
+[coverage] settled; memo step/coverage/1188409be0bb45d0/d3-coverage-assessor@4:d8f2c9f08a26c347 written
 [coverage] STOP_AFTER_COVERAGE=stuck: the phase is not advanced.
 [coverage] cancelling this process; the next one re-enters coverage.
 ------------------------------------------------------------------------------

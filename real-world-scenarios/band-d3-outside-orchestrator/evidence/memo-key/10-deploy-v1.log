@@ -1,11 +1,11 @@
-project : https://aif-mxv7i27um4pks.services.ai.azure.com/api/projects/priorauth
+project : https://aif-gkr52qggxgbu6.services.ai.azure.com/api/projects/priorauth
 agents  : /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/real-world-scenarios/band-d3-outside-orchestrator/agent
 
 == d3-coverage-assessor (coverage-agent.yaml)
-   version 17 ← active
+   version 3 ← active
 == d3-decision-letter (decision-letter-agent.yaml)
-   version 2 ← active
+   version 1 ← active
 
-d3-coverage-assessor         d3-coverage-assessor@17:f5146e1128a6f9f3
-d3-decision-letter           d3-decision-letter@2:d698a89118b1f866
+d3-coverage-assessor         d3-coverage-assessor@3:f5146e1128a6f9f3
+d3-decision-letter           d3-decision-letter@1:d698a89118b1f866
 wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/real-world-scenarios/band-d3-outside-orchestrator/evidence/agent-identity.json

@@ -1,7 +1,7 @@
 {
  "d3-coverage-assessor": {
-  "version": "18",
-  "identity": "d3-coverage-assessor@18:548932c63934c3fc",
+  "version": "4",
+  "identity": "d3-coverage-assessor@4:548932c63934c3fc",
   "definition_digest": "548932c63934c3fce8cc2d7862e838096e4c6c1ee33144fbb582ea7107a5f1bb",
   "definition": {
    "kind": "prompt",
@@ -10,8 +10,8 @@
   }
  },
  "d3-decision-letter": {
-  "version": "2",
-  "identity": "d3-decision-letter@2:d698a89118b1f866",
+  "version": "1",
+  "identity": "d3-decision-letter@1:d698a89118b1f866",
   "definition_digest": "d698a89118b1f8668df6de91c8d751509851f8a2ab0ba93690d9ea1d8c9c18a3",
   "definition": {
    "kind": "prompt",

@@ -1,3 +1,8 @@
-  d3-coverage-assessor           44 →   45  (+1)
-  d3-decision-letter              1 →    2  (+1)
-  TOTAL                          45 →   47  (+2)
+$ ./count-calls.sh --since evidence/run/00-counts-baseline.json
+  d3-coverage-assessor            0 →    1  (+1)
+  d3-decision-letter              0 →    1  (+1)
+  TOTAL                           0 →    2  (+2)
+exit=0
+
+$ ./count-calls.sh --json > evidence/run/50-counts-final.json
+exit=0

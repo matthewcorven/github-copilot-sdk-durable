@@ -7,10 +7,10 @@
   "phase": "coverage"
  },
  "memos": {
-  "step/coverage/1188409be0bb45d0/d3-coverage-assessor@17:48d2a3c62ecbb105": {
+  "step/coverage/1188409be0bb45d0/d3-coverage-assessor@3:48d2a3c62ecbb105": {
    "step": "coverage",
-   "agentIdentity": "d3-coverage-assessor@17:48d2a3c62ecbb105",
-   "outputChars": 1507
+   "agentIdentity": "d3-coverage-assessor@3:48d2a3c62ecbb105",
+   "outputChars": 1527
   }
  },
  "result": null

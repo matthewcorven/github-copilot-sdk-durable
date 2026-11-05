@@ -1,4 +1,4 @@
 DETERMINATION: PENDED
 BASIS: Provider specialty is not in the request, so specialty-procedure appropriateness cannot be confirmed.
-OUTSTANDING: Obtain the ordering/rendering provider specialty before a determination.
+OUTSTANDING: Obtain the ordering provider specialty before a determination.
 REVIEWER: Dr. A. Reviewer, utilization management
