@@ -163,11 +163,15 @@ This is the band's whole claim, and it is the easiest thing in the harness to ge
   it now (check 4b). This harness does not read that summary for the assertion; it reads the store.
   `kill-mid-delegation` does print the reported holders in its evidence, cross-checked against the wire
   records, so the summary is *checked* rather than *trusted*.
-- **Where the run ended.** A run that completes hands control back to the coordinator, so "the run
-  finished with `triage_agent`" is true of almost every successful recovery and says nothing about who
-  took over after the fault. Each result therefore records three separate things: `holderAtFault`, the
-  `holder` (post-recovery), and `holderAtEnd` — plus `firstActionAfterRecovery`, the first thing the
-  recovered process committed, so the holder can be checked against an action rather than standing alone.
+- **Where the run ended.** `holderAtEnd` is the holder of the newest committed checkpoint once the run
+  has stopped — a real reading, but not the question. On the durable variant the final `settle` commits
+  `TaskCommit.Completed` **without** writing a coordinator checkpoint, so the newest checkpoint still
+  names the specialist that produced the last turn; on the baseline the newest framework checkpoint after
+  a finished run names whichever agent spoke last (the coordinator, for the closing courtesy turn). It is
+  recorded because it is the value a careless harness would report as "who holds control", and it differs
+  from the answer in exactly the way a reader has to be able to see. Where the two collapse to the same
+  agent — the durable kill row, whose specialist produces and settles — the row says so rather than
+  presenting three independent readings as corroboration.
 - **A process's stdout.** Every injection point is reached by polling committed state, except the
   durable variant's own `--kill-after-*` seams, which announce a pid *after* the commit they name has
   returned. A pid is not a holder, so that is the one thing read from a line.
@@ -223,12 +227,12 @@ stop are confirmed: the script waits for the pid to be gone and fails the run if
 | `outcome` | The vocabulary below. |
 | `holder` | **The post-recovery controlling agent** — the band's assertion. |
 | `holderAtFault` | Who held control when the fault was injected. |
-| `holderAtEnd` | Who held control when the run ended (often the coordinator: a run that completes hands control back). |
+| `holderAtEnd` | The holder of the newest committed checkpoint once the run stopped. A real reading and deliberately **not** the answer: on the durable variant the final settle completes the task without writing a coordinator checkpoint, so this is usually the last specialist; on the baseline it is usually the coordinator, because the closing turn is a courtesy reply. Recorded so a reader can see the gap between it and the post-recovery holder. |
 | `phase` | The state's own description of where it stopped or resumed. |
 | `detail` | What was observed, in prose, naming the holder. |
 | `evidence` | The raw readings the sentence comes from. |
 | `observations` | The same readings as numbers, when a fault produces counts. |
-| `harness` | The `dotnet` version, endpoint, model, exact command, **producing commit**, and which environment variable the API key came from. |
+| `harness` | The `dotnet` version, endpoint, model, exact command, **producing commit**, and the key provenance: `apiKeyFrom` (the variable that already held a key when the harness started), `portKeyFrom` and `portKeySubstituted` (baseline only: whether the port was handed a key under a different name than the operator set). |
 
 Outcome vocabulary, used in the results and in the band README:
 
@@ -278,7 +282,7 @@ guard sees a path it created and a fault can never be handed a directory the var
 | Requirement | Version | Notes |
 | --- | --- | --- |
 | .NET SDK | 10.0.402 | Must resolve to `/opt/homebrew/bin/dotnet` (or `DOTNET`). |
-| An OpenAI-compatible endpoint | — | **the baseline only.** `OPENAI_API_KEY` is required by the port; when it is unset and `OPENROUTER_API_KEY` is present the harness uses it and records `apiKeyFrom: OPENROUTER_API_KEY` in every baseline result. Without either, every baseline row is `not exercised` with that reason and the durable rows still run. |
+| An OpenAI-compatible endpoint | — | **the baseline only.** The port reads `OPENAI_API_KEY`. The harness **does not synthesise it**: each baseline child is started with `env OPENAI_API_KEY=<key>` for that one process, and every result records where the key came from — `apiKeyFrom` is the variable that already held one, `portKeyFrom` is the variable the port was handed it under, and `portKeySubstituted` says whether those differ. With neither `OPENAI_API_KEY` nor `OPENROUTER_API_KEY` set, every baseline row is `not exercised` with that reason and the durable rows still run. |
 | `python3`, `lsof` | — | `python3` reads the stores; `lsof` finds the application's own pid. |
 | A signed-in Copilot CLI | 1.0.105+ | **the durable only**, for the SDK runtime the harness starts. The faults use `BAND_F_ROUTING=scripted`, so no model call is made for routing — the durable rows need no endpoint. |
 

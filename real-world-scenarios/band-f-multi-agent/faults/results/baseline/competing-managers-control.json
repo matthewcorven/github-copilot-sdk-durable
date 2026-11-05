@@ -3,7 +3,7 @@
   "fault": "competing-managers-control",
   "outcome": "control: one manager completed",
   "holder": "triage_agent",
-  "holderAtFault": "triage_agent",
+  "holderAtFault": "return_agent",
   "holderAtEnd": "triage_agent",
   "phase": "one coordinator served the run (the control)",
   "detail": "Control: one coordinator. The process serving turn 0 finished the run alone and control ended with triage_agent; the specialist tool results went from {} to {\"Order 1234 is currently being processed and will ship in 2 business days.\": 1, \"Refund processed successfully for order 1234.\": 1, \"Return initiated successfully for order 1234. You will receive return instructions via email.\": 1}. Nothing was competing for the state, so anything the fault row observes that differs from this belongs to the second manager.",
@@ -13,10 +13,12 @@
     "endpoint": "https://openrouter.ai/api/v1",
     "model": "openai/gpt-4o-mini",
     "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/competing-managers.sh --variant baseline --fault-not-injected",
-    "commit": "6b9b3971673b33be2f8a63928246263f6b5d70f0",
-    "apiKeyFrom": "OPENAI_API_KEY"
+    "commit": "69f3f912acbad7d5a8ac4e68e7cf5d162844da89",
+    "apiKeyFrom": "OPENROUTER_API_KEY",
+    "portKeyFrom": "OPENROUTER_API_KEY",
+    "portKeySubstituted": true
   },
-  "recordedAt": "2026-11-05T19:19:49.352782+00:00",
+  "recordedAt": "2026-11-05T20:49:19.191940+00:00",
   "observations": {
     "toolResultsBefore": {},
     "toolResultsAfter": {

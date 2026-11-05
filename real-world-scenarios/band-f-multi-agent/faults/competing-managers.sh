@@ -46,6 +46,8 @@ SNAP_BEFORE="$(snapshot "$VARIANT" "$RUNDIR")"
 COUNTS_BEFORE="$(snap "$SNAP_BEFORE" counts)"
 
 if [ "$NOT_INJECTED" = "1" ]; then
+  # The state at the point the fault would have struck: the first manager was serving turn 0 with a
+  # specialist in control. That is the `holderAtFault` the fault row is compared against.
   wait_wrapper "$RUNDIR" wrapper 420 || true
   AFTER="$(snapshot "$VARIANT" "$RUNDIR")"
   AFTER_HOLDER="$(snap "$AFTER" holder)"
@@ -54,7 +56,7 @@ if [ "$NOT_INJECTED" = "1" ]; then
   record_result "$VARIANT" "$RESULT_NAME" "control: one manager completed" "$AFTER_HOLDER" \
     "one coordinator served the run (the control)" "$DETAIL" \
     "tool results: $COUNTS_BEFORE then $COUNTS_AFTER; holder after: $AFTER_HOLDER" \
-    "{\"toolResultsBefore\":$COUNTS_BEFORE,\"toolResultsAfter\":$COUNTS_AFTER,\"processes\":1}" "$AFTER_HOLDER" "$AFTER_HOLDER"
+    "{\"toolResultsBefore\":$COUNTS_BEFORE,\"toolResultsAfter\":$COUNTS_AFTER,\"processes\":1}" "$BEFORE_HOLDER" "$AFTER_HOLDER"
   echo "control: $VARIANT one manager completed (holder $AFTER_HOLDER)" >&2
   exit 0
 fi
@@ -64,15 +66,7 @@ fi
 # outcome and the expected one.
 SECOND_LOG="$RUNDIR/second-manager.log"
 SECOND_START=$SECONDS
-if [ "$VARIANT" = "durable" ]; then
-  ( cd "$DURABLE_DIR" && KEEP=1 RUN_DIR="$(state durable "$RUNDIR")" BAND_F_ROUTING=scripted \
-      "$DURABLE_DIR/resume.sh" ) > "$SECOND_LOG" 2>&1
-else
-  ( cd "$BAND_DIR" && CHECKPOINT_DIR="$(state baseline "$RUNDIR")" \
-      CONTROL_LOG="$(state baseline "$RUNDIR")/second-manager.jsonl" \
-      "$BAND_DIR/run.sh" --resume "$(state baseline "$RUNDIR")" ) > "$SECOND_LOG" 2>&1
-fi
-SECOND_STATUS=$?
+SECOND_STATUS="$(run_second_process "$VARIANT" "$RUNDIR" "$SECOND_LOG")"
 SECOND_MILLIS=$(( (SECONDS - SECOND_START) * 1000 ))
 
 REFUSAL=""

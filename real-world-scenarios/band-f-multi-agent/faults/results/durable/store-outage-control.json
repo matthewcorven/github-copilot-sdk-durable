@@ -13,10 +13,12 @@
     "endpoint": "https://openrouter.ai/api/v1",
     "model": "harness default (scripted routing)",
     "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/store-outage.sh --variant durable --fault-not-injected",
-    "commit": "6b9b3971673b33be2f8a63928246263f6b5d70f0",
-    "apiKeyFrom": "OPENAI_API_KEY"
+    "commit": "69f3f912acbad7d5a8ac4e68e7cf5d162844da89",
+    "apiKeyFrom": "OPENROUTER_API_KEY",
+    "portKeyFrom": null,
+    "portKeySubstituted": null
   },
-  "recordedAt": "2026-11-05T19:26:06.104260+00:00",
+  "recordedAt": "2026-11-05T20:55:44.350848+00:00",
   "observations": {
     "toolResults": {
       "Order 1234 is currently being processed and will ship in 2 business days.": 1,

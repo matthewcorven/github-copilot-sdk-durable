@@ -39,7 +39,11 @@ if ! await_holder "$VARIANT" "$RUNDIR" "return_agent" 420; then
 fi
 
 if [ "$NOT_INJECTED" = "1" ]; then
-  # The control: the run is left alone. Its own completion is the measurement.
+  # The control: the run is left alone. Its own completion is the measurement. The state is
+  # snapshotted at the point the fault would have struck — the moment a specialist held control —
+  # because that is the state the fault and its control have to share for the pair to mean anything.
+  STATE_AT_POINT="$(snapshot "$VARIANT" "$RUNDIR")"
+  POINT_HOLDER="$(snap "$STATE_AT_POINT" holder)"
   wait_wrapper "$RUNDIR" wrapper 420 || true
   AFTER="$(holder_json "$VARIANT" "$RUNDIR")"
   END_HOLDER="$(printf '%s' "$AFTER" | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("holder") or "")')"
@@ -52,8 +56,8 @@ if [ "$NOT_INJECTED" = "1" ]; then
   fi
   record_result "$VARIANT" "$RESULT_NAME" "control: completed in one process" "$END_HOLDER" \
     "the delegation committed and nothing was killed (the control)" "$DETAIL" \
-    "holder when the kill would have struck: $(holder_now "$VARIANT" "$RUNDIR"); holder at the end: $END_HOLDER" \
-    "{\"processes\":1}" "$END_HOLDER" "$END_HOLDER"
+    "holder when the kill would have struck: $POINT_HOLDER; holder at the end: $END_HOLDER" \
+    "{\"processes\":1,\"holderAtPoint\":\"$POINT_HOLDER\"}" "$POINT_HOLDER" "$END_HOLDER"
   echo "control completed: holder $END_HOLDER" >&2
   exit 0
 fi

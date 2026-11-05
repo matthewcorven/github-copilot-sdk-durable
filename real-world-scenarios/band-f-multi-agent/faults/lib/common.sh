@@ -36,24 +36,48 @@ log() { printf '%s\n' "$*" >&2; }
 
 # ── prerequisites ──────────────────────────────────────────────────────────
 
-# The baseline port needs an OpenAI-compatible endpoint and refuses to run without one. When
-# OPENAI_API_KEY is unset but an OPENROUTER_API_KEY is present, this harness uses it and records
-# that it did (`apiKeyFrom` in every baseline result's harness block), rather than reading an
-# equivalence the operator never stated. `baseline_unrunnable_reason` is what a baseline row quotes
-# when there is no endpoint at all.
-if [ -z "${OPENAI_API_KEY:-}" ] && [ -n "${OPENROUTER_API_KEY:-}" ]; then
-  export OPENAI_API_KEY="$OPENROUTER_API_KEY"
-  FAULTS_KEY_SOURCE="OPENROUTER_API_KEY"
-elif [ -n "${OPENAI_API_KEY:-}" ]; then
-  FAULTS_KEY_SOURCE="OPENAI_API_KEY"
-else
-  FAULTS_KEY_SOURCE=""
+# Key provenance, recorded rather than inferred.
+#
+# This harness does **not** synthesise `OPENAI_API_KEY` from anything, because whatever it exported
+# would then be what `apiKeyFrom` reports — a record that describes the harness's own action and not
+# the environment. The operator's environment is reported as found:
+#
+#   apiKeyFrom       the variable that already held a key when the harness started, or "" if none did
+#   apiKeyReachable  the variable a nested run could inherit one from, if any
+#   portAllowedKey   the key actually handed to the baseline's `run.sh` (it reads OPENAI_API_KEY)
+#
+# The first two are facts about this machine; the third is a decision, and each baseline result says
+# whether it was the same variable or a substitution the operator would have had to authorise.
+FAULTS_API_KEY_FROM=""
+if [ -n "${OPENAI_API_KEY:-}" ]; then
+  FAULTS_API_KEY_FROM="OPENAI_API_KEY"
+elif [ -n "${OPENROUTER_API_KEY:-}" ]; then
+  FAULTS_API_KEY_FROM="OPENROUTER_API_KEY"
 fi
-export FAULTS_KEY_SOURCE
+export FAULTS_API_KEY_FROM
 
+# Which single variable a nested run can inherit a key through. The baseline port reads only
+# `OPENAI_API_KEY`, so with only an OPENROUTER key present the harness passes it through that one name
+# **for the baseline child only** (`env OPENAI_API_KEY=... ./run.sh`), never by exporting it in this
+# shell — so no durable run and no recorded provenance can inherit a variable the harness invented.
+FAULTS_PORT_KEY_SOURCE="$FAULTS_API_KEY_FROM"
+export FAULTS_PORT_KEY_SOURCE
+
+# Whether the baseline can be started at all. Records `not exercised` with the reason when it cannot,
+# and returns 0 either way so a caller can test the text: empty means "it can run".
 baseline_unrunnable_reason() {
-  [ -n "${FAULTS_KEY_SOURCE:-}" ] && return 0
-  echo "the baseline port needs an OpenAI-compatible endpoint and refuses to run without one: OPENAI_API_KEY is unset and there is no OPENROUTER_API_KEY to use instead, so this variant could not be started at all"
+  [ -n "${FAULTS_API_KEY_FROM:-}" ] && return 0
+  echo "the baseline port needs an OpenAI-compatible endpoint and refuses to run without one: neither OPENAI_API_KEY nor OPENROUTER_API_KEY is set, so this variant could not be started at all"
+}
+
+# The environment the baseline child is started with: its own `OPENAI_API_KEY`, taken from whichever
+# variable the operator actually set. `run_baseline` is the only place it is applied.
+port_key_env() {
+  case "${FAULTS_API_KEY_FROM:-}" in
+    OPENAI_API_KEY) printf 'OPENAI_API_KEY=%s' "${OPENAI_API_KEY:-}" ;;
+    OPENROUTER_API_KEY) printf 'OPENAI_API_KEY=%s' "${OPENROUTER_API_KEY:-}" ;;
+    *) printf 'OPENAI_API_KEY=' ;;
+  esac
 }
 
 # The baseline port takes an OpenAI-compatible endpoint; the durable variant takes the SDK's bundled
@@ -142,7 +166,7 @@ start_run() {
     ( cd "$DURABLE_DIR" && KEEP=1 RUN_DIR="$base" BAND_F_ROUTING="${BAND_F_ROUTING:-scripted}" \
         "$DURABLE_DIR/run.sh" "$@" >"$out.log" 2>&1 ) &
   else
-    ( cd "$BAND_DIR" && CHECKPOINT_DIR="$base" "$BAND_DIR/run.sh" >"$out.log" 2>&1 ) &
+    ( cd "$BAND_DIR" && env "$(port_key_env)" CHECKPOINT_DIR="$base" "$BAND_DIR/run.sh" >"$out.log" 2>&1 ) &
   fi
   echo $! > "$rundir/wrapper.pid"
 }
@@ -157,7 +181,7 @@ start_resume() {
     ( cd "$DURABLE_DIR" && KEEP=1 RUN_DIR="$base" BAND_F_ROUTING="${BAND_F_ROUTING:-scripted}" \
         "$DURABLE_DIR/resume.sh" "$@" >"$out.$tag.log" 2>&1 ) &
   else
-    ( cd "$BAND_DIR" && CHECKPOINT_DIR="$base" CONTROL_LOG="${CONTROL_LOG:-$base/control-transfer.jsonl}" \
+    ( cd "$BAND_DIR" && env "$(port_key_env)" CHECKPOINT_DIR="$base" CONTROL_LOG="${CONTROL_LOG:-$base/control-transfer.jsonl}" \
         "$BAND_DIR/run.sh" --resume "$base" >"$out.$tag.log" 2>&1 ) &
   fi
   echo $! > "$rundir/wrapper.$tag.pid"
@@ -182,6 +206,23 @@ await_app_pid() {
   return 1
 }
 
+# Starts a second process on the same state, in the foreground, with the variant's own entry point and
+# the same environment every other start uses. A fault that needs a competitor or a third delivery
+# calls this rather than repeating the invocation: one place decides what a variant process is given,
+# so a second writer can never be launched with a different environment from the first.
+run_second_process() {
+  local variant="$1" rundir="$2" log="$3"
+  local base; base="$(state "$variant" "$rundir")"
+  if [ "$variant" = "durable" ]; then
+    ( cd "$DURABLE_DIR" && KEEP=1 RUN_DIR="$base" BAND_F_ROUTING="${BAND_F_ROUTING:-scripted}" \
+        "$DURABLE_DIR/resume.sh" ) > "$log" 2>&1
+  else
+    ( cd "$BAND_DIR" && env "$(port_key_env)" CHECKPOINT_DIR="$base" \
+        CONTROL_LOG="$base/control-transfer.jsonl" "$BAND_DIR/run.sh" --resume "$base" ) > "$log" 2>&1
+  fi
+  echo $?
+}
+
 # Runs a variant to completion in the foreground and prints its status.
 run_to_completion() {
   local variant="$1" rundir="$2"
@@ -191,7 +232,7 @@ run_to_completion() {
     ( cd "$DURABLE_DIR" && KEEP=1 RUN_DIR="$base" BAND_F_ROUTING="${BAND_F_ROUTING:-scripted}" \
         "$DURABLE_DIR/run.sh" "$@" )
   else
-    ( cd "$BAND_DIR" && CHECKPOINT_DIR="$base" "$BAND_DIR/run.sh" )
+    ( cd "$BAND_DIR" && env "$(port_key_env)" CHECKPOINT_DIR="$base" "$BAND_DIR/run.sh" )
   fi
 }
 
@@ -204,7 +245,7 @@ resume_to_completion() {
     ( cd "$DURABLE_DIR" && KEEP=1 RUN_DIR="$base" BAND_F_ROUTING="${BAND_F_ROUTING:-scripted}" \
         "$DURABLE_DIR/resume.sh" "$@" ) > "$rundir/.resume.$tag.log" 2>&1
   else
-    ( cd "$BAND_DIR" && CHECKPOINT_DIR="$base" CONTROL_LOG="${CONTROL_LOG:-$base/control-transfer.jsonl}" \
+    ( cd "$BAND_DIR" && env "$(port_key_env)" CHECKPOINT_DIR="$base" CONTROL_LOG="${CONTROL_LOG:-$base/control-transfer.jsonl}" \
         "$BAND_DIR/run.sh" --resume "$base" ) > "$rundir/.resume.$tag.log" 2>&1
   fi
   echo $?
@@ -733,7 +774,11 @@ document = {
         "model": os.environ.get("OPENAI_MODEL", "") if variant == "baseline" else "harness default (scripted routing)",
         "command": os.environ.get("FAULT_COMMAND", ""),
         "commit": os.environ.get("FAULTS_COMMIT", ""),
-        "apiKeyFrom": os.environ.get("FAULTS_KEY_SOURCE", ""),
+        "apiKeyFrom": os.environ.get("FAULTS_API_KEY_FROM", ""),
+        "portKeyFrom": os.environ.get("FAULTS_PORT_KEY_SOURCE", "") if variant == "baseline" else None,
+        "portKeySubstituted": (
+            os.environ.get("FAULTS_API_KEY_FROM") != "OPENAI_API_KEY"
+        ) if variant == "baseline" else None,
     },
     "recordedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
 }
@@ -864,11 +909,12 @@ begin_fault() {
 
   if [ "$VARIANT" = "baseline" ]; then
     local reason
-    reason="$(baseline_unrunnable_reason)" || {
+    reason="$(baseline_unrunnable_reason)"
+    if [ -n "$reason" ]; then
       record_not_exercised baseline "$RESULT_NAME" "the baseline could not be started" "$reason"
       echo "not exercised: $reason" >&2
       exit 0
-    }
+    fi
   fi
   return 0
 }

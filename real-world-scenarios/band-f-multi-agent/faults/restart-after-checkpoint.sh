@@ -140,29 +140,36 @@ if not d:
     raise SystemExit(0)
 print("%s %s turn %s at %s" % (d.get("agent"), d.get("event") or "spoke in checkpoint", d.get("turn", d.get("index")), d.get("entry") or d.get("checkpoint")))' 2>/dev/null || echo "")"
 
+# The answer is the agent the restarted process gave control to: the first agent to act in a checkpoint
+# it wrote, which is a state reading independent of the holder field. It is deliberately not
+# `END_HOLDER` — that is where the run ended once it had served every remaining turn, and on both
+# variants it is a different agent from the one that resumed. An earlier version phrased this from one
+# value and passed that same value twice, which could only ever print "resumed by X" and never
+# consulted the state at all; that is why the control's sentence contradicted its own checkpoint.
+POST_HOLDER="${FIRST_AGENT:-$END_HOLDER}"
 if [ "$RESUME_STATUS" = "0" ]; then
-  OUTCOME="$(describe_recovery "$FIRST_AGENT" "$FIRST_AGENT")"
+  OUTCOME="$(describe_recovery "$POST_HOLDER" "$FIRST_AGENT")"
 else
-  OUTCOME="restart failed; control stops at ${FIRST_AGENT:-${END_HOLDER:-nothing}}"
+  OUTCOME="restart failed; control stops at ${POST_HOLDER:-nothing}"
 fi
 
 EVIDENCE="stopped cleanly (pid $stopped, SIGTERM, confirmed gone) at $STOP_LABEL; frozen state: holder $AT_STOP_HOLDER, fingerprint $(snap "$FROZEN" fingerprint), tool results $FROZEN_COUNTS; first action after the restart: $FIRST_DESC; $REPLAY_NOTE; $VERIFY_NOTE; recovery needed $RECOVERY_ATTEMPTS process(es)${RECOVERY_ERRORS:+ ($RECOVERY_ERRORS)}; port-reported resume: ${REPORTED:-(none)}${HOLDERS:+; holders across the run: $HOLDERS}"
 
 if [ "$VARIANT" = "durable" ]; then
-  DETAIL="The process was stopped with SIGTERM at the commit where $AT_STOP_HOLDER held turn 1 and had produced nothing. The restarted process read that checkpoint and gave control to $FIRST_AGENT — the agent the checkpoint named, not the coordinator — and its first committed action was $FIRST_DESC. $REPLAY_NOTE; $VERIFY_NOTE. Control after the restart was $(describe_recovery "$FIRST_AGENT" "$FIRST_AGENT"); the run then finished in $RECOVERY_ATTEMPTS process(es) and ended with $END_HOLDER holding control, which is the settle step rather than the answer."
+  DETAIL="The process was stopped with SIGTERM at the commit where $AT_STOP_HOLDER held turn 1 and had produced nothing. The restarted process read that checkpoint, took control as $(describe_recovery "$POST_HOLDER" "$FIRST_AGENT"), and its first committed action was $FIRST_DESC. $REPLAY_NOTE; $VERIFY_NOTE. Control after the restart was $POST_HOLDER, and the run finished in $RECOVERY_ATTEMPTS process(es)."
 else
   if [ "$RESUME_STATUS" = "0" ]; then
     COMPLETED="The restart completed in $RECOVERY_ATTEMPTS process(es)."
   else
     COMPLETED="The restart did not complete: $RECOVERY_ERRORS — the framework aborts every resume of a workflow that still has work, and the port's resume has no way past it."
   fi
-  DETAIL="The process was stopped with SIGTERM at $STOP_LABEL. The restarted process gave control to ${FIRST_AGENT:-nothing} — the first agent to act in a checkpoint it wrote afterwards — and its newest checkpoint then names ${END_HOLDER:-nothing}. $REPLAY_NOTE. $COMPLETED"
+  DETAIL="The process was stopped with SIGTERM at $STOP_LABEL, where the framework checkpoint named $AT_STOP_HOLDER. The restarted process gave control to $POST_HOLDER ($(describe_recovery "$POST_HOLDER" "$FIRST_AGENT")); its newest checkpoint then names ${END_HOLDER:-nothing} and the first agent to act in a checkpoint it wrote was ${FIRST_AGENT:-none}. $REPLAY_NOTE. $COMPLETED"
   if [ -n "$REPORTED" ] && [ "$REPORTED" != "$FIRST_AGENT" ]; then
     DETAIL="$DETAIL The port's own resume line named $REPORTED; the state it moved is what says $FIRST_AGENT acted."
   fi
 fi
 
-record_result "$VARIANT" "$RESULT_NAME" "$OUTCOME" "${FIRST_AGENT:-$END_HOLDER}" "$PHASE" "$DETAIL" "$EVIDENCE" \
+record_result "$VARIANT" "$RESULT_NAME" "$OUTCOME" "$POST_HOLDER" "$PHASE" "$DETAIL" "$EVIDENCE" \
   "{\"processes\":$RECOVERY_ATTEMPTS,\"holderAtStop\":\"${AT_STOP_HOLDER:-}\",\"actedFirst\":\"${FIRST_AGENT:-}\",\"portReportedResume\":\"${REPORTED:-}\"}" \
   "$AT_STOP_HOLDER" "$END_HOLDER"
-echo "$VARIANT / $RESULT_NAME: $OUTCOME (holder ${FIRST_AGENT:-$END_HOLDER})" >&2
+echo "$VARIANT / $RESULT_NAME: $OUTCOME (holder $POST_HOLDER)" >&2

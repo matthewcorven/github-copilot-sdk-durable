@@ -69,5 +69,15 @@ for variant in "${VARIANTS[@]}"; do
   done
 done
 
-"$PYTHON" "$HERE/lib/summarise.py" "$HERE/results" "$STATUS_FILE" | tee "$HERE/results/summary.txt"
+# The summariser exits non-zero when a result or control is missing, and its output is the band's
+# table. Its status is checked before the table is written: a missing result must not leave
+# `results/summary.txt` holding a table of `**missing**` rows and an exit code of 0.
+SUMMARY="$("$PYTHON" "$HERE/lib/summarise.py" "$HERE/results" "$STATUS_FILE")"
+SUMMARY_STATUS=$?
+printf '%s\n' "$SUMMARY" > "$HERE/results/summary.txt"
+printf '%s\n' "$SUMMARY"
+if [ "$SUMMARY_STATUS" -ne 0 ]; then
+  log "run-all: the summary reports a missing result or control (exit $SUMMARY_STATUS)"
+  FAILED=1
+fi
 exit $FAILED

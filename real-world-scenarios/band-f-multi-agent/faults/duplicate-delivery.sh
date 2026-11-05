@@ -42,7 +42,8 @@ if [ "$NOT_INJECTED" = "1" ]; then
   COUNTS="$(snap "$SNAP" counts)"
   if [ "$VARIANT" = "durable" ]; then
     TURNS="$(durable_count "$(state durable "$RUNDIR")/store.jsonl" turns)"
-    DETAIL="Control: the closing request delivered once, in one process, with nothing killed. The store holds one specialist output per turn — $COUNTS — across $TURNS turn(s), and the run ended with $AFTER_HOLDER holding control. The fault run is compared to exactly this multiset, so a result it holds twice is that specialist's tool run a second time and nothing else."
+    CONTROL_VERSIONS="$(durable_count "$(state durable "$RUNDIR")/store.jsonl" output-versions 3)"
+    DETAIL="Control: the closing request delivered once, in one process, with nothing killed. The store holds $CONTROL_VERSIONS output version(s) for turn 3 and the specialist results $COUNTS across $TURNS turn(s); the run ended with $AFTER_HOLDER holding control. Turn 3's output version count is what the fault row is measured against, because the whole-run multiset cannot answer the question: return_agent answers turn 0 and turn 3, so its result legitimately appears twice in any run that serves both turns."
   else
     TURNS="$(baseline_log_count "$RUNDIR" turn_end)"
     DETAIL="Control: the closing request delivered once, in one process, with nothing killed. The checkpointed conversation holds the specialist tool results $COUNTS across $TURNS completed turn(s), and the run ended with $AFTER_HOLDER holding control. The fault run is compared to exactly this multiset, so a result it holds twice is that specialist's tool run a second time and nothing else."
@@ -50,7 +51,7 @@ if [ "$NOT_INJECTED" = "1" ]; then
   record_result "$VARIANT" "$RESULT_NAME" "control: delivered once" "$AFTER_HOLDER" \
     "the closing request was delivered once and nothing was killed (the control)" "$DETAIL" \
     "tool results: $COUNTS; completed turns: $TURNS; holder after: $AFTER_HOLDER" \
-    "{\"toolResults\":$COUNTS,\"completedTurns\":$TURNS}" "$CONTROL_HOLDER" "$AFTER_HOLDER"
+    "{\"toolResults\":$COUNTS,\"completedTurns\":$TURNS,\"outputVersionsForTurn3\":${CONTROL_VERSIONS:-0}}" "$CONTROL_HOLDER" "$AFTER_HOLDER"
   echo "control: $VARIANT delivered once (holder $AFTER_HOLDER)" >&2
   exit 0
 fi
@@ -104,6 +105,15 @@ COUNTS_BEFORE="$(snap "$FROZEN" counts)"
 
 recover_variant "$VARIANT" "$RUNDIR" 2
 DELIVERY_STATUS=$?
+
+# The request is delivered a **second** time after the first delivery completed. This is the half the
+# issue is really about: a re-delivery only tests deduplication if the first delivery was answered.
+# For the durable variant the second resume finds the turn's output committed; for the baseline the
+# port's resume skips the turns its log records as complete. Either may also no-op on a finished run,
+# which is a deduplication of its own and is reported as such.
+REDELIVERY_STATUS=""
+REDELIVERY_STATUS="$(run_second_process "$VARIANT" "$RUNDIR" "$RUNDIR/.redelivery.log")"
+REDELIVERY_NOTE="$(grep -m1 -E 'already finished|nothing to resume|skipping [0-9]+ completed' "$RUNDIR/.redelivery.log" 2>/dev/null | sed 's/^[[:space:]]*//' || true)"
 AFTER="$(holder_json "$VARIANT" "$RUNDIR")"
 AFTER_HOLDER="$(printf '%s' "$AFTER" | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("holder") or "")')"
 
@@ -128,27 +138,63 @@ HOLDERS="$(printf '%s' "$AFTER" | "$PYTHON" -c 'import json,sys; d=json.load(sys
 verify_store "$RUNDIR" >/dev/null
 VERIFY_NOTE="verify exited $?"
 
-# The doubling is in the multiset of results, not in a total: a result the control holds once and the
-# fault holds twice is that specialist's tool run twice, whatever else the run did.
-DOUBLED="$(printf '%s\n%s\n' "$COUNTS_BEFORE" "$COUNTS_AFTER" | "$PYTHON" -c '
+# What "doubled" means here, and why the whole-run multiset cannot decide it.
+#
+# return_agent answers turn 0 (the return the customer asked for) and turn 3 (the confirm-still-open
+# follow-up), so its tool result legitimately appears **twice** in any run that serves both turns —
+# including the no-fault control, whose multiset is identical to this run's "after". A delta against
+# the frozen state therefore cannot distinguish "the re-delivered turn ran twice" from "the run served
+# two turns": for `return_agent` the two are the same number. The whole-run total is recorded for the
+# reader, but the assertion is per turn: the re-delivered request is turn 3, so turn 3 must have more
+# than one committed output, or a reuse record, for the tool to have run a second time for it.
+SNAP_AFTER_COUNTS="$(snap "$SNAP_AFTER" counts)"
+VERSIONS_FOR_TURN="$("$PYTHON" - "$(state durable "$RUNDIR")/store.jsonl" <<'PY'
+import json, sys
+versions = 0
+for line in open(sys.argv[1], encoding="utf-8"):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        record = json.loads(line)
+    except ValueError:
+        continue
+    if record.get("type") != "document-version":
+        continue
+    payload = record.get("payload") or {}
+    if payload.get("kind") != "band-f.specialist-output":
+        continue
+    if (payload.get("value") or {}).get("turn") == 3:
+        versions += 1
+print(versions)
+PY
+)"
+DOUBLED="$(printf '%s\n%s\n' "$COUNTS_BEFORE" "$SNAP_AFTER_COUNTS" | "$PYTHON" -c '
 import json, sys
 lines = [line for line in sys.stdin.read().splitlines() if line.strip()]
 before, after = json.loads(lines[0]), json.loads(lines[1])
 print(json.dumps({k: after[k] - before.get(k, 0) for k in after if after[k] > before.get(k, 0)}))')"
-DOUBLED_COUNT="$("$PYTHON" -c 'import json,sys; print(sum(json.loads(sys.argv[1]).values()))' "$DOUBLED")"
 TURNS_DELTA=$(( ${TURNS_AFTER:-0} - ${TURNS_BEFORE:-0} ))
-if [ "$DOUBLED_COUNT" -gt 0 ]; then OUTCOME="doubled"; else OUTCOME="not doubled"; fi
 
-if [ "$DOUBLED_COUNT" -gt 0 ]; then
-  MECHANISM="The second process found the delegation committed, its own checkpoint still naming $AFTER_HOLDER, and no output for the turn — so it produced a second time. This variant has no identity for a delivery that a second process could deduplicate against."
+# The assertion: did the re-delivered turn produce a second output, or was the first reused?
+if [ "${VERSIONS_FOR_TURN:-0}" -gt 1 ] || [ "${REUSED:-0}" -gt 0 ]; then
+  OUTCOME="doubled"
+  DOUBLED_VERDICT="$VERSIONS_FOR_TURN output version(s) for the re-delivered turn ${TURNS_AFTER:+and $REUSED reuse record(s)}"
 else
-  MECHANISM="The second process produced nothing: the first had already committed the turn and the store answered for it (${OUTPUT_VERSIONS:-0} output version(s), ${REUSED:-0} reuse record(s)), so the request was delivered twice and the tool ran once."
+  OUTCOME="not doubled"
+  DOUBLED_VERDICT="one output version for the re-delivered turn and no reuse record — the request arrived twice and the tool ran once"
 fi
 
-DETAIL="The closing request was delivered twice. The first process was killed with SIGKILL while $BEFORE_HOLDER held turn 3 with nothing produced; the second delivery was one resume of the state the kill left (exit $DELIVERY_STATUS). The specialist's tool results went from $COUNTS_BEFORE to $COUNTS_AFTER, so $DOUBLED_COUNT more specialist tool run(s) happened ($DOUBLED), and the run served $TURNS_DELTA more turn(s). $MECHANISM $VERIFY_NOTE. Control after recovery was $AFTER_HOLDER."
+if [ "$OUTCOME" = "doubled" ]; then
+  MECHANISM="The second process found the delegation committed, its own checkpoint still naming $AFTER_HOLDER, and no output for the turn — so it produced. This variant has no identity for a delivery that a second process could deduplicate against."
+else
+  MECHANISM="The second process produced nothing for the turn: the first had already committed it and the store answered for it, so the request was delivered twice and the tool ran once."
+fi
 
-EVIDENCE="frozen after the first delivery (pid $killed, SIGKILL, confirmed gone) with holder $BEFORE_HOLDER and $TURNS_BEFORE completed turn(s); tool results before: $COUNTS_BEFORE; after: $COUNTS_AFTER; repeated: $DOUBLED; completed turns: $TURNS_BEFORE then $TURNS_AFTER; second delivery exit: $DELIVERY_STATUS; holder after: $AFTER_HOLDER; $VERIFY_NOTE; $OUTPUT_VERSIONS output version(s) for turn 3; $REUSED reuse record(s); holders across the run: $HOLDERS"
+DETAIL="The closing request was delivered three times in total: the first process was killed with SIGKILL while $BEFORE_HOLDER held turn 3 with nothing produced, a second process resumed the same store (exit $DELIVERY_STATUS), and then the same request was delivered again to the now-complete run (exit ${REDELIVERY_STATUS:-?}). $DOUBLED_VERDICT. Control after recovery was $AFTER_HOLDER. $MECHANISM ${REDELIVERY_NOTE:+The third delivery said: \"$REDELIVERY_NOTE\". }$VERIFY_NOTE."
+
+EVIDENCE="frozen after the first delivery (pid $killed, SIGKILL, confirmed gone) with holder $BEFORE_HOLDER and $TURNS_BEFORE completed turn(s); output versions for the re-delivered turn 3: 0 before, $VERSIONS_FOR_TURN after, $REUSED reuse record(s); third delivery exit ${REDELIVERY_STATUS:-?}: ${REDELIVERY_NOTE:-no refusal line}; whole-run specialist results before: $COUNTS_BEFORE, after: $SNAP_AFTER_COUNTS (delta $DOUBLED — reported, not decisive: return_agent answers turn 0 too, so its result appears twice in a no-fault run); completed turns: $TURNS_BEFORE then $TURNS_AFTER; second delivery exit: $DELIVERY_STATUS; holder after: $AFTER_HOLDER; $VERIFY_NOTE; holders across the run: $HOLDERS"
 
 record_result "$VARIANT" "$RESULT_NAME" "$OUTCOME" "$AFTER_HOLDER" "$PHASE" "$DETAIL" "$EVIDENCE" \
-  "{\"toolResultsBefore\":$COUNTS_BEFORE,\"toolResultsAfter\":$COUNTS_AFTER,\"repeated\":$DOUBLED,\"completedTurnsBefore\":$TURNS_BEFORE,\"completedTurnsAfter\":$TURNS_AFTER,\"secondDelivery\":\"resume\"}" "$FROZEN_HOLDER" "$AFTER_HOLDER"
+  "{\"outputVersionsForTurn3\":${VERSIONS_FOR_TURN:-0},\"reuseRecordsForTurn3\":${REUSED:-0},\"toolResultsBefore\":$COUNTS_BEFORE,\"toolResultsAfter\":$SNAP_AFTER_COUNTS,\"toolResultsDelta\":$DOUBLED,\"completedTurnsBefore\":$TURNS_BEFORE,\"completedTurnsAfter\":$TURNS_AFTER,\"secondDelivery\":\"resume\",\"thirdDeliveryExit\":${REDELIVERY_STATUS:-null}}" "$FROZEN_HOLDER" "$AFTER_HOLDER"
 echo "$VARIANT / $RESULT_NAME: $OUTCOME (holder $AFTER_HOLDER)" >&2

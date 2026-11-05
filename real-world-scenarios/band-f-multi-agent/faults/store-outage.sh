@@ -227,7 +227,7 @@ fi
 
 EVIDENCE="outage at the handoff: held by $BEFORE_HOLDER; moved $PRIMARY aside with $MOVED_AT_OUTAGE record(s) in it; live process: $LIVE_DID; moved file afterwards: $MOVED_AFTER record(s); live path present: $([ "$LIVE_PATH_EXISTS" = "1" ] && echo yes || echo no); live output: $LIVE_LOG; moved file: $INTACT; holder read from the moved state: ${SURVIVED_HOLDER:-nothing}; holder after recovery: ${AFTER_HOLDER:-nothing}${RESUME_STATUS:+; resume exit $RESUME_STATUS}; $VERIFY_NOTE"
 
-record_result "$VARIANT" "$RESULT_NAME" "$OUTCOME" "$SURVIVED_HOLDER" "$PHASE" "$DETAIL" "$EVIDENCE" \
+record_result "$VARIANT" "$RESULT_NAME" "$OUTCOME" "${AFTER_HOLDER:-$SURVIVED_HOLDER}" "$PHASE" "$DETAIL" "$EVIDENCE" \
   "{\"holderAtOutage\":\"$BEFORE_HOLDER\",\"survivedHolder\":\"${SURVIVED_HOLDER:-}\",\"recoveredHolder\":\"${AFTER_HOLDER:-}\",\"liveProcess\":\"$([ "$OBSERVED" = "1" ] && echo exited || echo stopped)\"}" \
   "$SURVIVED_HOLDER" "$AFTER_HOLDER"
 echo "$VARIANT / $RESULT_NAME: $OUTCOME (holder $AFTER_HOLDER)" >&2
