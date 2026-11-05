@@ -1,143 +1,285 @@
 # Band A — Local dev-tool agent
 
-A Blazor Server application in which each customer enquiry starts a Copilot session that
-works the enquiry and streams its progress into the browser. This directory holds the
-**baseline**: the Build26 reference application, vendored unmodified and ported to a
-buildable project, defects included.
+A Blazor Server application in which each customer enquiry starts a Copilot session that works the
+enquiry, streams progress into the browser, and reports a result. The scenario is built **twice**:
 
-```
-upstream/     byte-identical copy of microsoft/Build26-BRK206-… @ da8b33a, MIT
-PROVENANCE    pinned SHA, file list, hashes, and the three port changes
-baseline/     the same application as a project in this repository
-run.sh        builds and starts it, prints the URL
-```
+| | `baseline/` | `durable/` |
+| --- | --- | --- |
+| What it is | the Build26 reference application, vendored unmodified and ported to a buildable project | the same application, with the enquiry state moved into the Durable store |
+| Upstream | `microsoft/Build26-BRK206-…` @ `da8b33a`, MIT — see `upstream/PROVENANCE.md` | written here, over `lib/Durable.cs` |
+| Where an enquiry lives | a `Dictionary<string, Agent>` field in a singleton | one document per conversation in a `DurableStore` (JSONL file) |
+| Restart | every enquiry, phase and report is gone | unfinished enquiries resume from what committed |
+| Run | `./run.sh` (port 5027) | `(cd durable && ./run.sh)` (port 5028) |
 
-The Durable variant of this scenario is a separate work item (#145, #146, #148). Nothing in
-`baseline/` refers to it: there is no store, no task, and no checkpoint in this tree.
+## Why this is realistic
+
+It is not a scenario written to show a point. It is an application Microsoft published and demoed,
+and its durability story is exactly what a real local dev tool does when it is written quickly: the
+agent state is an in-process dictionary, nothing is written to disk, and the SDK session that would
+have made recovery possible is created and then forgotten. The observed defects — the dictionary, a
+hard-coded `await Task.Delay(15000)` eviction, no lock, no retained session id — are the upstream
+ones, preserved. `baseline/` differs from `upstream/AgentOrchestrator/` in three non-behavioural
+places (assembly name, the scoped-CSS bundle name, and not carrying the `.sln`); they are listed in
+`upstream/PROVENANCE.md`.
+
+The work it does is ordinary: read a customer enquiry, validate it, search property listings, write
+a report, or reject spam. The listings are real seeded JSON and the search is EF Core/SQLite, so the
+*application* half is a real application. Only the durability half is the comparison.
+
+## The two variants side by side
+
+| Concern | `baseline/` | `durable/` |
+| --- | --- | --- |
+| Agent state | `Dictionary<string, Agent>` (`baseline/AppState.cs:13`) | `EnquiryState` document per conversation (`durable/EnquiryState.cs`) |
+| Where it is written | nowhere | `DurableStore` at `BAND_A_STORE`, default `band-a-store.jsonl` beside the assembly |
+| Rejected-enquiry removal | `await Task.Delay(15000)` then `Agents.Remove` (`baseline/AppState.cs:37-40`) | committed `hideAt` on a terminal document; the record stays |
+| SDK session | `CreateSessionAsync` result not retained (`baseline/Agent.cs:53`) | conversation rebound on resume (`durable/EnquiryStore.cs`) |
+| Concurrency | unlocked dictionary mutated from every run task | one commit gate per store; guards evaluated inside the transaction |
+| Restart | empty dashboard | `ResumeUnfinished()` before the server accepts a request (`durable/Program.cs:62`) |
+| Pipeline, tools, prompt, page | the same | the same |
+
+The Durable variant is deliberately the baseline's sibling: same phases, same tools, same system
+prompt, same Razor page. What changes is where an enquiry lives between two mouse clicks and a
+restart. Design detail and the checkpoint boundary are in `durable/README.md`; do not duplicate it
+here.
 
 ## Prerequisites
 
 | Requirement | Version | Notes |
 | --- | --- | --- |
-| .NET SDK | 10.0 | `net10.0` target; the .NET 10 Blazor toolchain is required. `dotnet` on `PATH` must be 10.0.x, or set `DOTNET` to that install |
-| GitHub Copilot CLI | signed in | The SDK spawns the runtime over stdio; `copilot` must be on `PATH` and authenticated |
+| .NET SDK | 10.0.x | `net10.0` target, and the .NET 10 Blazor toolchain. `dotnet --version` must print 10.0.x, or set `DOTNET` to that install |
+| GitHub Copilot CLI | signed in | The SDK spawns the runtime; `copilot` must be on `PATH` and authenticated. No Azure subscription and no database server are needed — listings are seeded into SQLite on first start |
+| Fault harness only | Node, `python3`, `curl`, Playwright + Chromium, and the built `tools/ReplayRuntime` | Only for `faults/`. The two `run.sh` commands need none of them |
 
-The app needs no Azure subscription and no database server: listings are seeded into a local
-SQLite file on first start from `baseline/Data/Properties/*.json`.
-
-Check both before running:
+Check the two required ones before starting:
 
 ```bash
-dotnet --version   # 10.0.x
-copilot --version
+dotnet --version    # 10.0.x
+copilot --version   # any version, signed in
 ```
 
-## Run
+## One command per variant
 
 ```bash
 cd real-world-scenarios/band-a-local-dev-tool
-./run.sh
+
+./run.sh                        # baseline, port 5027
+(cd durable && ./run.sh)        # Durable variant, port 5028
 ```
 
-`run.sh` publishes the project into a scratch directory under `$TMPDIR`, starts it, and
-prints:
+Both publish into a fresh `$TMPDIR` scratch directory, print their URL, and stop with Ctrl-C. Nothing
+is written inside the repository: the SQLite file, the Copilot client's base directory, and (for the
+Durable variant) the store all resolve inside that scratch directory.
 
+Then, in the browser, click the **+** button and pick a sample enquiry — for example *"Looking for a
+3-bed family home near good schools in the suburbs, budget around $500k"*. The card moves through
+Validating → Searching → Writing Report and the dashboard counts follow it.
+
+To watch the difference the scenario is about, keep the Durable variant's store and restart it:
+
+```bash
+(cd durable && KEEP=1 ./run.sh)          # note the "Resume with:" line it prints
+# Ctrl-C, then:
+(cd durable && BAND_A_STORE=<that path> ./run.sh)
 ```
-Band A baseline (BandABaseline)
-  URL:     http://localhost:5027
-  Scratch: /var/folders/…/band-a-baseline.XXXXXX   (KEEP=1 to keep it)
-  Stop with Ctrl-C.
-```
 
-`KEEP=1 ./run.sh` keeps the scratch directory on exit; otherwise it is removed. Everything
-the app writes — `properties.db` and the Copilot client's base directory, which is
-`AppContext.BaseDirectory/.copilot` in `AppState.cs` — resolves inside that directory, not in
-this repository. `PORT=5028 ./run.sh` changes the port.
+The dashboard the second process opens is the one the first left behind. Do the same with the
+baseline (`KEEP=1 ./run.sh`, Ctrl-C, restart) and the dashboard is empty — that is the whole point,
+and it takes under a minute to see.
 
-## What to click
+`KEEP=1` keeps the scratch directory; otherwise it is removed on exit. `PORT=` overrides the port.
 
-1. Open the printed URL. The page shows the phase pipeline (Queued → Validating → Searching →
-   Writing Report → Rejected / No Matches / Done) and a dashboard counting agents.
-2. Click the **+** button at the top right, then pick a sample enquiry — for example *"Looking
-   for a 3-bed family home near good schools in the suburbs, budget around $500k"*.
-3. The new card shows the enquiry and, as the model works, its reported intent and phase. The
-   dashboard's *Processing*, *Completed* and *Rejected* counts follow it. A completed enquiry
-   keeps its card, report included, until the process exits.
+## Teardown
 
-Enquiries that the model rejects (*"BUY CRYPTO NOW!!! …"*) leave a card that disappears by
-itself 15 seconds later. Enquiries that fail with an exception are removed immediately.
-
-## This application loses all agent state on restart
-
-No agent, conversation, enquiry, phase or report is written anywhere. `AppState` keeps them
-in an in-process `Dictionary<string, Agent>`, and the process exiting is the end of them. The
-SQLite database holds property listings only — it has never held agent state. Restart the
-app and the dashboard is empty; the Copilot session created for each enquiry is not resumed,
-because its identifier is not retained.
-
-## Known defects (preserved)
-
-These are upstream behaviour and are kept as-is: they are what the Durable variant is being
-compared against. They are not fixed here, and no code in `baseline/` compensates for them.
-
-1. **In-memory dictionary.** `AppState.Agents` is a `Dictionary<string, Agent>` in a
-   singleton. It lives in one process. Restart, recycle, or a second server, and the
-   enquiries are gone.
-2. **15-second eviction by timer.** A rejected enquiry is removed by a hard-coded
-   `await Task.Delay(15000)` inside the run loop. The delay is part of the request path, so
-   the code that removes the agent runs in the same task that ran it; if the process is
-   restarted in that window, nothing removes the agent and nothing restarts it either.
-3. **No persistence of the SDK session.** `client.CreateSessionAsync(...)` returns a session
-   whose id is never stored and never resumed. The runtime may keep session data under the
-   client's base directory, but the application cannot find it again.
-4. **No thread safety.** `Agents` is written by every `RunAgentAsync` task and read by the
-   Blazor renderer without a lock. A `Dictionary<string, Agent>` is not safe for concurrent
-   mutation; two enquiries started at the same moment mutate it from two threads.
-5. **Unbounded growth for successful enquiries.** Completed agents are kept for the life of
-   the process by design ("For demo, successful agents stay on screen forever"), so a
-   long-running instance accumulates them.
-6. **No cancellation.** Nothing in the application calls `CopilotSession.DisposeAsync` for a
-   running enquiry when the browser goes away or the user stops looking at it; the run loop
-   is a fire-and-forget `_ = AppState.RunAgentAsync(enquiry)`.
-
-## What changed to make it build
-
-Nothing that a compiler required. The upstream project builds as vendored against .NET
-10.0.402 and the package versions it pins (`GitHub.Copilot.SDK` 1.0.0, `Markdig` `*`,
-`Microsoft.EntityFrameworkCore.Sqlite` 9.0.0). `baseline/` differs from
-`upstream/AgentOrchestrator/` in three places, none behavioural:
-
-| Change | Why |
+| What | How |
 | --- | --- |
-| `<AssemblyName>BandABaseline</AssemblyName>`, `<RootNamespace>AgentOrchestrator</RootNamespace>` | The assembly is no longer named after the upstream application. |
-| `Components/App.razor`: `AgentOrchestrator.styles.css` → `BandABaseline.styles.css` | The generated scoped-CSS bundle is named after the assembly; without this the two scoped stylesheets (layout reconnect modal) are not linked. |
-| `AgentOrchestrator.sln` and the upstream `.gitignore` not carried over | The project is built by path; the root `.gitignore` covers `bin/` and `obj/`. |
+| Either application | Ctrl-C |
+| The scratch directory, store, SQLite file, Copilot sign-in | on exit, unless `KEEP=1` was set. With `KEEP=1`, delete the path the run printed |
+| A fault-harness run | the harness reaps itself; to check: `pgrep -f 'BandA'; pgrep -f ReplayRuntime` should print nothing. Leftover runs live under `.scratch/band-a-faults/` |
 
-`Agent.cs`, `AppState.cs`, `Program.cs`, `Phase.cs`, `PropertyDatabase.cs` and every Razor
-file are unmodified copies.
+Nothing needs `docker`, a cloud resource, or a background service to be shut down.
 
-One build warning is visible on every build: NU1903 for `SQLitePCLRaw.lib.e_sqlite3` 2.1.10
-(a transitive dependency of `Microsoft.EntityFrameworkCore.Sqlite` 9.0.0). At startup EF
-also logs a `KeyFeatures` value-converter warning. Neither is fixed, because fixing them
-means changing the pinned packages.
+## The fault results table
+
+Five faults, run against both variants. Transcribed from `faults/results/<variant>/<fault>.json`;
+`faults/results/summary.txt` is rendered from those files by `faults/lib/summarise.py`, which exits
+non-zero if a variant is missing a result. Evidence and controls: `faults/README.md`.
+
+| Fault | baseline | durable | Result files |
+| --- | --- | --- | --- |
+| `kill -9` mid-turn | **lost** | **resumed** | [`baseline`](faults/results/baseline/kill-mid-turn.json) · [`durable`](faults/results/durable/kill-mid-turn.json) |
+| restart after a committed checkpoint | **lost** | **resumed** | [`baseline`](faults/results/baseline/restart-after-checkpoint.json) · [`durable`](faults/results/durable/restart-after-checkpoint.json) |
+| duplicate delivery | **doubled** | **doubled** | [`baseline`](faults/results/baseline/duplicate-delivery.json) · [`durable`](faults/results/durable/duplicate-delivery.json) |
+| two concurrent clients | **not corrupted** | **not corrupted** | [`baseline`](faults/results/baseline/concurrent-clients.json) · [`durable`](faults/results/durable/concurrent-clients.json) |
+| store unavailable mid-operation | **not exercised** — the baseline writes no agent state to disk | **failed safely, with a split store** | [`baseline`](faults/results/baseline/store-outage.json) · [`durable`](faults/results/durable/store-outage.json) |
+
+What each of those five cells actually says, in the result files' own words:
+
+- **`kill-mid-turn`, baseline — lost.** *"A new process, same port, same working directory, shows 0
+  cards: processing 0, completed 0, rejected 0. Nothing resumes: the agent lived in a
+  `Dictionary<string, Agent>` that died with the process, and the SDK session id was never
+  retained."*
+- **`kill-mid-turn`, durable — resumed.** *"The kill left a committed document at phase validating
+  with 2 entries… A new process resumed 1 task(s) at phase validating and finished with task
+  terminal at phase done, 10 entries, restarts=1, report 46 characters. The turn that was cut off
+  was re-sent, not replayed: it left no answer to reuse."* The 10 entries are 9 plus a replayed
+  turn — see the limitation below.
+- **`restart-after-checkpoint`, baseline — lost.** *"It shows 0 cards: processing 0, completed 0.
+  Whatever phase had committed is gone with the process, so there is no resume to be exact
+  about."*
+- **`restart-after-checkpoint`, durable — resumed.** *"The restart resumed 1 task(s) from the
+  committed phase and finished at done with 10 entries (task terminal). The committed checkpoint was
+  ahead of the last completed turn, so the remaining work ran and the finished part did not."*
+- **`duplicate-delivery` — doubled, both.** Baseline: *"2 agents on the page … and 2 model turns
+  reached the runtime. The application has no identity for an enquiry."* Durable: *"2 enquiry
+  documents, 2 model admissions and 2 search tool call(s) … the variant has no identity for an
+  enquiry to deduplicate on."*
+- **`concurrent-clients` — not corrupted, both.** Baseline: *"In this sample the dictionary race
+  did not manifest — the defect is present in the code … but one concurrent pair is not enough to
+  make it throw."* Durable: *"2 enquiry documents and 2 task records, all 2 terminal, 16 transcript
+  entries and 0 entries crossing documents. The commit gate serialized the two writers."*
+- **`store-outage`, baseline — not exercised.** *"The baseline keeps every agent in an in-process
+  `Dictionary<string, Agent>` and writes no agent state to disk for the lifetime of the process.
+  There is no store file to remove, lock, or corrupt."* Removing `properties.db` was deliberately
+  not substituted: that would fault the search tool, not the durability of an enquiry.
+- **`store-outage`, durable — failed safely, with a split store.** *"Nothing was lost, but the state
+  is now in two files: an operator reading the live path sees a different enquiry history … The
+  application fails safe in the sense that it reports no corruption and keeps writing; it does not
+  fail loudly, and it does not tell anyone the old file was gone."*
+
+Every script has a control (`--fault-not-injected`) that runs the same steps without the injection.
+The control table in `faults/results/summary.txt` is what makes the outcomes attributable: with the
+kill removed, both variants **complete**; with the duplicate removed, both produce **one** enquiry.
+Reproduce all of it with `./faults/run-all.sh` (~3 minutes).
+
+## What the baseline gets right
+
+This is a comparison, not a takedown. Where the baseline is simpler or better, it is stated plainly:
+
+- **It is smaller, and the smallness is a real property.** The baseline's whole agent state is
+  `baseline/Agent.cs` plus the dictionary and the timer in `baseline/AppState.cs` — 91 + 57 lines
+  total, `wc -l`, and none of them are durability code. There is no store to open, no document
+  schema, no commit discipline, no resume path. It is easier to read in one sitting.
+- **It has no operational surface at all.** No store file, no format to migrate, no exclusive lock
+  to trip over, no `BAND_A_STORE` to point somewhere. Restarting it is always a clean start, and a
+  developer never has to reason about what the last run left behind.
+- **It is dependency-free in the durable sense.** Nothing in `baseline/` references `lib/Durable.cs`
+  or any library of ours. If the durable layer were wrong, the baseline would still work.
+- **It never fails to start because of yesterday's state.** A corrupt, half-written or
+  differently-versioned store cannot stop the baseline from coming up, because it has none. The
+  Durable variant's split store (above) is a class of problem the baseline cannot have.
+- **Its congestion story is honest for a demo.** "Successful agents stay on screen forever, rejected
+  ones linger for fifteen seconds" is a deliberate demo choice, documented as such in the upstream
+  comment, and it does exactly what it says.
+- **It is not slower for the turn.** Both variants send the same prompts and make the same tool
+  calls per enquiry; the Durable variant adds a commit per phase transition. That cost is real and
+  is not measured against a benefit here.
+
+It gets those things by having nothing to lose — and then it does lose everything, which is the fault
+table. Both statements are true at once, and a reader deciding whether to adopt the durable layer
+should weigh them together.
+
+## Where the Durable variant is worse
+
+Stated here rather than left to the other document, because a comparison that only lists wins is not
+evidence:
+
+- **`duplicate-delivery` is a tie.** Neither variant deduplicates. If an enquiry needs an identity,
+  neither application has one today.
+- **`concurrent-clients` is a tie on observed behaviour.** The Durable variant's isolation is
+  structural (a commit gate, per-conversation documents, zero entries crossing) and the baseline's
+  is incidental, but one concurrent pair did not make the baseline throw, so the row records no win.
+- **`store-outage` is a limitation, not a pass.** The application recreated the store path, kept
+  writing, and said nothing. Two files, no error, no operator signal.
+- **A killed turn is re-sent, not replayed.** On the recorded runtime the resume commits the turn
+  again, and session replay inflates the transcript (10 entries against an uninterrupted run's 9).
+  A `done` enquiry whose answer never committed gets a second answer, not the first one back. Both
+  are in `durable/README.md` under *Known limitations*.
+- **One store writer per process.** The JSONL provider takes an exclusive file lock, so two servers
+  cannot serve the same store. The baseline has no such restriction because it has no store.
+- **607 durability-specific lines against 1310 counted.** That is 46% of the variant existing for a
+  property the baseline does not claim to have. It is the cost, measured.
+
+## Lines of custom durability code
+
+Measured with `wc -l` on 2026-11-05, in this directory:
+
+```bash
+wc -l durable/EnquiryState.cs durable/EnquiryCheckpoint.cs durable/EnquiryDurable.cs \
+      durable/EnquiryWrites.cs durable/EnquiryStore.cs durable/EnquiryTask.cs \
+      durable/ExitSeam.cs durable/Program.cs durable/AppState.cs durable/EnquiryTools.cs \
+      durable/EnquiryPhases.cs durable/EnquiryContracts.cs durable/Components/Pages/Home.razor
+wc -l baseline/Agent.cs baseline/AppState.cs
+```
+
+| Variant | Files counted | `wc -l` total | Durability-specific | Baseline for the same |
+| --- | --- | ---: | ---: | --- |
+| `baseline/` | `baseline/Agent.cs` (91) + `baseline/AppState.cs` (57) | **148** | **0** — no line exists to make state durable | — |
+| `durable/` | 13 files, as above | **2497** | **607** of **1310** code lines | 148 |
+
+Two numbers, and the difference matters:
+
+- **`wc -l` = 2497** is every line of the 13 files, blank lines and comments included. This is the
+  literal measurement the issue asks for; there is no classifier script in this repo, so the file
+  list is stated above and the command is the one shown.
+- **607 / 1310** is the durability-specific split, and it comes from the per-file table in
+  `durable/README.md` §*Custom durability code, counted* (source file:
+  [`durable/README.md`](durable/README.md)), which classifies **non-blank, non-comment** lines line
+  by line. A reader who disagrees with a call changes the split, not the `wc -l` total.
+
+Three files in `durable/` are deliberately not in either number: `Headless.cs` (522 `wc -l`; the
+evidence driver, not the application), `PropertyDatabase.cs` (159) and `Phase.cs` (35) — the last two
+are the baseline's, reused verbatim, and are zero durability lines by construction. Adding every file
+in `durable/` (the 13 above plus those three) gives **3213** `wc -l`; the matrix's "lines of custom
+durability code" is the 607 figure, because that is the number that would go away if the durable
+layer did.
+
+## Layout
+
+```
+real-world-scenarios/band-a-local-dev-tool/
+├── README.md                  # this file
+├── run.sh                     # baseline: build, start, print the URL
+├── upstream/                  # byte-identical Build26 copy, MIT, with PROVENANCE.md
+├── baseline/                  # the vendored application as a project here
+│   ├── Agent.cs               # one enquiry, in memory
+│   └── AppState.cs            # Dictionary<string, Agent>, 15s eviction, no lock
+├── durable/                   # the same application over lib/Durable.cs
+│   ├── README.md              # checkpoint design, evidence, line-count table
+│   ├── run.sh                 # build, start, print the URL
+│   ├── evidence.sh            # reproduces evidence/
+│   └── evidence/              # captured restart / terminal-state / concurrency output
+└── faults/                    # five faults x two variants, with controls
+    ├── README.md              # the harness, the injection point, the vocabulary
+    ├── run-all.sh             # everything, ~3 minutes
+    └── results/               # one JSON per run, plus summary.txt rendered from them
+```
 
 ## What was executed
 
 On 2026-11-04, macOS arm64, .NET SDK 10.0.402, GitHub Copilot CLI 1.0.105 signed in:
 
-- `./run.sh` — published, started, served `GET /` with HTTP 200 and the Blazor
-  InteractiveServer websocket connected.
-- One enquiry submitted through the UI (*"Looking for a 3-bed family home near good schools
-  in the suburbs, budget around $500k"*) ran against the live runtime. The card moved
-  through Validating → Searching, the tool line *Search matching properties* appeared, and
-  the dashboard settled at `Processing 0 / Completed 1 / Rejected 0` — the `Phase.Done`
-  path, with the card retained.
-- A second enquiry (*"BUY CRYPTO NOW!!! Not actually looking for property lol"*) was rejected
-  by the model. `Processing` dropped to 0 and the card disappeared after the upstream
-  15-second delay, with no console error.
+- The **baseline** published, started, served `GET /` with the Blazor InteractiveServer websocket
+  connected. One enquiry submitted through the UI ran against the live runtime (card moved
+  Validating → Searching, tool line *Search matching properties*, dashboard settled at
+  `Processing 0 / Completed 1 / Rejected 0`). A second, spam enquiry was rejected and its card
+  disappeared after the upstream 15-second delay, with no console error.
+- The **Durable variant** built and published cleanly, and `durable/evidence.sh` ran its stages
+  against the recorded runtime with all assertions passing; captured output is
+  `durable/evidence/durable-restart-and-concurrency.md`. Stage 4 was additionally run against the
+  live signed-in CLI, with both documents, transcripts and tasks distinct.
 
-Not executed here: several enquiries at once (defect 4), a restart mid-enquiry (defect 3),
-and a run against a different CLI version. Those belong to the fault-evidence work item.
+On 2026-11-05, same machine and SDK:
+
+- `durable/evidence.sh` was re-run in full; the checked-in capture in
+  `durable/evidence/durable-restart-and-concurrency.md` is that run.
+- `./faults/run-all.sh` — 5 faults × 2 variants plus 10 controls, **exit 0 for all 20 runs**.
+  Results in `faults/results/`, harness log in `faults/results/run-all.log`.
+
+Not executed: the browser UI under a headless browser outside the fault harness (the harness does
+drive it with Playwright for the baseline rows), and either variant against a CLI version other than
+1.0.105. `durable/README.md` records that the checked-in stage 4 capture is the recorded-runtime
+one, not the live one.
 
 ## Licence
 
