@@ -13,12 +13,12 @@
     "endpoint": "https://openrouter.ai/api/v1",
     "model": "openai/gpt-4o-mini",
     "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/duplicate-delivery.sh --variant baseline --fault-not-injected",
-    "commit": "69f3f912acbad7d5a8ac4e68e7cf5d162844da89",
+    "commit": "146fc94fa310fd338e09be901d918fa3215dd465",
     "apiKeyFrom": "OPENROUTER_API_KEY",
     "portKeyFrom": "OPENROUTER_API_KEY",
     "portKeySubstituted": true
   },
-  "recordedAt": "2026-11-05T20:48:50.519915+00:00",
+  "recordedAt": "2026-11-05T21:01:27.960079+00:00",
   "observations": {
     "toolResults": {
       "Order 1234 is currently being processed and will ship in 2 business days.": 1,

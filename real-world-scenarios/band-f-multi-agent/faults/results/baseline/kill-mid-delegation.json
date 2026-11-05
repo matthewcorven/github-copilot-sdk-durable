@@ -7,18 +7,18 @@
   "holderAtEnd": "return_agent",
   "phase": "a handoff is queued at return_agent's executor, so return_agent is about to run",
   "detail": "The process was killed with SIGKILL while return_agent held control; a handoff was queued at that agent's executor. The recovery did not complete: attempt 1 aborted with the framework's \"Expected exactly one update for key 'SharedState'\"; attempt 2 aborted with the framework's \"Expected exactly one update for key 'SharedState'\" — the framework aborts every resume of a workflow that still has work, and the port's resume has no way past it. The first agent to act in the recovered process was return_agent, so control after recovery was resumed by return_agent — read from the framework checkpoint rather than from the port's log. The run's newest checkpoint afterwards names return_agent, which is where the port ended rather than what this fault asks. The port's own resume line named triage_agent as holding control; the state it moved shows return_agent ran first, so return_agent is the answer.",
-  "evidence": "at the kill (pid 52759, SIGKILL, confirmed gone): holder return_agent, fingerprint checkpoints:5/authors:2/last:12bab674a7ce4cb595739d7a5e3c9bd3, specialist tool results {}; after recovery the state moved: yes; first action after recovery: return_agent spoke in checkpoint turn 5 at e1fcaccd113447b29c91a4c15df09e2b; recovery ran 2 process(es) (attempt 1 aborted with the framework's \"Expected exactly one update for key 'SharedState'\"; attempt 2 aborted with the framework's \"Expected exactly one update for key 'SharedState'\"); port-reported resume: triage_agent; the baseline has no verifier; control is read from its checkpoint, not its log",
+  "evidence": "at the kill (pid 76581, SIGKILL, confirmed gone): holder return_agent, fingerprint checkpoints:5/authors:2/last:1ce03286518b4893ae46faeaa7074651, specialist tool results {}; after recovery the state moved: yes; first action after recovery: return_agent spoke in checkpoint turn 5 at a162629de8e044e4a9d42146da8b6d4a; recovery ran 2 process(es) (attempt 1 aborted with the framework's \"Expected exactly one update for key 'SharedState'\"; attempt 2 aborted with the framework's \"Expected exactly one update for key 'SharedState'\"); port-reported resume: triage_agent; the baseline has no verifier; control is read from its checkpoint, not its log",
   "harness": {
     "dotnet": "10.0.402",
     "endpoint": "https://openrouter.ai/api/v1",
     "model": "openai/gpt-4o-mini",
     "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/kill-mid-delegation.sh --variant baseline",
-    "commit": "69f3f912acbad7d5a8ac4e68e7cf5d162844da89",
+    "commit": "146fc94fa310fd338e09be901d918fa3215dd465",
     "apiKeyFrom": "OPENROUTER_API_KEY",
     "portKeyFrom": "OPENROUTER_API_KEY",
     "portKeySubstituted": true
   },
-  "recordedAt": "2026-11-05T20:47:51.190568+00:00",
+  "recordedAt": "2026-11-05T21:00:21.586625+00:00",
   "observations": {
     "processes": 2,
     "holderWhenKilled": "return_agent",

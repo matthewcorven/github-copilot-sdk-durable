@@ -13,12 +13,12 @@
     "endpoint": "https://openrouter.ai/api/v1",
     "model": "openai/gpt-4o-mini",
     "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/store-outage.sh --variant baseline",
-    "commit": "69f3f912acbad7d5a8ac4e68e7cf5d162844da89",
+    "commit": "146fc94fa310fd338e09be901d918fa3215dd465",
     "apiKeyFrom": "OPENROUTER_API_KEY",
     "portKeyFrom": "OPENROUTER_API_KEY",
     "portKeySubstituted": true
   },
-  "recordedAt": "2026-11-05T20:49:33.086423+00:00",
+  "recordedAt": "2026-11-05T21:02:13.190590+00:00",
   "observations": {
     "holderAtOutage": "return_agent",
     "survivedHolder": "triage_agent",

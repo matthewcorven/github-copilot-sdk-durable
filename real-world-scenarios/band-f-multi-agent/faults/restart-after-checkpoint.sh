@@ -62,31 +62,62 @@ else
   # the newest checkpoint must name the specialist the stop is about. Under load that can take a while
   # (a resumed model call plus checkpoint persistence), so the wait is generous — a timeout here
   # would record `not exercised` for a fault that is merely slow, which would be a false absence.
-  # The baseline announces nothing, so the stop point is found by polling. A poll has a window between
-  # "the state says turn 1 is with the specialist" and the harness acting, and the run can consume a
-  # whole turn inside it. The window is closed by holding the process the moment the state is right and
-  # re-reading it while it is held: a stopped process cannot advance underneath the check.
+  # The baseline announces nothing, so the stop point is found by polling — but a poll read from a
+  # running process is a race: the run can consume the whole turn between the read and the signal,
+  # which is what made this row record `not exercised` for a fault that was merely too quick.
+  #
+  # The race is closed by stopping the process first and reading while it cannot move. If the state is
+  # right the process stays held and is stopped with SIGTERM next; if not, it is resumed and polled
+  # again. What the row reports is the state read *inside* the process that was stopped, so it is the
+  # state the stop actually landed on rather than the state a poll happened to see.
   reached=0
-  for _ in $(seq 1 6000); do
-    HOLDER_NOW="$(holder_now "$VARIANT" "$RUNDIR")"
-    TURNS_DONE="$(baseline_log_count "$RUNDIR" turn_end)"
-    if [ "${TURNS_DONE:-0}" -eq 1 ] && [ "$HOLDER_NOW" = "$WANT_HOLDER" ]; then
-      if hold_and_confirm "$VARIANT" "$RUNDIR" >/dev/null; then
-        STILL="$(holder_now "$VARIANT" "$RUNDIR")"
-        STILL_TURNS="$(baseline_log_count "$RUNDIR" turn_end)"
-        if [ "$STILL" = "$WANT_HOLDER" ] && [ "${STILL_TURNS:-0}" -eq 1 ]; then
+  for _ in $(seq 1 3000); do
+    pid_now="$(cat "$RUNDIR/pid" 2>/dev/null || true)"
+    if [ -z "$pid_now" ]; then
+      pid_now="$(app_pid "$VARIANT" "$RUNDIR")"
+      [ -n "$pid_now" ] && echo "$pid_now" > "$RUNDIR/pid"
+    fi
+    if [ -z "$pid_now" ]; then
+      if [ -f "$RUNDIR/wrapper.pid" ] && ! kill -0 "$(cat "$RUNDIR/wrapper.pid")" 2>/dev/null; then break; fi
+      sleep 0.05
+      continue
+    fi
+    if ! kill -STOP "$pid_now" 2>/dev/null; then
+      if [ -f "$RUNDIR/wrapper.pid" ] && ! kill -0 "$(cat "$RUNDIR/wrapper.pid")" 2>/dev/null; then break; fi
+      sleep 0.05
+      continue
+    fi
+    # Confirm the stop took effect before reading; a stopped process cannot advance underneath it.
+    stopped_state=""
+    for _ in $(seq 1 200); do
+      stopped_state="$(ps -o state= -p "$pid_now" 2>/dev/null | tr -d ' ')"
+      case "$stopped_state" in T*|t*|P*) break ;; esac
+      sleep 0.01
+    done
+    HELD_HOLDER="$(holder_now "$VARIANT" "$RUNDIR")"
+    HELD_TURNS="$(baseline_log_count "$RUNDIR" turn_end)"
+    case "$stopped_state" in
+      T*|t*|P*)
+        if [ "$HELD_HOLDER" = "$WANT_HOLDER" ] && [ "${HELD_TURNS:-0}" -eq 1 ]; then
           reached=1
           break
         fi
-        kill -CONT "$(cat "$RUNDIR/pid")" 2>/dev/null || true
-      fi
-    fi
-    if [ -f "$RUNDIR/wrapper.pid" ] && ! kill -0 "$(cat "$RUNDIR/wrapper.pid")" 2>/dev/null; then break; fi
-    sleep 0.2
+        kill -CONT "$pid_now" 2>/dev/null || true
+        ;;
+      *)
+        # It exited while being stopped; nothing was held.
+        if ! kill -0 "$pid_now" 2>/dev/null; then
+          if [ -f "$RUNDIR/wrapper.pid" ] && ! kill -0 "$(cat "$RUNDIR/wrapper.pid")" 2>/dev/null; then break; fi
+          continue
+        fi
+        kill -CONT "$pid_now" 2>/dev/null || true
+        ;;
+    esac
+    sleep 0.05
   done
   if [ "$reached" != "1" ]; then
     record_not_exercised "$VARIANT" "$RESULT_NAME" "the stop point was not reached" \
-      "the run never reached '$STOP_LABEL' (last holder: ${HOLDER_NOW:-none}, completed turns: ${TURNS_DONE:-0})"
+      "the run never reached '$STOP_LABEL' while held (last holder: ${HELD_HOLDER:-none}, completed turns: ${HELD_TURNS:-0}): $(tail_log "$RUNDIR/.starter.log" 6 | tr '\n' ' ')"
     exit 0
   fi
 fi
