@@ -100,6 +100,37 @@ public class TaskResumeTests
         Assert.Equal("child-done", final.Result!.Value.GetProperty("parent").GetString());
     }
 
+    /// <summary>
+    /// A parent that is re-entered while it is still <c>Waiting</c> owes the wait it recorded. Its
+    /// checkpoint is where it will continue from, and the children it named may not have run yet —
+    /// so entering the next phase first would let the parent read an outcome that does not exist.
+    /// </summary>
+    [Fact]
+    public async Task ResumeAsync_AParentReEnteredWhileWaiting_FinishesItsChildrenFirst()
+    {
+        var store = DurableStore.CreateEphemeral();
+        var registry = new ExtensionRegistry();
+        var parent = WaitingParentTask();
+        var child = SlowChildTask(TimeSpan.FromMilliseconds(150));
+        registry.Install(new Extension("waiting", tasks: [parent, child]));
+
+        await using var harness = await DurableHarness.OpenAsync(store, registry);
+
+        var parentId = await SeedWaitingParentAsync(store, parent, child);
+
+        // The parent is re-entered on its own, not through a resume that happens to run the child
+        // first: the child is still Pending when this call starts, which is the state a process
+        // that died between the parent's waiting commit and the child's first phase leaves.
+        var final = await harness.RunTaskAsync(parentId).WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal("completed", final.Status);
+
+        // The parent's second phase saw a finished child. Without the wait being recovered on
+        // re-entry it ran against a child that had not started, and recorded "child-Pending".
+        Assert.Equal("child-done", final.Result!.Value.GetProperty("parent").GetString());
+        Assert.Equal(TaskStatus.Terminal, store.Task(parentId)!.Status);
+    }
+
     [Fact]
     public async Task ResumeAsync_WithNothingInterrupted_ReturnsNoOutcomes()
     {
@@ -227,9 +258,35 @@ public class TaskResumeTests
                         DurableJson.ToElement(new Dictionary<string, string> { ["phase"] = "collect", ["child"] = child.Id }),
                         [child.Id]);
                 }),
-                ["collect"] = (_, checkpoint, runtime) => runtime.CommitAsync(() =>
-                    TaskCommit.Completed(DurableJson.ToElement(
-                        new Dictionary<string, string> { ["parent"] = "child-done", ["child"] = checkpoint["child"] }))),
+                ["collect"] = async (_, checkpoint, runtime) =>
+                {
+                    // Read the child's outcome the way a real phase does. A resume that skipped the
+                    // recorded wait reaches this with the child still Pending.
+                    var outcomes = await runtime.OutcomesAsync([checkpoint["child"]]);
+                    var seen = outcomes.Count > 0 ? outcomes[0].Status : "missing";
+                    return await runtime.CommitAsync(() => TaskCommit.Completed(DurableJson.ToElement(
+                        new Dictionary<string, string>
+                        {
+                            ["parent"] = seen == "completed" ? "child-done" : "child-" + seen,
+                            ["child"] = checkpoint["child"],
+                        })));
+                },
+            },
+            (_, _, runtime) => runtime.CommitAsync(() => TaskCommit.Aborted()));
+
+    /// <summary>A child whose first phase takes real time, so a parent that skips its wait sees it unfinished.</summary>
+    private static DurableTaskDefinition SlowChildTask(TimeSpan delay) =>
+        DurableTask.DefinePhases<Dictionary<string, string>, Dictionary<string, string>>(
+            "test.slow-child",
+            () => new Dictionary<string, string> { ["phase"] = "work" },
+            new Dictionary<string, Func<Dictionary<string, string>, Dictionary<string, string>, TaskRuntime, Task<TaskCommit>>>
+            {
+                ["work"] = async (_, _, runtime) =>
+                {
+                    await Task.Delay(delay, runtime.CancellationToken);
+                    return await runtime.CommitAsync(() => TaskCommit.Completed(
+                        DurableJson.ToElement(new Dictionary<string, string> { ["child"] = "done" })));
+                },
             },
             (_, _, runtime) => runtime.CommitAsync(() => TaskCommit.Aborted()));
 

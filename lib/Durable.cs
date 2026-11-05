@@ -5240,6 +5240,17 @@ internal sealed class DurableRuntime : IAsyncDisposable
             await Store.CommitAsync(_ => Task.CompletedTask);
         }
 
+        // A task re-entered from a checkpoint it committed while WAITING still owes that wait. The
+        // wait is a recorded fact -- the checkpoint names the children -- so it survives the process
+        // that committed it, and re-entering the next phase before the children have finished would
+        // let a parent act on an outcome that does not exist yet. Recover it here, before the first
+        // phase runs, and only for a record that is still Waiting: a fresh record has no children to
+        // wait on, and a Running one is not waiting on anything.
+        if (Store.Task(taskId)?.Status == TaskStatus.Waiting)
+        {
+            await WaitForChildrenAsync(taskId, record.WaitingOn, cancellationToken);
+        }
+
         var runtime = new TaskRuntime(Store, record, definition, cancellationToken);
         while (!cancellationToken.IsCancellationRequested)
         {

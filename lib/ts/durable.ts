@@ -2404,6 +2404,16 @@ export class DurableTaskRunner {
     completion: Deferred<TaskOutcome>,
     cancellationToken: AbortSignal,
   ): Promise<TaskOutcome> {
+    // A task re-entered from a checkpoint it committed while Waiting still owes that wait. The
+    // wait is a recorded fact -- the checkpoint names the children -- so it survives the process
+    // that committed it, and entering the next phase before the children have finished would let
+    // a parent act on an outcome that does not exist yet. Recover it here, before the first phase
+    // runs, and only for a record that is still Waiting: a fresh record has no children to wait
+    // on, and a Running one is not waiting on anything.
+    if (this.store.task(taskId)?.status === TaskStatus.Waiting) {
+      await this.waitForChildrenAsync(taskId, record.waitingOn, cancellationToken);
+    }
+
     const runtime = new TaskRuntime(this.store, record, definition, cancellationToken);
     while (!cancellationToken.aborted) {
       // The task may have been aborted while it was waiting on its children. An abort
