@@ -128,9 +128,37 @@ public static class TriageStore
     public static Task<string> CreateJournalAsync(DurableStore store) =>
         store.CommitAsync(tx => Task.FromResult(tx.CreateConversation().Id));
 
-    /// <summary>The task a run's attempt belongs to, read from the store by name.</summary>
+    /// <summary>
+    /// The task a new attempt should continue: the most recent unfinished one, or the most recent
+    /// finished one when every attempt is finished.
+    /// </summary>
+    /// <remarks>
+    /// **An unfinished task wins, whatever its position.** The obvious lookup —
+    /// <c>FirstOrDefault(name == …)</c> — returns the first task the store happens to hold, which
+    /// after one completed generation is always that finished one: the resume branch then never runs,
+    /// a second process creates a new task, and the interrupted one is stranded with nobody to
+    /// continue it. That was a real defect, found in review, and the ordering below is the fix.
+    /// <para>
+    /// Among unfinished tasks the newest wins, so an interrupted run is continued rather than an
+    /// older abandoned attempt. Among finished tasks the newest wins too, so <c>--reset</c> measures
+    /// a new generation against the last one. Task ids are allocated from the store's monotonic
+    /// sequence (<c>t{sequence}</c>), so the numeric suffix is the creation order; ordering by it
+    /// rather than by list position is what makes the choice independent of provider iteration order.
+    /// </para>
+    /// </remarks>
     public static DurableTaskRecord? CurrentTask(DurableStore store) =>
-        store.Tasks.FirstOrDefault(task => task.Name == Store.TaskName);
+        store.Tasks
+            .Where(task => task.Name == Store.TaskName)
+            .OrderBy(task => task.Status == global::Durable.TaskStatus.Terminal ? 1 : 0)
+            .ThenByDescending(task => SequenceOf(task.Id))
+            .FirstOrDefault();
+
+    /// <summary>
+    /// A task id's creation order, from the <c>t{sequence}</c> form
+    /// <see cref="Transaction.CreateTask"/> allocates.
+    /// </summary>
+    private static long SequenceOf(string taskId) =>
+        taskId.Length > 1 && long.TryParse(taskId.AsSpan(1), out var value) ? value : 0;
 
     /// <summary>The number in a pull request's owner id.</summary>
     public static int NumberOf(string owner) =>

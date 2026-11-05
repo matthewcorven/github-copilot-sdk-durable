@@ -61,6 +61,15 @@ unfinished run or **starts a new generation**, and the two are different behavio
 | no record, or a finished task | creates a new task, generation +1, and because every PR's digest is unchanged, reuses every assessment and posts no comment |
 | `running` at phase N | enters at phase N; the phase pointer, and for phase 6 the memos, stop it repeating work |
 
+**Which task is "the current one" is not a detail, and getting it wrong made the resume unreachable.**
+`TriageStore.CurrentTask` first selected `Tasks.FirstOrDefault(name == …)` — the first task in store
+order, which after one completed generation is always that finished task. Every later process then
+declared it finished and created a *new* one, leaving an interrupted run stranded with nobody to
+continue it: exactly the case requirement 3 exists for, silently dead. The selection now prefers a
+non-terminal task and tie-breaks on creation sequence, and stage 5c is the evidence: generation 1
+completes, generation 2 is stopped at `collect`, and the third process **adopts the interrupted task**
+(`resuming durable task t223 at phase 'classify'`), never prints `is finished`, and finishes the work.
+
 The *generation* is not a cooldown replacement. The baseline's gate exists because its state cannot
 express "unfinished"; the durable variant's state can, so the question "has anything changed" is
 answered per PR by the digest instead of per run by a clock. That is a behaviour difference and the
@@ -91,13 +100,28 @@ output is `evidence/durable-triage-and-idempotency.md`.
    - Stage 3 stops *between* phase 6 and phase 7 (`BAND_C_EXIT_AFTER_PHASE=comment`). The resume
      enters at `report` and writes nothing; thirteen comments stay thirteen.
    - Stage 4 stops *inside* phase 6, after seven of thirteen (`BAND_C_EXIT_AFTER_COMMENTS=7`). The
-     resume re-enters phase 6 and skips exactly seven by memo and posts six. The control (4b) removes
-     the guard and the same resume posts all thirteen.
+     resume re-enters phase 6, skips seven and posts six. **At that seam the memo and the ledger both
+     hold the seven**, so this stage on its own does not show which one prevented the re-post — a
+     resume with the memos erased produces the identical "7 skipped" through the ledger. Stage 4a is
+     the control that separates them: `BAND_C_HIDE_LEDGER=1` withholds the ledger entry and leaves
+     the memo, the ledger is empty (0 entries) and the seven are still skipped — **by the memo**. The
+     control 4b removes every guard and the same resume posts all thirteen.
 4. **Concurrent runs must not both proceed.** Stage 5: five rounds of two processes started together
    against one store; each round has exactly one completion and one refusal, and the refusal is the
    store's own message with the lock file and the holding process in it. The control (5b) runs the
    same two processes against different stores and both proceed, so the refusal is the store's and not
    a flag.
+
+   **This meets the requirement as written and only as written, and the reason is worth stating
+   plainly rather than leaving to a footnote.** The guarantee is not "one run per repository"; it is
+   "one writer per store file". Two runs of this program that agree on the store path cannot overlap —
+   that is a property of the layer and it holds. Two runs that disagree on the path both proceed, and
+   nothing in the layer or in this program notices: §"Concurrency" below measures that case and the
+   stage-5b control is it. So the requirement is satisfied *because the host chooses one path per
+   repository*, not because the store knows what a repository is. If that convention breaks — a second
+   checkout, a different worktree, `DURABLE_STORE` pointing elsewhere — the refusal does not happen.
+   Making it a property of the data rather than of the filename would need an ownership record inside
+   the store, which the layer does not have.
 5. **Use `lib/Durable.cs`. No private store.** `BandCDurable.csproj` references
    `../../../lib/Copilot.Durable.csproj`. Nothing from the store is copied: `Contracts.cs` defines
    document shapes and `TriageStore.cs` calls the layer. The one layer change this variant needed is
@@ -122,12 +146,21 @@ support:
 
 - A refused run **does nothing at all** — it exits before the fixture is read. A caller that wants the
   second run to wait and then perform its own triage has to retry; nothing here does that.
-- The refusal is **per store file**, not per repository. Two runs pointed at two different store paths
-  for the same repository both proceed, and nothing in the layer notices — the control in stage 5b is
-  exactly that case, and it is a control *because* the expected behaviour is the opposite. The lock is
-  only a mutex if every writer agrees on the path. `run.sh` fixes the path to
-  `.scratch/band-c-durable/<repo>/store.jsonl`, which is a convention in this script, not a guarantee
-  in the layer.
+- **The refusal is per store file, not per repository — this is the honest limit of requirement 4.**
+  Two runs pointed at two different store paths for the same repository both proceed, and nothing in
+  the layer notices. Stage 5b is exactly that case, and it is a control *because* the expected
+  behaviour is the opposite. The lock is only a mutex if every writer agrees on the path, so what this
+  variant demonstrates is *"two processes over one store cannot both proceed"*, not *"two triage runs
+  of one repository cannot both proceed"*. `run.sh` derives the path from the fixture's repository name
+  (`.scratch/band-c-durable/store.jsonl`, whose documents are keyed by repository), which makes the
+  second true in practice for runs started through that script — a convention in this script, not a
+  guarantee in the layer, and not something this variant can enforce.
+
+  Closing it properly needs an owner record *inside* the store — "repository X is being triaged by
+  process P since T" — written in a transaction before any work, which is a layer feature this variant
+  does not have and does not invent: a private lock file next to the store would be exactly the "no
+  private store" line requirement 5 draws. It is stated here as a gap rather than dressed up as a
+  property.
 
 The baseline has neither property: its two runs race the same branch, the loser's `update-ref` fails
 and the winner's write lands, and neither run knows the other existed.
@@ -155,9 +188,10 @@ or neither — which is only possible because of the layer change below.
 ### The window a memo cannot close
 
 The comment file is written first, then the ledger entry and the memo commit. A process that dies
-between those two leaves a comment that no record mentions. Measured, not argued:
-`BAND_C_EXIT_AFTER_COMMENT_EFFECT=1` stops exactly there, and the resume posts that one comment again
-— a duplicate of one, and no more than one, however many times the run is repeated.
+between those two leaves a comment that no record mentions. Measured, not argued — stage 4c
+(`BAND_C_EXIT_AFTER_COMMENT_EFFECT=1`) stops exactly there and asserts the shape: **1 comment on disk,
+0 ledger entries, 0 memos**, and the resume posts that one comment again — a duplicate of one, and no
+more than one, however many times the run is repeated.
 
 That is the honest shape of an external effect with no transaction on the other side. The alternative
 would be to commit the ledger first and write the comment second, which turns a lost comment into a
@@ -235,6 +269,17 @@ and before the commit, so it commits with the checkpoint and rolls back through 
 `Transaction.Memo` is used by `TriageStore.RecordCommentAsync`; the ledger entry and the memo are then
 one transaction, which is what makes "a resume sees both or neither" true.
 
+A second defect came out of the review of this variant, and it is the more dangerous of the two
+because it is silent: **a rollback discarded a write and the next failed transaction put it back.**
+`InMemoryStoreProvider.UpdateTask` keeps a baseline of each task's last known state so the next
+transaction can arm its own undo with it, and it moved that baseline forward to the state the failing
+transaction wrote. Restoring only the record left the baseline ahead of it, so the following failure
+restored the memo — or checkpoint — this one had discarded. The TypeScript port already reset the
+baseline; C# and Python did not, which is what made it a port divergence and not a design choice.
+Fixed in both (`UndoLog.Restore` now takes the baseline map and puts it back), with two tests that
+fail without the fix: one for a memo, one for a checkpoint, both staging a second, unrelated failing
+transaction because that is what makes the stale baseline observable.
+
 Two smaller things the layer made awkward, recorded because the next consumer will meet them:
 
 - **A phase handler gets no store.** `TaskRuntime` has the task, the definition, the cancellation token
@@ -259,7 +304,7 @@ a tie is called one.
 | **Cold start every run** | yes: Phase 1 reads the blob and every eligible PR is re-classified, re-scored, re-commented | no: a finished record starts a generation that reuses every assessment at an unchanged digest, and the ledger stops the comments | stage 2: `reused: 13 assessment(s) at an unchanged digest, 0 newly classified`, `0 comment(s) posted, 13 skipped by the ledger` |
 | **Cooldown** | the per-PR rule, plus a run gate that refuses any second run inside the hour because the state cannot say "unfinished" | the per-PR rule unchanged; the run gate is gone, replaced by "resume if the record says running, new generation if it says finished" | stage 1 vs `../evidence/two-runs.md`: the baseline's run 2 says `run skipped by the one-hour cooldown`; this variant's run 2 triages the same 13 and posts nothing |
 | **Failed save-state** | Phase 8 is the last step; a run that dies before it leaves the effects and the previous view, and the next run redoes the effects | every phase committed as it went; a run that dies leaves a record at the phase it reached and no work is silently redone | stage 3 and stage 4: both seams leave a coherent record, and both resumes duplicate nothing |
-| **Overlapping runs** | no lock: both read, both triage, the second `update-ref` fails, the winner's write lands and neither run knows | the store is opened exclusively; the second process is refused before it reads anything | stage 5: 5/5 rounds have exactly one refusal; stage 5b: two stores, both proceed |
+| **Overlapping runs** | no lock: both read, both triage, the second `update-ref` fails, the winner's write lands and neither run knows | the store is opened exclusively; a second process over the *same store file* is refused before it reads anything. Two different store files do not refuse (§"Concurrency"): the guarantee is one writer per store path, not one run per repository, and satisfying requirement 4 depends on the host deriving one path per repository | stage 5: 5/5 rounds have exactly one refusal; stage 5b: two stores, both proceed |
 | **Duplicate delivery of the comment** | not prevented: a re-run re-comments every eligible PR | prevented by a memo within a run and a ledger across runs, keyed `(pr, digest)` | stage 2/2b, stage 3, stage 4/4b |
 | **Resume from a mid-run stop** | not expressible: its only state is a whole-file snapshot written at the end | expressible: the run record names the phase, each document names its stage, memos name the completed steps | stage 3 (between phases) and stage 4 (inside a phase) |
 | **Store outage / write failure** | not exercised | not exercised | neither variant injects one. The layer's `StoreFileLock` refusal is the closest thing measured, and it is an open failure, not a write failure. |

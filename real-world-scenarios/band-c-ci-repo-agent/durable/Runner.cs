@@ -108,6 +108,11 @@ public static class Runner
                 description.Add("BAND_C_NO_IDEMPOTENCY_GUARD=1");
             }
 
+            if (seam.LedgerHidden)
+            {
+                description.Add("BAND_C_HIDE_LEDGER=1");
+            }
+
             Console.WriteLine($"seam:       {string.Join(" ", description)} (exit {ExitSeam.ExitCode})");
         }
 

@@ -6,8 +6,7 @@ substitutions the script itself makes while it prints (`<scratch>` for the scrat
 the command, printed by the script before it ran, and each `[exit N]` is its status.
 
 Executed on 2026-11-05, macOS arm64, `dotnet` 10.0.402 at `/opt/homebrew/bin/dotnet`, from a clean
-scratch directory. The script exited 0 and every `✓` line below is one of its assertions; there is a
-`✗` line in this file only in the paragraphs that record a rejected attempt.
+scratch directory. The script exited 0 with **66 assertions**; every `✓` line below is one of them.
 
 Two runs of `./durable/evidence.sh` produce identical assertion output, which is what makes the
 numbers here reproducible rather than a snapshot of one lucky run.
@@ -17,8 +16,10 @@ Contents:
 1. Stage 1 — both variants, same fixture, same clock, identical output documents
 2. Stage 2 — re-run unchanged posts no comment, and the control that posts thirteen
 3. Stage 3 — interrupted after commenting, resumed, no duplicate
-4. Stage 4 — interrupted *inside* the comment phase, resumed, seven memos honoured
-5. Stage 5 — two simultaneous runs, one refused, five rounds, and the control
+4. Stage 4 — interrupted *inside* the comment phase; 4a isolates the memo, 4b removes every guard,
+   4c measures the window no memo closes
+5. Stage 5 — two simultaneous runs, one refused; 5b the two-store control; 5c a finished generation
+   followed by an interrupted one and a resume
 6. Stage 6 — the store read back, so no claim rests on the program's own output
 7. Stage 7 — the line count for the matrix
 8. Stage 8 — the layer gap this variant found, reproduced
@@ -424,7 +425,7 @@ fixture:    <worktree>/real-world-scenarios/band-c-ci-repo-agent/baseline/fixtur
 output:     <scratch>/same/run-3
 seam:       BAND_C_NO_IDEMPOTENCY_GUARD=1 (exit 42)
 
-run:        task t2 is finished (generation 1); starting a new one
+run:        task t223 is finished (generation 1); starting a new one
 phase 1/8  load state and collect pull requests
   state:      no unfinished run record for this repository — a new generation
   prior run:  2026-11-05T12:00:00Z triaged 1 generation(s) of state
@@ -687,9 +688,8 @@ $ python3 evidence/_store.py task <scratch>/interrupted/store.jsonl
 ## 4. Requirement 3, the harder seam — interrupted inside the comment phase
 
 This is the case the issue names, and the phase pointer cannot help: the stop happens *during* phase
-6, after nine comments and before the phase commits. The resume re-enters phase 6 with the run record
-still saying `comment`, and the only thing that stops the seven posted comments from being posted
-again is the memo.
+6, after seven comments and before the phase commits. The resume re-enters phase 6 with the run record
+still saying `comment`.
 
 ```
 $ BAND_C_EXIT_AFTER_COMMENTS=7 dotnet <worktree>/real-world-scenarios/band-c-ci-repo-agent/durable/bin/Debug/net10.0/BandCDurable.dll --store <scratch>/midway/store.jsonl --run-dir <scratch>/midway/run --fixture pull-requests.json --now 2026-11-05T12:00:00Z
@@ -845,12 +845,166 @@ run:        completed — 13 triaged, 13 commented, 2 in cooldown, 1 not ours, 1
   ✓ comments on disk afterwards: 13
 ```
 
-The store's own account of that stop, and of the resume that followed, is in stage 6.
+**At that seam the memo and the ledger both hold the seven**, so this stage alone does not say which
+one prevented the re-post: a resume with the memos erased produces the identical `7 skipped` through
+the ledger. Stage 4a is the control that separates them.
 
-### 4b. The control
+### 4a. The memo alone — the ledger withheld
 
-The same seam and the same resume with the guard removed: all thirteen comments are written again,
-including the seven that already existed.
+`BAND_C_HIDE_LEDGER=1` withholds the ledger entry and leaves the memo. The ledger is empty, the memos
+are seven, and the resume still skips seven — by the memo, with no ledger record to skip them:
+
+```
+$ BAND_C_EXIT_AFTER_COMMENTS=7 BAND_C_HIDE_LEDGER=1 dotnet <worktree>/real-world-scenarios/band-c-ci-repo-agent/durable/bin/Debug/net10.0/BandCDurable.dll --store <scratch>/midway-memo/store.jsonl ...
+band C durable — the pr-triage agent with its state in a Durable store
+run time:   2026-11-05T12:00:00Z
+repository: fixture/durable
+store:      <scratch>/midway-memo/store.jsonl
+fixture:    <worktree>/real-world-scenarios/band-c-ci-repo-agent/baseline/fixture/pull-requests.json (17 pull requests)
+output:     <scratch>/midway-memo/run
+seam:       BAND_C_EXIT_AFTER_COMMENTS=7 BAND_C_HIDE_LEDGER=1 (exit 42)
+
+phase 1/8  load state and collect pull requests
+  state:      no unfinished run record for this repository — a new generation
+  collected:  17 pull requests (pull_request_read get / get_files / get_reviews / get_check_runs)
+  not ours:   #110 authored by octocat — not app/github-copilot
+  not open:   #120 state=closed
+  cooldown:   #108 updated 30m ago (< 60m) — skip any PR that was opened or last updated (new commits, edits) less than 1 hour before the current run time
+  cooldown:   #116 updated 10m ago (< 60m) — skip any PR that was opened or last updated (new commits, edits) less than 1 hour before the current run time
+  eligible:   13 pull request(s)
+
+phase 2/8  classify and assess risk
+  #101  docs       risk=low    2 file(s), +6/-6  docs: fix quickstart typos and the sample output
+  #102  test       risk=low    3 file(s), +190/-4  test: add parity tests for the TypeScript port
+  #103  formatting risk=low    1 file(s), +62/-62  formatting: reflow the long lines in durable.ts
+  #104  chore      risk=medium 2 file(s), +18/-18  chore: bump the Copilot CLI pin to 1.0.105
+  #105  refactor   risk=medium 12 file(s), +260/-240  refactor: extract the JSON store options out of Durable.cs
+  #106  bug        risk=high   4 file(s), +180/-40  fix: replay drops the tool result when the runtime retries
+  #107  feature    risk=high   41 file(s), +2400/-300  feat: apply backpressure when the admission queue is full
+  #109  chore      risk=high   2 file(s), +0/-140  chore: remove the dead replay shim
+  #111  docs       risk=low    2 file(s), +48/-3  docs: add the Python port notes to the README
+  #112  formatting risk=low    1 file(s), +310/-310  formatting: normalise tabs to spaces in the Python port
+  #113  formatting risk=low    2 file(s), +900/-900  formatting: normalise line endings in the example scripts
+  #114  chore      risk=medium 2 file(s), +8/-8  chore: refresh the sandbox base image pins
+  #115  chore      risk=medium 1 file(s), +44/-44  chore: bump the uv lock for the Python port
+
+phase 3/8  score priority (impact 0-50 + urgency 0-30 + quality 0-20)
+  #101   44 = impact 24 + urgency  0 + quality 20
+  #102   49 = impact 29 + urgency  0 + quality 20
+  #103   46 = impact 30 + urgency  0 + quality 16
+  #104   50 = impact 34 + urgency  0 + quality 16
+  #105   61 = impact 41 + urgency  0 + quality 20
+  #106   76 = impact 50 + urgency 24 + quality  2
+  #107   61 = impact 45 + urgency  6 + quality 10
+  #109   58 = impact 32 + urgency 14 + quality 12
+  #111   42 = impact 22 + urgency  0 + quality 20
+  #112   44 = impact 28 + urgency  0 + quality 16
+  #113   26 = impact 14 + urgency  0 + quality 12
+  #114   52 = impact 36 + urgency  0 + quality 16
+  #115   50 = impact 34 + urgency  0 + quality 16
+
+phase 4/8  recommend actions
+  #101  auto_merge    low risk, quality 20/20, CI passing
+  #102  auto_merge    low risk, quality 20/20, CI passing
+  #103  auto_merge    low risk, quality 16/20, CI passing
+  #104  batch_review  similar low/medium-risk work, reviewed together
+  #105  fast_track    quality 20/20, impact 41/50
+  #106  defer         high risk and CI failing
+  #107  batch_review  similar low/medium-risk work, reviewed together
+  #109  close         superseded by #107
+  #111  auto_merge    low risk, quality 20/20, CI passing
+  #112  auto_merge    low risk, quality 16/20, CI passing
+  #113  defer         impact 14/50 below the triage threshold
+  #114  batch_review  similar low/medium-risk work, reviewed together
+  #115  batch_review  similar low/medium-risk work, reviewed together
+
+phase 5/8  batch and label
+  batch-001  formatting x3: #103, #112, #113
+  batch-002  chore x3: #104, #114, #115
+  #101  add [pr-type:docs, pr-risk:low, pr-priority:p2, pr-action:auto_merge, pr-agent:same-repo] keep [documentation]
+  #102  add [pr-type:test, pr-risk:low, pr-priority:p2, pr-action:auto_merge, pr-agent:same-repo] keep [tests]
+  #103  add [pr-type:formatting, pr-risk:low, pr-priority:p2, pr-action:auto_merge, pr-agent:same-repo, pr-batch:batch-001] keep []
+  #104  add [pr-type:chore, pr-risk:medium, pr-priority:p2, pr-action:batch_review, pr-agent:same-repo, pr-batch:batch-002] keep [dependencies]
+  #105  add [pr-type:refactor, pr-risk:medium, pr-priority:p1, pr-action:fast_track, pr-agent:same-repo] keep [refactor]
+  #106  add [pr-type:bug, pr-risk:high, pr-priority:p0, pr-action:defer, pr-agent:same-repo] remove [pr-type:docs] keep [bug, needs-review]
+  #107  add [pr-type:feature, pr-risk:high, pr-priority:p1, pr-action:batch_review, pr-agent:same-repo] remove [pr-risk:low] keep [enhancement]
+  #109  add [pr-type:chore, pr-risk:high, pr-priority:p1, pr-action:close, pr-agent:same-repo] keep [chore, stale]
+  #111  add [pr-type:docs, pr-risk:low, pr-priority:p2, pr-action:auto_merge, pr-agent:fork] keep [documentation]
+  #112  add [pr-type:formatting, pr-risk:low, pr-priority:p2, pr-action:auto_merge, pr-agent:same-repo, pr-batch:batch-001] keep []
+  #113  add [pr-type:formatting, pr-risk:low, pr-priority:p3, pr-action:defer, pr-agent:same-repo, pr-batch:batch-001] keep []
+  #114  add [pr-type:chore, pr-risk:medium, pr-priority:p2, pr-action:batch_review, pr-agent:same-repo, pr-batch:batch-002] keep [dependencies]
+  #115  add [pr-type:chore, pr-risk:medium, pr-priority:p2, pr-action:batch_review, pr-agent:same-repo, pr-batch:batch-002] keep [dependencies]
+  wrote:      labels.json (add-labels safe output)
+
+phase 6/8  comment each triaged PR
+  wrote:      comments/pr-101.md (448 bytes)
+  wrote:      comments/pr-102.md (444 bytes)
+  wrote:      comments/pr-103.md (476 bytes)
+  wrote:      comments/pr-104.md (483 bytes)
+  wrote:      comments/pr-105.md (463 bytes)
+  wrote:      comments/pr-106.md (454 bytes)
+  wrote:      comments/pr-107.md (477 bytes)
+  seam:       stopped inside phase 'comment' after 7 comment(s) (BAND_C_EXIT_AFTER_COMMENTS), exit 42
+[exit 42]
+  ✓ the memo-only seam exited 42 after the seventh comment: 42
+  ✓ memos at the memo-only seam: 7
+  ✓ the ledger is empty, so it cannot be the guard here: ledger entries: 0
+
+$ BAND_C_HIDE_LEDGER=1 dotnet <worktree>/real-world-scenarios/band-c-ci-repo-agent/durable/bin/Debug/net10.0/BandCDurable.dll --store <scratch>/midway-memo/store.jsonl ...
+band C durable — the pr-triage agent with its state in a Durable store
+run time:   2026-11-05T12:00:00Z
+repository: fixture/durable
+store:      <scratch>/midway-memo/store.jsonl
+fixture:    <worktree>/real-world-scenarios/band-c-ci-repo-agent/baseline/fixture/pull-requests.json (17 pull requests)
+output:     <scratch>/midway-memo/run
+seam:       BAND_C_HIDE_LEDGER=1 (exit 42)
+
+run:        resuming durable task t2 at phase 'comment' (attempt 2, restarts so far 0)
+resuming:   0 comment(s) recorded in this run's record
+memos:      7 step memo(s) on record
+────────────────────────────────────────────────────────────────────────
+phase 6/8  comment each triaged PR
+  skipped:    comments/pr-101.md — memo comment/101/2b202a7aede878ba present
+  skipped:    comments/pr-102.md — memo comment/102/3a7981d07fa4302f present
+  skipped:    comments/pr-103.md — memo comment/103/717441717950cc1b present
+  skipped:    comments/pr-104.md — memo comment/104/df075f5169867822 present
+  skipped:    comments/pr-105.md — memo comment/105/72bd32d303128ad5 present
+  skipped:    comments/pr-106.md — memo comment/106/0df7f986069399fe present
+  skipped:    comments/pr-107.md — memo comment/107/b4010998c6bbd365 present
+  wrote:      comments/pr-109.md (415 bytes)
+  wrote:      comments/pr-111.md (442 bytes)
+  wrote:      comments/pr-112.md (486 bytes)
+  wrote:      comments/pr-113.md (487 bytes)
+  wrote:      comments/pr-114.md (481 bytes)
+  wrote:      comments/pr-115.md (484 bytes)
+
+  idempotent: 6 comment(s) posted, 7 skipped by memo, 0 skipped by the ledger
+
+phase 7/8  create the triage report issue
+  wrote:      triage-report.md (3024 bytes)
+  wrote:      triage-data.json (data safe output)
+
+phase 8/8  save run state
+  wrote:      band-c.run@fixture/durable — generation 1, phase save
+  wrote:      band-c.pr@pr:<number> for 13 pull request(s), stage batch
+  wrote:      band-c.comments@agent:pr-triage — 0 comment(s) on record
+  outcome:    the task's terminal record carries the counts below
+
+triaged 13 PR(s): #101 auto_merge, #102 auto_merge, #103 auto_merge, #104 batch_review, #105 fast_track, #106 defer, #107 batch_review, #109 close, #111 auto_merge, #112 auto_merge, #113 defer, #114 batch_review, #115 batch_review
+2 skipped by the 1-hour cooldown, 1 not authored by app/github-copilot, 1 not open.
+
+run:        completed — 13 triaged, 13 commented, 2 in cooldown, 1 not ours, 1 not open
+[exit 0]
+  ✓ the memo-only resume exited: 0
+  ✓ comments skipped with no ledger to skip them: 7
+  ✓ comments the memo-only resume posted: 6
+  ✓ skips attributed to the ledger: 0
+```
+
+### 4b. The control — every guard removed
+
+The same seam and the same resume with `BAND_C_NO_IDEMPOTENCY_GUARD=1`: all thirteen comments are
+written again, including the seven that already existed.
 
 ```
 $ BAND_C_NO_IDEMPOTENCY_GUARD=1 dotnet <worktree>/real-world-scenarios/band-c-ci-repo-agent/durable/bin/Debug/net10.0/BandCDurable.dll --store <scratch>/midway-off/store.jsonl --run-dir <scratch>/midway-off/run ...
@@ -901,6 +1055,149 @@ run:        completed — 13 triaged, 13 commented, 2 in cooldown, 1 not ours, 1
   ✓ comments the control resume skipped: 0
 ```
 
+### 4c. The window no memo closes
+
+The comment file is written before the ledger entry and the memo commit. `BAND_C_EXIT_AFTER_COMMENT_EFFECT=1`
+stops between them: one comment on disk, no ledger entry, no memo. The resume posts that one comment
+again — one duplicate, and no more than one.
+
+```
+$ BAND_C_EXIT_AFTER_COMMENT_EFFECT=1 dotnet <worktree>/real-world-scenarios/band-c-ci-repo-agent/durable/bin/Debug/net10.0/BandCDurable.dll --store <scratch>/effect/store.jsonl ...
+band C durable — the pr-triage agent with its state in a Durable store
+run time:   2026-11-05T12:00:00Z
+repository: fixture/durable
+store:      <scratch>/effect/store.jsonl
+fixture:    <worktree>/real-world-scenarios/band-c-ci-repo-agent/baseline/fixture/pull-requests.json (17 pull requests)
+output:     <scratch>/effect/run
+seam:       BAND_C_EXIT_AFTER_COMMENT_EFFECT=1 (exit 42)
+
+phase 1/8  load state and collect pull requests
+  state:      no unfinished run record for this repository — a new generation
+  collected:  17 pull requests (pull_request_read get / get_files / get_reviews / get_check_runs)
+  not ours:   #110 authored by octocat — not app/github-copilot
+  not open:   #120 state=closed
+  cooldown:   #108 updated 30m ago (< 60m) — skip any PR that was opened or last updated (new commits, edits) less than 1 hour before the current run time
+  cooldown:   #116 updated 10m ago (< 60m) — skip any PR that was opened or last updated (new commits, edits) less than 1 hour before the current run time
+  eligible:   13 pull request(s)
+
+phase 2/8  classify and assess risk
+  #101  docs       risk=low    2 file(s), +6/-6  docs: fix quickstart typos and the sample output
+  #102  test       risk=low    3 file(s), +190/-4  test: add parity tests for the TypeScript port
+  #103  formatting risk=low    1 file(s), +62/-62  formatting: reflow the long lines in durable.ts
+  #104  chore      risk=medium 2 file(s), +18/-18  chore: bump the Copilot CLI pin to 1.0.105
+  #105  refactor   risk=medium 12 file(s), +260/-240  refactor: extract the JSON store options out of Durable.cs
+  #106  bug        risk=high   4 file(s), +180/-40  fix: replay drops the tool result when the runtime retries
+  #107  feature    risk=high   41 file(s), +2400/-300  feat: apply backpressure when the admission queue is full
+  #109  chore      risk=high   2 file(s), +0/-140  chore: remove the dead replay shim
+  #111  docs       risk=low    2 file(s), +48/-3  docs: add the Python port notes to the README
+  #112  formatting risk=low    1 file(s), +310/-310  formatting: normalise tabs to spaces in the Python port
+  #113  formatting risk=low    2 file(s), +900/-900  formatting: normalise line endings in the example scripts
+  #114  chore      risk=medium 2 file(s), +8/-8  chore: refresh the sandbox base image pins
+  #115  chore      risk=medium 1 file(s), +44/-44  chore: bump the uv lock for the Python port
+
+phase 3/8  score priority (impact 0-50 + urgency 0-30 + quality 0-20)
+  #101   44 = impact 24 + urgency  0 + quality 20
+  #102   49 = impact 29 + urgency  0 + quality 20
+  #103   46 = impact 30 + urgency  0 + quality 16
+  #104   50 = impact 34 + urgency  0 + quality 16
+  #105   61 = impact 41 + urgency  0 + quality 20
+  #106   76 = impact 50 + urgency 24 + quality  2
+  #107   61 = impact 45 + urgency  6 + quality 10
+  #109   58 = impact 32 + urgency 14 + quality 12
+  #111   42 = impact 22 + urgency  0 + quality 20
+  #112   44 = impact 28 + urgency  0 + quality 16
+  #113   26 = impact 14 + urgency  0 + quality 12
+  #114   52 = impact 36 + urgency  0 + quality 16
+  #115   50 = impact 34 + urgency  0 + quality 16
+
+phase 4/8  recommend actions
+  #101  auto_merge    low risk, quality 20/20, CI passing
+  #102  auto_merge    low risk, quality 20/20, CI passing
+  #103  auto_merge    low risk, quality 16/20, CI passing
+  #104  batch_review  similar low/medium-risk work, reviewed together
+  #105  fast_track    quality 20/20, impact 41/50
+  #106  defer         high risk and CI failing
+  #107  batch_review  similar low/medium-risk work, reviewed together
+  #109  close         superseded by #107
+  #111  auto_merge    low risk, quality 20/20, CI passing
+  #112  auto_merge    low risk, quality 16/20, CI passing
+  #113  defer         impact 14/50 below the triage threshold
+  #114  batch_review  similar low/medium-risk work, reviewed together
+  #115  batch_review  similar low/medium-risk work, reviewed together
+
+phase 5/8  batch and label
+  batch-001  formatting x3: #103, #112, #113
+  batch-002  chore x3: #104, #114, #115
+  #101  add [pr-type:docs, pr-risk:low, pr-priority:p2, pr-action:auto_merge, pr-agent:same-repo] keep [documentation]
+  #102  add [pr-type:test, pr-risk:low, pr-priority:p2, pr-action:auto_merge, pr-agent:same-repo] keep [tests]
+  #103  add [pr-type:formatting, pr-risk:low, pr-priority:p2, pr-action:auto_merge, pr-agent:same-repo, pr-batch:batch-001] keep []
+  #104  add [pr-type:chore, pr-risk:medium, pr-priority:p2, pr-action:batch_review, pr-agent:same-repo, pr-batch:batch-002] keep [dependencies]
+  #105  add [pr-type:refactor, pr-risk:medium, pr-priority:p1, pr-action:fast_track, pr-agent:same-repo] keep [refactor]
+  #106  add [pr-type:bug, pr-risk:high, pr-priority:p0, pr-action:defer, pr-agent:same-repo] remove [pr-type:docs] keep [bug, needs-review]
+  #107  add [pr-type:feature, pr-risk:high, pr-priority:p1, pr-action:batch_review, pr-agent:same-repo] remove [pr-risk:low] keep [enhancement]
+  #109  add [pr-type:chore, pr-risk:high, pr-priority:p1, pr-action:close, pr-agent:same-repo] keep [chore, stale]
+  #111  add [pr-type:docs, pr-risk:low, pr-priority:p2, pr-action:auto_merge, pr-agent:fork] keep [documentation]
+  #112  add [pr-type:formatting, pr-risk:low, pr-priority:p2, pr-action:auto_merge, pr-agent:same-repo, pr-batch:batch-001] keep []
+  #113  add [pr-type:formatting, pr-risk:low, pr-priority:p3, pr-action:defer, pr-agent:same-repo, pr-batch:batch-001] keep []
+  #114  add [pr-type:chore, pr-risk:medium, pr-priority:p2, pr-action:batch_review, pr-agent:same-repo, pr-batch:batch-002] keep [dependencies]
+  #115  add [pr-type:chore, pr-risk:medium, pr-priority:p2, pr-action:batch_review, pr-agent:same-repo, pr-batch:batch-002] keep [dependencies]
+  wrote:      labels.json (add-labels safe output)
+
+phase 6/8  comment each triaged PR
+  seam:       stopped between the comment and its ledger record, after 1 comment(s) (BAND_C_EXIT_AFTER_COMMENT_EFFECT), exit 42
+[exit 42]
+  ✓ the seam exited 42 between the effect and its record: 42
+  ✓ comments on disk at the seam: 1
+  ✓ the ledger has no record of the comment that exists: ledger entries: 0
+  ✓ and no memo of it either: 0
+
+$ dotnet <worktree>/real-world-scenarios/band-c-ci-repo-agent/durable/bin/Debug/net10.0/BandCDurable.dll --store <scratch>/effect/store.jsonl --run-dir <scratch>/effect/run ...
+band C durable — the pr-triage agent with its state in a Durable store
+run time:   2026-11-05T12:00:00Z
+repository: fixture/durable
+store:      <scratch>/effect/store.jsonl
+fixture:    <worktree>/real-world-scenarios/band-c-ci-repo-agent/baseline/fixture/pull-requests.json (17 pull requests)
+output:     <scratch>/effect/run
+
+run:        resuming durable task t2 at phase 'comment' (attempt 2, restarts so far 0)
+resuming:   0 comment(s) recorded in this run's record
+memos:      0 step memo(s) on record
+────────────────────────────────────────────────────────────────────────
+phase 6/8  comment each triaged PR
+  wrote:      comments/pr-101.md (448 bytes)
+  wrote:      comments/pr-102.md (444 bytes)
+  wrote:      comments/pr-103.md (476 bytes)
+  wrote:      comments/pr-104.md (483 bytes)
+  wrote:      comments/pr-105.md (463 bytes)
+  wrote:      comments/pr-106.md (454 bytes)
+  wrote:      comments/pr-107.md (477 bytes)
+  wrote:      comments/pr-109.md (415 bytes)
+  wrote:      comments/pr-111.md (442 bytes)
+  wrote:      comments/pr-112.md (486 bytes)
+  wrote:      comments/pr-113.md (487 bytes)
+  wrote:      comments/pr-114.md (481 bytes)
+  wrote:      comments/pr-115.md (484 bytes)
+
+phase 7/8  create the triage report issue
+  wrote:      triage-report.md (3024 bytes)
+  wrote:      triage-data.json (data safe output)
+
+phase 8/8  save run state
+  wrote:      band-c.run@fixture/durable — generation 1, phase save
+  wrote:      band-c.pr@pr:<number> for 13 pull request(s), stage batch
+  wrote:      band-c.comments@agent:pr-triage — 13 comment(s) on record
+  outcome:    the task's terminal record carries the counts below
+
+triaged 13 PR(s): #101 auto_merge, #102 auto_merge, #103 auto_merge, #104 batch_review, #105 fast_track, #106 defer, #107 batch_review, #109 close, #111 auto_merge, #112 auto_merge, #113 defer, #114 batch_review, #115 batch_review
+2 skipped by the 1-hour cooldown, 1 not authored by app/github-copilot, 1 not open.
+
+run:        completed — 13 triaged, 13 commented, 2 in cooldown, 1 not ours, 1 not open
+[exit 0]
+  ✓ the resume exited: 0
+  ✓ the resume posts #101 again — the duplicate this window costs, and exactly one: 1
+  ✓ comments on disk afterwards (13, not 14): 13
+```
+
 ## 5. Requirement 4 — two simultaneous runs, one refused
 
 Five rounds of two processes started together against one store. Exactly one proceeds each time; the
@@ -909,48 +1206,317 @@ process.
 
 ```
 ── round 1
-  run-1 exit=3   run-2 exit=0
+  run-1 exit=0   run-2 exit=3
   ✓ runs that proceeded: 1
   ✓ runs refused at the store open: 1
-  refusal: durable: cannot open the store: The durable store file '<scratch>/race-1/store.jsonl' is already open in another process. Its lock file '<scratch>/race-1/store.jsonl.lock' is held by process 30299 (since 2026-11-05T14:39:53.0806880+00:00). A store file supports a single writer at a time; close the other store, or point this one at a different path.
+  refusal: durable: cannot open the store: The durable store file '<scratch>/race-1/store.jsonl' is already open in another process. Its lock file '<scratch>/race-1/store.jsonl.lock' is held by process 32895 (since 2026-11-05T15:29:19.9646590+00:00). A store file supports a single writer at a time; close the other store, or point this one at a different path.
 
 ── round 2
   run-1 exit=0   run-2 exit=3
   ✓ runs that proceeded: 1
   ✓ runs refused at the store open: 1
-  refusal: durable: cannot open the store: The durable store file '<scratch>/race-2/store.jsonl' is already open in another process. Its lock file '<scratch>/race-2/store.jsonl.lock' is held. A store file supports a single writer at a time; close the other store, or point this one at a different path.
+  refusal: durable: cannot open the store: The durable store file '<scratch>/race-2/store.jsonl' is already open in another process. Its lock file '<scratch>/race-2/store.jsonl.lock' is held by process 33012 (since 2026-11-05T15:29:21.1786510+00:00). A store file supports a single writer at a time; close the other store, or point this one at a different path.
 
 ── round 3
   run-1 exit=0   run-2 exit=3
   ✓ runs that proceeded: 1
   ✓ runs refused at the store open: 1
-  refusal: durable: cannot open the store: The durable store file '<scratch>/race-3/store.jsonl' is already open in another process. Its lock file '<scratch>/race-3/store.jsonl.lock' is held by process 30465 (since 2026-11-05T14:39:55.7868850+00:00). A store file supports a single writer at a time; close the other store, or point this one at a different path.
+  refusal: durable: cannot open the store: The durable store file '<scratch>/race-3/store.jsonl' is already open in another process. Its lock file '<scratch>/race-3/store.jsonl.lock' is held by process 33084 (since 2026-11-05T15:29:22.3887230+00:00). A store file supports a single writer at a time; close the other store, or point this one at a different path.
 
 ── round 4
   run-1 exit=3   run-2 exit=0
   ✓ runs that proceeded: 1
   ✓ runs refused at the store open: 1
-  refusal: durable: cannot open the store: The durable store file '<scratch>/race-4/store.jsonl' is already open in another process. Its lock file '<scratch>/race-4/store.jsonl.lock' is held by process 30580 (since 2026-11-05T14:39:57.0725380+00:00). A store file supports a single writer at a time; close the other store, or point this one at a different path.
+  refusal: durable: cannot open the store: The durable store file '<scratch>/race-4/store.jsonl' is already open in another process. Its lock file '<scratch>/race-4/store.jsonl.lock' is held by process 33285 (since 2026-11-05T15:29:24.4395010+00:00). A store file supports a single writer at a time; close the other store, or point this one at a different path.
 
 ── round 5
   run-1 exit=0   run-2 exit=3
   ✓ runs that proceeded: 1
   ✓ runs refused at the store open: 1
-  refusal: durable: cannot open the store: The durable store file '<scratch>/race-5/store.jsonl' is already open in another process. Its lock file '<scratch>/race-5/store.jsonl.lock' is held by process 30673 (since 2026-11-05T14:39:59.2746910+00:00). A store file supports a single writer at a time; close the other store, or point this one at a different path.
+  refusal: durable: cannot open the store: The durable store file '<scratch>/race-5/store.jsonl' is already open in another process. Its lock file '<scratch>/race-5/store.jsonl.lock' is held by process 33309 (since 2026-11-05T15:29:25.7297990+00:00). A store file supports a single writer at a time; close the other store, or point this one at a different path.
 
   ✓ refusals across 5 rounds: 5
 ```
 
-### 5b. The control
+**The refusal is the store file's lock, not a commit gate this variant built.** `StoreFileLock` is
+the layer's; pointing two runs at one path is what makes it refuse. So the honest statement of
+requirement 4 is *"two processes over one store path cannot both proceed"*, not *"two triage runs of
+one repository cannot both proceed"*. Stage 5b is the control that shows the difference.
 
-The same two processes against two different stores: both proceed. The refusal is the store's, not a
-flag this program sets.
+### 5b. The control — two stores, both proceed
 
 ```
   control-a exit=0
   control-b exit=0
   ✓ process A against its own store: 0
   ✓ process B against its own store: 0
+```
+
+### 5c. A finished generation does not strand the next interrupted run
+
+Three processes against one store: generation 1 completes, generation 2 is stopped at `collect`, and
+the third resumes. It must adopt the interrupted task and re-enter its phase, not declare the finished
+task current and start again:
+
+```
+$ dotnet <worktree>/real-world-scenarios/band-c-ci-repo-agent/durable/bin/Debug/net10.0/BandCDurable.dll --store <scratch>/generation/store.jsonl --run-dir <scratch>/generation/run-1 ...
+band C durable — the pr-triage agent with its state in a Durable store
+run time:   2026-11-05T12:00:00Z
+repository: fixture/durable
+store:      <scratch>/generation/store.jsonl
+fixture:    <worktree>/real-world-scenarios/band-c-ci-repo-agent/baseline/fixture/pull-requests.json (17 pull requests)
+output:     <scratch>/generation/run-1
+
+phase 1/8  load state and collect pull requests
+  state:      no unfinished run record for this repository — a new generation
+  collected:  17 pull requests (pull_request_read get / get_files / get_reviews / get_check_runs)
+  not ours:   #110 authored by octocat — not app/github-copilot
+  not open:   #120 state=closed
+  cooldown:   #108 updated 30m ago (< 60m) — skip any PR that was opened or last updated (new commits, edits) less than 1 hour before the current run time
+  cooldown:   #116 updated 10m ago (< 60m) — skip any PR that was opened or last updated (new commits, edits) less than 1 hour before the current run time
+  eligible:   13 pull request(s)
+
+phase 2/8  classify and assess risk
+  #101  docs       risk=low    2 file(s), +6/-6  docs: fix quickstart typos and the sample output
+  #102  test       risk=low    3 file(s), +190/-4  test: add parity tests for the TypeScript port
+  #103  formatting risk=low    1 file(s), +62/-62  formatting: reflow the long lines in durable.ts
+  #104  chore      risk=medium 2 file(s), +18/-18  chore: bump the Copilot CLI pin to 1.0.105
+  #105  refactor   risk=medium 12 file(s), +260/-240  refactor: extract the JSON store options out of Durable.cs
+  #106  bug        risk=high   4 file(s), +180/-40  fix: replay drops the tool result when the runtime retries
+  #107  feature    risk=high   41 file(s), +2400/-300  feat: apply backpressure when the admission queue is full
+  #109  chore      risk=high   2 file(s), +0/-140  chore: remove the dead replay shim
+  #111  docs       risk=low    2 file(s), +48/-3  docs: add the Python port notes to the README
+  #112  formatting risk=low    1 file(s), +310/-310  formatting: normalise tabs to spaces in the Python port
+  #113  formatting risk=low    2 file(s), +900/-900  formatting: normalise line endings in the example scripts
+  #114  chore      risk=medium 2 file(s), +8/-8  chore: refresh the sandbox base image pins
+  #115  chore      risk=medium 1 file(s), +44/-44  chore: bump the uv lock for the Python port
+
+phase 3/8  score priority (impact 0-50 + urgency 0-30 + quality 0-20)
+  #101   44 = impact 24 + urgency  0 + quality 20
+  #102   49 = impact 29 + urgency  0 + quality 20
+  #103   46 = impact 30 + urgency  0 + quality 16
+  #104   50 = impact 34 + urgency  0 + quality 16
+  #105   61 = impact 41 + urgency  0 + quality 20
+  #106   76 = impact 50 + urgency 24 + quality  2
+  #107   61 = impact 45 + urgency  6 + quality 10
+  #109   58 = impact 32 + urgency 14 + quality 12
+  #111   42 = impact 22 + urgency  0 + quality 20
+  #112   44 = impact 28 + urgency  0 + quality 16
+  #113   26 = impact 14 + urgency  0 + quality 12
+  #114   52 = impact 36 + urgency  0 + quality 16
+  #115   50 = impact 34 + urgency  0 + quality 16
+
+phase 4/8  recommend actions
+  #101  auto_merge    low risk, quality 20/20, CI passing
+  #102  auto_merge    low risk, quality 20/20, CI passing
+  #103  auto_merge    low risk, quality 16/20, CI passing
+  #104  batch_review  similar low/medium-risk work, reviewed together
+  #105  fast_track    quality 20/20, impact 41/50
+  #106  defer         high risk and CI failing
+  #107  batch_review  similar low/medium-risk work, reviewed together
+  #109  close         superseded by #107
+  #111  auto_merge    low risk, quality 20/20, CI passing
+  #112  auto_merge    low risk, quality 16/20, CI passing
+  #113  defer         impact 14/50 below the triage threshold
+  #114  batch_review  similar low/medium-risk work, reviewed together
+  #115  batch_review  similar low/medium-risk work, reviewed together
+
+phase 5/8  batch and label
+  batch-001  formatting x3: #103, #112, #113
+  batch-002  chore x3: #104, #114, #115
+  #101  add [pr-type:docs, pr-risk:low, pr-priority:p2, pr-action:auto_merge, pr-agent:same-repo] keep [documentation]
+  #102  add [pr-type:test, pr-risk:low, pr-priority:p2, pr-action:auto_merge, pr-agent:same-repo] keep [tests]
+  #103  add [pr-type:formatting, pr-risk:low, pr-priority:p2, pr-action:auto_merge, pr-agent:same-repo, pr-batch:batch-001] keep []
+  #104  add [pr-type:chore, pr-risk:medium, pr-priority:p2, pr-action:batch_review, pr-agent:same-repo, pr-batch:batch-002] keep [dependencies]
+  #105  add [pr-type:refactor, pr-risk:medium, pr-priority:p1, pr-action:fast_track, pr-agent:same-repo] keep [refactor]
+  #106  add [pr-type:bug, pr-risk:high, pr-priority:p0, pr-action:defer, pr-agent:same-repo] remove [pr-type:docs] keep [bug, needs-review]
+  #107  add [pr-type:feature, pr-risk:high, pr-priority:p1, pr-action:batch_review, pr-agent:same-repo] remove [pr-risk:low] keep [enhancement]
+  #109  add [pr-type:chore, pr-risk:high, pr-priority:p1, pr-action:close, pr-agent:same-repo] keep [chore, stale]
+  #111  add [pr-type:docs, pr-risk:low, pr-priority:p2, pr-action:auto_merge, pr-agent:fork] keep [documentation]
+  #112  add [pr-type:formatting, pr-risk:low, pr-priority:p2, pr-action:auto_merge, pr-agent:same-repo, pr-batch:batch-001] keep []
+  #113  add [pr-type:formatting, pr-risk:low, pr-priority:p3, pr-action:defer, pr-agent:same-repo, pr-batch:batch-001] keep []
+  #114  add [pr-type:chore, pr-risk:medium, pr-priority:p2, pr-action:batch_review, pr-agent:same-repo, pr-batch:batch-002] keep [dependencies]
+  #115  add [pr-type:chore, pr-risk:medium, pr-priority:p2, pr-action:batch_review, pr-agent:same-repo, pr-batch:batch-002] keep [dependencies]
+  wrote:      labels.json (add-labels safe output)
+
+phase 6/8  comment each triaged PR
+  wrote:      comments/pr-101.md (448 bytes)
+  wrote:      comments/pr-102.md (444 bytes)
+  wrote:      comments/pr-103.md (476 bytes)
+  wrote:      comments/pr-104.md (483 bytes)
+  wrote:      comments/pr-105.md (463 bytes)
+  wrote:      comments/pr-106.md (454 bytes)
+  wrote:      comments/pr-107.md (477 bytes)
+  wrote:      comments/pr-109.md (415 bytes)
+  wrote:      comments/pr-111.md (442 bytes)
+  wrote:      comments/pr-112.md (486 bytes)
+  wrote:      comments/pr-113.md (487 bytes)
+  wrote:      comments/pr-114.md (481 bytes)
+  wrote:      comments/pr-115.md (484 bytes)
+
+phase 7/8  create the triage report issue
+  wrote:      triage-report.md (3024 bytes)
+  wrote:      triage-data.json (data safe output)
+
+phase 8/8  save run state
+  wrote:      band-c.run@fixture/durable — generation 1, phase save
+  wrote:      band-c.pr@pr:<number> for 13 pull request(s), stage batch
+  wrote:      band-c.comments@agent:pr-triage — 13 comment(s) on record
+  outcome:    the task's terminal record carries the counts below
+
+triaged 13 PR(s): #101 auto_merge, #102 auto_merge, #103 auto_merge, #104 batch_review, #105 fast_track, #106 defer, #107 batch_review, #109 close, #111 auto_merge, #112 auto_merge, #113 defer, #114 batch_review, #115 batch_review
+2 skipped by the 1-hour cooldown, 1 not authored by app/github-copilot, 1 not open.
+run:        new durable task t2 (journal c1)
+────────────────────────────────────────────────────────────────────────
+
+run:        completed — 13 triaged, 13 commented, 2 in cooldown, 1 not ours, 1 not open
+[exit 0]
+  ✓ the first generation completed: 0
+  first task: t2
+
+$ BAND_C_EXIT_AFTER_PHASE=collect dotnet <worktree>/real-world-scenarios/band-c-ci-repo-agent/durable/bin/Debug/net10.0/BandCDurable.dll --store <scratch>/generation/store.jsonl ...
+band C durable — the pr-triage agent with its state in a Durable store
+run time:   2026-11-05T12:00:00Z
+repository: fixture/durable
+store:      <scratch>/generation/store.jsonl
+fixture:    <worktree>/real-world-scenarios/band-c-ci-repo-agent/baseline/fixture/pull-requests.json (17 pull requests)
+output:     <scratch>/generation/run-2
+seam:       BAND_C_EXIT_AFTER_PHASE=collect (exit 42)
+
+run:        task t2 is finished (generation 1); starting a new one
+phase 1/8  load state and collect pull requests
+  state:      no unfinished run record for this repository — a new generation
+  prior run:  2026-11-05T12:00:00Z triaged 1 generation(s) of state
+  collected:  17 pull requests (pull_request_read get / get_files / get_reviews / get_check_runs)
+  not ours:   #110 authored by octocat — not app/github-copilot
+  not open:   #120 state=closed
+  cooldown:   #108 updated 30m ago (< 60m) — skip any PR that was opened or last updated (new commits, edits) less than 1 hour before the current run time
+  cooldown:   #116 updated 10m ago (< 60m) — skip any PR that was opened or last updated (new commits, edits) less than 1 hour before the current run time
+  eligible:   13 pull request(s)
+
+  seam:       stopped after phase 'collect' (BAND_C_EXIT_AFTER_PHASE), exit 42
+[exit 42]
+  ✓ the second generation was interrupted at 'collect': 42
+  interrupted task: t223
+
+$ dotnet <worktree>/real-world-scenarios/band-c-ci-repo-agent/durable/bin/Debug/net10.0/BandCDurable.dll --store <scratch>/generation/store.jsonl --run-dir <scratch>/generation/run-3 ...
+band C durable — the pr-triage agent with its state in a Durable store
+run time:   2026-11-05T12:00:00Z
+repository: fixture/durable
+store:      <scratch>/generation/store.jsonl
+fixture:    <worktree>/real-world-scenarios/band-c-ci-repo-agent/baseline/fixture/pull-requests.json (17 pull requests)
+output:     <scratch>/generation/run-3
+
+run:        resuming durable task t223 at phase 'classify' (attempt 2, restarts so far 0)
+resuming:   0 comment(s) recorded in this run's record
+memos:      0 step memo(s) on record
+────────────────────────────────────────────────────────────────────────
+phase 2/8  classify and assess risk
+  #101  docs       risk=low    2 file(s), +6/-6  docs: fix quickstart typos and the sample output   [from the store]
+  #102  test       risk=low    3 file(s), +190/-4  test: add parity tests for the TypeScript port   [from the store]
+  #103  formatting risk=low    1 file(s), +62/-62  formatting: reflow the long lines in durable.ts   [from the store]
+  #104  chore      risk=medium 2 file(s), +18/-18  chore: bump the Copilot CLI pin to 1.0.105   [from the store]
+  #105  refactor   risk=medium 12 file(s), +260/-240  refactor: extract the JSON store options out of Durable.cs   [from the store]
+  #106  bug        risk=high   4 file(s), +180/-40  fix: replay drops the tool result when the runtime retries   [from the store]
+  #107  feature    risk=high   41 file(s), +2400/-300  feat: apply backpressure when the admission queue is full   [from the store]
+  #109  chore      risk=high   2 file(s), +0/-140  chore: remove the dead replay shim   [from the store]
+  #111  docs       risk=low    2 file(s), +48/-3  docs: add the Python port notes to the README   [from the store]
+  #112  formatting risk=low    1 file(s), +310/-310  formatting: normalise tabs to spaces in the Python port   [from the store]
+  #113  formatting risk=low    2 file(s), +900/-900  formatting: normalise line endings in the example scripts   [from the store]
+  #114  chore      risk=medium 2 file(s), +8/-8  chore: refresh the sandbox base image pins   [from the store]
+  #115  chore      risk=medium 1 file(s), +44/-44  chore: bump the uv lock for the Python port   [from the store]
+
+  reused:     13 assessment(s) at an unchanged digest, 0 newly classified
+
+phase 3/8  score priority (impact 0-50 + urgency 0-30 + quality 0-20)
+  #101   44 = impact 24 + urgency  0 + quality 20
+  #102   49 = impact 29 + urgency  0 + quality 20
+  #103   46 = impact 30 + urgency  0 + quality 16
+  #104   50 = impact 34 + urgency  0 + quality 16
+  #105   61 = impact 41 + urgency  0 + quality 20
+  #106   76 = impact 50 + urgency 24 + quality  2
+  #107   61 = impact 45 + urgency  6 + quality 10
+  #109   58 = impact 32 + urgency 14 + quality 12
+  #111   42 = impact 22 + urgency  0 + quality 20
+  #112   44 = impact 28 + urgency  0 + quality 16
+  #113   26 = impact 14 + urgency  0 + quality 12
+  #114   52 = impact 36 + urgency  0 + quality 16
+  #115   50 = impact 34 + urgency  0 + quality 16
+
+phase 4/8  recommend actions
+  #101  auto_merge    low risk, quality 20/20, CI passing
+  #102  auto_merge    low risk, quality 20/20, CI passing
+  #103  auto_merge    low risk, quality 16/20, CI passing
+  #104  batch_review  similar low/medium-risk work, reviewed together
+  #105  fast_track    quality 20/20, impact 41/50
+  #106  defer         high risk and CI failing
+  #107  batch_review  similar low/medium-risk work, reviewed together
+  #109  close         superseded by #107
+  #111  auto_merge    low risk, quality 20/20, CI passing
+  #112  auto_merge    low risk, quality 16/20, CI passing
+  #113  defer         impact 14/50 below the triage threshold
+  #114  batch_review  similar low/medium-risk work, reviewed together
+  #115  batch_review  similar low/medium-risk work, reviewed together
+
+phase 5/8  batch and label
+  batch-001  formatting x3: #103, #112, #113
+  batch-002  chore x3: #104, #114, #115
+  #101  add [pr-type:docs, pr-risk:low, pr-priority:p2, pr-action:auto_merge, pr-agent:same-repo] keep [documentation]
+  #102  add [pr-type:test, pr-risk:low, pr-priority:p2, pr-action:auto_merge, pr-agent:same-repo] keep [tests]
+  #103  add [pr-type:formatting, pr-risk:low, pr-priority:p2, pr-action:auto_merge, pr-agent:same-repo, pr-batch:batch-001] keep []
+  #104  add [pr-type:chore, pr-risk:medium, pr-priority:p2, pr-action:batch_review, pr-agent:same-repo, pr-batch:batch-002] keep [dependencies]
+  #105  add [pr-type:refactor, pr-risk:medium, pr-priority:p1, pr-action:fast_track, pr-agent:same-repo] keep [refactor]
+  #106  add [pr-type:bug, pr-risk:high, pr-priority:p0, pr-action:defer, pr-agent:same-repo] remove [pr-type:docs] keep [bug, needs-review]
+  #107  add [pr-type:feature, pr-risk:high, pr-priority:p1, pr-action:batch_review, pr-agent:same-repo] remove [pr-risk:low] keep [enhancement]
+  #109  add [pr-type:chore, pr-risk:high, pr-priority:p1, pr-action:close, pr-agent:same-repo] keep [chore, stale]
+  #111  add [pr-type:docs, pr-risk:low, pr-priority:p2, pr-action:auto_merge, pr-agent:fork] keep [documentation]
+  #112  add [pr-type:formatting, pr-risk:low, pr-priority:p2, pr-action:auto_merge, pr-agent:same-repo, pr-batch:batch-001] keep []
+  #113  add [pr-type:formatting, pr-risk:low, pr-priority:p3, pr-action:defer, pr-agent:same-repo, pr-batch:batch-001] keep []
+  #114  add [pr-type:chore, pr-risk:medium, pr-priority:p2, pr-action:batch_review, pr-agent:same-repo, pr-batch:batch-002] keep [dependencies]
+  #115  add [pr-type:chore, pr-risk:medium, pr-priority:p2, pr-action:batch_review, pr-agent:same-repo, pr-batch:batch-002] keep [dependencies]
+  wrote:      labels.json (add-labels safe output)
+
+phase 6/8  comment each triaged PR
+  skipped:    comments/pr-101.md — ledger records it posted at 2026-11-05T12:00:00Z by run fixture/durable
+  skipped:    comments/pr-102.md — ledger records it posted at 2026-11-05T12:00:00Z by run fixture/durable
+  skipped:    comments/pr-103.md — ledger records it posted at 2026-11-05T12:00:00Z by run fixture/durable
+  skipped:    comments/pr-104.md — ledger records it posted at 2026-11-05T12:00:00Z by run fixture/durable
+  skipped:    comments/pr-105.md — ledger records it posted at 2026-11-05T12:00:00Z by run fixture/durable
+  skipped:    comments/pr-106.md — ledger records it posted at 2026-11-05T12:00:00Z by run fixture/durable
+  skipped:    comments/pr-107.md — ledger records it posted at 2026-11-05T12:00:00Z by run fixture/durable
+  skipped:    comments/pr-109.md — ledger records it posted at 2026-11-05T12:00:00Z by run fixture/durable
+  skipped:    comments/pr-111.md — ledger records it posted at 2026-11-05T12:00:00Z by run fixture/durable
+  skipped:    comments/pr-112.md — ledger records it posted at 2026-11-05T12:00:00Z by run fixture/durable
+  skipped:    comments/pr-113.md — ledger records it posted at 2026-11-05T12:00:00Z by run fixture/durable
+  skipped:    comments/pr-114.md — ledger records it posted at 2026-11-05T12:00:00Z by run fixture/durable
+  skipped:    comments/pr-115.md — ledger records it posted at 2026-11-05T12:00:00Z by run fixture/durable
+
+  idempotent: 0 comment(s) posted, 0 skipped by memo, 13 skipped by the ledger
+
+phase 7/8  create the triage report issue
+  wrote:      triage-report.md (3024 bytes)
+  wrote:      triage-data.json (data safe output)
+
+phase 8/8  save run state
+  wrote:      band-c.run@fixture/durable — generation 1, phase save
+  wrote:      band-c.pr@pr:<number> for 13 pull request(s), stage batch
+  wrote:      band-c.comments@agent:pr-triage — 13 comment(s) on record
+  outcome:    the task's terminal record carries the counts below
+
+triaged 13 PR(s): #101 auto_merge, #102 auto_merge, #103 auto_merge, #104 batch_review, #105 fast_track, #106 defer, #107 batch_review, #109 close, #111 auto_merge, #112 auto_merge, #113 defer, #114 batch_review, #115 batch_review
+2 skipped by the 1-hour cooldown, 1 not authored by app/github-copilot, 1 not open.
+
+run:        completed — 13 triaged, 13 commented, 2 in cooldown, 1 not ours, 1 not open
+[exit 0]
+  ✓ the third process exited: 0
+  ✓ the resume adopted the interrupted task, not a new one: 1
+  ✓ exactly one resume banner: 1
+  ✓ it did not declare the finished task current: 0
+  ✓ it re-entered the phase after the one the seam stopped at: 1
+  ✓ the resumed run finished the work the interrupted one started: 1
+  ✓ comments the resumed run wrote (generation 1's are adopted by the ledger): 0
+  ✓ comments it adopted from generation 1: 13
+  ✓ and it never treated the previous generation's finished task as current: 0
 ```
 
 ## 6. The store, read back
@@ -1011,17 +1577,17 @@ $ python3 evidence/count.py
 File                Code  Durability  Application
 -------------------------------------------------
 Contracts.cs         103         103            0
-ExitSeam.cs           66          66            0
+ExitSeam.cs           70          70            0
 Fixture.cs            69           0           69
-Phases.cs            393         132          261
+Phases.cs            402         141          261
 Program.cs             2           2            0
-Runner.cs            223         154           69
+Runner.cs            227         158           69
 Triage.cs            499          47          452
-TriageStore.cs        65          65            0
+TriageStore.cs        71          71            0
 -------------------------------------------------
-Total               1420         569          851
+Total               1443         592          851
 
-durability: 569 of 1420 code lines (40%)
+durability: 592 of 1443 code lines (41%)
   ✓ every declaration is classified and the split adds up: 0
 ```
 

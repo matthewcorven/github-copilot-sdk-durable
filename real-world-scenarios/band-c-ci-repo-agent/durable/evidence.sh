@@ -244,6 +244,26 @@ exactly 7 "$(grep -c 'skipped:    comments/' "$logs/midway-2.txt")" "comments th
 exactly 6 "$(grep -c 'wrote:      comments/' "$logs/midway-2.txt")" "comments the resume posted"
 exactly 13 "$(ls "$scratch/midway/run/comments" | wc -l | tr -d ' ')" "comments on disk afterwards"
 
+# ── 4a. The memo alone, with the ledger hidden ─────────────────────────────────────────────
+say "4a. control — the same seam with the ledger hidden, so the memo is the only guard"
+run midway-memo-1 "BAND_C_EXIT_AFTER_COMMENTS=7 BAND_C_HIDE_LEDGER=1 dotnet $dll --store <scratch>/midway-memo/store.jsonl ..." \
+  env BAND_C_EXIT_AFTER_COMMENTS=7 BAND_C_HIDE_LEDGER=1 -- \
+  "$dotnet" "$dll" --store "$scratch/midway-memo/store.jsonl" --run-dir "$scratch/midway-memo/run" \
+  --fixture "$fixture" --now "$clock"
+exactly 42 "$?" "the memo-only seam exited 42 after the seventh comment"
+memo_only=$(python3 "$here/evidence/_store.py" memos "$scratch/midway-memo/store.jsonl" | wc -l | tr -d ' ')
+exactly 7 "$memo_only" "memos at the memo-only seam"
+ledger_only=$(python3 "$here/evidence/_store.py" ledger "$scratch/midway-memo/store.jsonl" | head -1)
+exactly "ledger entries: 0" "$ledger_only" "the ledger is empty, so it cannot be the guard here"
+echo
+run midway-memo-2 "BAND_C_HIDE_LEDGER=1 dotnet $dll --store <scratch>/midway-memo/store.jsonl ..." \
+  env BAND_C_HIDE_LEDGER=1 -- "$dotnet" "$dll" --store "$scratch/midway-memo/store.jsonl" \
+  --run-dir "$scratch/midway-memo/run" --fixture "$fixture" --now "$clock"
+exactly 0 "$?" "the memo-only resume exited"
+exactly 7 "$(grep -c 'skipped:    comments/' "$logs/midway-memo-2.txt")" "comments skipped with no ledger to skip them"
+exactly 6 "$(grep -c 'wrote:      comments/' "$logs/midway-memo-2.txt")" "comments the memo-only resume posted"
+exactly 0 "$(grep -c 'ledger records it posted' "$logs/midway-memo-2.txt")" "skips attributed to the ledger"
+
 # ── 4b. The control: the same mid-phase resume with the guard removed ───────────────────────
 say "4b. control — the same mid-phase resume with the guard removed"
 run midway-off-1 "BAND_C_EXIT_AFTER_COMMENTS=7 BAND_C_NO_IDEMPOTENCY_GUARD=1 dotnet $dll --store <scratch>/midway-off/store.jsonl ..." \
@@ -256,6 +276,26 @@ run midway-off-2 "BAND_C_NO_IDEMPOTENCY_GUARD=1 dotnet $dll --store <scratch>/mi
 exactly 0 "$?" "the guard-disabled resume exited"
 exactly 13 "$(grep -c 'wrote:      comments/' "$logs/midway-off-2.txt")" "comments re-posted by the control resume"
 exactly 0 "$(grep -c 'skipped:    comments/' "$logs/midway-off-2.txt")" "comments the control resume skipped"
+
+# ── 4c. The window a memo cannot close ──────────────────────────────────────────────────────
+say "4c. the window no memo closes — stopped between the comment and its record"
+run effect-1 "BAND_C_EXIT_AFTER_COMMENT_EFFECT=1 dotnet $dll --store <scratch>/effect/store.jsonl ..." \
+  env BAND_C_EXIT_AFTER_COMMENT_EFFECT=1 -- "$dotnet" "$dll" --store "$scratch/effect/store.jsonl" \
+  --run-dir "$scratch/effect/run" --fixture "$fixture" --now "$clock"
+exactly 42 "$?" "the seam exited 42 between the effect and its record"
+exactly 1 "$(ls "$scratch/effect/run/comments" | wc -l | tr -d ' ')" "comments on disk at the seam"
+exactly "ledger entries: 0" "$(python3 "$here/evidence/_store.py" ledger "$scratch/effect/store.jsonl" | head -1)" \
+  "the ledger has no record of the comment that exists"
+exactly 0 "$(python3 "$here/evidence/_store.py" memos "$scratch/effect/store.jsonl" | wc -l | tr -d ' ')" \
+  "and no memo of it either"
+echo
+run effect-2 "dotnet $dll --store <scratch>/effect/store.jsonl --run-dir <scratch>/effect/run ..." \
+  -- "$dotnet" "$dll" --store "$scratch/effect/store.jsonl" --run-dir "$scratch/effect/run" \
+  --fixture "$fixture" --now "$clock"
+exactly 0 "$?" "the resume exited"
+exactly 1 "$(grep -c 'wrote:      comments/pr-101.md' "$logs/effect-2.txt")" \
+  "the resume posts #101 again — the duplicate this window costs, and exactly one"
+exactly 13 "$(ls "$scratch/effect/run/comments" | wc -l | tr -d ' ')" "comments on disk afterwards (13, not 14)"
 
 # ── 5. Concurrency ─────────────────────────────────────────────────────────────────────────
 say "5. requirement 4 — $rounds rounds of 2 simultaneous runs against one store"
@@ -307,6 +347,56 @@ echo "  control-a exit=$status_a"
 echo "  control-b exit=$status_b"
 exactly 0 "$status_a" "process A against its own store"
 exactly 0 "$status_b" "process B against its own store"
+
+# ── 5c. Complete, then interrupt, then resume against the same store ─────────────────────────
+say "5c. a finished generation does not strand the next interrupted run"
+run generation-1 "dotnet $dll --store <scratch>/generation/store.jsonl --run-dir <scratch>/generation/run-1 ..." \
+  -- "$dotnet" "$dll" --store "$scratch/generation/store.jsonl" --run-dir "$scratch/generation/run-1" \
+  --fixture "$fixture" --now "$clock"
+exactly 0 "$?" "the first generation completed"
+first=$(python3 - "$scratch/generation/store.jsonl" <<'PY'
+import sys, json, pathlib
+names = [json.loads(l)["payload"]["id"] for l in pathlib.Path(sys.argv[1]).read_text().splitlines()
+         if json.loads(l).get("type") == "task"]
+print(names[0])
+PY
+)
+echo "  first task: $first"
+echo
+run generation-2 "BAND_C_EXIT_AFTER_PHASE=collect dotnet $dll --store <scratch>/generation/store.jsonl ..." \
+  env BAND_C_EXIT_AFTER_PHASE=collect -- "$dotnet" "$dll" --store "$scratch/generation/store.jsonl" \
+  --run-dir "$scratch/generation/run-2" --fixture "$fixture" --now "$clock"
+exactly 42 "$?" "the second generation was interrupted at 'collect'"
+interrupted=$(python3 - "$scratch/generation/store.jsonl" <<'PY'
+import sys, json, pathlib
+states = [json.loads(l)["payload"] for l in pathlib.Path(sys.argv[1]).read_text().splitlines()
+          if json.loads(l).get("type") == "task" and str(json.loads(l)["payload"].get("name","")).startswith("band-c.")]
+unfinished = [s for s in states if s.get("status") != 4]
+print(unfinished[-1]["id"] if unfinished else "(none)")
+PY
+)
+echo "  interrupted task: $interrupted"
+echo
+run generation-3 "dotnet $dll --store <scratch>/generation/store.jsonl --run-dir <scratch>/generation/run-3 ..." \
+  -- "$dotnet" "$dll" --store "$scratch/generation/store.jsonl" --run-dir "$scratch/generation/run-3" \
+  --fixture "$fixture" --now "$clock"
+exactly 0 "$?" "the third process exited"
+exactly 1 "$(grep -c "resuming durable task $interrupted" "$logs/generation-3.txt")" \
+  "the resume adopted the interrupted task, not a new one"
+exactly 1 "$(grep -c 'resuming durable task' "$logs/generation-3.txt")" "exactly one resume banner"
+exactly 0 "$(grep -c 'is finished' "$logs/generation-3.txt")" "it did not declare the finished task current"
+exactly 1 "$(grep -c "at phase 'classify'" "$logs/generation-3.txt")" \
+  "it re-entered the phase after the one the seam stopped at"
+exactly 1 "$(grep -c 'completed — 13 triaged' "$logs/generation-3.txt")" \
+  "the resumed run finished the work the interrupted one started"
+# Generation 1 already commented on all thirteen, so the resumed generation adopts them: it is
+# finishing the interrupted run's *triage*, not re-doing generation 1's comments.
+exactly 0 "$(grep -c 'wrote:      comments/' "$logs/generation-3.txt")" \
+  "comments the resumed run wrote (generation 1's are adopted by the ledger)"
+exactly 13 "$(grep -c 'skipped:    comments/' "$logs/generation-3.txt")" \
+  "comments it adopted from generation 1"
+exactly 0 "$(grep -c 'is finished' "$logs/generation-3.txt")" \
+  "and it never treated the previous generation's finished task as current"
 
 # ── 6. Read the store back ──────────────────────────────────────────────────────────────────
 say "6. what the store itself says about the interrupted and resumed run"

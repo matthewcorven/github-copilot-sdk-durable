@@ -393,7 +393,12 @@ public static class TriagePhases
             var text = Triage.Comment(assessment);
 
             var memo = seam?.GuardDisabled == true ? null : await runtime.MemoAsync(key);
-            var ledger = seam?.GuardDisabled == true ? new CommentLedger() : TriageStore.Ledger(store);
+            // Two controls, and they are different experiments: `GuardDisabled` removes every guard
+            // (a duplicate is the point), `LedgerHidden` removes only the cross-run record so the
+            // in-run memo is what remains (memo-only is the point).
+            var ledger = seam?.GuardDisabled == true || seam?.LedgerHidden == true
+                ? new CommentLedger()
+                : TriageStore.Ledger(store);
             var recorded = ledger.For(pr.Number, digest);
 
             if (memo is not null)
@@ -430,7 +435,17 @@ public static class TriagePhases
             // The ledger entry and the step memo commit together: one transaction, so a resume sees
             // both or neither. The memo cannot be written through runtime.MemoAsync here — that
             // takes the gate this commit holds — which is why the transaction-scoped form exists.
-            await TriageStore.RecordCommentAsync(store, input, runtime.Task.Id, key, record);
+            if (seam?.LedgerHidden != true)
+            {
+                await TriageStore.RecordCommentAsync(store, input, runtime.Task.Id, key, record);
+            }
+            else
+            {
+                // The memo on its own, committed outside a transaction so it survives on the task
+                // record exactly as it would have — only the ledger entry is withheld.
+                await runtime.MemoAsync(key, DurableJson.ToElement(record));
+            }
+
             posted.Add(pr.Number);
             written++;
             Console.WriteLine($"  wrote:      comments/pr-{number}.md ({record.Bytes} bytes)");

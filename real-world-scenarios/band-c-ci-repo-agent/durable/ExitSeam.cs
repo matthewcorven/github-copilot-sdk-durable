@@ -42,6 +42,19 @@ public sealed class ExitSeam
     public bool AfterCommentEffect { get; private init; }
 
     /// <summary>
+    /// Whether the ledger is hidden from the comment step, leaving the memo as the only guard.
+    /// </summary>
+    /// <remarks>
+    /// The control the mid-phase seam needs. Stage 4 stops inside phase 6 after seven comments; at
+    /// that point the memo and the ledger both hold the seven, so a resume that skips seven has not
+    /// shown *which* one did it. With the ledger hidden the memo is the only thing left, and the
+    /// same seven are still skipped — which is what makes the memo the demonstrated guard rather than
+    /// an incidental passenger. The ledger is not written by this process either, so a reader sees
+    /// the memo carrying the whole run.
+    /// </remarks>
+    public bool LedgerHidden { get; private init; }
+
+    /// <summary>
     /// Whether the comment step's guard is deliberately removed.
     /// </summary>
     /// <remarks>
@@ -59,6 +72,7 @@ public sealed class ExitSeam
         var comments = Environment.GetEnvironmentVariable("BAND_C_EXIT_AFTER_COMMENTS");
         var effect = Environment.GetEnvironmentVariable("BAND_C_EXIT_AFTER_COMMENT_EFFECT");
         var guard = Environment.GetEnvironmentVariable("BAND_C_NO_IDEMPOTENCY_GUARD");
+        var ledger = Environment.GetEnvironmentVariable("BAND_C_HIDE_LEDGER");
 
         var seam = new ExitSeam
         {
@@ -70,6 +84,7 @@ public sealed class ExitSeam
                     : throw new ArgumentException($"BAND_C_EXIT_AFTER_COMMENTS='{comments}' is not a positive number"),
             AfterCommentEffect = effect == "1",
             GuardDisabled = guard == "1",
+            LedgerHidden = ledger == "1",
         };
 
         if (seam.Phase is not null && !Phases.Order.Contains(seam.Phase))
@@ -78,7 +93,8 @@ public sealed class ExitSeam
                 $"BAND_C_EXIT_AFTER_PHASE='{seam.Phase}' is not one of {string.Join(", ", Phases.Order)}");
         }
 
-        return seam.Phase is null && seam.AfterComments is null && !seam.AfterCommentEffect && !seam.GuardDisabled
+        return seam.Phase is null && seam.AfterComments is null && !seam.AfterCommentEffect
+            && !seam.GuardDisabled && !seam.LedgerHidden
             ? null
             : seam;
     }
