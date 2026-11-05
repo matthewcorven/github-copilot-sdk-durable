@@ -4,7 +4,12 @@
 #   ./run.sh                 # run 1 triages; run 2 reads the state back and is inside the cooldown
 #   KEEP=1 ./run.sh          # keep the scratch directory for inspection
 #   RUN2_AFTER_MINUTES=61 ./run.sh   # put run 2 past the cooldown: it triages again
-#   NOW=2026-11-05T14:00:00Z ./run.sh   # override run 1's clock
+#   NOW=2026-11-05T14:00:00Z ./run.sh   # override the base clock both runs start from
+#
+# `NOW` is the *base* clock, not run 1's private clock: run 1 starts at it and run 2 starts at
+# `NOW + RUN2_AFTER_MINUTES`, so the two can be combined. Passing `NOW` to run 1 alone and letting
+# run 2 keep its own default would compare two different clocks, and the cooldown is a comparison
+# between them.
 #
 # Both runs are separate processes against one bare repository under the scratch directory. The two
 # output directories (`run-1/`, `run-2/`) are per process; the state branch (`repo.git`) is shared,
@@ -89,6 +94,14 @@ if [ -n "${NOW:-}" ]; then
   now_args=(--now "$NOW")
 fi
 
+# Run 2 starts at run 1's base plus the requested shift. `--now` and `--after` compose in the
+# baseline (--after shifts whatever base is in effect), so both are always passed: pinning run 2
+# to run 1's instant is what made RUN2_AFTER_MINUTES ineffective when NOW was set.
+second_now_args=(--after "${RUN2_AFTER_MINUTES:-0}")
+if [ -n "${NOW:-}" ]; then
+  second_now_args=(--now "$NOW" "${second_now_args[@]}")
+fi
+
 echo "════════════════════════════════════════════════════════════════════════"
 echo " run 1 — cold start: no memory/pr-triage branch, all eight phases"
 echo "════════════════════════════════════════════════════════════════════════"
@@ -112,8 +125,7 @@ second="$scratch/run-2.log"
   --run-dir "$scratch/run-2" \
   --repo "$scratch/repo.git" \
   --fixture "$fixture" \
-  --after "${RUN2_AFTER_MINUTES:-0}" \
-  "${now_args[@]+"${now_args[@]}"}" | tee "$second"
+  "${second_now_args[@]}" | tee "$second"
 status2=${PIPESTATUS[0]}
 if [ "$status2" -ne 0 ]; then
   echo "run.sh: run 2 exited $status2" >&2

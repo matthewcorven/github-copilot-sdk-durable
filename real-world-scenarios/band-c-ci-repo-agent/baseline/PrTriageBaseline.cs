@@ -91,6 +91,15 @@ static class Triage
             Console.Error.WriteLine($"baseline: {ex.Message}");
             return 1;
         }
+        catch (JsonException ex)
+        {
+            // A previous writer left something that is not JSON on the state branch. This is a
+            // failed run, not a crash: name the file and the parse position so a reader can find
+            // the bad commit, and exit 1 like every other Phase 1 input failure. State is not a
+            // fallback: the run does not silently start cold, because the branch clearly exists.
+            Console.Error.WriteLine($"baseline: state on {StateBranch} is not valid JSON: {ex.Message}");
+            return 1;
+        }
     }
 
     static async Task<int> RunPhasesAsync(Options options)
@@ -100,10 +109,12 @@ static class Triage
         Directory.CreateDirectory(commentsDir);
 
         var fixture = Fixture.Load(options.FixturePath);
-        var now = options.Now
+        // `--after` shifts whatever base clock the run starts from, so the two options combine:
+        // an explicit `--now` is the base, the fixture's own captured time is the default base.
+        var baseTime = options.Now
             ?? DateTimeOffset.Parse(fixture.CapturedAt, CultureInfo.InvariantCulture,
-                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal)
-               .AddMinutes(options.AfterMinutes);
+                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal);
+        var now = baseTime.AddMinutes(options.AfterMinutes);
 
         Console.WriteLine("band C baseline — local reproduction of github/gh-aw pr-triage-agent");
         Console.WriteLine($"run time:   {Iso(now)}");
