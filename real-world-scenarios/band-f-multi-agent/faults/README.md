@@ -37,9 +37,9 @@ in this table is typed by hand.
 | `restart-after-checkpoint` | durable | **resumed by refund_agent** | `refund_agent` |
 | `duplicate-delivery` | baseline | **not exercised** | `—` |
 | `duplicate-delivery` | durable | **not doubled** | `return_agent` |
-| `competing-managers` | baseline | **refused: the second manager** | `return_agent` |
+| `competing-managers` | baseline | **refused: the second manager** | `refund_agent` |
 | `competing-managers` | durable | **refused: the second manager** | `return_agent` |
-| `store-outage` | baseline | **no half-transition; the store's path stopped resolving** | `refund_agent` |
+| `store-outage` | baseline | **no half-transition; the store's path stopped resolving** | `triage_agent` |
 | `store-outage` | durable | **failed safely, with a split store; resumed at return_agent** | `return_agent` |
 
 ## What each result observed
@@ -48,8 +48,8 @@ in this table is typed by hand.
 
 | Variant | Outcome | Holder | Detail |
 | --- | --- | --- | --- |
-| baseline | **recovery failed; control stops at return_agent** | `return_agent` | The process was killed with SIGKILL while return_agent held control; a handoff was queued at that agent's executor. The recovery did not complete: attempt 1 aborted with the framework's "Expected exactly one update for key 'SharedState'" — the framework aborts every resume of a workflow that still has work, and the port's resume has no way past it. The first agent to act in the recovered process … |
-| durable | **resumed by return_agent** | `return_agent` | The process was killed with SIGKILL while return_agent held control, delegated to with nothing produced. A new process reopened the same store and gave control to return_agent — not back to the coordinator — and its first committed action was return_agent produced turn 0 at e45. Control after recovery was return_agent. The run then served every turn and ended with return_agent holding control, wh… |
+| baseline | **recovery failed; control stops at return_agent** | `return_agent` | The process was killed with SIGKILL while return_agent held control; a handoff was queued at that agent's executor. The recovery did not complete: attempt 1 aborted with the framework's "Expected exactly one update for key 'SharedState'"; attempt 2 aborted with the framework's "Expected exactly one update for key 'SharedState'" — the framework aborts every resume of a workflow that still has work… |
+| durable | **resumed by return_agent** | `return_agent` | The process was killed with SIGKILL while return_agent held control, delegated to with nothing produced. A new process reopened the same store and gave control to return_agent — not back to the coordinator — and its first committed action was return_agent produced turn 0 at e45. Control after recovery was return_agent. After that the run served its remaining turns; its newest checkpoint names ret… |
 
 ### `restart-after-checkpoint`
 
@@ -63,20 +63,20 @@ in this table is typed by hand.
 | Variant | Outcome | Holder | Detail |
 | --- | --- | --- | --- |
 | baseline | **not exercised** | `—` | The request the kill interrupted was delivered a second time: the port's resume re-sent it from the turn its own log had not recorded as complete, which is the duplicate delivery happening. The delivery could not be completed, however — attempt 1 aborted with the framework's "Expected exactly one update for key 'SharedState'"; attempt 2 aborted with the framework's "Expected exactly one update fo… |
-| durable | **not doubled** | `return_agent` | The closing request was delivered three times in total: the first process was killed with SIGKILL while return_agent held turn 3 with nothing produced, a second process resumed the same store (exit 0), and then the same request was delivered again to the now-complete run (exit 0). one output version for the re-delivered turn and no reuse record — the request arrived twice and the tool ran once. C… |
+| durable | **not doubled** | `return_agent` | The first process was killed with SIGKILL while return_agent held turn 3 with nothing produced, and a second process resumed the same store (exit 0): the request was delivered twice. On the per-turn count, which is the finding, turn 3 committed one output version and nothing was reused, so the request arrived twice and the specialist's tool ran once. Control after recovery was return_agent. The s… |
 
 ### `competing-managers`
 
 | Variant | Outcome | Holder | Detail |
 | --- | --- | --- | --- |
-| baseline | **refused: the second manager** | `return_agent` | A second coordinator was started on the same state while the first was serving turn 0. It was refused by the framework checkpoint store's lock at open, after 1000ms and before it could commit anything: "Unhandled exception. System.InvalidOperationException: The store at '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/.scratch/band-f-faults/baseline/competing-man… |
+| baseline | **refused: the second manager** | `refund_agent` | A second coordinator was started on the same state while the first was serving turn 0. It was refused by the framework checkpoint store's lock at open, after 0ms and before it could commit anything: "Unhandled exception. System.InvalidOperationException: The store at '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/.scratch/band-f-faults/baseline/competing-manage… |
 | durable | **refused: the second manager** | `return_agent` | A second coordinator was started on the same state while the first was serving turn 0. It was refused by the store's single-writer lock at open, after 1000ms and before it could commit anything: "Unhandled exception. System.InvalidOperationException: The durable store file '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/.scratch/band-f-faults/durable/competing-m… |
 
 ### `store-outage`
 
 | Variant | Outcome | Holder | Detail |
 | --- | --- | --- | --- |
-| baseline | **no half-transition; the store's path stopped resolving** | `refund_agent` | The framework store's index was moved aside while the process held it open at the handoff (return_agent held turn 0). The live process exited on its own: [control] workflow error: System.Reflection.TargetInvocationException: Error invoking handler for Microsoft.Agents.AI.Workflows.Specialized.HandoffState. The moved index survived intact — 11 index entr(y\|ies), 0 torn, 11 whose checkpoint docume… |
+| baseline | **no half-transition; the store's path stopped resolving** | `triage_agent` | The framework store's index was moved aside while the process held it open at the handoff (return_agent held turn 0). The live process exited on its own. The moved index survived intact — 20 index entr(y\|ies), 0 torn, 20 whose checkpoint document is present — and the checkpoint documents it names are still present, so the state before the outage is readable: the checkpoint its last entry names h… |
 | durable | **failed safely, with a split store; resumed at return_agent** | `return_agent` | The store file was moved aside while the process held it open at the handoff (return_agent held turn 0). The live process exited on its own — it did not notice: it reopened the original path and finished the run there. The moved file survived intact — 36 record(s), 4 task record(s), 0 torn — with its last committed checkpoint naming return_agent; the transition that was in flight (a specialist ou… |
 
 ## Before/after controls
@@ -87,15 +87,15 @@ control that reaches the same outcome as its fault would prove nothing, and is c
 
 | Fault | Variant | Control outcome | Control holder | Fault outcome | Fault holder | Holder at injection: control / fault |
 | --- | --- | --- | --- | --- | --- | --- |
-| `kill-mid-delegation` | baseline | control: completed in one process | `refund_agent` | recovery failed; control stops at return_agent | `return_agent` | control: return_agent / fault: return_agent |
+| `kill-mid-delegation` | baseline | control: completed in one process | `triage_agent` | recovery failed; control stops at return_agent | `return_agent` | control: return_agent / fault: return_agent |
 | `kill-mid-delegation` | durable | control: completed in one process | `return_agent` | resumed by return_agent | `return_agent` | control: return_agent / fault: return_agent |
 | `restart-after-checkpoint` | baseline | restart failed; control stops at triage_agent | `triage_agent` | restart failed; control stops at refund_agent | `refund_agent` | control: triage_agent / fault: refund_agent |
 | `restart-after-checkpoint` | durable | resumed by refund_agent | `refund_agent` | resumed by refund_agent | `refund_agent` | control: triage_agent / fault: refund_agent |
 | `duplicate-delivery` | baseline | control: delivered once | `triage_agent` | not exercised | `—` | control: triage_agent / fault: — |
 | `duplicate-delivery` | durable | control: delivered once | `return_agent` | not doubled | `return_agent` | control: return_agent / fault: return_agent |
-| `competing-managers` | baseline | control: one manager completed | `triage_agent` | refused: the second manager | `return_agent` | control: return_agent / fault: return_agent |
+| `competing-managers` | baseline | control: one manager completed | `triage_agent` | refused: the second manager | `refund_agent` | control: return_agent / fault: refund_agent |
 | `competing-managers` | durable | control: one manager completed | `return_agent` | refused: the second manager | `return_agent` | control: return_agent / fault: return_agent |
-| `store-outage` | baseline | control: completed | `triage_agent` | no half-transition; the store's path stopped resolving | `refund_agent` | control: return_agent / fault: refund_agent |
+| `store-outage` | baseline | control: completed | `triage_agent` | no half-transition; the store's path stopped resolving | `triage_agent` | control: return_agent / fault: triage_agent |
 | `store-outage` | durable | control: completed | `return_agent` | failed safely, with a split store; resumed at return_agent | `return_agent` | control: return_agent / fault: return_agent |
 
 ## Harness status
@@ -127,7 +127,7 @@ control that reaches the same outcome as its fault would prove nothing, and is c
 
 ## Produced at
 
-- `169c3b52829cebc58b6bab75841f452810d0d75a` — 10 result(s)
+- `272baac6735e2d6d15f869a1e4b7fb74d72369fd` — 10 result(s)
 
 <!-- END GENERATED -->
 
