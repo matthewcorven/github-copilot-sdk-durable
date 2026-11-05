@@ -7,18 +7,18 @@
   "holderAtEnd": "return_agent",
   "phase": "settle",
   "detail": "The closing request was delivered three times in total: the first process was killed with SIGKILL while return_agent held turn 3 with nothing produced, a second process resumed the same store (exit 0), and then the same request was delivered again to the now-complete run (exit 0). one output version for the re-delivered turn and no reuse record — the request arrived twice and the tool ran once. Control after recovery was return_agent. The second process produced nothing for the turn: the first had already committed it and the store answered for it, so the request was delivered twice and the tool ran once. The third delivery said: \"resume:    the run is already finished; there is nothing to resume.\". verify exited 0.",
-  "evidence": "frozen after the first delivery (pid 30439, SIGKILL, confirmed gone) with holder return_agent and 4 completed turn(s); output versions for the re-delivered turn 3: 0 before, 1 after, 0 reuse record(s); third delivery exit 0: resume:    the run is already finished; there is nothing to resume.; whole-run specialist results before: {\"Order 1234 is currently being processed and will ship in 2 business days.\": 1, \"Refund processed successfully for order 1234.\": 1, \"Return initiated successfully for order 1234. You will receive return instructions via email.\": 1}, after: {\"Order 1234 is currently being processed and will ship in 2 business days.\": 1, \"Refund processed successfully for order 1234.\": 1, \"Return initiated successfully for order 1234. You will receive return instructions via email.\": 2} (delta {\"Return initiated successfully for order 1234. You will receive return instructions via email.\": 1} — reported, not decisive: return_agent answers turn 0 too, so its result appears twice in a no-fault run); completed turns: 4 then 4; second delivery exit: 0; holder after: return_agent; verify exited 0; holders across the run: return_agent -> refund_agent -> order_agent -> return_agent",
+  "evidence": "frozen after the first delivery (pid 54012, SIGKILL, confirmed gone) with holder return_agent and 4 completed turn(s); output versions for the re-delivered turn 3: 0 before, 1 after, 0 reuse record(s); third delivery exit 0: resume:    the run is already finished; there is nothing to resume.; whole-run specialist results before: {\"Order 1234 is currently being processed and will ship in 2 business days.\": 1, \"Refund processed successfully for order 1234.\": 1, \"Return initiated successfully for order 1234. You will receive return instructions via email.\": 1}, after: {\"Order 1234 is currently being processed and will ship in 2 business days.\": 1, \"Refund processed successfully for order 1234.\": 1, \"Return initiated successfully for order 1234. You will receive return instructions via email.\": 2} (delta {\"Return initiated successfully for order 1234. You will receive return instructions via email.\": 1} — reported, not decisive: return_agent answers turn 0 too, so its result appears twice in a no-fault run); completed turns: 4 then 4; second delivery exit: 0; holder after: return_agent; verify exited 0; holders across the run: return_agent -> refund_agent -> order_agent -> return_agent",
   "harness": {
     "dotnet": "10.0.402",
     "endpoint": "https://openrouter.ai/api/v1",
     "model": "harness default (scripted routing)",
-    "command": "./duplicate-delivery.sh --variant durable",
-    "commit": "d77bde00b03af0517811f32474a7c5f9caa08ad6",
+    "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/duplicate-delivery.sh --variant durable",
+    "commit": "169c3b52829cebc58b6bab75841f452810d0d75a",
     "apiKeyFrom": "OPENROUTER_API_KEY",
     "portKeyFrom": null,
     "portKeySubstituted": null
   },
-  "recordedAt": "2026-11-05T21:31:22.532350+00:00",
+  "recordedAt": "2026-11-05T21:43:43.145532+00:00",
   "observations": {
     "outputVersionsForTurn3": 1,
     "reuseRecordsForTurn3": 0,

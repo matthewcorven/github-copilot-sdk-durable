@@ -13,12 +13,12 @@
     "endpoint": "https://openrouter.ai/api/v1",
     "model": "openai/gpt-4o-mini",
     "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/competing-managers.sh --variant baseline --fault-not-injected",
-    "commit": "d77bde00b03af0517811f32474a7c5f9caa08ad6",
+    "commit": "169c3b52829cebc58b6bab75841f452810d0d75a",
     "apiKeyFrom": "OPENROUTER_API_KEY",
     "portKeyFrom": "OPENROUTER_API_KEY",
     "portKeySubstituted": true
   },
-  "recordedAt": "2026-11-05T21:19:50.433274+00:00",
+  "recordedAt": "2026-11-05T21:38:41.691944+00:00",
   "observations": {
     "toolResultsBefore": {},
     "toolResultsAfter": {

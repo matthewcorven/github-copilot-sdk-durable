@@ -2,27 +2,27 @@
   "variant": "baseline",
   "fault": "store-outage",
   "outcome": "no half-transition; the store's path stopped resolving",
-  "holder": "triage_agent",
-  "holderAtFault": "triage_agent",
-  "holderAtEnd": "triage_agent",
+  "holder": "refund_agent",
+  "holderAtFault": "refund_agent",
+  "holderAtEnd": "refund_agent",
   "phase": "the newest checkpoint the surviving index names",
-  "detail": "The framework store's index was moved aside while the process held it open at the handoff (return_agent held turn 0). The live process exited on its own. The moved index survived intact — 18 index entr(y|ies), 0 torn, 18 whose checkpoint document is present — and the checkpoint documents it names are still present, so the state before the outage is readable: the checkpoint its last entry names holds triage_agent in control. There is no half-transition in the surviving index: the checkpoint documents are written whole, so the worst case is one entry that a reader of the moved index cannot see. After the outage, the live path holds no index at all, while the moved index grew by 13 entr(y|ies) because the port writes through the handle it opened before the outage — so nothing was lost, and the file the store's own path names is simply absent. The port does not expose a way to resume a completed run (its resume aborts in the framework), so the post-outage reading is the state itself rather than a process started on it; control after the outage was triage_agent, read from the checkpoint the surviving index names last.",
-  "evidence": "outage at the handoff: held by return_agent; moved /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/.scratch/band-f-faults/baseline/store-outage/state/index.jsonl aside with 5 record(s) in it; live process: exited on its own; moved file afterwards: 18 record(s); live path present: no; live output: [control] termination condition fired on turn 4 (the agent's closing message contains \"welcome\")  <scratch>/baseline/store-outage/state ; moved file: 18 index entr(y|ies), 0 torn, 18 whose checkpoint document is present; holder read from the moved state: triage_agent; holder after recovery: triage_agent; the baseline has no verifier",
+  "detail": "The framework store's index was moved aside while the process held it open at the handoff (return_agent held turn 0). The live process exited on its own: [control] workflow error: System.Reflection.TargetInvocationException: Error invoking handler for Microsoft.Agents.AI.Workflows.Specialized.HandoffState. The moved index survived intact — 11 index entr(y|ies), 0 torn, 11 whose checkpoint document is present — and the checkpoint documents it names are still present, so the state before the outage is readable: the checkpoint its last entry names holds refund_agent in control. There is no half-transition in the surviving index: the checkpoint documents are written whole, so the worst case is one entry that a reader of the moved index cannot see. After the outage, the live path holds no index at all, while the moved index grew by 6 entr(y|ies) because the port writes through the handle it opened before the outage — so nothing was lost, and the file the store's own path names is simply absent. The port does not expose a way to resume a completed run (its resume aborts in the framework), so the post-outage reading is the state itself rather than a process started on it; control after the outage was refund_agent, read from the checkpoint the surviving index names last.",
+  "evidence": "outage at the handoff: held by return_agent; moved /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/.scratch/band-f-faults/baseline/store-outage/state/index.jsonl aside with 5 record(s) in it; live process: exited on its own; moved file afterwards: 11 record(s); live path present: no; live output:    at Microsoft.Agents.AI.Workflows.InProc.InProcessRunner.Microsoft.Agents.AI.Workflows.Execution.ISuperStepRunner.RunSuperStepAsync(CancellationToken cancellationToken) [control] handoff triage_agent -> refund_agent run.sh: the workflow exited 1; checkpoint directory kept at <scratch>/baseline/store-outage/state ; moved file: 11 index entr(y|ies), 0 torn, 11 whose checkpoint document is present; holder read from the moved state: refund_agent; holder after recovery: refund_agent; the baseline has no verifier",
   "harness": {
     "dotnet": "10.0.402",
     "endpoint": "https://openrouter.ai/api/v1",
     "model": "openai/gpt-4o-mini",
     "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/store-outage.sh --variant baseline",
-    "commit": "d77bde00b03af0517811f32474a7c5f9caa08ad6",
+    "commit": "169c3b52829cebc58b6bab75841f452810d0d75a",
     "apiKeyFrom": "OPENROUTER_API_KEY",
     "portKeyFrom": "OPENROUTER_API_KEY",
     "portKeySubstituted": true
   },
-  "recordedAt": "2026-11-05T21:20:03.380848+00:00",
+  "recordedAt": "2026-11-05T21:38:50.940391+00:00",
   "observations": {
     "holderAtOutage": "return_agent",
-    "survivedHolder": "triage_agent",
-    "recoveredHolder": "triage_agent",
+    "survivedHolder": "refund_agent",
+    "recoveredHolder": "refund_agent",
     "liveProcess": "exited"
   }
 }

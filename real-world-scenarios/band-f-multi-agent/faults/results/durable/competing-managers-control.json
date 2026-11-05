@@ -13,12 +13,12 @@
     "endpoint": "https://openrouter.ai/api/v1",
     "model": "harness default (scripted routing)",
     "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/competing-managers.sh --variant durable --fault-not-injected",
-    "commit": "d77bde00b03af0517811f32474a7c5f9caa08ad6",
+    "commit": "169c3b52829cebc58b6bab75841f452810d0d75a",
     "apiKeyFrom": "OPENROUTER_API_KEY",
     "portKeyFrom": null,
     "portKeySubstituted": null
   },
-  "recordedAt": "2026-11-05T21:25:51.769240+00:00",
+  "recordedAt": "2026-11-05T21:45:43.838341+00:00",
   "observations": {
     "toolResultsBefore": {},
     "toolResultsAfter": {
