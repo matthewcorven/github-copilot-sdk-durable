@@ -1,0 +1,47 @@
+=== 20. kill -9 the orchestrator at the gate ===
+
+$ ps -p 22896 -o pid=,stat=,command=
+22896 S    /Users/core/Library/Application Support/dotnet/runfile/orchestrator-243dd43f2047e69526215ec791e6e50aef0fe0218c51a741c9ac8cb3516c8d95/bin/debug/orchestrator
+
+$ ./count-calls.sh
+  d3-coverage-assessor           45 responses
+  d3-decision-letter              1 responses
+
+$ kill -9 22896
+exit=0
+
+$ ps -p 22896 -o pid=,stat=,command=   # the proof the process is gone
+22896 ?E   (orchestrator)
+(no output above; ps exited 0)
+
+$ ps -eo pid,command | grep -c 'runfile/orchestrator'
+       0
+
+$ ps -p 22896 >/dev/null && echo alive || echo gone
+gone
+
+-- the same check again, after the parent shell reaped it --
+$ ps -p 22896 -o pid=,stat=,command=
+(empty)
+$ ps -p 22896 -o stat=  → []
+   'Z'/'?E' is a zombie: the process is dead, only its exit record is waiting
+   to be collected. `kill -9` cannot kill an already-dead process; `ps` can still list it.
+
+$ sleep 2; ps -p 22896 >/dev/null 2>&1 && echo alive || echo gone
+gone
+
+$ pgrep -f 'runfile/orchestrator' | wc -l
+       0
+
+=== 21. restart: resume the store the killed process left ===
+$ ./count-calls.sh --json   # before the restart
+{'d3-coverage-assessor': 45, 'd3-decision-letter': 1}
+
+$ ./count-calls.sh   # after the restart, before the gate is answered
+  d3-coverage-assessor           45 responses
+  d3-decision-letter              1 responses
+
+$ ./count-calls.sh --since evidence/run/21-counts-after-kill.json
+  d3-coverage-assessor           45 →   45  (+0)
+  d3-decision-letter              1 →    1  (+0)
+  TOTAL                          46 →   46  (+0)

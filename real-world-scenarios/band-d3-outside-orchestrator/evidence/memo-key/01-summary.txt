@@ -1,0 +1,7 @@
+Scenario       key mode  calls  key used                                              produced by                              memo result
+A-miss-v1      identity  +1     step/coverage/1188409be0bb45d0/d3-coverage-assessor@17:48d2a3c62ecbb105 d3-coverage-assessor@17:48d2a3c62ecbb105 miss
+A2-naive-v1    naive     +1     step/coverage/1188409be0bb45d0                         d3-coverage-assessor@17:48d2a3c62ecbb105 miss
+B-hit-v1       identity  +0     step/coverage/1188409be0bb45d0/d3-coverage-assessor@17:48d2a3c62ecbb105 d3-coverage-assessor@17:48d2a3c62ecbb105 hit
+C-miss-v2      identity  +1     step/coverage/1188409be0bb45d0/d3-coverage-assessor@18:d8f2c9f08a26c347 d3-coverage-assessor@18:d8f2c9f08a26c347 miss
+D-stale-naive  naive     +0     step/coverage/1188409be0bb45d0                         d3-coverage-assessor@17:48d2a3c62ecbb105 hit
+E-fixed        identity  +1     step/coverage/1188409be0bb45d0/d3-coverage-assessor@18:d8f2c9f08a26c347 d3-coverage-assessor@18:d8f2c9f08a26c347 miss

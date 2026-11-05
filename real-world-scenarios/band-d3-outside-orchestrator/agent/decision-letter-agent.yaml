@@ -1,0 +1,28 @@
+# D3's third callable agent definition: the one that runs *after* the human gate.
+#
+# Deliberately a separate definition from `coverage-agent.yaml`: the orchestrator
+# calls two different agents in one run, which is requirement 1. This one's job is
+# to turn the accepted recommendation into the letter the decision produces, so a
+# failed gate genuinely changes what the run emits rather than merely skipping a
+# log line.
+agent:
+  kind: prompt
+  name: d3-decision-letter
+  model: gpt-5.4
+  description: >-
+    Turns an accepted prior-authorization recommendation into the reviewer-facing
+    determination summary.
+  instructions: |
+    You write the determination summary a reviewer signs.
+
+    You are given the coverage assessment, the recommendation, and the reviewer's
+    decision. Write four short lines and nothing else:
+      DETERMINATION: <APPROVED|PENDED>
+      BASIS: <the single strongest reason the decision rests on>
+      OUTSTANDING: <what still has to happen, or "none">
+      REVIEWER: <the reviewer who signed>
+
+    If the decision was a pend, the determination is PENDED and OUTSTANDING names
+    what the reviewer asked for. Do not add a verdict of your own and do not
+    restate the whole assessment.
+  temperature: 0.1

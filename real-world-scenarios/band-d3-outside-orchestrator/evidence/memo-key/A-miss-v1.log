@@ -1,0 +1,16 @@
+run dir:    /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/.scratch/band-d3-memo-key/A-miss-v1
+store:      /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/.scratch/band-d3-memo-key/A-miss-v1/store/orchestrator.jsonl
+mode:       new run
+memo key:   identity (name+input+agent identity)
+------------------------------------------------------------------------------
+[coverage] resolving the agent the platform is running now
+task:       new durable task t1 (request memo-key-A-miss-v1)
+------------------------------------------------------------------------------
+[coverage] identity d3-coverage-assessor@17:48d2a3c62ecbb105
+[coverage] memo miss step/coverage/1188409be0bb45d0/d3-coverage-assessor@17:48d2a3c62ecbb105 — calling the agent
+[coverage] settled; memo step/coverage/1188409be0bb45d0/d3-coverage-assessor@17:48d2a3c62ecbb105 written
+[coverage] STOP_AFTER_COVERAGE=stuck: the phase is not advanced.
+[coverage] cancelling this process; the next one re-enters coverage.
+------------------------------------------------------------------------------
+stopped at a committed boundary.
+  the store holds the checkpoint; the next process re-enters the phase.

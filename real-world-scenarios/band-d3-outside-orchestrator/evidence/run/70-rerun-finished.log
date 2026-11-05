@@ -1,0 +1,36 @@
+run dir:   /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/.scratch/band-d3
+dotnet:    /opt/homebrew/bin/dotnet (10.0.402)
+project:   https://aif-mxv7i27um4pks.services.ai.azure.com/api/projects/priorauth
+resuming:  the store run.sh left
+
+run dir:    /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/.scratch/band-d3
+store:      /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/.scratch/band-d3/store/orchestrator.jsonl
+mode:       resume the store's run
+memo key:   identity (name+input+agent identity)
+------------------------------------------------------------------------------
+task:       resuming durable task t1 (restarts before this process: 1)
+phase:      letter
+memos:      3 on record
+  step/coverage/1188409be0bb45d0/d3-coverage-assessor@18:d8f2c9f08a26c347
+    → coverage: 1. Provider Specialty-Procedure Appropriateness  
+Status: INSUFFICIENT  
+Confidence: 98  
+Eviden…
+  step/gate/1bf82b4371597886/human@n/a:79a5478768d24474
+    → gate: pend_for_review|Dr. A. Reviewer, utilization management|Provider specialty is not in the request…
+  step/letter/d62205728a0ff381/d3-decision-letter@2:a4b8a883cd0e648f
+    → letter: DETERMINATION: PENDED
+BASIS: Provider specialty is not in the request, so specialty-procedure ap…
+memos:      3 on record — a phase that re-enters looks these up before it calls anything
+task:       already finished; nothing to do.
+------------------------------------------------------------------------------
+run complete.
+  recommendation : pend_for_review — provider specialty is not supplied, so specialty-procedure appropriateness cannot be confirmed despite diagnosis support for medical necessity.
+  decision       : pend_for_review by Dr. A. Reviewer, utilization management
+  determination  : PENDED
+  step coverage  ← d3-coverage-assessor@18:d8f2c9f08a26c347  key step/coverage/1188409be0bb45d0/d3-coverage-assessor@18:d8f2c9f08a26c347
+  step gate      ← human  key step/gate/1bf82b4371597886/human@n/a:79a5478768d24474
+  step letter    ← d3-decision-letter@2:a4b8a883cd0e648f  key step/letter/d62205728a0ff381/d3-decision-letter@2:a4b8a883cd0e648f
+
+run dir: /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/.scratch/band-d3
+kept: /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/.scratch/band-d3

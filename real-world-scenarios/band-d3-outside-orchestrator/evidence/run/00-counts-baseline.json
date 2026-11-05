@@ -1,0 +1,16 @@
+{
+ "agents": {
+  "d3-coverage-assessor": {
+   "count": 44,
+   "pages": 1,
+   "latest": 1793900578,
+   "incomplete": []
+  },
+  "d3-decision-letter": {
+   "count": 1,
+   "pages": 1,
+   "latest": 1793895785,
+   "incomplete": []
+  }
+ }
+}

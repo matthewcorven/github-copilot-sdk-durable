@@ -1,0 +1,55 @@
+$ ./memo-key-demo.sh
+== A: empty store, definition v1 ==
+  identity d3-coverage-assessor@17:f5146e1128a6f9f3
+
+
+A-miss-v1      identity calls +1  (new run)
+  key      step/coverage/1188409be0bb45d0/d3-coverage-assessor@17:48d2a3c62ecbb105
+  produced d3-coverage-assessor@17:48d2a3c62ecbb105
+
+== B: A's store, definition still v1 ==
+
+
+  identity d3-coverage-assessor@17:f5146e1128a6f9f3 (unchanged)
+B-hit-v1       identity calls +0  (re-entered coverage on a store that had not advanced)
+  key      step/coverage/1188409be0bb45d0/d3-coverage-assessor@17:48d2a3c62ecbb105
+  produced d3-coverage-assessor@17:48d2a3c62ecbb105
+
+== A2: a store written under the NAIVE key, still v1 (the control's input) ==
+A2-naive-v1    naive    calls +1  (new run)
+  key      step/coverage/1188409be0bb45d0
+  produced d3-coverage-assessor@17:48d2a3c62ecbb105
+
+== edit the agent definition, then re-deploy ==
+  appended a paragraph to the coverage agent's instructions
+  identity d3-coverage-assessor@18:548932c63934c3fc
+
+== C: fresh store under the edited (v2) definition ==
+C-miss-v2      identity calls +1  (new run)
+  key      step/coverage/1188409be0bb45d0/d3-coverage-assessor@18:d8f2c9f08a26c347
+  produced d3-coverage-assessor@18:d8f2c9f08a26c347
+
+== D: CONTROL — A2's store (written by v1), v2 live, NAIVE key ==
+D-stale-naive  naive    calls +0  (re-entered coverage on a store that had not advanced)
+  key      step/coverage/1188409be0bb45d0
+  produced d3-coverage-assessor@17:48d2a3c62ecbb105
+
+== E: a copy of D's store, identity key ==
+E-fixed        identity calls +1  (re-entered coverage on a store that had not advanced)
+  key      step/coverage/1188409be0bb45d0/d3-coverage-assessor@18:d8f2c9f08a26c347
+  produced d3-coverage-assessor@18:d8f2c9f08a26c347
+
+  (agent/coverage-agent.yaml is restored on exit; the platform still runs v2)
+
+== what the platform's own counts say ==
+  PASS  A empty store, definition v1: one call
+  PASS  B same store, definition unchanged: no call — the memo is reused
+  PASS  C definition changed: one call — a new step
+  PASS  D control, naive key: no call — it reused a result v2 never produced
+  PASS  E D's store, identity key: one call — the stale memo is invisible
+
+  D's store reports the coverage step as produced by d3-coverage-assessor@17:48d2a3c62ecbb105
+  while the platform was running d3-coverage-assessor@18:548932c63934c3fc — that is the bug the key prevents.
+  E, on the same store, could only produce d3-coverage-assessor@18:d8f2c9f08a26c347.
+
+  the agent identity in the key is what makes B a hit, C a miss, and D's reuse impossible.
