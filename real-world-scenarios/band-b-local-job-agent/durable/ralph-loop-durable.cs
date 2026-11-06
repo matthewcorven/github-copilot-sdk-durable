@@ -106,11 +106,26 @@ static async Task<int> DurableLoopAsync(string[] args)
     // checkpoint, and this process exits normally.
     using var stop = new CancellationTokenSource();
 
-    var store = DurableStore.Create(new DurableStoreOptions
+    // The layer refuses a second writer on the same store file (StoreFileLock), but that refusal
+    // is only worth anything if the process acts on it. A store create that throws here would exit
+    // the process through an unhandled exception, and the loop would have done nothing at all. Doing
+    // nothing is the promise for "a second loop over the same folder": a run that cannot be the
+    // owner of the run does not read the plan, does not send a turn, and does not touch a file.
+    DurableStore store;
+    try
     {
-        Path = storePath,
-        Format = DurableStoreFormat.Jsonl,
-    });
+        store = DurableStore.Create(new DurableStoreOptions
+        {
+            Path = storePath,
+            Format = DurableStoreFormat.Jsonl,
+        });
+    }
+    catch (InvalidOperationException refused)
+    {
+        Console.WriteLine($"refused:   {refused.Message}");
+        Console.WriteLine("refused:   a run belongs to the process that opened its store; this one exits without doing the job.");
+        return Job.RefusedExitCode;
+    }
 
     try
     {
@@ -929,6 +944,12 @@ static class Job
     public const string PromptFile = "PROMPT.md";
     public const string StoreDirectory = ".durable";
     public const int DefaultMaxIterations = 10;
+
+    // The status a process exits with when another process owns the run's store. It is 4, not 1:
+    // run.sh's 1 means "the loop stopped but the target does not match the plan", and a refused
+    // process did not touch the target at all. Reporting it as 1 would describe a run that
+    // happened and failed; this says nothing happened.
+    public const int RefusedExitCode = 4;
 
     // Two open plan items per pass. The baseline asks for "as many as you can in this pass",
     // which makes an iteration's size a property of the model's mood; a resumed run could then
