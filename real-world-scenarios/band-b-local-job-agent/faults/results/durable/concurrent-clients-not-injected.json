@@ -1,0 +1,16 @@
+{
+  "variant": "durable",
+  "fault": "concurrent-clients-not-injected",
+  "outcome": "control: corrupted without overlap",
+  "phase": "loop 1 to completion, then loop 2 against the same target (the control)",
+  "detail": "Control FAILED: two loops run one after the other still left a target that does not match the plan (plan 'in-progress 4 12', shape intact, verifier 'fail: FAIL  section-03.md: first line is not an H1: Settings live in a file.'). A fault cannot be blamed for damage that happens without it.",
+  "evidence": "overlap claim: none: loop 1 had already exited (3) when loop 2 started; gate connection windows: two-connections (2 connection(s), overlap 0.000s); loop 1 exit 3, loop 2 exit 3; gate frames: 26 in / 615 out; plan shape: intact; store 'present 103 0 iteration-complete/2'",
+  "harness": {
+    "dotnet": "dotnet",
+    "model": "gpt-5.1-codex-mini",
+    "command": "./faults/concurrent-clients.sh --variant durable --fault-not-injected",
+    "script": "concurrent-clients.sh",
+    "commit": "a89e64367a6b040a5197d45a878cabe7db7174c0"
+  },
+  "recordedAt": "2026-11-06T01:32:12.662129+00:00"
+}

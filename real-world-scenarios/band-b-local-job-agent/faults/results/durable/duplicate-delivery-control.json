@@ -1,0 +1,16 @@
+{
+  "variant": "durable",
+  "fault": "duplicate-delivery-control",
+  "outcome": "control: one delivery",
+  "phase": "one iteration, nothing re-delivered (the control)",
+  "detail": "Control: the same run with nothing re-delivered. 1 session.send frame(s), 5 assistant.message, 5 tool.execution_start, exit 3, plan 'in-progress 2 14', verifier 'fail: FAIL  section-01.md: first line is not an H1: The queue keeps five jobs.', product digest 963a1e8bd9cf7a7b. The duplicate run is read against these counts; the re-delivery is the only difference.",
+  "evidence": "frames at the gate: 1 session.send, 5 assistant.message, 5 tool.execution_start; frames re-delivered by the gate: 0; tool calls after the re-delivery: 0; product digest 963a1e8bd9cf7a7b; store 'present 51 0 iteration-complete/1'; last line \"iteration cap reached: 1 iterations and the plan is not complete.\"",
+  "harness": {
+    "dotnet": "dotnet",
+    "model": "gpt-5.1-codex-mini",
+    "command": "./faults/duplicate-delivery.sh --variant durable --fault-not-injected",
+    "script": "duplicate-delivery.sh",
+    "commit": "a89e64367a6b040a5197d45a878cabe7db7174c0"
+  },
+  "recordedAt": "2026-11-06T01:29:14.716143+00:00"
+}
