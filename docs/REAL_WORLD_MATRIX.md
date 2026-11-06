@@ -23,9 +23,9 @@ Dimensions are fixed by the program epic (#142) so bands are comparable:
 
 ## Scope of this document
 
-**Bands A, B, C, F and G, so far.** The other two bands' rows land with their own A4-equivalents —
-#163 (D) and #169 (E) — because each band owns its README and its own rows, per the program
-epic. Nothing in this file is extrapolated from one band to another. A band whose directory exists
+**Bands A, B, C, D, F and G, so far.** Band E's rows land with its own equivalent (#169) — it is blocked
+on an Android toolchain this machine does not have — because each band owns its README and its own rows,
+per the program epic. Nothing in this file is extrapolated from one band to another. A band whose directory exists
 but whose rows are not here has not been measured to this standard yet; the absence is deliberate.
 
 **Three kinds of evidence are in this file, and they are not interchangeable.** Bands A and B both ran
@@ -33,8 +33,10 @@ real agent turns against a signed-in Copilot runtime — A's inside a web app, B
 *is* the model's tool calls. **Band C's is a local reproduction of an Actions workflow and never ran the
 hosted Action** — no runner, no live GitHub API, no model call. **Band F has two baselines, and each of
 its cells names which one it is measured against.** **Band G has three columns**, and its middle one is
-the vendor's extension on an emulator — one sample, with two stated residuals. Each band's cells carry
-their caveat inline; none of the bands' cells are an aggregate.
+the vendor's extension on an emulator — one sample, with two stated residuals. **Band D ran against a
+real Azure subscription and is torn down**, so its cells describe a run that happened rather than a
+service anyone can query. Each band's cells carry their caveat inline; none of the bands' cells are an
+aggregate.
 
 ## Band A — local dev-tool agent
 
@@ -500,6 +502,75 @@ Rendered from `faults/results/` by `faults/lib/three_way.py`, with a drift check
 - **The middle column's two residuals are holes, not wins for this variant:** no model-call count (its
   executors call no model) and no observable child cascade.
 
+## Band D — Azure-hosted Foundry agent
+
+Three scenarios, because this band has **two Durable positions** and a baseline:
+
+| | Directory | What it is |
+| --- | --- | --- |
+| D1 | [`band-d-hosted-foundry-agent/`](../real-world-scenarios/band-d-hosted-foundry-agent/README.md) | The baseline: `microsoft/Prior-Authorization-Multi-Agent-Solution-Accelerator` (MIT) deployed as Foundry hosted agents and run for real. |
+| D2 | [`band-d-durable-inside/`](../real-world-scenarios/band-d-durable-inside/README.md) | **Durable inside.** The same deployment, with the agent's *working state* in the Durable layer inside the container while Foundry keeps the transcript. |
+| D3 | [`band-d3-outside-orchestrator/`](../real-world-scenarios/band-d3-outside-orchestrator/README.md) | **Durable outside.** A local Durable orchestrator that treats Foundry agents as tools and owns the process end to end. |
+
+**The band's finding is composition, not replacement.** Foundry owns **what was said** — the
+transcript, the session, the platform's conversation history (`store: False`). Durable owns **what is
+true** — the working state, the decision, its deadline, the process. Neither replaces the other, and
+when they disagree the working state wins for every question of fact; the transcript is the record of
+the disagreement ([`BOUNDARY.md`](../real-world-scenarios/band-d-durable-inside/BOUNDARY.md) states the
+rule and each fact's owner).
+
+> **Platform caveat, and it applies to every cell.** This band ran against **Azure Foundry on a real
+> subscription** (East US 2, `gpt-5.4`), not a substitute. The deployment is **torn down** — the
+> evidence is captured and committed, the resources are not live. Cells below describe a run that
+> happened, not a service anyone can query now.
+
+Evidence: [`band-d-hosted-foundry-agent/evidence/platform-behaviour.md`](../real-world-scenarios/band-d-hosted-foundry-agent/evidence/platform-behaviour.md),
+[`band-d-durable-inside/evidence/restart-across-stop.md`](../real-world-scenarios/band-d-durable-inside/evidence/restart-across-stop.md),
+[`band-d3-outside-orchestrator/evidence/run/`](../real-world-scenarios/band-d3-outside-orchestrator/evidence/run/),
+[`band-d-durable-inside/BOUNDARY.md`](../real-world-scenarios/band-d-durable-inside/BOUNDARY.md).
+
+| Dimension | `D1` baseline (platform) | `D2` Durable inside | `D3` Durable outside |
+| --- | --- | --- | --- |
+| **Where state lives** | **Platform service only.** Foundry owns the session and the transcript; the reference sets `store: False` because the platform keeps history. A per-session filesystem (`$HOME`, `/files`) holds anything the agent writes. | **Both, split on purpose.** Foundry owns the transcript and the `agent_session_id`; Durable owns one document per fact (`d2.work-state@<requestId>`) and one task that parks on an external event. | **App store.** One Durable task per run, memoised per step; the Foundry transcript is an input to each call, not the authority. |
+| **Survives process death** | **Session survives; in-flight work does not.** A foreground response whose client disconnects is **`cancelled`**, `background: false` — recorded, not retried, not finished. Sessions persist 30 days, sliding with activity. | **Yes, at the approval.** The stop is explicit, and the resumed turn re-enters `checkpoint.phase: "await"`, never `park`; the deadline is **byte-identical** before and after (`1793997250.6636398`). | **Yes, between calls.** `kill -9` of the orchestrator, restart: **+0** platform calls from the platform's own paginated counter. |
+| **Mid-turn failure behaviour** | **Lost.** *"The platform keeps the session and the transcript; it does not keep in-flight work."* | **Resumed at the approval, not before it.** `resume_work` settled `pending` at task `t4`; the store's five task records all carry the same deadline. | **Resumed at the gate**, and the memo means a completed call is not repeated. |
+| **Duplicate delivery** | **`not exercised`.** No fault run drove a duplicate approval at the platform level (that is D4's evidence). | **One commit.** `record_approval` woke `t4`, which completed with the approval document answered once. | **Idempotent by memo key.** A repeated invocation for the same step returns the recorded result; the memo key includes the agent identity (`name@version:sha256(definition)`), so a changed definition is a **new** step. |
+| **Concurrent clients** | **`not exercised`.** | **`not exercised`.** The count of concurrent approvals is one, stated as a limit. | **`not exercised`.** |
+| **Store outage** | **`not exercised`.** | **`not exercised`.** | **`not exercised`.** |
+| **Offline capability** | **`not exercised`.** | **`not exercised`.** | **`not exercised`.** |
+| **Recovery cost** | **Resubmit; the foreground work is gone.** Sessions resume with context after an explicit `:stop`, and a fresh session answers `NO PRIOR CONTEXT` — that control pair is what separates "the platform resumed the session" from "the platform replayed the transcript". | **Restart the container; no manual step.** Measured over the restart as **7 s, 6 s, 7 s and 8 s** of session compute with a 5 s stop gap. | **Restart the orchestrator; no manual step, and no repeated call.** The whole run across two processes made **+2** calls, one per agent. |
+| **Operational burden** | **Nothing on you, and a preview surface on the platform.** No server, no store, no credential to rotate — the platform owns the session. What preview status adds: region and enrollment limits, a 30-day session window, a 900 s default idle timeout that bills while the session idles, and behaviour that may change. | **A deployment you own, plus a store inside the container.** The working state is a file the container must keep; the platform-removed burden is unchanged. | **The platform's burden stays, and you add a store.** One local scheduler, one store file, one writer — and the agent calls are now a cost you can count. |
+| **Lines of custom durability code** | **0.** `band-d-hosted-foundry-agent/` is 8 files, 1 134 lines — vendored agent source, `infra/`, and scripts. The reference has no durability code because it delegates that to the platform. | **2 348 lines across 12 files**, of which the durability-specific part is the work-state document and the parking task in `agent/durable_state.py` and the verbs in `agent/main.py`. | **1 837 lines across 7 files**, of which the orchestrator's task/memo/gate wiring is the durability code. |
+
+### What each position actually shows
+
+- **D1's contribution is a measurement, not a feature.** The platform's four questions — session window,
+  idle timeout, what happens to a foreground response when the client disconnects, and whether it is
+  replayed — are answered from a real deployment, with each answer marked *documented* or *observed*.
+  The one-line answer: **the platform keeps the session and the transcript; it does not keep in-flight
+  work.**
+- **D2's contribution is that Durable composes rather than competes.** The approval parks on an external
+  event with a durable deadline, survives a container restart, and resumes **at the approval**. The
+  transcript stays the platform's; nothing is mirrored.
+- **D3's contribution is the other shape:** the store is what survives and the agents are replaceable.
+  Its strongest control is the **memo key**: a naive key wrongly reused v1's result (`+0` calls), and the
+  identity-bearing key correctly missed (`+1`) — a control that demonstrates the wrong answer, which is
+  worth more than one that only shows the right one.
+
+### Where this band's rows diverge from the easy story
+
+- **Five of the six fault dimensions are `not exercised` for Band D**, because D4 — the fault evidence —
+  has not run. That is the honest state of the band, not a gap in the scenarios: D1, D2 and D3 each
+  prove their own claim under normal operation and under one interruption, and the six-fault sweep is
+  separate work.
+- **D1's local Docker Compose path does not complete a run.** Three verbatim failures are recorded; the
+  hosted path is what ran. The issue's step 2 asks for exactly that fallback, so it is compliance, not
+  a shortfall.
+- **Only two of the accelerator's four specialists are deployed.** Clinical and compliance are absent
+  from every transcript, and the decision errs to PEND rather than pretending to a full assessment.
+- **`resilient_background` was deliberately not enabled.** Turning it on would change the baseline the
+  band compares against; the replay answer is therefore quoted from the docs, not observed.
+
 ## Currency
 
 | | |
@@ -508,10 +579,11 @@ Rendered from `faults/results/` by `faults/lib/three_way.py`, with a drift check
 | Band B measurements recorded | 2026-11-05 (variant evidence, `durable/evidence/run-all.sh`) and 2026-11-06 (fault evidence, `faults/run-all.sh`, 21 runs, 03:33:43Z–03:52:17Z at `32770e70b581`) |
 | Band C measurements recorded | 2026-11-05 — variant evidence (`durable/evidence.sh`, two identical runs) and fault evidence (`faults/run-all.sh`, 24 runs, 18:04:06Z–18:05:02Z) |
 | Band G measurements recorded | 2026-11-05 — baseline `run.sh`/`resume.sh`, durable `evidence.sh` (six flows, 30 claims), and fault evidence (`faults/run-all.sh`, 34 runs across three columns at `cfbea21`); the extension column was run on the DTS emulator, `1.16.0-preview.261029.1` |
+| Band D measurements recorded | 2026-11-05 — D1 (one hosted prior-auth run, `evidence/run-20261105T125254Z/`), D2 (`evidence/run-20261105T203358Z/`, four turns over a container restart), D3 (two orchestrator processes across a `kill -9`, `evidence/run/`). All on BizSpark / East US 2, all torn down |
 | Band F measurements recorded | 2026-11-05 — baseline run and durable `evidence.sh` (including its live-model stage against `claude-sonnet-5`), and fault evidence (`faults/run-all.sh`, 20 runs, produced at commit `272baac`). Baseline rows used an OpenAI-compatible endpoint; durable fault rows used scripted routing and made no model call |
 | Machine | macOS arm64, .NET SDK 10.0.402; GitHub Copilot CLI 1.0.105 for Bands A and B (Band B's fault harness used the CLI bundled with the SDK build, 1.0.103, because the 1.0.105 install refused `gpt-5.1-codex-mini` as unavailable); Bands C and F fault rows need no CLI — neither makes a model call there (Band F's *variant* evidence did call a model) |
 | Durable layer pinned at | the `dev` tip the scenario was built against — `lib/Copilot.Durable.csproj` reads `0.5.0`, which is **not yet released** (no `v0.5.0` tag, no CHANGELOG section). Per the program epic's versioning rule, the scenario's feature PR lands pinned to the release that cuts it; until then these rows describe `dev`, not a published package |
-| Rows added since | Band A (#147), Band C (#157), then Band B (#152), Band F (#174) and Band G (#179) on 2026-11-06. **Band B needed no layer change**: `DurableStore.Create`'s exclusive `StoreFileLock` already refused a second writer, and the `concurrent-clients` fault showed the *variant* was the half that was missing — it caught the refusal and reports exit 4 now (`durable/ralph-loop-durable.cs:114-128`). **Band F needed no layer change either** — documentation only, written against evidence F1–F3 already produced at `272baac`. Band C (#157), 2026-11-05, needed `Transaction.Memo` in all three ports (filed as #201) and a silent rollback fix (`UndoLog.Restore` resetting the baseline map); both are on `dev` with tests that fail without them (`durable/README.md` §*What `lib/Durable.cs` could not express*) |
+| Rows added since | Band A (#147), Band C (#157), then Band B (#152), Band F (#174), Band G (#179) and Band D (#163) on 2026-11-06. **Band B needed no layer change**: `DurableStore.Create`'s exclusive `StoreFileLock` already refused a second writer, and the `concurrent-clients` fault showed the *variant* was the half that was missing — it caught the refusal and reports exit 4 now (`durable/ralph-loop-durable.cs:114-128`). **Band F needed no layer change either** — documentation only, written against evidence F1–F3 already produced at `272baac`. Band C (#157), 2026-11-05, needed `Transaction.Memo` in all three ports (filed as #201) and a silent rollback fix (`UndoLog.Restore` resetting the baseline map); both are on `dev` with tests that fail without them (`durable/README.md` §*What `lib/Durable.cs` could not express*) |
 | **Fidelity differs by band** | Bands A and B ran real agent turns against a signed-in CLI; Band B's jobs are live model work over real files, so its counts are one model's and not reproducible byte for byte in their *numbers* (its *products* are, per the run-equivalence rows). **Band C's is a local reproduction of an Actions workflow and never ran the hosted Action** — see the caveat on its section. **Band F has two baselines, and each of its cells names which one it is measured against.** **Band G has three columns**, and its middle column is the vendor's extension on an emulator — one sample, with two stated residuals. A reader comparing sections is comparing kinds of evidence, not configurations of one experiment |
 
 A band's rows are re-measured, not carried forward, when its scenario changes. If a later change to
