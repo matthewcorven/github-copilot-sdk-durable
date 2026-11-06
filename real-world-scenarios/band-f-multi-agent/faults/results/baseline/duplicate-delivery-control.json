@@ -1,0 +1,31 @@
+{
+  "variant": "baseline",
+  "fault": "duplicate-delivery-control",
+  "outcome": "control: delivered once",
+  "holder": "triage_agent",
+  "holderAtFault": "triage_agent",
+  "holderAtEnd": "triage_agent",
+  "phase": "the closing request was delivered once and nothing was killed (the control)",
+  "detail": "Control: the closing request delivered once, in one process, with nothing killed. The checkpointed conversation holds the specialist tool results {\"Order 1234 is currently being processed and will ship in 2 business days.\": 1, \"Refund processed successfully for order 1234.\": 1, \"Return initiated successfully for order 1234. You will receive return instructions via email.\": 1} across 5 completed turn(s), and the run ended with triage_agent holding control. The fault run is compared to exactly this multiset, so a result it holds twice is that specialist's tool run a second time and nothing else.",
+  "evidence": "tool results: {\"Order 1234 is currently being processed and will ship in 2 business days.\": 1, \"Refund processed successfully for order 1234.\": 1, \"Return initiated successfully for order 1234. You will receive return instructions via email.\": 1}; completed turns: 5; holder after: triage_agent",
+  "harness": {
+    "dotnet": "10.0.402",
+    "endpoint": "https://openrouter.ai/api/v1",
+    "model": "openai/gpt-4o-mini",
+    "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/duplicate-delivery.sh --variant baseline --fault-not-injected",
+    "commit": "272baac6735e2d6d15f869a1e4b7fb74d72369fd",
+    "apiKeyFrom": "OPENROUTER_API_KEY",
+    "portKeyFrom": "OPENROUTER_API_KEY",
+    "portKeySubstituted": true
+  },
+  "recordedAt": "2026-11-05T22:21:49.117000+00:00",
+  "observations": {
+    "toolResults": {
+      "Order 1234 is currently being processed and will ship in 2 business days.": 1,
+      "Refund processed successfully for order 1234.": 1,
+      "Return initiated successfully for order 1234. You will receive return instructions via email.": 1
+    },
+    "completedTurns": 5,
+    "outputVersionsForTurn3": 0
+  }
+}

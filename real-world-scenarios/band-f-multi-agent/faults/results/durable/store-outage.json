@@ -1,0 +1,28 @@
+{
+  "variant": "durable",
+  "fault": "store-outage",
+  "outcome": "failed safely, with a split store; resumed at return_agent",
+  "holder": "return_agent",
+  "holderAtFault": "return_agent",
+  "holderAtEnd": "return_agent",
+  "phase": "settle",
+  "detail": "The store file was moved aside while the process held it open at the handoff (return_agent held turn 0). The live process exited on its own — it did not notice: it reopened the original path and finished the run there. The moved file survived intact — 36 record(s), 4 task record(s), 0 torn — with its last committed checkpoint naming return_agent; the transition that was in flight (a specialist output) is simply absent, so there is no state in which control has moved and the commit that says so is missing. A fresh process on the surviving file took control as return_agent — the holder the surviving checkpoint names — and its first committed action was return_agent produced turn 0 at e45; the run reached 4 turn(s) with return_agent holding control at the end. verify exited 0. The state is now in two files and nothing merged them: the live path holds 214 record(s), the moved file still holds the 36 record(s) it had at the outage (it grew by 0), so an operator who restores the moved file replaces the post-outage run rather than merging with it. Control was not lost; it was forked, which is the failure this row records.",
+  "evidence": "outage at the handoff: held by return_agent; moved /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/.scratch/band-f-faults/durable/store-outage/state/store.jsonl aside with 36 record(s) in it; live process: exited on its own; moved file afterwards: 36 record(s); live path present: yes; live output:  store:     <scratch>/durable/store-outage/state/store.jsonl kept: <scratch>/durable/store-outage/state ; moved file: 36 record(s), 4 task record(s), 0 torn; holder read from the moved state: return_agent; holder after recovery: return_agent; resume exit 0; verify exited 0",
+  "harness": {
+    "dotnet": "10.0.402",
+    "endpoint": "https://openrouter.ai/api/v1",
+    "model": "harness default (scripted routing)",
+    "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/store-outage.sh --variant durable",
+    "commit": "272baac6735e2d6d15f869a1e4b7fb74d72369fd",
+    "apiKeyFrom": "OPENROUTER_API_KEY",
+    "portKeyFrom": null,
+    "portKeySubstituted": null
+  },
+  "recordedAt": "2026-11-05T22:27:35.853784+00:00",
+  "observations": {
+    "holderAtOutage": "return_agent",
+    "survivedHolder": "return_agent",
+    "recoveredHolder": "return_agent",
+    "liveProcess": "exited"
+  }
+}

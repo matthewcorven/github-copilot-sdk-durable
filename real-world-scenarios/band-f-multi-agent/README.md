@@ -2,7 +2,8 @@
 
 This directory reproduces the delegation shape of the reference implementation for Band F
 (multi-agent orchestration): `microsoft/agent-framework`'s `handoff_simple.py`. It is the baseline
-side of the comparison; the Durable variant is F2 (#172), and the fault evidence is F3 (#173).
+side of the comparison; the Durable variant is F2 (#172), and the fault evidence is F3 (#173) —
+`faults/`, including `faults/README.md`, which is the fault matrix and its reasoning.
 
 **The baseline delegates for real.** One agent decides that another should take over, and the
 conversation moves to that agent. The evidence file under `evidence/` is our reproduction of that
@@ -28,6 +29,7 @@ delegation baseline, not a durable-execution baseline, and the comparison must n
 | `evidence/control-transfer.jsonl` | The same run's machine-readable control-transfer log, one record per transition. |
 | `evidence/resume-stdout.txt` | Captured stdout of a resume against the same directory, naming the agent that held control. |
 | `evidence/endpoint-required.txt` | What `run.sh` does when no endpoint is configured. |
+| `faults/` | The F3 fault harness: five faults against both variants, each result naming the post-recovery controlling agent. See `faults/README.md`. |
 
 ## Pinned source
 
