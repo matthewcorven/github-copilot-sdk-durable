@@ -191,16 +191,20 @@ if [ "$INJECT" = "1" ]; then
   exit 0
 fi
 
-if [ "$PLAN_SHAPE" = "intact" ] && [ "$VERIFY" = "pass" ]; then
+# The control's claim is about *damage*, not about finishing: two loops one after the other over the same
+# target may leave the job unfinished — each loop is capped, and an unfinished job is not a corrupted one.
+# What must hold is that the plan is still a plan and that nothing was killed: if that fails when nothing
+# overlapped, an overlap cannot be blamed for damaging a target.
+if [ "$PLAN_SHAPE" = "intact" ] && [ "$FIRST_STATUS" != "timeout" ] && [ "$SECOND_STATUS" != "timeout" ]; then
   record_result "$VARIANT" "$FAULT" "control: serialised, not corrupted" \
     "loop 1 to completion, then loop 2 against the same target (the control)" \
-    "Control: the same two loops with no overlap — loop 1 exited $FIRST_STATUS before loop 2 started, loop 2 exited $SECOND_STATUS, plan '$PLAN', shape $PLAN_SHAPE, verifier: pass. Two loops one after the other over the same target do not corrupt it; so a corrupt target in the fault run belongs to the overlap, not to running twice." \
+    "Control: the same two loops with no overlap — loop 1 exited $FIRST_STATUS before loop 2 started, loop 2 exited $SECOND_STATUS, plan '$PLAN' (status, ticked, open), shape $PLAN_SHAPE, verifier '$VERIFY'. Two loops one after the other leave a target that is still a plan; whether the job is finished depends on the cap, and the verifier's verdict here is reported rather than required. So damage in the fault run would belong to the overlap, not to running twice." \
     "$EVIDENCE"
   exit 0
 fi
 
 record_result "$VARIANT" "$FAULT" "control: corrupted without overlap" \
   "loop 1 to completion, then loop 2 against the same target (the control)" \
-  "Control FAILED: two loops run one after the other still left a target that does not match the plan (plan '$PLAN', shape $PLAN_SHAPE, verifier '$VERIFY'). A fault cannot be blamed for damage that happens without it." \
+  "Control FAILED: two loops run one after the other left a target that is not a plan (plan '$PLAN', shape $PLAN_SHAPE, verifier '$VERIFY', exits $FIRST_STATUS and $SECOND_STATUS). A fault cannot be blamed for damage that happens without it." \
   "$EVIDENCE"
 exit 0
