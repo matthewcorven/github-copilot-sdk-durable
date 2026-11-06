@@ -1,0 +1,16 @@
+{
+  "variant": "durable",
+  "fault": "restart-after-checkpoint",
+  "outcome": "not exercised",
+  "phase": "a boundary between two iterations, seen from outside the process",
+  "detail": "Not reachable, and checked rather than assumed. The only frame a process outside the run can stop at between iterations is the creation of the next iteration's conversation. At that frame the store already says 'turn-started/1' — iteration 2's turn was issued and has not returned — because the checkpoint that marks a turn started is committed before the conversation is created and the settle that follows is inside the same iteration. 1 iteration(s) had completed by then. So a process stopped here leaves the state kill-mid-turn records: a turn that was issued and never finished, which the next process refuses rather than repeats. A restart from a *settled* boundary exists only inside the process, and a fault injected from outside cannot land on it. The control below is the same run uninterrupted, which does finish.",
+  "evidence": "",
+  "harness": {
+    "dotnet": "dotnet",
+    "model": "gpt-5.1-codex-mini",
+    "command": "./faults/restart-after-checkpoint.sh --variant durable",
+    "script": "restart-after-checkpoint.sh",
+    "commit": "32770e70b5818b93d8745acfd83286cffb48c072"
+  },
+  "recordedAt": "2026-11-06T03:39:10.660597+00:00"
+}

@@ -1,0 +1,16 @@
+{
+  "variant": "baseline",
+  "fault": "duplicate-delivery-control",
+  "outcome": "control: one delivery",
+  "phase": "one iteration, nothing re-delivered (the control)",
+  "detail": "Control: the same run with nothing re-delivered. 1 session.sendAndWait frame(s), 10 assistant.message, 24 tool.execution_start, exit 0, plan 'complete 16 0', verifier 'pass', product digest 76524817ca57aa5b. The duplicate run is read against these counts; the re-delivery is the only difference.",
+  "evidence": "frames at the gate: 1 session.sendAndWait, 10 assistant.message, 24 tool.execution_start; frames re-delivered by the gate: 0; tool calls after the re-delivery: 0; product digest 76524817ca57aa5b; store 'missing 0 0 -'; last line \"plan reports complete after 1 iteration(s).\"",
+  "harness": {
+    "dotnet": "dotnet",
+    "model": "gpt-5.1-codex-mini",
+    "command": "./faults/duplicate-delivery.sh --variant baseline --fault-not-injected",
+    "script": "duplicate-delivery.sh",
+    "commit": "32770e70b5818b93d8745acfd83286cffb48c072"
+  },
+  "recordedAt": "2026-11-06T03:35:39.364275+00:00"
+}

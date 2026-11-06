@@ -112,6 +112,7 @@ Exit statuses:
 | 1 | The target does not match the plan (from `run.sh`) |
 | 2 | No `PLAN.md` in the working directory, or no `dotnet` on `PATH` (from `run.sh`) |
 | 3 | Iteration cap reached with the plan still open (`run.sh` reports this as 3, not 1) |
+| 4 | Another process owns this run's store, so nothing was done (the Durable variant; `run.sh` and `resume.sh`) |
 
 `RALPH_MODEL` is passed straight to the session. The loop does not check it against the
 account's model list, so a model the CLI rejects fails that iteration; this CLI (1.0.105)
@@ -155,6 +156,9 @@ real-world-scenarios/band-b-local-job-agent/
 │   └── resume.sh          # later processes: reopen the store and continue
 ├── evidence/
 │   └── durable-kill-and-resume.md  # captured kill/resume, idempotency diff, cap, divergence
+├── faults/                # five faults, controls, and the diff test — see faults/README.md
+│   ├── run-all.sh
+│   └── results/           # one JSON per fault per variant, checked in
 └── upstream/
     ├── LICENSE            # MIT, github/awesome-copilot
     ├── PROVENANCE.md      # repo, commit, paths, hashes
@@ -241,6 +245,83 @@ unrecoverable in-flight turn, with the store dumped before the resume reads it (
 
 Full transcript with diffs, the cap demonstration, the plan-divergence demonstration, and the
 scratch-directory controls: `evidence/durable-kill-and-resume.md`.
+
+## Fault evidence
+
+Five faults, each run against both variants, plus the comparison this band exists for. Every number below
+is produced by `faults/`; none is typed. `faults/README.md` describes each injection; this is the result.
+
+```bash
+./real-world-scenarios/band-b-local-job-agent/faults/run-all.sh
+```
+
+| Fault | baseline | durable |
+| --- | --- | --- |
+| `kill-mid-turn` | **lost its position** | **refused to resume the dead turn** |
+| `restart-after-checkpoint` | **restarted from the plan** | **not exercised** |
+| `duplicate-delivery` | **doubled** | **doubled** |
+| `concurrent-clients` | **not corrupted** | **refused the second client** |
+| `store-outage` | **not exercised** | **continued past the outage** |
+
+Each row has a control that removes the injection: the held frame is released, the store is not moved, the
+second loop starts after the first has finished, the delivery is not repeated. Every control's outcome
+differed from its fault's, which is what makes the fault attributable. `faults/results/summary.txt` holds
+the matrix and the control table the rows above come from, generated from the result files.
+
+**Kill mid-turn.** The baseline loses the loop's position: a new process re-read the plan and started again
+at its own iteration 1. The Durable variant does not resume either, and does not pretend to — the store
+records `turn-started` and no outcome, so a second process reports what it holds and fails the run rather
+than re-issuing a turn that may already have written files. That is the limit §"The honest limit" states,
+now measured from outside the process.
+
+**Restart after a committed iteration.** The baseline has no such seam: one pass finishes the whole plan on
+this machine, so the harness stops it after a returned tool call instead, and the second process starts
+over. For the Durable variant the row is **not exercised**, with the reason recorded: the only frame a
+process outside the run can stop at between iterations is the creation of the next iteration's
+conversation, and at that frame the store already says `turn-started` — so a stop there is `kill-mid-turn`,
+not a boundary. A restart from a settled boundary exists only inside the process.
+
+**Duplicate delivery.** One prompt request forwarded twice by the gate. Both variants removed a second set
+of tool calls: 4 for the baseline against 0 after the re-delivery in its control, 7 for the Durable variant
+against 0. Neither refused the second delivery, so on both, a duplicate is silent extra work over the same
+files.
+
+**Concurrent clients.** Two loops over one folder, the first blocked at a tool call when the second starts.
+The baseline did not corrupt: both finished, the plan was still a plan and the verifier passed. The Durable
+variant refused the second client with exit 4 before it read the plan, sent a prompt or wrote a file —
+`lib/Durable.cs` already took an exclusive lock on the store file; the variant now reports that refusal as
+itself instead of dying of an unhandled exception (the change the fault required).
+
+**Store outage.** The baseline writes no state outside the job's own files, so it is **not exercised**, with
+the reason checked on every run. For the Durable variant the store was moved aside while the process held
+it open; the writes made afterwards went into the renamed file — a `FileStream` follows the inode — so the
+run neither refused nor stopped. That is the row's word: `continued past the outage`. It is not
+`failed safely`, and the result says so rather than choosing the flattering vocabulary.
+
+### A run that was interrupted and continued
+
+The strongest claim this band can make is that an interrupted run leaves the same product as one that was
+not. Three runs of the same variant over one staged target: uninterrupted, repeated, and stopped then
+continued. Compared: **the same file set, with the same SHA-256 per file, at the same relative path** —
+every regular file under the target except `.durable/`, which is the record and differs by construction.
+
+| Variant | Repeat vs reference | Interrupted vs reference |
+| --- | --- | --- |
+| durable | identical, byte for byte | **identical, byte for byte** |
+| baseline | identical, byte for byte | identical, byte for byte |
+
+The Durable variant's interruption is its own committed-iteration stop (`STOP_AFTER_ITERATION=2`), and the
+second process resumed at iteration 3 and finished: the product is the same 17 files with the same bytes as
+one uninterrupted run. The baseline cannot continue a run, so its "continuation" is a second process
+starting over after a SIGKILL — and its product matched as well.
+
+The comparison is not vacuous: on every run the comparator is asked to say "differs" for one appended byte
+and for one extra file, and "identical" for an unmodified tree, and the run stops if any of the three
+misbehaves. The repeat run is the second guard — two clean runs being byte-identical is what makes a
+matching interrupted product a statement about the work rather than about the model's mood.
+
+What it does **not** say: the Durable variant's equality is over the *files*. The store's account of the
+interruption differs from the uninterrupted run's, by construction, and is not compared.
 
 ## Upstream
 

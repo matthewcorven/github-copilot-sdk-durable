@@ -137,6 +137,11 @@ echo
 loop_status=$?
 
 echo
+if [ "$loop_status" -eq 4 ]; then
+  echo "refused: another process owns this run's store; nothing was done."
+  echo "target: $target"
+  exit 4
+fi
 if [ "$loop_status" -eq 3 ]; then
   echo "iteration cap reached; the plan is still open. See the loop output above."
   echo "target: $target"

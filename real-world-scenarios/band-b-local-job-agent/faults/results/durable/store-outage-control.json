@@ -1,0 +1,16 @@
+{
+  "variant": "durable",
+  "fault": "store-outage-control",
+  "outcome": "control: the store stayed",
+  "phase": "a tool result in flight, nothing moved (the control)",
+  "detail": "Control: the same steps with the store left in place. It finished with the store at 'present 331 0 iteration-complete/8', plan 'complete 16 0', verifier 'pass', exit 0, files new after the run [none], last line \"plan reports complete after 8 iteration(s).\". This is what the outage run is compared against; the move is the only difference.",
+  "evidence": "held 'out tool.execution_complete 1'; store before 'present 24 0 turn-started/0'; digests: /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/store-outage-control/before.digest and /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/store-outage-control/after.digest; the store file after the run 'present 331 0 iteration-complete/8'; the moved file 'missing 0 0 -'; files new after the outage: [none]; plan before 'in-progress 0 16' after 'complete 16 0'; verifier 'pass'; exit 0; last line \"plan reports complete after 8 iteration(s).\"",
+  "harness": {
+    "dotnet": "dotnet",
+    "model": "gpt-5.1-codex-mini",
+    "command": "./faults/store-outage.sh --variant durable --fault-not-injected",
+    "script": "store-outage.sh",
+    "commit": "32770e70b5818b93d8745acfd83286cffb48c072"
+  },
+  "recordedAt": "2026-11-06T03:47:59.791525+00:00"
+}
