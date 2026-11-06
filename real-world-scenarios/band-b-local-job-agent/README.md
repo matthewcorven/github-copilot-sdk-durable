@@ -1,15 +1,32 @@
-# Band B — the Ralph Loop baseline, and its Durable variant
+# Band B — the Ralph Loop job agent, and its Durable variant
 
-A port of the vendored Ralph Loop recipe (`upstream/`) to C#, against the plain
-GitHub Copilot SDK. The loop reads a plan file, sends a prompt to a fresh session, lets the
-agent edit files in a scratch directory, re-reads the plan, and repeats until the plan
-reports complete.
+## The scenario
 
-**What it is not:** durable. The loop's position is a local variable in a running process.
-Nothing in `baseline/` imports, references, or asserts on the Durable library.
-**If you kill the process mid-iteration, there is no record of which step was running.** The
-plan file may have been half-updated; recovery is re-reading the markdown and hoping the last
-edit was consistent. That is the property Band B exists to measure — issue #148.
+A long-running unattended agent job on a developer's machine. A plan file lists work; the loop
+sends a prompt to a **fresh** session, lets the agent edit files in a scratch directory, re-reads
+the plan, and repeats until the plan reports complete. It runs for minutes, makes live model calls,
+and holds no server. The question Band B measures is what happens to that job when the process
+that owns it goes away in the middle — issue #148.
+
+Both halves are ports of the vendored Ralph Loop recipe (`upstream/`, byte-identical to
+`github/awesome-copilot` at `7e40881`, MIT) to C# against the plain GitHub Copilot SDK. **The baseline
+is the recipe's own shape, and it is not durable:** the loop's position is a local variable in a running
+process, and nothing in `baseline/` imports, references, or asserts on the Durable library. **If you
+kill the process mid-iteration, there is no record of which step was running.** The plan file may have
+been half-updated; recovery is re-reading the markdown and hoping the last edit was consistent.
+
+## The two variants
+
+Both variants do the same job against the same template and are checked by the same verifier,
+`baseline/verify.sh`. Only the progress model differs.
+
+| | `baseline/` | `durable/` |
+| --- | --- | --- |
+| The loop | `ralph-loop.cs`, one file-based .NET app | `ralph-loop-durable.cs`, the same loop over `lib/Durable.cs` |
+| Where the position lives | the `iteration` local variable, plus the markdown file | a Durable task's checkpoint, in a JSONL store at `<target>/.durable/store.jsonl` |
+| Resume | none — a new process re-reads the plan and starts at its own iteration 1 | `resume.sh` reopens the store and continues at the iteration the checkpoint names |
+| Scratch area | `.scratch/band-b-target/` | `.scratch/band-b-durable/target/` (with the store inside it) |
+| Runner | `run.sh` (72 `wc -l`) | `run.sh` (171) + `resume.sh` (106) |
 
 Everything under `baseline/` is one file-based .NET app plus a shell runner. Nothing there
 references `lib/Durable.cs`; there is no store, no checkpoint, no task, no admission, and no
@@ -18,8 +35,6 @@ conversation document.
 `durable/` is the other half of the comparison: the same job, the same prompt, the same
 `baseline/verify.sh`, with the loop position in a Durable task instead of a local variable. A
 killed run resumes at the next iteration (issue #150). Run both with the commands below.
-
----
 
 ## Prerequisites
 
@@ -42,7 +57,9 @@ RALPH_MODEL=gpt-6-luna ./real-world-scenarios/band-b-local-job-agent/run.sh
 The run header prints the model it will use and whether the pinned default or `RALPH_MODEL`
 supplied it.
 
-## One command
+## Commands
+
+### Baseline — one process, no resume
 
 ```bash
 ./real-world-scenarios/band-b-local-job-agent/run.sh
@@ -56,7 +73,42 @@ KEEP=1 ./real-world-scenarios/band-b-local-job-agent/run.sh
 ```
 
 To shorten the run for a smoke test, pass the cap as the first argument. The default is the
-constant in `baseline/ralph-loop.cs`.
+constant in `baseline/ralph-loop.cs`. Killed mid-run the baseline starts over: that is the
+property this band measures, not a defect to work around.
+
+### Durable — `run.sh`, then `resume.sh`
+
+Two processes, and the second one is the point:
+
+```bash
+KEEP=1 ./real-world-scenarios/band-b-local-job-agent/durable/run.sh
+KEEP=1 ./real-world-scenarios/band-b-local-job-agent/durable/resume.sh   # only after a stop
+```
+
+`run.sh` and `resume.sh` remove the scratch directory on exit unless `KEEP=1`, so a two-process
+sequence keeps it across both. Neither script will empty or delete a directory it did not create: it
+marks its own with `.band-b-scratch` and refuses (exit 2) a `RUN_DIR` or `TARGET` that already has
+content.
+
+Both variants together, from a clean checkout, are under ten minutes on this machine — most of it is
+the model's tool calls, not the build. The measurement behind that: the fault harness ran **21 harness
+runs** across both variants — five faults plus nine controls, each a complete job, and two run-equivalence
+tests — in the 19 minutes between 03:33:43Z and 03:52:17Z. A baseline job is one model pass on the
+template. The Durable variant's kill-and-resume seam is an environment variable rather than a
+wait-for-it, so it runs the same way every time; see the `STOP_*` table below.
+
+## Teardown
+
+| What | How |
+| --- | --- |
+| Either loop | Ctrl-C. The Durable variant leaves the task `Running` at its last checkpoint, so a later `resume.sh` continues it |
+| The scratch target | on exit, unless `KEEP=1`. With `KEEP=1`, delete the path the run printed (`.scratch/band-b-target/` or `.scratch/band-b-durable/`) |
+| The Durable store | lives inside the scratch target at `<target>/.durable/store.jsonl`, plus the `<store>.lock` and `<store>.lock.owner` sidecars the layer keeps while a process holds it; both go with the directory |
+| A fault-harness run | the harness reaps the application, the gate and the CLI by PID from its `servers` file, and removes its own directory under `.scratch/band-b-faults/` unless `KEEP=1`. To check: `pgrep -f 'ralph-loop'` should print nothing |
+| The Copilot sign-in | none — the CLI's own session is reused, and nothing is written by these scripts |
+
+No `docker`, no cloud resource, and no background service to shut down. The only durable artifact is the
+scratch directory, and both runners remove the one they created.
 
 ## What the target directory contains
 
@@ -108,11 +160,11 @@ Exit statuses:
 
 | Status | Meaning |
 | --- | --- |
-| 0 | The plan reported complete and the files match |
-| 1 | The target does not match the plan (from `run.sh`) |
-| 2 | No `PLAN.md` in the working directory, or no `dotnet` on `PATH` (from `run.sh`) |
+| 0 | The plan reported complete and the files match — **or**, for the Durable variant, the run stopped at its own `STOP_AFTER_ITERATION` seam, which is reported as 0 because the run never claimed to be finished and is not verified |
+| 1 | The target does not match the plan, or (Durable) the loop failed — the dead-turn refusal exits 1 with the plan still open |
+| 2 | No `PLAN.md` in the working directory, or no `dotnet` on `PATH`. `resume.sh` adds: no target, or no store at `<target>/.durable/store.jsonl` to resume. Both Durable runners also return it for a `RUN_DIR`/`TARGET` that already holds content and is not theirs to empty |
 | 3 | Iteration cap reached with the plan still open (`run.sh` reports this as 3, not 1) |
-| 4 | Another process owns this run's store, so nothing was done (the Durable variant; `run.sh` and `resume.sh`) |
+| 4 | Another process owns this run's store, so nothing was done — the Durable variant only (`durable/run.sh:140`, `durable/resume.sh:84`); the loop did not read the plan, send a prompt or write a file |
 
 `RALPH_MODEL` is passed straight to the session. The loop does not check it against the
 account's model list, so a model the CLI rejects fails that iteration; this CLI (1.0.105)
@@ -166,25 +218,12 @@ real-world-scenarios/band-b-local-job-agent/
     └── ralph-loop.ts
 ```
 
-## Running both variants
+## The Durable variant's runs and seams
 
-Both variants do the same job against the same template and are checked by the same verifier,
-`baseline/verify.sh`. The baseline keeps its position in a local variable; the Durable variant
-keeps it in a Durable store, so a second process can continue the first one's run.
-
-```bash
-# Baseline: one process, no resume. Killed mid-run it starts over.
-./real-world-scenarios/band-b-local-job-agent/run.sh
-
-# Durable: one process, resumable. run.sh and resume.sh remove the scratch directory
-# on exit unless KEEP=1, so a two-process sequence keeps it across both. Neither script
-# will empty or delete a directory it did not create: it marks its own with
-# `.band-b-scratch` and refuses (exit 2) a RUN_DIR or TARGET that already has content.
-KEEP=1 ./real-world-scenarios/band-b-local-job-agent/durable/run.sh
-KEEP=1 ./real-world-scenarios/band-b-local-job-agent/durable/resume.sh   # only after a stop
-```
-
-### The Durable variant's runs
+Every stop below is an environment variable the loop reads, not a signal handler: the phase
+commits, prints the line, and throws on its own cancellation token, so the runner unwinds and the
+process exits 0 with the task left `Running` at the checkpoint. Nothing is shared with the next
+process but the store file.
 
 | Command | What it does |
 | --- | --- |
@@ -220,9 +259,12 @@ that already holds content is refused with exit 2 instead of being emptied.
 - **The plan file stays the input.** A resume reads its position from the store and the work list
   from the file, and corrects a hand-ticked item whose change is not on disk.
 
-Cost, measured: `durable/ralph-loop-durable.cs` is 663 code lines, of which 283 exist only for
-durability (43%). `baseline/ralph-loop.cs` has 0. The counting rule and a per-region table whose
-rows sum to those totals are in `evidence/durable-kill-and-resume.md` §6.
+Cost, measured: `durable/ralph-loop-durable.cs` is **674 code lines**, of which **294 exist only for
+durability (44%)**. `baseline/ralph-loop.cs` has **0** of 104. Counted with `python3
+durable/evidence/table.py`, which aborts rather than renders if its regions stop covering the file;
+the per-region table whose rows sum to those totals is in `evidence/durable-kill-and-resume.md` §6.
+`wc -l` on the same two files is 989 and 163 — every line, blank and comment included. Both numbers,
+and which is which, are in §*Lines of custom durability code* below.
 
 The honest limit, in two parts. The memo boundary is the *turn*, not the tool call inside it, and
 the layer is asymmetric about that boundary:
@@ -246,33 +288,55 @@ unrecoverable in-flight turn, with the store dumped before the resume reads it (
 Full transcript with diffs, the cap demonstration, the plan-divergence demonstration, and the
 scratch-directory controls: `evidence/durable-kill-and-resume.md`.
 
-## Fault evidence
+## The faults, transcribed
 
 Five faults, each run against both variants, plus the comparison this band exists for. Every number below
-is produced by `faults/`; none is typed. `faults/README.md` describes each injection; this is the result.
+is transcribed from `faults/results/`; none is typed. [`faults/README.md`](faults/README.md) describes each
+injection; this is the result.
 
 ```bash
-./real-world-scenarios/band-b-local-job-agent/faults/run-all.sh
+./real-world-scenarios/band-b-local-job-agent/faults/run-all.sh               # both variants
+./real-world-scenarios/band-b-local-job-agent/faults/run-all.sh --no-controls # faults only
 ```
 
-| Fault | baseline | durable |
-| --- | --- | --- |
-| `kill-mid-turn` | **lost its position** | **refused to resume the dead turn** |
-| `restart-after-checkpoint` | **restarted from the plan** | **not exercised** |
-| `duplicate-delivery` | **doubled** | **doubled** |
-| `concurrent-clients` | **not corrupted** | **refused the second client** |
-| `store-outage` | **not exercised** | **continued past the outage** |
+| Fault | `baseline` | `durable` | Result files |
+| --- | --- | --- | --- |
+| `kill-mid-turn` | **lost its position** | **refused to resume the dead turn** | [`baseline`](faults/results/baseline/kill-mid-turn.json) · [`durable`](faults/results/durable/kill-mid-turn.json) |
+| `restart-after-checkpoint` | **restarted from the plan** | **not exercised** | [`baseline`](faults/results/baseline/restart-after-checkpoint.json) · [`durable`](faults/results/durable/restart-after-checkpoint.json) |
+| `duplicate-delivery` | **doubled** | **doubled** | [`baseline`](faults/results/baseline/duplicate-delivery.json) · [`durable`](faults/results/durable/duplicate-delivery.json) |
+| `concurrent-clients` | **not corrupted** | **refused the second client** | [`baseline`](faults/results/baseline/concurrent-clients.json) · [`durable`](faults/results/durable/concurrent-clients.json) |
+| `store-outage` | **not exercised** | **continued past the outage** | [`baseline`](faults/results/baseline/store-outage.json) · [`durable`](faults/results/durable/store-outage.json) |
+
+All 21 harness runs — 5 faults × 2 variants, **9 controls** (the baseline has no `store-outage` control to run) and the 2 run-equivalence tests — exited 0
+([`run-all.log`](faults/results/run-all.log)), recorded 2026-11-06T03:33:43Z–03:52:17Z at
+`harness.commit 32770e70b581`.
 
 Each row has a control that removes the injection: the held frame is released, the store is not moved, the
 second loop starts after the first has finished, the delivery is not repeated. Every control's outcome
-differed from its fault's, which is what makes the fault attributable. `faults/results/summary.txt` holds
-the matrix and the control table the rows above come from, generated from the result files.
+differed from its fault's, which is what makes the fault attributable.
+[`faults/results/summary.txt`](faults/results/summary.txt) holds the matrix and the control table the rows
+above come from, rendered from the result files by `faults/lib/summarise.py`.
+
+**Only one of these five faults is a clean win for the Durable variant, and it is about exclusion, not
+recovery.** The table is read wrong if the diffing cells are counted as more than they are:
+
+| Cell | Why it is not upgraded |
+| --- | --- |
+| `duplicate-delivery` | a **tie** — both variants made a second set of tool calls and neither reported it |
+| `restart-after-checkpoint` / `durable` | **`not exercised`**, and the reason is a finding: no frame outside the process lands between two iterations |
+| `store-outage` / `baseline` | **`not exercised`** — there is no store to take away |
+| `kill-mid-turn` / `durable` | the variant **refused**, so the run did not finish: a stated limit, measured from outside |
+
+What is left is `concurrent-clients`, where the layer's exclusive lock stops the second client before it
+reads the plan — an exclusion win, about concurrency rather than recovery. And `store-outage` / `durable`
+is `continued past the outage`, which is survival *without detection*, not a pass. The durable side
+finished neither of its two interruption rows.
 
 **Kill mid-turn.** The baseline loses the loop's position: a new process re-read the plan and started again
 at its own iteration 1. The Durable variant does not resume either, and does not pretend to — the store
 records `turn-started` and no outcome, so a second process reports what it holds and fails the run rather
-than re-issuing a turn that may already have written files. That is the limit §"The honest limit" states,
-now measured from outside the process.
+than re-issuing a turn that may already have written files. That is the limit §*What the Durable variant
+adds, and its cost* states, now measured from outside the process.
 
 **Restart after a committed iteration.** The baseline has no such seam: one pass finishes the whole plan on
 this machine, so the harness stops it after a returned tool call instead, and the second process starts
@@ -281,10 +345,16 @@ process outside the run can stop at between iterations is the creation of the ne
 conversation, and at that frame the store already says `turn-started` — so a stop there is `kill-mid-turn`,
 not a boundary. A restart from a settled boundary exists only inside the process.
 
-**Duplicate delivery.** One prompt request forwarded twice by the gate. Both variants removed a second set
-of tool calls: 4 for the baseline against 0 after the re-delivery in its control, 7 for the Durable variant
-against 0. Neither refused the second delivery, so on both, a duplicate is silent extra work over the same
-files.
+**Duplicate delivery — a tie.** One prompt request forwarded twice by the gate. Both variants did a second
+set of tool calls: **4 of the baseline's 4** `tool.execution_start` frames crossed the gate after the
+re-delivery, and **8 of the Durable variant's 8**. Neither refused the second delivery, so on both, a
+duplicate is silent extra work over the same files. The controls are the counts to read those against — the
+baseline's one-delivery control logs 24 `tool.execution_start` frames over the whole (larger) run, the
+Durable variant's 4 — and in neither control does anything cross after a re-delivery, because there is not
+one. Read the ratio, not the raw totals: the two variants make different numbers of calls per pass, so
+"4 against 24" and "8 against 8" are the same claim — a second delivery produced its own calls — and not
+evidence of different behaviour. Neither variant names a delivery, so neither can deduplicate one; the
+Durable variant's `run.sh` exit 3 here is its cap, not a refusal.
 
 **Concurrent clients.** Two loops over one folder, the first blocked at a tool call when the second starts.
 The baseline did not corrupt: both finished, the plan was still a plan and the verifier passed. The Durable
@@ -298,30 +368,118 @@ it open; the writes made afterwards went into the renamed file — a `FileStream
 run neither refused nor stopped. That is the row's word: `continued past the outage`. It is not
 `failed safely`, and the result says so rather than choosing the flattering vocabulary.
 
-### A run that was interrupted and continued
+### The run-equivalence result, with its numbers
 
 The strongest claim this band can make is that an interrupted run leaves the same product as one that was
-not. Three runs of the same variant over one staged target: uninterrupted, repeated, and stopped then
-continued. Compared: **the same file set, with the same SHA-256 per file, at the same relative path** —
-every regular file under the target except `.durable/`, which is the record and differs by construction.
+not. Per variant, three runs over three copies of one staged target: **reference** (uninterrupted),
+**repeat** (a second clean run, which is what makes the comparison mean anything), and **interrupted**
+(killed, then a second process against the same target). Both variants' `outcome` field is `identical` —
+and the paragraphs below keep apart what that word means on each, because it does not mean the same thing.
 
-| Variant | Repeat vs reference | Interrupted vs reference |
+**What was compared, exactly.** The product, not the directory: every regular file under the target
+**except `.durable/`** (the store is the record, and it differs by construction — one process opened it
+versus two) and except the harness's build directory. For each file, its SHA-256 and its path relative to
+the target, as one text; two runs are identical when that text is equal. So "identical" means *the same
+file set with the same bytes in each file* — not the same names, and not the same contents in a different
+arrangement. A renamed file fails the comparison. **17 files** in every case: `PLAN.md`, `PROMPT.md`,
+`release-notes.md`, `docs/section-01.md` … `docs/section-14.md`.
+
+| Variant | Interruption | Repeat vs reference | Interrupted vs reference |
+| --- | --- | --- | --- |
+| `durable` | `STOP_AFTER_ITERATION=2`, then `resume.sh` (resumed at iteration 3, finished at 8) | **identical** — 17 files, same sha256 per file and path | **identical** — 17 files, same sha256 per file and path |
+| `baseline` | `SIGKILL` at `out tool.execution_start 2`, then the same command again | **differs** byte-for-byte in 14 of 17 files; identical after dropping blank lines | **differs** byte-for-byte in 14 of 17 files; identical after dropping blank lines |
+
+Both variants' verdicts are taken from the **normalised** comparison (runs of blank lines collapsed,
+trailing whitespace stripped), and the run reports `not comparable: two clean runs differed` and claims
+nothing about the interruption if the repeat run does not agree. On the Durable variant the normaliser does
+no work: reference, repeat and interrupted are byte-identical, 17 files each. On the baseline it is doing
+real work — two *clean* runs differ byte-for-byte in 14 of 17 files, so the baseline's agreement is "the
+same work, differently spaced", not "the same bytes".
+
+**The comparator is made able to fail, on every run.** Before any comparison is used, the script proves it
+can say no: an appended byte must report a difference (it does — `./PLAN.md`, 17 vs 17 files), an extra
+file must report a difference (it does — `./extra.txt`, 17 vs 18 files), and an unmodified tree must report
+identity (it does). An appended *line* is checked too, after normalising, and reports `differs: 1 of 17
+file(s) differ even after dropping blank lines`. If any of those misbehaves the run stops and records
+`comparator failed its self-check` rather than a comparison it could not make.
+
+**What the baseline's agreement does and does not mean.** The baseline cannot continue a run: its
+"interrupted" product was written by two processes where the reference's was written by one, and the second
+process **restarted from the plan** and did the work again. So its `identical` says *the job can be finished
+by starting over and the end state is the same*. It does **not** say the interruption was recovered — no
+position was restored, nothing was skipped, and the cost of the kill (every iteration after the kill re-done)
+does not appear in the product at all. It also rests on the normaliser, because the baseline's second pass
+does not reproduce the first pass's spacing. Reading it as "the baseline is durable too" would be the
+mistake this row exists to prevent: a product comparison cannot distinguish *resumed* from *redone*, and only
+the Durable variant's run has a resume in it.
+
+**What the Durable variant's agreement does not say.** The equality is over the *files*. The store's account
+of the interruption differs from the uninterrupted run's by construction, and is not compared. And the
+variant's interruption is its own committed-iteration stop, not a SIGKILL: the one stop a process outside
+the run can put between two iterations is inside the next turn (see `restart-after-checkpoint` above), so
+the seam that proves a resume is the seam the variant itself provides.
+
+Result files: [`faults/results/durable/run-equivalence.json`](faults/results/durable/run-equivalence.json) ·
+[`faults/results/baseline/run-equivalence.json`](faults/results/baseline/run-equivalence.json). The
+comparison is implemented and documented in [`faults/run-equivalence.sh`](faults/run-equivalence.sh) and
+[`faults/README.md`](faults/README.md) §*The extra evidence*.
+
+## Where the baseline is simpler — deliberately
+
+The comparison is one-sided only if this is left out. Every item below is the baseline doing less, and
+the Durable variant paying for it.
+
+| | `baseline/` | `durable/` |
 | --- | --- | --- |
-| durable | identical, byte for byte | **identical, byte for byte** |
-| baseline | identical, byte for byte | identical, byte for byte |
+| Code | **104** code lines, one file, one runner | **674** code lines, two runners (`run.sh` 171 `wc -l`, `resume.sh` 106) |
+| State on disk | none — the target's own files and nothing else | `<target>/.durable/store.jsonl`, plus `.lock` / `.lock.owner` sidecars while open |
+| Things that can go wrong at startup | no `dotnet`, no `PLAN.md` | those, plus a store that will not open, a store from another run, a second writer (exit 4), a target with no store to resume (exit 2) |
+| Running it twice in a row | safe by construction: nothing is shared | refused — exit 4, because the store is exclusively locked — which is a feature you must know about before you hit it |
+| Migration | none; delete the directory | the store is a record the next process must read, so its shape is a contract: a rename or a re-typed field in `LoopCheckpoint` has to keep reading stores the previous build wrote — `DurableStoreFormat.Auto` sniffs an existing file rather than assuming its own |
+| A dead turn | re-run the job; the result is the same finished product, measured | report and stop; the operator decides |
 
-The Durable variant's interruption is its own committed-iteration stop (`STOP_AFTER_ITERATION=2`), and the
-second process resumed at iteration 3 and finished: the product is the same 17 files with the same bytes as
-one uninterrupted run. The baseline cannot continue a run, so its "continuation" is a second process
-starting over after a SIGKILL — and its product matched as well.
+Two of those are real advantages and not just absence of machinery. **The baseline cannot be locked out
+of its own work**, so a re-run always proceeds. And **its recovery is a command the operator already
+knows** (`run.sh` again), where the Durable variant's needs the operator to understand the difference
+between a committed iteration and a dead turn. On this job, a re-run costs about a minute; that is the
+price the 294 durability lines buy down, not to zero, but to a resume at the last committed iteration.
 
-The comparison is not vacuous: on every run the comparator is asked to say "differs" for one appended byte
-and for one extra file, and "identical" for an unmodified tree, and the run stops if any of the three
-misbehaves. The repeat run is the second guard — two clean runs being byte-identical is what makes a
-matching interrupted product a statement about the work rather than about the model's mood.
+## Lines of custom durability code
 
-What it does **not** say: the Durable variant's equality is over the *files*. The store's account of the
-interruption differs from the uninterrupted run's, by construction, and is not compared.
+Two measurements, and the difference matters. In this directory, on 2026-11-06:
+
+```bash
+wc -l baseline/ralph-loop.cs durable/ralph-loop-durable.cs
+#   163 baseline/ralph-loop.cs
+#   989 durable/ralph-loop-durable.cs
+
+python3 durable/evidence/table.py    # the per-region classification, §6 of the evidence
+```
+
+| Variant | `wc -l` | Code lines | Durability-specific | Baseline for the same |
+| --- | ---: | ---: | ---: | ---: |
+| `baseline/` | **163** | **104** | **0** — no store, no task, no checkpoint, no memo, no resume path | — |
+| `durable/` | **989** | **674** | **294** of **674** (**44%**) | 104 code lines / 0 durability |
+
+- **`wc -l` = 989 and 163** is every line of each file, blank lines and comments included. That is the
+  literal measurement the issue asks for.
+- **Code lines = 674 and 104** excludes blank lines, `//` comments and the `#:` file directives. That is the
+  denominator the split is over.
+- **294 of 674** is the durability-specific count, from the 22-region table in
+  [`evidence/durable-kill-and-resume.md`](evidence/durable-kill-and-resume.md) §6, which classifies
+  **line by line** with its rule stated there. `durable/evidence/table.py` recomputes it from the
+  committed file and exits non-zero rather than rendering if the regions stop covering the file, so a
+  stale table fails loudly instead of publishing a number nobody re-derived.
+
+Neither number includes `lib/Durable.cs` (the layer both halves are measured against, not the scenario's
+code), the shell runners (`run.sh` 72, `durable/run.sh` 171, `durable/resume.sh` 106), `baseline/verify.sh`
+(87), or `faults/` (the measurement, not the application).
+
+**276 of the difference is not durability.** 674 − 104 = 570 code lines more than the baseline, and 294
+of those are durability; the other **276** are the variant doing more in code the baseline does in the prompt
+or in `verify.sh` — a bounded two-item pass, the reconcile conditions, the heading normalizer, the in-flight
+report's formatting. The honest reading is "294 durability lines added to a 104-line baseline", and a reader
+who disagrees with one classification call changes the 294, not the 674.
 
 ## Upstream
 

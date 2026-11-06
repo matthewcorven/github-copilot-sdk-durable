@@ -1079,8 +1079,8 @@ to keep durable state.
   `lib/Durable.cs`.
 - Blank lines and comment lines (`//`, and the `#:` file directives) are excluded. The regions below
   are disjoint and their union is every such line in the file: **22 regions,
-  663 code lines**. Re-running the region boundaries over the committed file reproduces both columns
-  exactly.
+  674 code lines**. Re-running `python3 durable/evidence/table.py` over the committed file reproduces both columns
+  exactly, and aborts instead of rendering if the regions no longer cover it.
 - A code line counts as **durability** when its only reason to exist is durable state: opening or
   disposing the store, creating or finding the task, deciding first-run versus resume, reading the
   run's stored input, writing or reading a checkpoint, writing or reading a memo, detecting an
@@ -1098,31 +1098,31 @@ to keep durable state.
 | File header: `#:` directives and `using` | 1-60 | 5 | 0 | 5 |
 | Top-level statements | 61-62 | 2 | 0 | 2 |
 | `DurableLoopAsync` — target, args, model, store path | 64-103 | 29 | 6 | 23 |
-| `DurableLoopAsync` — store, harness, extension install | 104-124 | 12 | 12 | 0 |
-| `DurableLoopAsync` — first-run branch | 125-151 | 21 | 17 | 4 |
-| `DurableLoopAsync` — resume branch: stored input, terminal check, resume banner | 152-185 | 26 | 14 | 12 |
-| `DurableLoopAsync` — `try`/`finally` around the store | 186-191 | 5 | 5 | 0 |
-| `AwaitRunAsync` — await the runner, the stopped-at-seam path | 192-207 | 15 | 8 | 7 |
-| `Report` — the outcome, the cap line, the exit statuses | 208-235 | 20 | 4 | 16 |
-| `Definition` — the task definition and its one phase | 237-250 | 13 | 13 | 0 |
-| `RunIterationAsync` — plan read, completion and cap from the stored input | 251-286 | 23 | 19 | 4 |
-| `RunIterationAsync` — in-flight detection and the report it prints | 287-295 | 7 | 7 | 0 |
-| `RunIterationAsync` — banner, checkpoint before the turn, memo read, no-turn branches | 296-333 | 29 | 29 | 0 |
-| `RunIterationAsync` — the turn, checkpoint after it, the memo, the two seams | 334-390 | 38 | 38 | 0 |
-| `RunIterationAsync` — reconcile, settle checkpoint, stop at the seam | 391-437 | 35 | 17 | 18 |
-| `RunAgentTurnAsync` — the SDK turn and the seam that leaves it in flight | 439-501 | 40 | 0 | 40 |
-| `Choices` | 502-510 | 6 | 0 | 6 |
-| `BuildTurnPrompt` | 511-539 | 23 | 0 | 23 |
-| `ReportInFlightTurn` — reading the store's checkpoint documents back | 548-620 | 54 | 54 | 0 |
-| `Reconcile`, its conditions and parsers, `NormalizeSectionHeadings` | 621-879 | 206 | 0 | 206 |
-| Helpers — `StepKey`, the three seams, `Digest`, `IsComplete`, `OpenItems`, … | 880-919 | 23 | 9 | 14 |
-| `Job` constants and the `LoopInput`/`LoopCheckpoint`/`StepOutcome`/`LoopResult` records | 920-968 | 31 | 31 | 0 |
-| **Total** | | **663** | **283** | **380** |
+| `DurableLoopAsync` — store, harness, extension install | 104-139 | 22 | 22 | 0 |
+| `DurableLoopAsync` — first-run branch | 140-166 | 21 | 17 | 4 |
+| `DurableLoopAsync` — resume branch: stored input, terminal check, resume banner | 167-200 | 26 | 14 | 12 |
+| `DurableLoopAsync` — `try`/`finally` around the store | 201-206 | 5 | 5 | 0 |
+| `AwaitRunAsync` — await the runner, the stopped-at-seam path | 207-222 | 15 | 8 | 7 |
+| `Report` — the outcome, the cap line, the exit statuses | 223-250 | 20 | 4 | 16 |
+| `Definition` — the task definition and its one phase | 252-265 | 13 | 13 | 0 |
+| `RunIterationAsync` — plan read, completion and cap from the stored input | 266-301 | 23 | 19 | 4 |
+| `RunIterationAsync` — in-flight detection and the report it prints | 302-310 | 7 | 7 | 0 |
+| `RunIterationAsync` — banner, checkpoint before the turn, memo read, no-turn branches | 311-348 | 29 | 29 | 0 |
+| `RunIterationAsync` — the turn, checkpoint after it, the memo, the two seams | 349-405 | 38 | 38 | 0 |
+| `RunIterationAsync` — reconcile, settle checkpoint, stop at the seam | 406-452 | 35 | 17 | 18 |
+| `RunAgentTurnAsync` — the SDK turn and the seam that leaves it in flight | 454-516 | 40 | 0 | 40 |
+| `Choices` | 517-525 | 6 | 0 | 6 |
+| `BuildTurnPrompt` | 526-554 | 23 | 0 | 23 |
+| `ReportInFlightTurn` — reading the store's checkpoint documents back | 563-635 | 54 | 54 | 0 |
+| `Reconcile`, its conditions and parsers, `NormalizeSectionHeadings` | 636-894 | 206 | 0 | 206 |
+| Helpers — `StepKey`, the three seams, `Digest`, `IsComplete`, `OpenItems`, … | 895-934 | 23 | 9 | 14 |
+| `Job` constants and the `LoopInput`/`LoopCheckpoint`/`StepOutcome`/`LoopResult` records | 935-989 | 32 | 32 | 0 |
+| **Total** | | **674** | **294** | **380** |
 
-The durability column sums to **283** and the application column to **380**; together
-they are **663**, the file's own code-line count.
+The durability column sums to **294** and the application column to **380**; together
+they are **674**, the file's own code-line count.
 
-**283 of 663 code lines — 43% — exist only for durability.** The baseline has
+**294 of 674 code lines — 44% — exist only for durability.** The baseline has
 **0**: `baseline/ralph-loop.cs` contains no store, no task, no checkpoint, no memo, and no resume
 path; its entire progress model is the `iteration` local variable plus the markdown file.
 
