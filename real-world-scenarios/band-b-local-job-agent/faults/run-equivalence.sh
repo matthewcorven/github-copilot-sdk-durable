@@ -7,19 +7,16 @@
 # Three runs of the same variant over the same staged target, in three directories:
 #
 #   1. reference   uninterrupted, one process, to its own end
-#   2. interrupted a process is killed with SIGKILL between iterations, then a second process is started
-#                  against the same target — the sequence `restart-after-checkpoint` and `kill-mid-turn`
-#                  describe
-#   3. repeat      a second uninterrupted run, which is what says whether two clean runs are even the
-#                  same. Without it, a difference in (2) could be the model's variance rather than the
+#   2. repeat      a second uninterrupted run, which is what says two clean runs are even the same thing.
+#                  Without it, a difference in (3) could be the model's variance rather than the
 #                  interruption, and the comparison would be meaningless.
-#   4. second-pass the baseline only: the same target run to the end *twice*, with no kill anywhere. The
-#                  baseline cannot continue a run, so its "continued" run is a second pass over the whole
-#                  job — and a second pass is expected to write different bytes where the model words a
-#                  section differently. Comparing against a second pass, rather than against a single one,
-#                  is what separates "the interruption changed the product" from "a second pass is a second
-#                  pass". For the Durable variant the settled iterations are not redone, so the reference
-#                  is the right comparison and no fourth run is needed.
+#   3. interrupted the run is stopped at a boundary and a second process is started against the same
+#                  target. Which boundary depends on the variant, and both are named in the result:
+#                  the Durable variant's own committed-iteration stop (`STOP_AFTER_ITERATION`), because
+#                  that is the only stop this band can put between iterations — from outside the process
+#                  the only reachable frame is inside the next turn; the baseline is killed with SIGKILL
+#                  inside its pass, because it has no other stop and no second iteration to be stopped
+#                  between.
 #
 # **What is compared, exactly.** The product, not the directory: every regular file under the target
 # except the store (`.durable/`, which is the record and differs by construction — one process opened it
@@ -234,34 +231,6 @@ INTERRUPTED_END="$(end_line "$WORK/interrupted/app.log")"
 EQUIVALENT="$(compare_product "$WORK/reference/target" "$WORK/interrupted/target")"
 EQUIVALENT_NORMALISED="$(compare_normalised "$WORK/reference/target" "$WORK/interrupted/target")"
 
-# The baseline's attributable comparison. Its second process re-does the job, so the question is not
-# "does the killed run match one pass" but "does it match any second pass". A second pass with no kill is
-# run for exactly that reason.
-SECOND_PASS_STATUS="not run (the Durable variant does not redo settled iterations)"
-SECOND_PASS_VERIFY="not applicable"
-SECOND_PASS_COMPARE="not applicable"
-SECOND_PASS_NORMALISED="not applicable"
-ATTRIBUTABLE="$EQUIVALENT"
-if [ "$VARIANT" = "baseline" ]; then
-  log "run-equivalence: second-pass run (the baseline's control for a second pass)"
-  mkdir -p "$WORK/second-pass/target"
-  cp -R "$WORK/app" "$WORK/second-pass/app"
-  # It has to start where the interrupted run started, and end the same way. The interrupted run's shape is
-  # "pass, kill, pass": the first pass writes the release-notes item and the two `release-notes.md` items,
-  # and the second pass does the rest. Copying the *template* would give the second-pass control one pass
-  # over a target the reference had already finished, whose product is the template — an identity that
-  # proves nothing. So the control runs one pass and then a second one over what that left, which is
-  # exactly the interrupted run's shape with nothing killed.
-  cp -R "$WORK/template/." "$WORK/second-pass/target/"
-  # One pass, then a second process over what it left: the interrupted run's shape with nothing killed.
-  run_to_end "$WORK/second-pass" "$TARGET_CAP" "" pass1.log >/dev/null
-  SECOND_PASS_STATUS="$(run_to_end "$WORK/second-pass" "$TARGET_CAP")"
-  SECOND_PASS_VERIFY="$(verify_target "$WORK/second-pass/target")"
-  SECOND_PASS_COMPARE="$(compare_product "$WORK/interrupted/target" "$WORK/second-pass/target")"
-  SECOND_PASS_NORMALISED="$(compare_normalised "$WORK/interrupted/target" "$WORK/second-pass/target")"
-  ATTRIBUTABLE="$SECOND_PASS_NORMALISED"
-fi
-
 # An interrupted run whose second process refused (the Durable variant's in-flight limit) is not a
 # difference in the product: it is a run that stopped. The two are separate sentences.
 HONEST_NOTE=""
@@ -274,27 +243,12 @@ if grep -qs 'was in flight' "$WORK/interrupted/"*.log; then
 fi
 
 if [ "$VARIANT" = "baseline" ]; then
-  HEADLINE="An uninterrupted baseline run compared with one killed mid-turn and then re-run. The baseline cannot continue a run — its position is a local variable — so the second process started the job again from the plan, which makes the comparison one between a single pass and a *second* pass. That is why the verdict is taken from the second-pass control below: two clean runs over one target, no kill. If the killed run matches an unkilled second pass, the interruption added nothing to the product; if it does not, the difference is the interruption's and is reported as such."
+  HEADLINE="An uninterrupted baseline run compared with one killed mid-turn and then re-run. The baseline cannot continue a run — its position is a local variable — so its 'continued' product was written by two processes where the reference's was written by one. The comparison is between those two products, and every file that differs is named."
 else
   HEADLINE="An uninterrupted Durable run compared with one killed between iterations and then continued by a second process. The checkpoint is the loop's position, so the second process reads it instead of the plan alone."
 fi
 
-SECOND_PASS_INFORMATIVE="not applicable"
-if [ "$VARIANT" = "baseline" ]; then
-  if [[ "$REPRODUCIBLE" == identical* ]]; then
-    SECOND_PASS_INFORMATIVE="no: the two clean runs are byte-identical, so on this target a pass leaves nothing for a later one to change and the second-pass control's agreement with the interrupted run is the template's, not the interruption's"
-  else
-    SECOND_PASS_INFORMATIVE="yes: two clean runs differ, so agreement between the interrupted run and a second pass is a fact about the work rather than about an empty pass"
-  fi
-fi
-
-DETAIL="$HEADLINE Compared: the same file set, with the same SHA-256 per file, at the same relative path — every regular file under the target except .durable/ (the store, which differs by construction) and the harness's build directory. Reference: $REFERENCE_STATUS (verifier $REFERENCE_VERIFY). Repeat, uninterrupted: $REPEAT_STATUS (verifier $REPEAT_VERIFY), which compared '$REPRODUCIBLE' against the reference byte for byte, and '$REPRODUCIBLE_NORMALISED' after dropping blank lines — that is what says whether two clean runs are the same thing on this machine. Interrupted at '$INTERRUPT_FRAME' with SIGKILL, then continued: exit $INTERRUPTED_STATUS, verifier $INTERRUPTED_VERIFY, last line \"$INTERRUPTED_END\".$HONEST_NOTE Interrupted vs reference: $EQUIVALENT (normalised: $EQUIVALENT_NORMALISED). Second-pass control (two clean runs over one target, no kill): $SECOND_PASS_STATUS, verifier $SECOND_PASS_VERIFY, which compared '$SECOND_PASS_COMPARE' against the interrupted run, and '$SECOND_PASS_NORMALISED' after dropping blank lines — the normalised one is the comparison the verdict is taken from. Is that comparison informative? $SECOND_PASS_INFORMATIVE. Comparator self-check: $SELF_CHECK."
-
-# Two *finished* products agree only when the comparison is informative. A baseline "second pass" over a
-# target the first pass already finished has nothing left to do, so both products are the template's — an
-# identity that proves nothing about the interruption. When the reference and the repeat are byte-identical
-# there is no second-pass work to compare, and the verdict says so rather than calling that agreement
-# evidence.
+DETAIL="$HEADLINE Compared: the same file set, with the same SHA-256 per file, at the same relative path — every regular file under the target except .durable/ (the store, which differs by construction) and the harness's build directory. Reference: $REFERENCE_STATUS (verifier $REFERENCE_VERIFY). Repeat, uninterrupted: $REPEAT_STATUS (verifier $REPEAT_VERIFY), which compared '$REPRODUCIBLE' against the reference byte for byte, and '$REPRODUCIBLE_NORMALISED' after dropping blank lines — that is what says whether two clean runs are the same thing on this machine. Interrupted at '$INTERRUPT_FRAME' with SIGKILL, then continued: exit $INTERRUPTED_STATUS, verifier $INTERRUPTED_VERIFY, last line \"$INTERRUPTED_END\".$HONEST_NOTE Interrupted vs reference: $EQUIVALENT (normalised: $EQUIVALENT_NORMALISED). The verdict is taken from the interrupted product against the reference, after dropping blank lines, because the repeat run above shows two clean runs of this variant agree byte for byte. Where they do not, the result says the runs are not comparable and claims nothing about the interruption. Comparator self-check: $SELF_CHECK."
 
 if [ "$REFUSED_IN_FLIGHT" = "1" ]; then
   # Nothing continued the run, so there is no continued product to compare. Said first, because no
@@ -302,15 +256,13 @@ if [ "$REFUSED_IN_FLIGHT" = "1" ]; then
   OUTCOME="not resumed: the interruption landed in the in-flight turn"
 elif [[ "$REPRODUCIBLE_NORMALISED" != identical* ]]; then
   OUTCOME="not comparable: two clean runs differed"
-elif [ "$VARIANT" = "baseline" ] && [[ "$SECOND_PASS_INFORMATIVE" != yes:* ]]; then
-  OUTCOME="not comparable: a second pass has nothing left to do"
-elif [[ "$ATTRIBUTABLE" == identical* ]]; then
+elif [[ "$EQUIVALENT_NORMALISED" == identical* ]]; then
   OUTCOME="identical"
 else
   OUTCOME="differs"
 fi
 
-EVIDENCE="reference: $REFERENCE_VERIFY; repeat vs reference: $REPRODUCIBLE (normalised: $REPRODUCIBLE_NORMALISED); interrupted vs reference: $EQUIVALENT (normalised: $EQUIVALENT_NORMALISED); second-pass control: $SECOND_PASS_STATUS, interrupted vs it: $SECOND_PASS_COMPARE (normalised: $SECOND_PASS_NORMALISED); verdict taken from: $([ "$VARIANT" = "baseline" ] && echo 'the second-pass comparison' || echo 'the reference comparison'); second pass informative: $SECOND_PASS_INFORMATIVE; interruption point: '$INTERRUPT_FRAME'; comparator self-check: $SELF_CHECK"
+EVIDENCE="reference: $REFERENCE_VERIFY; repeat vs reference: $REPRODUCIBLE (normalised: $REPRODUCIBLE_NORMALISED); interrupted vs reference: $EQUIVALENT (normalised: $EQUIVALENT_NORMALISED); verdict taken from: interrupted vs reference, normalised; interruption point: '$INTERRUPT_FRAME'; comparator self-check: $SELF_CHECK"
 record_result "$VARIANT" "$FAULT" "$OUTCOME" \
   "reference, repeat, and kill-then-continue of the same staged target" \
   "$DETAIL" \

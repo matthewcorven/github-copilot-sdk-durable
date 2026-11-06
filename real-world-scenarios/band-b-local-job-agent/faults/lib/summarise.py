@@ -54,7 +54,6 @@ OUTCOMES = {
     "identical",
     "differs",
     "not comparable: two clean runs differed",
-    "not comparable: a second pass has nothing left to do",
     "not resumed: the interruption landed in the in-flight turn",
     "comparator failed its self-check",
     "control did not finish",

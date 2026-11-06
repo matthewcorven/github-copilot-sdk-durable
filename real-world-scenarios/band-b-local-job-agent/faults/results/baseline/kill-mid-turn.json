@@ -3,14 +3,14 @@
   "fault": "kill-mid-turn",
   "outcome": "lost its position",
   "phase": "a tool call in flight in iteration 1",
-  "detail": "Killed pid 54365 with SIGKILL while the runtime's tool call was at the gate (out tool.execution_start 2). plan before 'in-progress 0 16', after the kill 'in-progress 0 16'; files the half-turn left new: [none], files it left modified: [none]. A new process ran the same command: exit 0, plan 'complete 16 0', verifier 'pass', last line \"plan reports complete after 1 iteration(s).\". The baseline's position is a local variable, so nothing continued the killed turn: the second process re-read the plan and began at its own iteration 1. Whatever the half-turn had already written stays on disk and is not recorded anywhere — that is what 'lost its position' means here, not 'lost its files'.",
+  "detail": "Killed pid 19601 with SIGKILL while the runtime's tool call was at the gate (out tool.execution_start 2). plan before 'in-progress 0 16', after the kill 'in-progress 0 16'; files the half-turn left new: [none], files it left modified: [none]. A new process ran the same command: exit 0, plan 'complete 16 0', verifier 'pass', last line \"plan reports complete after 1 iteration(s).\". The baseline's position is a local variable, so nothing continued the killed turn: the second process re-read the plan and began at its own iteration 1. Whatever the half-turn had already written stays on disk and is not recorded anywhere — that is what 'lost its position' means here, not 'lost its files'.",
   "evidence": "gate frame: 'out tool.execution_start 2'; before.digest/after.digest hold the product digest on both sides; exit 0; plan after the second process: complete 16 0; nothing about the baseline records an iteration",
   "harness": {
     "dotnet": "dotnet",
     "model": "gpt-5.1-codex-mini",
     "command": "./faults/kill-mid-turn.sh --variant baseline",
     "script": "kill-mid-turn.sh",
-    "commit": "599ec5c150fa3f3b6539e80b9d68f60e789d10fe"
+    "commit": "7eacde34127fad4245e81be4a491f6b43b3890e1"
   },
-  "recordedAt": "2026-11-06T02:06:07.295068+00:00"
+  "recordedAt": "2026-11-06T02:41:44.762384+00:00"
 }
