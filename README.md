@@ -283,7 +283,9 @@ in `Enforced` mode, on a signed-in host where a real backend engaged.
 
 The `sandbox-advisory` CI job runs the three examples on `ubuntu-latest` (Bubblewrap),
 `macos-latest` (Seatbelt) and `windows-latest` (ProcessContainer) and prints the reported backend
-and platform per example. The reporting step is `continue-on-error: true`, so a platform gap
+and platform per example. It runs on a nightly schedule and on pushes to `main` rather than on
+every pull request, because the report describes the runners and not the diff. The reporting step
+is `continue-on-error: true`, so a platform gap
 degrades an assertion set rather than failing a pull request; the report-completeness assertion
 is not, so a script that produces no report turns the check red. See
 [`docs/SANDBOX_CI.md`](docs/SANDBOX_CI.md).
