@@ -86,6 +86,15 @@ unchanged.
 | `store-outage.sh` | a tool result in flight | `mv` the store aside while the process holds it open | what the live path holds, what the moved file still recovers, what the target gained |
 | `run-equivalence.sh` | *not a fault*: reference, repeat, and kill-then-continue of one staged target | — | whether the interrupted run's product is the reference's |
 
+## A limit of the kill seam, measured
+
+`kill-mid-turn` holds the runtime's second `tool.execution_start`, which is emitted *before* the tool runs.
+On the runs recorded here that was reached with the pass already writing; it is not guaranteed to be, and a
+probe that held the 2nd and the 4th start on a cold target found 0 changed files — the model had opened
+files but not yet written them. The result reports the files the half-turn left, new and modified, so a run
+whose kill landed before any write says so rather than implying a half-written target. The Durable variant's
+outcome does not depend on this: its seam is the store, not the files.
+
 ## The target is staged, and why
 
 `baseline/target/` has twelve checkable items and the baseline's **unbounded** prompt finishes all twelve
