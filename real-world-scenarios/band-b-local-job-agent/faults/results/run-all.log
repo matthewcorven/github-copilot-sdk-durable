@@ -1,7 +1,7 @@
 # faults/run-all.sh
 
-commit: a89e64367a6b040a5197d45a878cabe7db7174c0
-results: /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z
+commit: 3dcb0be2bfd6de7c2b5717e6b8f7b97773937cc3
+results: /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z
 controls: included
 variants: baseline durable
 
@@ -30,123 +30,123 @@ durable run-equivalence 0
 
 ## what each script said
 harness: building baseline (this compiles the file-based app; about a minute cold)
-harness: started baseline as pid 79009
+harness: started baseline as pid 3759
 kill-mid-turn: baseline is blocked at the gate on 'out tool.execution_start 2'
-/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/real-world-scenarios/band-b-local-job-agent/faults/lib/common.sh: line 211: 79009 Killed: 9               COPILOT_CLI_PATH="$rundir/copilot" RALPH_MODEL="${FAULTS_MODEL:-gpt-5.1-codex-mini}" "$out/$binary" "$@" > "$applog" 2>&1  (wd: ~/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/kill-mid-turn/target)
-kill-mid-turn: kill -9 79009; the process is gone
-harness: started baseline as pid 81617
-harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z/baseline/kill-mid-turn.json
+/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/real-world-scenarios/band-b-local-job-agent/faults/lib/common.sh: line 211:  3759 Killed: 9               COPILOT_CLI_PATH="$rundir/copilot" RALPH_MODEL="${FAULTS_MODEL:-gpt-5.1-codex-mini}" "$out/$binary" "$@" > "$applog" 2>&1  (wd: ~/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/kill-mid-turn/target)
+kill-mid-turn: kill -9 3759; the process is gone
+harness: started baseline as pid 4315
+harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z/baseline/kill-mid-turn.json
 harness: building baseline (this compiles the file-based app; about a minute cold)
-harness: started baseline as pid 88471
+harness: started baseline as pid 4809
 kill-mid-turn: baseline is blocked at the gate on 'out tool.execution_start 2'
 kill-mid-turn-control: not injecting; releasing the held tool call so the turn can finish
-harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z/baseline/kill-mid-turn-control.json
+harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z/baseline/kill-mid-turn-control.json
 harness: building baseline (this compiles the file-based app; about a minute cold)
-harness: started baseline as pid 91582
+harness: started baseline as pid 5397
 restart-after-checkpoint: baseline is blocked at the gate on 'out tool.execution_complete 1'
-restart-after-checkpoint: stopped pid 91582: wait reported 143, i.e. it died of signal 15 (SIGTERM is 15)
-harness: started baseline as pid 91942
-harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z/baseline/restart-after-checkpoint.json
+restart-after-checkpoint: stopped pid 5397: wait reported 143, i.e. it died of signal 15 (SIGTERM is 15)
+harness: started baseline as pid 5775
+harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z/baseline/restart-after-checkpoint.json
 harness: building baseline (this compiles the file-based app; about a minute cold)
-harness: started baseline as pid 95660
+harness: started baseline as pid 6198
 restart-after-checkpoint: baseline is blocked at the gate on 'out tool.execution_complete 1'
-harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z/baseline/restart-after-checkpoint-control.json
+harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z/baseline/restart-after-checkpoint-control.json
 harness: building baseline (this compiles the file-based app; about a minute cold)
-harness: started baseline as pid 2439
-harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z/baseline/duplicate-delivery.json
+harness: started baseline as pid 6794
+harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z/baseline/duplicate-delivery.json
 harness: building baseline (this compiles the file-based app; about a minute cold)
-harness: started baseline as pid 8672
-harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z/baseline/duplicate-delivery-control.json
+harness: started baseline as pid 7402
+harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z/baseline/duplicate-delivery-control.json
 harness: building baseline (this compiles the file-based app; about a minute cold)
-harness: started baseline as pid 9442
+harness: started baseline as pid 7925
 concurrent-clients: loop 1 is blocked at the gate on 'out tool.execution_start 2'
-harness: started baseline as pid 9782
-concurrent-clients: loop 2 (pid 9782) started while loop 1 (pid 9442) is blocked
+harness: started baseline as pid 8084
+concurrent-clients: loop 2 (pid 8084) started while loop 1 (pid 7925) is blocked
 concurrent-clients: released loop 1; both loops now run
-harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z/baseline/concurrent-clients.json
+harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z/baseline/concurrent-clients.json
 harness: building baseline (this compiles the file-based app; about a minute cold)
-harness: started baseline as pid 11360
+harness: started baseline as pid 9309
 concurrent-clients: loop 1 is blocked at the gate on 'out tool.execution_start 2'
-harness: started baseline as pid 12098
-concurrent-clients-not-injected: loop 2 (pid 12098) started after loop 1 finished (exit 0)
-harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z/baseline/concurrent-clients-not-injected.json
+harness: started baseline as pid 13572
+concurrent-clients-not-injected: loop 2 (pid 13572) started after loop 1 finished (exit 0)
+harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z/baseline/concurrent-clients-not-injected.json
 harness: building baseline (this compiles the file-based app; about a minute cold)
-harness: started baseline as pid 12207
-harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z/baseline/store-outage.json
+harness: started baseline as pid 14459
+harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z/baseline/store-outage.json
 harness: building baseline (this compiles the file-based app; about a minute cold)
 run-equivalence: reference run
-harness: started baseline as pid 13507
+harness: started baseline as pid 16275
 run-equivalence: repeat run
-harness: started baseline as pid 14032
+harness: started baseline as pid 17096
 run-equivalence: interrupted run (killed between iterations)
-harness: started baseline as pid 14908
-/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/real-world-scenarios/band-b-local-job-agent/faults/lib/common.sh: line 211: 14908 Killed: 9               COPILOT_CLI_PATH="$rundir/copilot" RALPH_MODEL="${FAULTS_MODEL:-gpt-5.1-codex-mini}" "$out/$binary" "$@" > "$applog" 2>&1  (wd: ~/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/run-equivalence/interrupted/target)
-harness: started baseline as pid 15319
+harness: started baseline as pid 18004
+/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/real-world-scenarios/band-b-local-job-agent/faults/lib/common.sh: line 211: 18004 Killed: 9               COPILOT_CLI_PATH="$rundir/copilot" RALPH_MODEL="${FAULTS_MODEL:-gpt-5.1-codex-mini}" "$out/$binary" "$@" > "$applog" 2>&1  (wd: ~/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/run-equivalence/interrupted/target)
+harness: started baseline as pid 18282
 run-equivalence: second-pass run (the baseline's control for a second pass)
-harness: started baseline as pid 18027
-harness: started baseline as pid 56625
-harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z/baseline/run-equivalence.json
+harness: started baseline as pid 19072
+harness: started baseline as pid 19697
+harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z/baseline/run-equivalence.json
 harness: building durable (this compiles the file-based app; about a minute cold)
-harness: started durable as pid 57113
+harness: started durable as pid 20044
 kill-mid-turn: durable is blocked at the gate on 'out tool.execution_start 2'
-/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/real-world-scenarios/band-b-local-job-agent/faults/lib/common.sh: line 211: 57113 Killed: 9               DURABLE_RUNTIME_PATH="$rundir/copilot" RALPH_MODEL="${FAULTS_MODEL:-gpt-5.1-codex-mini}" "$out/$binary" "$@" > "$applog" 2>&1  (wd: ~/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/kill-mid-turn/target)
-kill-mid-turn: kill -9 57113; the process is gone
-harness: started durable as pid 57930
-harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z/durable/kill-mid-turn.json
+/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/real-world-scenarios/band-b-local-job-agent/faults/lib/common.sh: line 211: 20044 Killed: 9               DURABLE_RUNTIME_PATH="$rundir/copilot" RALPH_MODEL="${FAULTS_MODEL:-gpt-5.1-codex-mini}" "$out/$binary" "$@" > "$applog" 2>&1  (wd: ~/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/kill-mid-turn/target)
+kill-mid-turn: kill -9 20044; the process is gone
+harness: started durable as pid 20536
+harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z/durable/kill-mid-turn.json
 harness: building durable (this compiles the file-based app; about a minute cold)
-harness: started durable as pid 58079
+harness: started durable as pid 20637
 kill-mid-turn: durable is blocked at the gate on 'out tool.execution_start 2'
 kill-mid-turn-control: not injecting; releasing the held tool call so the turn can finish
-harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z/durable/kill-mid-turn-control.json
+harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z/durable/kill-mid-turn-control.json
 harness: building durable (this compiles the file-based app; about a minute cold)
-harness: started durable as pid 63064
+harness: started durable as pid 29476
 restart-after-checkpoint: durable is blocked at the gate on 'in session.create 3'
 restart-after-checkpoint: the seam 'in session.create 3' is inside iteration 2 (checkpoint 'turn-started/1'); releasing the frame so the run is not left held
-harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z/durable/restart-after-checkpoint.json
+harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z/durable/restart-after-checkpoint.json
 harness: building durable (this compiles the file-based app; about a minute cold)
-harness: started durable as pid 66653
+harness: started durable as pid 32578
 restart-after-checkpoint: durable is blocked at the gate on 'in session.create 3'
 restart-after-checkpoint: the seam 'in session.create 3' is inside iteration 2 (checkpoint 'turn-started/1'); releasing the frame so the run is not left held
-harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z/durable/restart-after-checkpoint-control.json
+harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z/durable/restart-after-checkpoint-control.json
 harness: building durable (this compiles the file-based app; about a minute cold)
-harness: started durable as pid 70093
-harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z/durable/duplicate-delivery.json
+harness: started durable as pid 36270
+harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z/durable/duplicate-delivery.json
 harness: building durable (this compiles the file-based app; about a minute cold)
-harness: started durable as pid 71020
-harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z/durable/duplicate-delivery-control.json
+harness: started durable as pid 36979
+harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z/durable/duplicate-delivery-control.json
 harness: building durable (this compiles the file-based app; about a minute cold)
-harness: started durable as pid 72018
+harness: started durable as pid 37873
 concurrent-clients: loop 1 is blocked at the gate on 'out tool.execution_start 2'
-harness: started durable as pid 74004
-concurrent-clients: loop 2 (pid 74004) started while loop 1 (pid 72018) is blocked
+harness: started durable as pid 38116
+concurrent-clients: loop 2 (pid 38116) started while loop 1 (pid 37873) is blocked
 concurrent-clients: released loop 1; both loops now run
-harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z/durable/concurrent-clients.json
+harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z/durable/concurrent-clients.json
 harness: building durable (this compiles the file-based app; about a minute cold)
-harness: started durable as pid 78778
+harness: started durable as pid 40306
 concurrent-clients: loop 1 is blocked at the gate on 'out tool.execution_start 2'
-harness: started durable as pid 79524
-concurrent-clients-not-injected: loop 2 (pid 79524) started after loop 1 finished (exit 3)
-harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z/durable/concurrent-clients-not-injected.json
+harness: started durable as pid 41014
+concurrent-clients-not-injected: loop 2 (pid 41014) started after loop 1 finished (exit 3)
+harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z/durable/concurrent-clients-not-injected.json
 harness: building durable (this compiles the file-based app; about a minute cold)
-harness: started durable as pid 79647
+harness: started durable as pid 41138
 store-outage: durable is blocked at the gate on 'out tool.execution_complete 1'; store before: present 24 0 turn-started/0
-store-outage: moved the store to /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/store-outage/target/.durable/store.jsonl.moved while pid 79647 holds it open
-harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z/durable/store-outage.json
+store-outage: moved the store to /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/store-outage/target/.durable/store.jsonl.moved while pid 41138 holds it open
+harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z/durable/store-outage.json
 harness: building durable (this compiles the file-based app; about a minute cold)
-harness: started durable as pid 82452
+harness: started durable as pid 43920
 store-outage: durable is blocked at the gate on 'out tool.execution_complete 1'; store before: present 24 0 turn-started/0
 store-outage-control: leaving the store where it is
-harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z/durable/store-outage-control.json
+harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z/durable/store-outage-control.json
 harness: building durable (this compiles the file-based app; about a minute cold)
 run-equivalence: reference run
-harness: started durable as pid 85832
+harness: started durable as pid 47313
 run-equivalence: repeat run
-harness: started durable as pid 88232
+harness: started durable as pid 49906
 run-equivalence: interrupted run (killed between iterations)
-harness: started durable as pid 90870
-/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/real-world-scenarios/band-b-local-job-agent/faults/lib/common.sh: line 211: 90870 Killed: 9               DURABLE_RUNTIME_PATH="$rundir/copilot" RALPH_MODEL="${FAULTS_MODEL:-gpt-5.1-codex-mini}" "$out/$binary" "$@" > "$applog" 2>&1  (wd: ~/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/run-equivalence/interrupted/target)
-harness: started durable as pid 91111
-harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T012004Z/durable/run-equivalence.json
+harness: started durable as pid 52715
+/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/real-world-scenarios/band-b-local-job-agent/faults/lib/common.sh: line 211: 52715 Killed: 9               DURABLE_RUNTIME_PATH="$rundir/copilot" RALPH_MODEL="${FAULTS_MODEL:-gpt-5.1-codex-mini}" "$out/$binary" "$@" > "$applog" 2>&1  (wd: ~/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/run-equivalence/interrupted/target)
+harness: started durable as pid 53025
+harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/results-20261106T014508Z/durable/run-equivalence.json
 
 ## rendered summary
 ## Fault matrix — outcome per fault per variant
@@ -165,36 +165,36 @@ harness: wrote /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktree
 
 | Variant | Outcome | Phase | Detail |
 | --- | --- | --- | --- |
-| baseline | **lost its position** | a tool call in flight in iteration 1 | Killed pid 79009 with SIGKILL while the runtime's tool call was at the gate (out tool.execution_start 2). plan before 'in-progress 0 16', after the kill 'in-progress 0 16'; files the half-turn left new: [none], files it left modified: [none]. A new process ran the same command: exit 0, plan 'complete 16 0', verifier 'pass', last line "plan reports complete after 1 iteration(s).". The baseline's position is a local variable, so nothing continued the killed turn: the second process re-read the plan and began at its own iteration 1. Whatever the half-turn had already written stays on disk and is not recorded anywhere — that is what 'lost its position' means here, not 'lost its files'. |
-| durable | **refused to resume the dead turn** | a tool call in flight in iteration 1 | Killed pid 57113 with SIGKILL while the runtime's tool call was at the gate (out tool.execution_start 2). Store before the kill 'present 28 0 turn-started/0', after it 'present 28 0 turn-started/0'; plan before 'in-progress 0 16', after the kill 'in-progress 0 16'; files the half-turn left new: [none], files it left modified: [none]. A new process read that record and refused: the turn was issued and never finished, so re-running it could duplicate the writes it had already made. Its last line: "durable: run did not complete: failed iteration 1 was in flight: the turn was issued (plan digest 07426b11a9af6214) and its outcome was never recorded, so it ma". Exit 1, plan 'in-progress 0 16', verifier 'fail: FAIL  release-notes.md: '### Overview' expected', store after 'present 36 0 turn-started/0'. This is the variant's stated limit — nothing durable records what a turn that does not return did — reported as the outcome rather than smoothed into 'resumed'. |
+| baseline | **lost its position** | a tool call in flight in iteration 1 | Killed pid 3759 with SIGKILL while the runtime's tool call was at the gate (out tool.execution_start 2). plan before 'in-progress 0 16', after the kill 'in-progress 0 16'; files the half-turn left new: [none], files it left modified: [none]. A new process ran the same command: exit 0, plan 'complete 16 0', verifier 'pass', last line "plan reports complete after 1 iteration(s).". The baseline's position is a local variable, so nothing continued the killed turn: the second process re-read the plan and began at its own iteration 1. Whatever the half-turn had already written stays on disk and is not recorded anywhere — that is what 'lost its position' means here, not 'lost its files'. |
+| durable | **refused to resume the dead turn** | a tool call in flight in iteration 1 | Killed pid 20044 with SIGKILL while the runtime's tool call was at the gate (out tool.execution_start 2). Store before the kill 'present 24 0 turn-started/0', after it 'present 24 0 turn-started/0'; plan before 'in-progress 0 16', after the kill 'in-progress 0 16'; files the half-turn left new: [none], files it left modified: [none]. A new process read that record and refused: the turn was issued and never finished, so re-running it could duplicate the writes it had already made. Its last line: "durable: run did not complete: failed iteration 1 was in flight: the turn was issued (plan digest 07426b11a9af6214) and its outcome was never recorded, so it ma". Exit 1, plan 'in-progress 0 16', verifier 'fail: FAIL  release-notes.md: '### Overview' expected', store after 'present 31 0 turn-started/0'. This is the variant's stated limit — nothing durable records what a turn that does not return did — reported as the outcome rather than smoothed into 'resumed'. |
 
 ### `restart-after-checkpoint`
 
 | Variant | Outcome | Phase | Detail |
 | --- | --- | --- | --- |
-| baseline | **restarted from the plan** | stopped after a tool call returned, inside the pass | Before the stop: plan 'in-progress 0 16' (1 iteration line(s) printed), seam 'out tool.execution_complete 1'. Stopped pid 91582: wait reported 143, i.e. it died of signal 15 (SIGTERM is 15). A second process then ran with the same command and no resume capability: 1 iteration line(s) in the log in total (its own are appended), exit 0, plan 'complete 16 0', verifier 'pass', last line: "plan reports complete after 1 iteration(s).". The baseline keeps its position in a local variable, so the second process re-read the plan and began again at its own iteration 1; the iteration the first process committed is not known to it. |
+| baseline | **restarted from the plan** | stopped after a tool call returned, inside the pass | Before the stop: plan 'in-progress 0 16' (1 iteration line(s) printed), seam 'out tool.execution_complete 1'. Stopped pid 5397: wait reported 143, i.e. it died of signal 15 (SIGTERM is 15). A second process then ran with the same command and no resume capability: 1 iteration line(s) in the log in total (its own are appended), exit 0, plan 'complete 16 0', verifier 'pass', last line: "plan reports complete after 1 iteration(s).". The baseline keeps its position in a local variable, so the second process re-read the plan and began again at its own iteration 1; the iteration the first process committed is not known to it. |
 | durable | **not exercised** | a boundary between two iterations, seen from outside the process | Not reachable, and checked rather than assumed. The only frame a process outside the run can stop at between iterations is the creation of the next iteration's conversation. At that frame the store already says 'turn-started/1' — iteration 2's turn was issued and has not returned — because the checkpoint that marks a turn started is committed before the conversation is created and the settle that follows is inside the same iteration. 1 iteration(s) had completed by then. So a process stopped here leaves the state kill-mid-turn records: a turn that was issued and never finished, which the next process refuses rather than repeats. A restart from a *settled* boundary exists only inside the process, and a fault injected from outside cannot land on it. The control below is the same run uninterrupted, which does finish. |
 
 ### `duplicate-delivery`
 
 | Variant | Outcome | Phase | Detail |
 | --- | --- | --- | --- |
-| baseline | **doubled** | one iteration, one delivery re-delivered by the gate | One delivery, forwarded twice by the gate (1 re-delivery of session.sendAndWait). The second copy got a turn of its own: 5 tool call(s) crossed the gate after the re-delivery, out of 5 in the whole run. One iteration finished, exit 0, plan 'complete 16 0', verifier 'pass'. The side effect of a second delivery is therefore a second set of tool calls over the same files, not an error the loop reports. This is a measured count of frames, not an assumption about the variant: the same words would be chosen for either variant. |
-| durable | **doubled** | one iteration, one delivery re-delivered by the gate | One delivery, forwarded twice by the gate (1 re-delivery of session.send). The second copy got a turn of its own: 10 tool call(s) crossed the gate after the re-delivery, out of 10 in the whole run. One iteration finished, exit 3, plan 'in-progress 2 14', verifier 'fail: FAIL  section-01.md: first line is not an H1: The queue keeps five jobs.'. The side effect of a second delivery is therefore a second set of tool calls over the same files, not an error the loop reports. This is a measured count of frames, not an assumption about the variant: the same words would be chosen for either variant. |
+| baseline | **doubled** | one iteration, one delivery re-delivered by the gate | One delivery, forwarded twice by the gate (1 re-delivery of session.sendAndWait). The second copy got a turn of its own: 4 tool call(s) crossed the gate after the re-delivery, out of 4 in the whole run. One iteration finished, exit 0, plan 'complete 16 0', verifier 'pass'. The side effect of a second delivery is therefore a second set of tool calls over the same files, not an error the loop reports. This is a measured count of frames, not an assumption about the variant: the same words would be chosen for either variant. |
+| durable | **doubled** | one iteration, one delivery re-delivered by the gate | One delivery, forwarded twice by the gate (1 re-delivery of session.send). The second copy got a turn of its own: 7 tool call(s) crossed the gate after the re-delivery, out of 7 in the whole run. One iteration finished, exit 3, plan 'in-progress 2 14', verifier 'fail: FAIL  section-01.md: first line is not an H1: The queue keeps five jobs.'. The side effect of a second delivery is therefore a second set of tool calls over the same files, not an error the loop reports. This is a measured count of frames, not an assumption about the variant: the same words would be chosen for either variant. |
 
 ### `concurrent-clients`
 
 | Variant | Outcome | Phase | Detail |
 | --- | --- | --- | --- |
-| baseline | **not corrupted** | loop 1 mid-turn; loop 2 started against the same target while loop 1 was blocked | Two loops over one folder overlapped — loop 1 (pid 9442) was alive and blocked at its gate on 'out tool.execution_start 2' when loop 2 started. Neither refused the other, both finished (exit 0 and 0), the plan is still a plan (intact), and the verifier passes. 1+1 iteration line(s) in total, plan 'complete 16 0'. Nothing serialised them and nothing broke: that is the finding, and it is not the same claim as 'serialised'. |
-| durable | **refused the second client** | loop 1 mid-turn; loop 2 started against the same target while loop 1 was blocked | Two loops over one folder overlapped: loop 1 (pid 72018) was alive and blocked at its gate on 'out tool.execution_start 2' when loop 2 started. Loop 2 exited 4 and its own first line about the collision was: "refused:   The durable store file '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/concurrent-clients/target/.durable/store.jsonl' is a". Loop 1 exited 3 after 2+0 iteration line(s) in total. Plan 'in-progress 4 12', shape intact, verifier 'fail: FAIL  section-03.md: first line is not an H1: Settings live in a file.'. The second loop did not read the plan, send a prompt or touch a file: the refusal comes from the layer's exclusive lock on the store file, and the variant reports it as a refusal rather than as a failed run. |
+| baseline | **not corrupted** | loop 1 mid-turn; loop 2 started against the same target while loop 1 was blocked | Two loops over one folder overlapped — loop 1 (pid 7925) was alive and blocked at its gate on 'out tool.execution_start 2' when loop 2 started. Neither refused the other, both finished (exit 0 and 0), the plan is still a plan (intact), and the verifier passes. 1+1 iteration line(s) in total, plan 'complete 16 0'. Nothing serialised them and nothing broke: that is the finding, and it is not the same claim as 'serialised'. |
+| durable | **refused the second client** | loop 1 mid-turn; loop 2 started against the same target while loop 1 was blocked | Two loops over one folder overlapped: loop 1 (pid 37873) was alive and blocked at its gate on 'out tool.execution_start 2' when loop 2 started. Loop 2 exited 4 and its own first line about the collision was: "refused:   The durable store file '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/concurrent-clients/target/.durable/store.jsonl' is a". Loop 1 exited 3 after 2+0 iteration line(s) in total. Plan 'in-progress 4 12', shape intact, verifier 'fail: FAIL  section-03.md: first line is not an H1: Settings live in a file.'. The second loop did not read the plan, send a prompt or touch a file: the refusal comes from the layer's exclusive lock on the store file, and the variant reports it as a refusal rather than as a failed run. |
 
 ### `store-outage`
 
 | Variant | Outcome | Phase | Detail |
 | --- | --- | --- | --- |
 | baseline | **not exercised** | the run's state on disk | The baseline keeps no state outside the job's own files, so there is no store to take away and nothing durable for an outage to fail safely over. Checked rather than assumed: the run finished (verifier 'pass'), and its target holds no file but PLAN.md, PROMPT.md, release-notes.md and docs/*.md — no store, no checkpoint, no session index. Removing one of those would fault the file the job is rewriting, which is a different fault and is not reported under this name. |
-| durable | **continued past the outage** | a tool result in flight; store moved aside | The store was moved while the application held it open, and the run neither refused nor stopped: exit 0, last line "plan reports complete after 8 iteration(s).", plan 'complete 16 0', files new after the outage [none], verifier 'pass'. A new store stands at the path ('present 307 0 iteration-complete/8') because the open handle kept writing to the moved inode. The moved file is 'present 24 0 turn-started/0'. That is the honest description: an outage the run did not turn into a failure, reported rather than folded into 'failed safely'. |
+| durable | **continued past the outage** | a tool result in flight; store moved aside | The store was moved while the application held it open, and the run neither refused nor stopped: exit 0, last line "plan reports complete after 8 iteration(s).", plan 'complete 16 0', files new after the outage [none], verifier 'pass'. A new store stands at the path ('present 304 0 iteration-complete/8') because the open handle kept writing to the moved inode. The moved file is 'present 24 0 turn-started/0'. That is the honest description: an outage the run did not turn into a failure, reported rather than folded into 'failed safely'. |
 
 ## The before/after controls
 
@@ -210,19 +210,19 @@ in whether the fault happened, so a difference between them belongs to it.
 | `duplicate-delivery` | baseline | control: one delivery | doubled | one iteration, nothing re-delivered (the control) | one iteration, one delivery re-delivered by the g… |
 | `duplicate-delivery` | durable | control: one delivery | doubled | one iteration, nothing re-delivered (the control) | one iteration, one delivery re-delivered by the g… |
 | `concurrent-clients` | baseline | control: serialised, not corrupted | not corrupted | loop 1 to completion, then loop 2 against the sam… | loop 1 mid-turn; loop 2 started against the same … |
-| `concurrent-clients` | durable | control: corrupted without overlap | refused the second client | loop 1 to completion, then loop 2 against the sam… | loop 1 mid-turn; loop 2 started against the same … |
+| `concurrent-clients` | durable | control: serialised, not corrupted | refused the second client | loop 1 to completion, then loop 2 against the sam… | loop 1 mid-turn; loop 2 started against the same … |
 | `store-outage` | durable | control: the store stayed | continued past the outage | a tool result in flight, nothing moved (the contr… | a tool result in flight; store moved aside |
 
 ## The extra evidence: a run that was interrupted and continued
 
 | Variant | Outcome | Detail |
 | --- | --- | --- |
-| baseline | **identical** | An uninterrupted baseline run compared with one killed mid-turn and then re-run. The baseline cannot continue a run — its position is a local variable — so the second process started the job again from the plan, which makes the comparison one between a single pass and a *second* pass. That is why the verdict is taken from the second-pass control below: two clean runs over one target, no kill. If the killed run matches an unkilled second pass, the interruption added nothing to the product; if it does not, the difference is the interruption's and is reported as such. Compared: the same file set, with the same SHA-256 per file, at the same relative path — every regular file under the target except .durable/ (the store, which differs by construction) and the harness's build directory. Reference: 0 (verifier pass). Repeat, uninterrupted: 0 (verifier pass), which compared 'differs: only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/run-equivalence/reference/target [none], only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/run-equivalence/repeat/target [none], different bytes [./docs/section-01.md ./docs/section-02.md ./docs/section-03.md ./docs/section-04.md ./docs/section-05.md ./docs/section-06.md ./docs/section-07.md ./docs/section-08.md ./docs/section-09.md ./docs/section-10.md ./docs/section-11.md ./docs/section-12.md ./docs/section-13.md ./docs/section-14.md ]; 17 vs 17 file(s)' against the reference byte for byte, and 'identical (17 file(s), sha256 per file after dropping blank lines)' after dropping blank lines — that is what says whether two clean runs are the same thing on this machine. Interrupted at 'out tool.execution_start 2' with SIGKILL, then continued: exit 0, verifier pass, last line "plan reports complete after 1 iteration(s).". Interrupted vs reference: identical (17 file(s), sha256 per file and path) (normalised: identical (17 file(s), sha256 per file after dropping blank lines)). Second-pass control (two clean runs over one target, no kill): 0/0, verifier pass, which compared 'differs: only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/run-equivalence/interrupted/target [none], only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/run-equivalence/second-pass/target [none], different bytes [./docs/section-01.md ./docs/section-02.md ./docs/section-03.md ./docs/section-04.md ./docs/section-05.md ./docs/section-06.md ./docs/section-07.md ./docs/section-08.md ./docs/section-09.md ./docs/section-10.md ./docs/section-11.md ./docs/section-12.md ./docs/section-13.md ./docs/section-14.md ]; 17 vs 17 file(s)' against the interrupted run, and 'identical (17 file(s), sha256 per file after dropping blank lines)' after dropping blank lines — the normalised one is the comparison the verdict is taken from. Comparator self-check: passes: the same tree is 'identical' to both comparators; one appended byte reports 'differs: only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/run-equivalence/template [none], only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/run-equivalence/selfcheck [none], different bytes [./PLAN.md ]; 17 vs 17 file(s)'; one extra file reports 'differs: only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/run-equivalence/template [none], only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/run-equivalence/selfcheck [./extra.txt ], different bytes [./PLAN.md ]; 17 vs 18 file(s)'; an appended line reports, after normalising, 'differs: 1 of 17 file(s) differ even after dropping blank lines'. |
-| durable | **not resumed: the interruption landed in the in-flight turn** | An uninterrupted Durable run compared with one killed between iterations and then continued by a second process. The checkpoint is the loop's position, so the second process reads it instead of the plan alone. Compared: the same file set, with the same SHA-256 per file, at the same relative path — every regular file under the target except .durable/ (the store, which differs by construction) and the harness's build directory. Reference: 0 (verifier pass). Repeat, uninterrupted: 0 (verifier pass), which compared 'identical (17 file(s), sha256 per file and path)' against the reference byte for byte, and 'identical (17 file(s), sha256 per file after dropping blank lines)' after dropping blank lines — that is what says whether two clean runs are the same thing on this machine. Interrupted at 'in session.create 3' with SIGKILL, then continued: exit 1, verifier fail: FAIL  section-01.md: first line is not an H1: The queue keeps five jobs., last line "durable: run did not complete: failed iteration 2 was in flight: the turn was issued (plan digest 40b28bb9608b539e) and its outcome was never recorded, so it ma". The second process refused to continue: "durable: run did not complete: failed iteration 2 was in flight: the turn was issued (plan digest 40b28bb9608b539e) and its outcome was never recorded, so it ma". The interruption landed in a turn the variant does not resume, so this run has no continued product to compare — the comparison below is between a finished product and a stopped one and is reported for completeness, not as evidence that a resume changed anything. Interrupted vs reference: differs: only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/run-equivalence/reference/target [none], only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/run-equivalence/interrupted/target [none], different bytes [./PLAN.md ./docs/section-01.md ./docs/section-02.md ./docs/section-03.md ./docs/section-04.md ./docs/section-05.md ./docs/section-06.md ./docs/section-07.md ./docs/section-08.md ./docs/section-09.md ./docs/section-10.md ./docs/section-11.md ./docs/section-12.md ./docs/section-13.md ./docs/section-14.md ]; 17 vs 17 file(s) (normalised: differs: 15 of 17 file(s) differ even after dropping blank lines). Second-pass control (two clean runs over one target, no kill): not run (the Durable variant does not redo settled iterations), verifier not applicable, which compared 'not applicable' against the interrupted run, and 'not applicable' after dropping blank lines — the normalised one is the comparison the verdict is taken from. Comparator self-check: passes: the same tree is 'identical' to both comparators; one appended byte reports 'differs: only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/run-equivalence/template [none], only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/run-equivalence/selfcheck [none], different bytes [./PLAN.md ]; 17 vs 17 file(s)'; one extra file reports 'differs: only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/run-equivalence/template [none], only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/run-equivalence/selfcheck [./extra.txt ], different bytes [./PLAN.md ]; 17 vs 18 file(s)'; an appended line reports, after normalising, 'differs: 1 of 17 file(s) differ even after dropping blank lines'. |
+| baseline | **identical** | An uninterrupted baseline run compared with one killed mid-turn and then re-run. The baseline cannot continue a run — its position is a local variable — so the second process started the job again from the plan, which makes the comparison one between a single pass and a *second* pass. That is why the verdict is taken from the second-pass control below: two clean runs over one target, no kill. If the killed run matches an unkilled second pass, the interruption added nothing to the product; if it does not, the difference is the interruption's and is reported as such. Compared: the same file set, with the same SHA-256 per file, at the same relative path — every regular file under the target except .durable/ (the store, which differs by construction) and the harness's build directory. Reference: 0 (verifier pass). Repeat, uninterrupted: 0 (verifier pass), which compared 'differs: only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/run-equivalence/reference/target [none], only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/run-equivalence/repeat/target [none], different bytes [./docs/section-01.md ./docs/section-02.md ./docs/section-03.md ./docs/section-04.md ./docs/section-05.md ./docs/section-06.md ./docs/section-07.md ./docs/section-08.md ./docs/section-09.md ./docs/section-10.md ./docs/section-11.md ./docs/section-12.md ./docs/section-13.md ./docs/section-14.md ]; 17 vs 17 file(s)' against the reference byte for byte, and 'identical (17 file(s), sha256 per file after dropping blank lines)' after dropping blank lines — that is what says whether two clean runs are the same thing on this machine. Interrupted at 'out tool.execution_start 2' with SIGKILL, then continued: exit 0, verifier pass, last line "plan reports complete after 1 iteration(s).". Interrupted vs reference: differs: only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/run-equivalence/reference/target [none], only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/run-equivalence/interrupted/target [none], different bytes [./docs/section-01.md ./docs/section-02.md ./docs/section-03.md ./docs/section-04.md ./docs/section-05.md ./docs/section-06.md ./docs/section-07.md ./docs/section-08.md ./docs/section-09.md ./docs/section-10.md ./docs/section-11.md ./docs/section-12.md ./docs/section-13.md ./docs/section-14.md ]; 17 vs 17 file(s) (normalised: identical (17 file(s), sha256 per file after dropping blank lines)). Second-pass control (two clean runs over one target, no kill): 0/0, verifier pass, which compared 'differs: only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/run-equivalence/interrupted/target [none], only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/run-equivalence/second-pass/target [none], different bytes [./docs/section-01.md ./docs/section-02.md ./docs/section-03.md ./docs/section-04.md ./docs/section-05.md ./docs/section-06.md ./docs/section-07.md ./docs/section-08.md ./docs/section-09.md ./docs/section-10.md ./docs/section-11.md ./docs/section-12.md ./docs/section-13.md ./docs/section-14.md ]; 17 vs 17 file(s)' against the interrupted run, and 'identical (17 file(s), sha256 per file after dropping blank lines)' after dropping blank lines — the normalised one is the comparison the verdict is taken from. Is that comparison informative? yes: two clean runs differ, so agreement between the interrupted run and a second pass is a fact about the work rather than about an empty pass. Comparator self-check: passes: the same tree is 'identical' to both comparators; one appended byte reports 'differs: only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/run-equivalence/template [none], only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/run-equivalence/selfcheck [none], different bytes [./PLAN.md ]; 17 vs 17 file(s)'; one extra file reports 'differs: only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/run-equivalence/template [none], only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/baseline/run-equivalence/selfcheck [./extra.txt ], different bytes [./PLAN.md ]; 17 vs 18 file(s)'; an appended line reports, after normalising, 'differs: 1 of 17 file(s) differ even after dropping blank lines'. |
+| durable | **not resumed: the interruption landed in the in-flight turn** | An uninterrupted Durable run compared with one killed between iterations and then continued by a second process. The checkpoint is the loop's position, so the second process reads it instead of the plan alone. Compared: the same file set, with the same SHA-256 per file, at the same relative path — every regular file under the target except .durable/ (the store, which differs by construction) and the harness's build directory. Reference: 0 (verifier pass). Repeat, uninterrupted: 0 (verifier pass), which compared 'identical (17 file(s), sha256 per file and path)' against the reference byte for byte, and 'identical (17 file(s), sha256 per file after dropping blank lines)' after dropping blank lines — that is what says whether two clean runs are the same thing on this machine. Interrupted at 'in session.create 3' with SIGKILL, then continued: exit 1, verifier fail: FAIL  section-01.md: first line is not an H1: The queue keeps five jobs., last line "durable: run did not complete: failed iteration 2 was in flight: the turn was issued (plan digest 40b28bb9608b539e) and its outcome was never recorded, so it ma". The second process refused to continue: "durable: run did not complete: failed iteration 2 was in flight: the turn was issued (plan digest 40b28bb9608b539e) and its outcome was never recorded, so it ma". The interruption landed in a turn the variant does not resume, so this run has no continued product to compare — the comparison below is between a finished product and a stopped one and is reported for completeness, not as evidence that a resume changed anything. Interrupted vs reference: differs: only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/run-equivalence/reference/target [none], only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/run-equivalence/interrupted/target [none], different bytes [./PLAN.md ./docs/section-01.md ./docs/section-02.md ./docs/section-03.md ./docs/section-04.md ./docs/section-05.md ./docs/section-06.md ./docs/section-07.md ./docs/section-08.md ./docs/section-09.md ./docs/section-10.md ./docs/section-11.md ./docs/section-12.md ./docs/section-13.md ./docs/section-14.md ]; 17 vs 17 file(s) (normalised: differs: 15 of 17 file(s) differ even after dropping blank lines). Second-pass control (two clean runs over one target, no kill): not run (the Durable variant does not redo settled iterations), verifier not applicable, which compared 'not applicable' against the interrupted run, and 'not applicable' after dropping blank lines — the normalised one is the comparison the verdict is taken from. Is that comparison informative? not applicable. Comparator self-check: passes: the same tree is 'identical' to both comparators; one appended byte reports 'differs: only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/run-equivalence/template [none], only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/run-equivalence/selfcheck [none], different bytes [./PLAN.md ]; 17 vs 17 file(s)'; one extra file reports 'differs: only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/run-equivalence/template [none], only in /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/run-equivalence/selfcheck [./extra.txt ], different bytes [./PLAN.md ]; 17 vs 18 file(s)'; an appended line reports, after normalising, 'differs: 1 of 17 file(s) differ even after dropping blank lines'. |
 
 ## Provenance
 
-Checked out at `a89e64367a6b`; every result's `harness.commit` is compared against it.
+Checked out at `3dcb0be2bfd6`; every result's `harness.commit` is compared against it.
 
 ## Harness status
 

@@ -10,7 +10,7 @@
     "model": "gpt-5.1-codex-mini",
     "command": "./faults/kill-mid-turn.sh --variant baseline --fault-not-injected",
     "script": "kill-mid-turn.sh",
-    "commit": "a89e64367a6b040a5197d45a878cabe7db7174c0"
+    "commit": "3dcb0be2bfd6de7c2b5717e6b8f7b97773937cc3"
   },
-  "recordedAt": "2026-11-06T01:20:45.188143+00:00"
+  "recordedAt": "2026-11-06T01:45:48.487446+00:00"
 }

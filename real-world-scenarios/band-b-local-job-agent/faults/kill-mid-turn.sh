@@ -139,7 +139,7 @@ if [ "$VARIANT" = "baseline" ]; then
   record_result "$VARIANT" "$FAULT" "lost its position" \
     "a tool call in flight in iteration 1" \
     "Killed pid $PID with SIGKILL while the runtime's tool call was at the gate ($FRAME). $LEFT. A new process ran the same command: exit $SECOND_STATUS, plan '$AFTER_PLAN', verifier '$AFTER_VERIFY', last line \"$END\". The baseline's position is a local variable, so nothing continued the killed turn: the second process re-read the plan and began at its own iteration 1. Whatever the half-turn had already written stays on disk and is not recorded anywhere — that is what 'lost its position' means here, not 'lost its files'." \
-    "before.digest/after.digest in the run directory hold the product digest on both sides; nothing about the baseline records an iteration"
+    "gate frame: '$FRAME'; before.digest/after.digest hold the product digest on both sides; exit $SECOND_STATUS; plan after the second process: $AFTER_PLAN; nothing about the baseline records an iteration"
   exit 0
 fi
 

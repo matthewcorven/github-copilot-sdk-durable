@@ -154,7 +154,7 @@ else
     record_result "$VARIANT" "$FAULT" "completed" \
       "an uninterrupted run to the end (the control)" \
       "Control: the same steps without the stop. $CONTROL_ITERATIONS iteration(s), exit $CONTROL_STATUS, plan '$CONTROL_PLAN', product digest ${CONTROL_DIGEST:0:16}, verifier: pass. This is what the stopped run is measured against; the stop is the only difference." \
-      "gate held '$FRAME' for iteration 2's prompt and released it; the run then reached its own end"
+      "gate held '$FRAME' and released it; the run then reached its own end"
     exit 0
   fi
   record_result "$VARIANT" "$FAULT" "control did not finish" \

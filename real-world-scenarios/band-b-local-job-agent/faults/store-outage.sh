@@ -134,8 +134,11 @@ STATUS="$(app_status)"
 reap_servers "$RUN_DIR"
 rm -f "$RUN_DIR/pid" "$RUN_DIR/inflight" "$RUN_DIR/release"
 
-# What is at the path now: the store the application re-created (an open handle keeps writing to the
-# moved inode, so a new file at the path is a new store), the moved file's own contents, or neither.
+# What the path holds now. A .NET FileStream keeps writing to the inode it opened, so the writes made
+# after the `mv` go into the file that is now named `.moved`; the path itself holds whatever the
+# application created when it next opened a store there, which is usually nothing, because the move
+# removed the name and the next open creates a new file. Both are read, because which one happened is
+# the observation.
 AT_PATH="$(store_state "$STORE_PATH")"
 MOVED_STATE="$(store_state "$STORE_PATH.moved")"
 AFTER_PLAN="$(plan_counts "$RUN_DIR/target")"
@@ -144,12 +147,12 @@ product_digest "$RUN_DIR/target" > "$RUN_DIR/after.digest"
 CHANGED_AFTER_OUTAGE="$(comm -13 <(cut -c67- "$RUN_DIR/before.digest" | LC_ALL=C sort) <(cut -c67- "$RUN_DIR/after.digest" | LC_ALL=C sort) | tr '\n' ' ')"
 END="$(end_line "$RUN_DIR/app.log")"
 REFUSED="$(grep -c 'refused\|Unhandled exception\|InvalidOperationException' "$RUN_DIR/app.log" 2>/dev/null || true)"
-EVIDENCE="held '$FRAME'; store before '$BEFORE_STORE'; at the path after '$AT_PATH'; the moved file '$MOVED_STATE'; files new after the outage: [${CHANGED_AFTER_OUTAGE:-none}]; plan before '$BEFORE_PLAN' after '$AFTER_PLAN'; verifier '$VERIFY'; exit $STATUS; last line \"$END\""
+EVIDENCE="held '$FRAME'; store before '$BEFORE_STORE'; digests: $RUN_DIR/before.digest and $RUN_DIR/after.digest; the store file after the run '$AT_PATH'; the moved file '$MOVED_STATE'; files new after the outage: [${CHANGED_AFTER_OUTAGE:-none}]; plan before '$BEFORE_PLAN' after '$AFTER_PLAN'; verifier '$VERIFY'; exit $STATUS; last line \"$END\""
 
 if [ "$MOVED" = "0" ]; then
   record_result "$VARIANT" "$FAULT" "control: the store stayed" \
     "a tool result in flight, nothing moved (the control)" \
-    "Control: the same steps with the store left in place. It finished at '$AT_PATH', plan '$AFTER_PLAN', verifier '$VERIFY', exit $STATUS last line \"$END\". This is what the outage run is compared against; the move is the only difference." \
+    "Control: the same steps with the store left in place. It finished with the store at '$AT_PATH', plan '$AFTER_PLAN', verifier '$VERIFY', exit $STATUS, files new after the run [${CHANGED_AFTER_OUTAGE:-none}], last line \"$END\". This is what the outage run is compared against; the move is the only difference." \
     "$EVIDENCE"
   exit 0
 fi
@@ -189,6 +192,6 @@ fi
 
 record_result "$VARIANT" "$FAULT" "continued past the outage" \
   "a tool result in flight; store moved aside" \
-  "The store was moved while the application held it open, and the run neither refused nor stopped: exit $STATUS, last line \"$END\", plan '$AFTER_PLAN', files new after the outage [${CHANGED_AFTER_OUTAGE:-none}], verifier '$VERIFY'. A new store stands at the path ('$AT_PATH') because the open handle kept writing to the moved inode. The moved file is '$MOVED_STATE'. That is the honest description: an outage the run did not turn into a failure, reported rather than folded into 'failed safely'." \
+  "The store was moved while the application held it open, and the run neither refused nor stopped: exit $STATUS, last line \"$END\", plan '$AFTER_PLAN', files new after the outage [${CHANGED_AFTER_OUTAGE:-none}], verifier '$VERIFY'. The writes made after the move went into the file the `mv` renamed — a .NET FileStream follows the inode, not the name — so the moved file now holds '$MOVED_STATE', having held '${BEFORE_STORE}' when the move happened, and the path holds '$AT_PATH'. That is the honest description of the injection: the name the application opens by went away while the handle kept working, and the run did not turn that into a failure. It is reported as that, not folded into 'failed safely'." \
   "$EVIDENCE"
 exit 0
