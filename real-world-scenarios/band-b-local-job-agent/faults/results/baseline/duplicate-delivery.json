@@ -4,13 +4,13 @@
   "outcome": "doubled",
   "phase": "one iteration, one delivery re-delivered by the gate",
   "detail": "One delivery, forwarded twice by the gate (1 re-delivery of session.sendAndWait). The second copy got a turn of its own: 4 tool call(s) crossed the gate after the re-delivery, out of 4 in the whole run. One iteration finished, exit 0, plan 'complete 16 0', verifier 'pass'. The side effect of a second delivery is therefore a second set of tool calls over the same files, not an error the loop reports. This is a measured count of frames, not an assumption about the variant: the same words would be chosen for either variant.",
-  "evidence": "frames at the gate: 1 session.sendAndWait, 5 assistant.message, 4 tool.execution_start; frames re-delivered by the gate: 1; tool calls after the re-delivery: 4; product digest 76524817ca57aa5b; store 'missing 0 0 -'; last line \"plan reports complete after 1 iteration(s).\"",
+  "evidence": "frames at the gate: 1 session.sendAndWait, 6 assistant.message, 4 tool.execution_start; frames re-delivered by the gate: 1; tool calls after the re-delivery: 4; product digest 2a3c8fbb3cf3bcc1; store 'missing 0 0 -'; last line \"plan reports complete after 1 iteration(s).\"",
   "harness": {
     "dotnet": "dotnet",
     "model": "gpt-5.1-codex-mini",
     "command": "./faults/duplicate-delivery.sh --variant baseline",
     "script": "duplicate-delivery.sh",
-    "commit": "7eacde34127fad4245e81be4a491f6b43b3890e1"
+    "commit": "32770e70b5818b93d8745acfd83286cffb48c072"
   },
-  "recordedAt": "2026-11-06T02:43:21.716727+00:00"
+  "recordedAt": "2026-11-06T03:35:01.144047+00:00"
 }

@@ -3,14 +3,14 @@
   "fault": "concurrent-clients",
   "outcome": "not corrupted",
   "phase": "loop 1 mid-turn; loop 2 started against the same target while loop 1 was blocked",
-  "detail": "Two loops over one folder overlapped — loop 1 (pid 24101) was alive and blocked at its gate on 'out tool.execution_start 2' when loop 2 started. Neither refused the other, both finished (exit 0 and 0), the plan is still a plan (intact), and the verifier passes. 1+1 iteration line(s) in total, plan 'complete 16 0'. Nothing serialised them and nothing broke: that is the finding, and it is not the same claim as 'serialised'.",
-  "evidence": "overlap claim: loop 1 (pid 24101) was alive and blocked at its gate on 'out tool.execution_start 2' when loop 2 started; gate connection windows: two-connections (2 connection(s), overlap 0.000s); loop 1 exit 0, loop 2 exit 0; gate frames: 17 in / 560 out; plan shape: intact; store 'missing 0 0 -'",
+  "detail": "Two loops over one folder overlapped — loop 1 (pid 17370) was alive and blocked at its gate on 'out tool.execution_start 2' when loop 2 started. Neither refused the other, both finished (exit 0 and 0), the plan is still a plan (intact), and the verifier passes. 1+1 iteration line(s) in total, plan 'complete 16 0'. Nothing serialised them and nothing broke: that is the finding, and it is not the same claim as 'serialised'.",
+  "evidence": "overlap claim: loop 1 (pid 17370) was alive and blocked at its gate on 'out tool.execution_start 2' when loop 2 started; gate connection windows: two-connections (2 connection(s), overlap 0.000s); loop 1 exit 0, loop 2 exit 0; gate frames: 18 in / 612 out; plan shape: intact; store 'missing 0 0 -'",
   "harness": {
     "dotnet": "dotnet",
     "model": "gpt-5.1-codex-mini",
     "command": "./faults/concurrent-clients.sh --variant baseline",
     "script": "concurrent-clients.sh",
-    "commit": "7eacde34127fad4245e81be4a491f6b43b3890e1"
+    "commit": "32770e70b5818b93d8745acfd83286cffb48c072"
   },
-  "recordedAt": "2026-11-06T02:44:18.250563+00:00"
+  "recordedAt": "2026-11-06T03:36:11.224672+00:00"
 }

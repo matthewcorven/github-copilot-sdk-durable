@@ -3,14 +3,14 @@
   "fault": "concurrent-clients",
   "outcome": "refused the second client",
   "phase": "loop 1 mid-turn; loop 2 started against the same target while loop 1 was blocked",
-  "detail": "Two loops over one folder overlapped: loop 1 (pid 39476) was alive and blocked at its gate on 'out tool.execution_start 2' when loop 2 started. Loop 2 exited 4 and its own first line about the collision was: \"refused:   The durable store file '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/concurrent-clients/target/.durable/store.jsonl' is a\". Loop 1 exited 3 after 2+0 iteration line(s) in total. Plan 'in-progress 4 12', shape intact, verifier 'fail: FAIL  section-03.md: first line is not an H1: Settings live in a file.'. The second loop did not read the plan, send a prompt or touch a file: the refusal comes from the layer's exclusive lock on the store file, and the variant reports it as a refusal rather than as a failed run.",
-  "evidence": "overlap claim: loop 1 (pid 39476) was alive and blocked at its gate on 'out tool.execution_start 2' when loop 2 started; gate connection windows: one-connection (1 connection(s), overlap 0.000s); loop 1 exit 3, loop 2 exit 4; gate frames: 18 in / 550 out; plan shape: intact; store 'present 85 0 iteration-complete/2'; loop 1 last line \"iteration cap reached: 2 iterations and the plan is not complete.\"; loop 2 last line \"refused:   The durable store file '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/concurrent-c\"",
+  "detail": "Two loops over one folder overlapped: loop 1 (pid 36003) was alive and blocked at its gate on 'out tool.execution_start 2' when loop 2 started. Loop 2 exited 4 and its own first line about the collision was: \"refused:   The durable store file '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/concurrent-clients/target/.durable/store.jsonl' is a\". Loop 1 exited 3 after 2+0 iteration line(s) in total. Plan 'in-progress 4 12', shape intact, verifier 'fail: FAIL  section-03.md: first line is not an H1: Settings live in a file.'. The second loop did not read the plan, send a prompt or touch a file: the refusal comes from the layer's exclusive lock on the store file, and the variant reports it as a refusal rather than as a failed run.",
+  "evidence": "overlap claim: loop 1 (pid 36003) was alive and blocked at its gate on 'out tool.execution_start 2' when loop 2 started; gate connection windows: one-connection (1 connection(s), overlap 0.000s); loop 1 exit 3, loop 2 exit 4; gate frames: 16 in / 476 out; plan shape: intact; store 'present 79 0 iteration-complete/2'; loop 1 last line \"iteration cap reached: 2 iterations and the plan is not complete.\"; loop 2 last line \"refused:   The durable store file '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/concurrent-c\"",
   "harness": {
     "dotnet": "dotnet",
     "model": "gpt-5.1-codex-mini",
     "command": "./faults/concurrent-clients.sh --variant durable",
     "script": "concurrent-clients.sh",
-    "commit": "7eacde34127fad4245e81be4a491f6b43b3890e1"
+    "commit": "32770e70b5818b93d8745acfd83286cffb48c072"
   },
-  "recordedAt": "2026-11-06T02:53:54.221028+00:00"
+  "recordedAt": "2026-11-06T03:44:42.801294+00:00"
 }

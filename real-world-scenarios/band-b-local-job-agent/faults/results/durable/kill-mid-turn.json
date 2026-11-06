@@ -3,14 +3,14 @@
   "fault": "kill-mid-turn",
   "outcome": "refused to resume the dead turn",
   "phase": "a tool call in flight in iteration 1",
-  "detail": "Killed pid 29559 with SIGKILL while the runtime's tool call was at the gate (out tool.execution_start 2). Store before the kill 'present 28 0 turn-started/0', after it 'present 28 0 turn-started/0'; plan before 'in-progress 0 16', after the kill 'in-progress 0 16'; files the half-turn left new: [none], files it left modified: [none]. A new process read that record and refused: the turn was issued and never finished, so re-running it could duplicate the writes it had already made. Its last line: \"durable: run did not complete: failed iteration 1 was in flight: the turn was issued (plan digest 07426b11a9af6214) and its outcome was never recorded, so it ma\". Exit 1, plan 'in-progress 0 16', verifier 'fail: FAIL  release-notes.md: '### Overview' expected', store after 'present 36 0 turn-started/0'. This is the variant's stated limit — nothing durable records what a turn that does not return did — reported as the outcome rather than smoothed into 'resumed'.",
+  "detail": "Killed pid 22194 with SIGKILL while the runtime's tool call was at the gate (out tool.execution_start 2). Store before the kill 'present 24 0 turn-started/0', after it 'present 24 0 turn-started/0'; plan before 'in-progress 0 16', after the kill 'in-progress 0 16'; files the half-turn left new: [none], files it left modified: [none]. A new process read that record and refused: the turn was issued and never finished, so re-running it could duplicate the writes it had already made. Its last line: \"durable: run did not complete: failed iteration 1 was in flight: the turn was issued (plan digest 07426b11a9af6214) and its outcome was never recorded, so it ma\". Exit 1, plan 'in-progress 0 16', verifier 'fail: FAIL  release-notes.md: '### Overview' expected', store after 'present 31 0 turn-started/0'. This is the variant's stated limit — nothing durable records what a turn that does not return did — reported as the outcome rather than smoothed into 'resumed'.",
   "evidence": "gate frame: 'out tool.execution_start 2'; checkpoint before kill: turn-started/0; after kill: turn-started/0; after the second process: turn-started/0",
   "harness": {
     "dotnet": "dotnet",
     "model": "gpt-5.1-codex-mini",
     "command": "./faults/kill-mid-turn.sh --variant durable",
     "script": "kill-mid-turn.sh",
-    "commit": "7eacde34127fad4245e81be4a491f6b43b3890e1"
+    "commit": "32770e70b5818b93d8745acfd83286cffb48c072"
   },
-  "recordedAt": "2026-11-06T02:47:04.174788+00:00"
+  "recordedAt": "2026-11-06T03:37:46.417754+00:00"
 }

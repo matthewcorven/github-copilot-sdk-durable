@@ -3,14 +3,14 @@
   "fault": "restart-after-checkpoint",
   "outcome": "restarted from the plan",
   "phase": "stopped after a tool call returned, inside the pass",
-  "detail": "Before the stop: plan 'in-progress 0 16' (1 iteration line(s) printed), seam 'out tool.execution_complete 1'. Stopped pid 21375: wait reported 143, i.e. it died of signal 15 (SIGTERM is 15). A second process then ran with the same command and no resume capability: 1 iteration line(s) in the log in total (its own are appended), exit 0, plan 'complete 16 0', verifier 'pass', last line: \"plan reports complete after 1 iteration(s).\". The baseline keeps its position in a local variable, so the second process re-read the plan and began again at its own iteration 1; the iteration the first process committed is not known to it.",
-  "evidence": "product digest before the stop 68812918a449ae38; no store exists for the baseline (plan only); frames at the gate: 13 in, 354 out",
+  "detail": "Before the stop: plan 'in-progress 0 16' (1 iteration line(s) printed), seam 'out tool.execution_complete 1'. Stopped pid 13575: wait reported 143, i.e. it died of signal 15 (SIGTERM is 15). A second process then ran with the same command and no resume capability: 1 iteration line(s) in the log in total (its own are appended), exit 0, plan 'complete 16 0', verifier 'pass', last line: \"plan reports complete after 1 iteration(s).\". The baseline keeps its position in a local variable, so the second process re-read the plan and began again at its own iteration 1; the iteration the first process committed is not known to it.",
+  "evidence": "product digest before the stop 68812918a449ae38; no store exists for the baseline (plan only); frames at the gate: 12 in, 333 out",
   "harness": {
     "dotnet": "dotnet",
     "model": "gpt-5.1-codex-mini",
     "command": "./faults/restart-after-checkpoint.sh --variant baseline",
     "script": "restart-after-checkpoint.sh",
-    "commit": "7eacde34127fad4245e81be4a491f6b43b3890e1"
+    "commit": "32770e70b5818b93d8745acfd83286cffb48c072"
   },
-  "recordedAt": "2026-11-06T02:42:47.804438+00:00"
+  "recordedAt": "2026-11-06T03:34:17.030213+00:00"
 }

@@ -3,14 +3,14 @@
   "fault": "restart-after-checkpoint-control",
   "outcome": "completed",
   "phase": "an uninterrupted run to the end (the control)",
-  "detail": "Control: the same steps without the stop. 1 iteration(s), exit 0, plan 'complete 16 0', product digest 03b9634ecc4b1d6f, verifier: pass. This is what the stopped run is measured against; the stop is the only difference.",
+  "detail": "Control: the same steps without the stop. 1 iteration(s), exit 0, plan 'complete 16 0', product digest 2a3c8fbb3cf3bcc1, verifier: pass. This is what the stopped run is measured against; the stop is the only difference.",
   "evidence": "gate held 'out tool.execution_complete 1' and released it; the run then reached its own end",
   "harness": {
     "dotnet": "dotnet",
     "model": "gpt-5.1-codex-mini",
     "command": "./faults/restart-after-checkpoint.sh --variant baseline --fault-not-injected",
     "script": "restart-after-checkpoint.sh",
-    "commit": "7eacde34127fad4245e81be4a491f6b43b3890e1"
+    "commit": "32770e70b5818b93d8745acfd83286cffb48c072"
   },
-  "recordedAt": "2026-11-06T02:43:04.078718+00:00"
+  "recordedAt": "2026-11-06T03:34:42.932193+00:00"
 }

@@ -4,13 +4,13 @@
   "outcome": "control: serialised, not corrupted",
   "phase": "loop 1 to completion, then loop 2 against the same target (the control)",
   "detail": "Control: the same two loops with no overlap — loop 1 exited 3 before loop 2 started, loop 2 exited 3, plan 'in-progress 4 12' (status, ticked, open), shape intact, verifier 'fail: FAIL  section-03.md: first line is not an H1: Settings live in a file.'. Two loops one after the other leave a target that is still a plan; whether the job is finished depends on the cap, and the verifier's verdict here is reported rather than required. So damage in the fault run would belong to the overlap, not to running twice.",
-  "evidence": "overlap claim: none: loop 1 had already exited (3) when loop 2 started; gate connection windows: two-connections (2 connection(s), overlap 0.000s); loop 1 exit 3, loop 2 exit 3; gate frames: 25 in / 598 out; plan shape: intact; store 'present 100 0 iteration-complete/2'",
+  "evidence": "overlap claim: none: loop 1 had already exited (3) when loop 2 started; gate connection windows: two-connections (2 connection(s), overlap 0.000s); loop 1 exit 3, loop 2 exit 3; gate frames: 22 in / 589 out; plan shape: intact; store 'present 91 0 iteration-complete/2'",
   "harness": {
     "dotnet": "dotnet",
     "model": "gpt-5.1-codex-mini",
     "command": "./faults/concurrent-clients.sh --variant durable --fault-not-injected",
     "script": "concurrent-clients.sh",
-    "commit": "7eacde34127fad4245e81be4a491f6b43b3890e1"
+    "commit": "32770e70b5818b93d8745acfd83286cffb48c072"
   },
-  "recordedAt": "2026-11-06T02:54:26.290636+00:00"
+  "recordedAt": "2026-11-06T03:45:18.549253+00:00"
 }

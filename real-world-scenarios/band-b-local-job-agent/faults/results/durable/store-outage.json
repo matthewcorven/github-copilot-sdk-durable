@@ -3,14 +3,14 @@
   "fault": "store-outage",
   "outcome": "continued past the outage",
   "phase": "a tool result in flight; store moved aside",
-  "detail": "The store was moved while the application held it open, and the run neither refused nor stopped: exit 0, last line \"plan reports complete after 8 iteration(s).\", plan 'complete 16 0', files new after the outage [none], verifier 'pass'. The writes made after the move went into the file the  renamed — a .NET FileStream follows the inode, not the name — so the moved file now holds 'present 24 0 turn-started/0', having held 'present 24 0 turn-started/0' when the move happened, and the path holds 'present 301 0 iteration-complete/8'. That is the honest description of the injection: the name the application opens by went away while the handle kept working, and the run did not turn that into a failure. It is reported as that, not folded into 'failed safely'.",
-  "evidence": "held 'out tool.execution_complete 1'; store before 'present 24 0 turn-started/0'; digests: /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/store-outage/before.digest and /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/store-outage/after.digest; the store file after the run 'present 301 0 iteration-complete/8'; the moved file 'present 24 0 turn-started/0'; files new after the outage: [none]; plan before 'in-progress 0 16' after 'complete 16 0'; verifier 'pass'; exit 0; last line \"plan reports complete after 8 iteration(s).\"",
+  "detail": "The store was moved while the application held it open, and the run neither refused nor stopped: exit 0, last line \"plan reports complete after 8 iteration(s).\", plan 'complete 16 0', files new after the outage [none], verifier 'pass'. The writes made after the move went into the file the  renamed — a .NET FileStream follows the inode, not the name — so the moved file now holds 'present 24 0 turn-started/0', having held 'present 24 0 turn-started/0' when the move happened, and the path holds 'present 280 0 iteration-complete/8'. That is the honest description of the injection: the name the application opens by went away while the handle kept working, and the run did not turn that into a failure. It is reported as that, not folded into 'failed safely'.",
+  "evidence": "held 'out tool.execution_complete 1'; store before 'present 24 0 turn-started/0'; digests: /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/store-outage/before.digest and /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/store-outage/after.digest; the store file after the run 'present 280 0 iteration-complete/8'; the moved file 'present 24 0 turn-started/0'; files new after the outage: [none]; plan before 'in-progress 0 16' after 'complete 16 0'; verifier 'pass'; exit 0; last line \"plan reports complete after 8 iteration(s).\"",
   "harness": {
     "dotnet": "dotnet",
     "model": "gpt-5.1-codex-mini",
     "command": "./faults/store-outage.sh --variant durable",
     "script": "store-outage.sh",
-    "commit": "7eacde34127fad4245e81be4a491f6b43b3890e1"
+    "commit": "32770e70b5818b93d8745acfd83286cffb48c072"
   },
-  "recordedAt": "2026-11-06T02:55:48.798183+00:00"
+  "recordedAt": "2026-11-06T03:46:38.930168+00:00"
 }
