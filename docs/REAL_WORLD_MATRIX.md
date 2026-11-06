@@ -23,17 +23,17 @@ Dimensions are fixed by the program epic (#142) so bands are comparable:
 
 ## Scope of this document
 
-**Bands A, B and C, so far.** The other four bands' rows land with their own A4-equivalents — #163 (D),
-#169 (E), #174 (F), #179 (G) — because each band owns its README and its own rows, per the program epic.
-Nothing in this file is extrapolated from one band to another. A band whose directory exists but whose
-rows are not here has not been measured to this standard yet; the absence is deliberate.
+**Bands A, B, C and F, so far.** The other three bands' rows land with their own A4-equivalents —
+#163 (D), #169 (E), #179 (G) — because each band owns its README and its own rows, per the program
+epic. Nothing in this file is extrapolated from one band to another. A band whose directory exists
+but whose rows are not here has not been measured to this standard yet; the absence is deliberate.
 
 **Three kinds of evidence are in this file, and they are not interchangeable.** Bands A and B both ran
 real agent turns against a signed-in Copilot runtime — A's inside a web app, B's as a CLI job whose work
 *is* the model's tool calls. **Band C's is a local reproduction of an Actions workflow and never ran the
-hosted Action** — no runner, no live GitHub API, no model call. Band C's cells carry that caveat inline;
-Band B's carry a different one, that its counts are one model's on one machine and that its jobs are live.
-The three bands' cells are not an aggregate.
+hosted Action** — no runner, no live GitHub API, no model call. **Band F has two baselines, and each of
+its cells names which one it is measured against.** Each band's cells carry their caveat inline; none of
+the bands' cells are an aggregate.
 
 ## Band A — local dev-tool agent
 
@@ -319,6 +319,120 @@ fail), so the two injections stop at the same business window but not the same p
 - **The one-comment window is measured, not closed.** A stop between the comment file and its ledger
   entry costs exactly one duplicate, however often it is repeated (`durable/evidence.sh` stage 4c).
 
+
+## Band F — multi-agent orchestration
+
+A handoff workflow in which one triage agent routes each customer turn to one of three specialists, and
+the specialist may hand control on to another participant. Baseline: `microsoft/agent-framework`'s
+`handoff_simple.py` at `cf734bc`, MIT, vendored byte-identical
+(`real-world-scenarios/band-f-multi-agent/upstream/PROVENANCE.md`). The C# port reproduces the sample's
+mesh handoff topology, its three tools and their exact result strings, its per-agent sessions and its
+termination predicate, and **adds** a file-backed workflow checkpoint store so the baseline can be
+faulted on the same axis as the Durable variant. Durable variant: the same four agents and tools with
+the delegation moved out of a framework executor's position and into a checkpointed durable task.
+
+Evidence: [`band-f-multi-agent/README.md`](../real-world-scenarios/band-f-multi-agent/README.md),
+[`faults/README.md`](../real-world-scenarios/band-f-multi-agent/faults/README.md),
+[`faults/results/summary.txt`](../real-world-scenarios/band-f-multi-agent/faults/results/summary.txt),
+[`durable/README.md`](../real-world-scenarios/band-f-multi-agent/durable/README.md),
+[`durable/evidence/run-stdout.txt`](../real-world-scenarios/band-f-multi-agent/durable/evidence/run-stdout.txt),
+[`evidence/run-stdout.txt`](../real-world-scenarios/band-f-multi-agent/evidence/run-stdout.txt).
+
+> **Read this before the cells: Band F has two baselines, and every cell below names its own.**
+> `baseline/` is the port — the sample's orchestration plus a workflow checkpoint store F1 added
+> (`FileSystemJsonCheckpointStore` with `CheckpointManager`, and a `resume` mode). The **sample as
+> published** has no checkpointing at all: `grep -ci checkpoint` returns 0 for both vendored Python
+> files. So there are two comparisons and they are not the same one:
+>
+> 1. **Against the port's checkpoint store** (`baseline/`, the middle column). This is the interesting
+>    comparison, and it is what most of the cells below measure. It asks what Durable adds over a real
+>    workflow checkpoint file.
+> 2. **Against the sample as published.** Durable adds the durability the sample lacks outright. That
+>    is true, and it is not a win over the sample's design goals — the sample never set out to be
+>    durable. Part two of the band README's "what does Durable add" section states it exactly: against
+>    the sample, the only earned claim is that the delegation is the durable fact rather than a log
+>    written beside one.
+>
+> Attributing the port's checkpointing to the sample would let comparison (1) borrow rhetorical force
+> from comparison (2). Every cell is tagged so that cannot happen quietly. The sample-as-published
+> comparison has no fault rows, because with nothing written a kill, a restart, a second manager and an
+> outage all simply lose the process.
+
+| Dimension | `baseline/` — port + checkpoint store | `durable/` | Measured against |
+| --- | --- | --- | --- |
+| **Where state lives** | **A workflow checkpoint directory.** `FileSystemJsonCheckpointStore` writes one JSON file per `WorkflowCheckpoint` plus `index.jsonl`, opened with `FileShare.None`; a JSONL control-transfer log sits beside it. *This store is the port's addition, not the sample's.* `baseline/BaselineHandoff.cs:162` | **An app store: a durable task with four per-turn document kinds.** One JSONL `DurableStore` at `store.jsonl` holds `band-f.delegation` (the task, whose checkpoint names the holder), `band-f.routing`, `band-f.user-turn`, `band-f.specialist-output` and `band-f.wire`, plus the entries and task records. `durable/Documents.cs:16`, `durable/Program.cs:99` | port + checkpoint store |
+| **Survives process death** | **Partially — and the recovery does not finish.** The checkpoint is written and the `resume` mode opens the newest one, but every resume of a workflow that still has work outstanding aborts in `Microsoft.Agents.AI.Workflows` with *"Expected exactly one update for key 'SharedState'"*. *"The recovery did not complete: attempt 1 aborted … attempt 2 aborted …"* — [`faults/results/baseline/kill-mid-delegation.json`](../real-world-scenarios/band-f-multi-agent/faults/results/baseline/kill-mid-delegation.json) | **Yes, from the committed checkpoint.** A new process reads `checkpoint.holder` and gives control to that agent — *"A new process reopened the same store and gave control to return_agent — not back to the coordinator — and its first committed action was return_agent produced turn 0 at e45"*; `verify` exited 0 — [`faults/results/durable/kill-mid-delegation.json`](../real-world-scenarios/band-f-multi-agent/faults/results/durable/kill-mid-delegation.json) | port + checkpoint store |
+| **Mid-turn failure behaviour** | **Lost — the resume cannot complete.** Killed with `SIGKILL` while `return_agent` held control; two recovery attempts aborted on the same framework error. The state stops at `return_agent`; *"the port's resume has no way past it."* The port's own log printed `resumed with triage_agent holding control` while the checkpoint named `return_agent` — the evidence reports from state, not the log — [`faults/results/baseline/kill-mid-delegation.json`](../real-world-scenarios/band-f-multi-agent/faults/results/baseline/kill-mid-delegation.json) | **Resumed from checkpoint, by re-entering the specialist's phase.** The attempt is committed and the model is not asked twice; *"this is a resumed attempt: return_agent was named by the checkpoint, not by a fresh routing decision"* (`durable/evidence/run-stdout.txt` stage 2). **Not continued:** the layer cannot resume a half-finished model call, and does not claim to — [`faults/results/durable/kill-mid-delegation.json`](../real-world-scenarios/band-f-multi-agent/faults/results/durable/kill-mid-delegation.json) | port + checkpoint store |
+| **Duplicate delivery** | **`not exercised` — the variant cannot complete the comparison.** *"The request the kill interrupted was delivered a second time … The delivery could not be completed … and the port refuses a fresh run over a directory that already holds one, so there is no completed run to compare counts in."* Recorded as `not exercised`, and *"It is not a durability win for the baseline — its recovery is broken, not safe"* — [`faults/results/baseline/duplicate-delivery.json`](../real-world-scenarios/band-f-multi-agent/faults/results/baseline/duplicate-delivery.json) | **Not doubled — on the per-turn count only, and it is not a win.** *"turn 3 committed one output version and nothing was reused, so the request arrived twice and the specialist's tool ran once"* (`outputVersionsForTurn3: 1`, `reuseRecordsForTurn3: 0`). What stopped it was the committed output, **not an identity for the request**: *"the variant has no record that a delivery is a repeat."* The third delivery to the finished run shows only that **a finished run is a no-op** — [`faults/results/durable/duplicate-delivery.json`](../real-world-scenarios/band-f-multi-agent/faults/results/durable/duplicate-delivery.json) | port + checkpoint store |
+| **Concurrent clients** | **Refused: the second manager — a tie.** *"It was refused by the framework checkpoint store's lock at open, after 0ms and before it could commit anything … The refusal names no pid"*; the first kept control — [`faults/results/baseline/competing-managers.json`](../real-world-scenarios/band-f-multi-agent/faults/results/baseline/competing-managers.json) | **Refused: the second manager — a tie.** *"It was refused by the store's single-writer lock at open, after 1000ms … The refusal names the pid that holds the lock, so the outcome is a defined winner rather than first-past-the-post."* Same outcome, better error — [`faults/results/durable/competing-managers.json`](../real-world-scenarios/band-f-multi-agent/faults/results/durable/competing-managers.json) | port + checkpoint store |
+| **Store outage** | **No half-transition; the store's path stopped resolving.** *"The moved index survived intact — 20 index entr(y\|ies), 0 torn, 20 whose checkpoint document is present … the checkpoint its last entry names holds triage_agent in control. There is no half-transition in the surviving index."* The live path afterwards holds no index — [`faults/results/baseline/store-outage.json`](../real-world-scenarios/band-f-multi-agent/faults/results/baseline/store-outage.json) | **Failed safely, with a split store — a limitation, not a pass.** Nothing lost or torn, but *"The live process exited on its own — it did not notice: it reopened the original path and finished the run there … The state is now in two files and nothing merged them … Control was not lost; it was forked."* The live path ends at 214 record(s); the moved file keeps the 36 record(s) it had at the outage — [`faults/results/durable/store-outage.json`](../real-world-scenarios/band-f-multi-agent/faults/results/durable/store-outage.json) | port + checkpoint store |
+| **Offline capability** | **`not exercised` — no offline claim in either direction.** Neither variant is documented or measured for network loss and no run drove one. The baseline needs an OpenAI-compatible endpoint for every turn; the Durable variant needs the SDK's runtime for a live turn. Not tested, so not claimed. | **`not exercised` — same reason**, and a resumed *process* is not an offline *turn*: the fault rows use scripted routing and resume against the SDK's runtime. `not exercised`, not "partial". | neither — not measured |
+| **Recovery cost** | **A resume that runs and cannot finish.** `./run.sh --resume <checkpoint-dir>` opens the newest checkpoint, prints the holder from its own log, and aborts on the framework's `SharedState` error; the harness retried twice and both attempts aborted. The work is not recovered — [`faults/results/baseline/kill-mid-delegation.json`](../real-world-scenarios/band-f-multi-agent/faults/results/baseline/kill-mid-delegation.json), [`faults/results/baseline/restart-after-checkpoint.json`](../real-world-scenarios/band-f-multi-agent/faults/results/baseline/restart-after-checkpoint.json) | **Restart the process; no manual step.** `./resume.sh` (or `run.sh --resume`) reads `checkpoint.holder` and gives control to that agent; the recorded fault needed one process and `verify` passed — [`faults/results/durable/restart-after-checkpoint.json`](../real-world-scenarios/band-f-multi-agent/faults/results/durable/restart-after-checkpoint.json). Caveat: a split store needs an operator to notice it — the `store-outage` row | port + checkpoint store |
+| **Operational burden** | **A checkpoint directory plus the port's own log.** `CHECKPOINT_DIR` holds `index.jsonl`, one JSON file per checkpoint and `control-transfer.jsonl`; the log is *"derived, not authoritative"* and the two can disagree — the fault evidence found a case where they do. The store takes an exclusive `FileShare.None` handle on `index.jsonl`, so one process per directory. *This is the port's addition.* | **One store file, a `.lock` and a `.lock.owner` sidecar.** `store.jsonl` must be backed up, versioned and role-managed; the JSONL provider takes an exclusive lock so two processes cannot serve one store. Every control record and document version is kept as a separate record, so one run leaves more state to back up than a checkpoint directory does. No Azure resource and no rotated secret, plus the Copilot sign-in the live stages need | port + checkpoint store |
+| **Lines of custom durability code** | **145 of 310 code lines** in `baseline/BaselineHandoff.cs` (444 `wc -l`). The checkpoint store open, the `resume` mode, the log readers, `ControlLog`, `ControlRecord`, the checkpoint event and the handoff pairing. The remaining 165 lines are the sample's orchestration. `wc -l` command and per-region split: band README §*Lines of custom durability code* | **724 of 1129 code lines (64%)** in 7 files, 1747 `wc -l`. `Contracts.cs` (211/97), `DelegationTask.cs` (453/294), `Documents.cs` (87/45), `Program.cs` (491/367), `Router.cs` (215/150), `Script.cs` (51/11), `SpecialistRunner.cs` (239/165). Per-file split and region table: band README §*Per-file split* | port + checkpoint store |
+
+### Fault outcomes, transcribed
+
+Five faults, both variants, ten controls. Rendered from `faults/results/*/*.json` by
+`faults/lib/summarise.py` into
+[`summary.txt`](../real-world-scenarios/band-f-multi-agent/faults/results/summary.txt). All 20 runs —
+5 faults × 2 variants plus 10 controls — exited 0, results produced at commit `272baac`. The holder in
+every row is read from committed **state** (the Durable variant's `checkpoint.holder`; the baseline's
+newest framework checkpoint), never from a log line. Every row here is measured against **the port's
+checkpoint store**, because the sample as published has no checkpoint to fault.
+
+| Fault | `baseline/` — port + checkpoint store | `durable/` | Result files |
+| --- | --- | --- | --- |
+| `kill -9` mid-delegation | **recovery failed; control stops at `return_agent`** | **resumed by `return_agent`** | [`baseline`](../real-world-scenarios/band-f-multi-agent/faults/results/baseline/kill-mid-delegation.json) · [`durable`](../real-world-scenarios/band-f-multi-agent/faults/results/durable/kill-mid-delegation.json) |
+| restart after a committed checkpoint | **restart failed; control stops at `refund_agent`** | **resumed by `refund_agent`** | [`baseline`](../real-world-scenarios/band-f-multi-agent/faults/results/baseline/restart-after-checkpoint.json) · [`durable`](../real-world-scenarios/band-f-multi-agent/faults/results/durable/restart-after-checkpoint.json) |
+| duplicate delivery | **`not exercised`** | **not doubled — per-turn count only** | [`baseline`](../real-world-scenarios/band-f-multi-agent/faults/results/baseline/duplicate-delivery.json) · [`durable`](../real-world-scenarios/band-f-multi-agent/faults/results/durable/duplicate-delivery.json) |
+| two competing managers | **refused: the second manager** | **refused: the second manager** | [`baseline`](../real-world-scenarios/band-f-multi-agent/faults/results/baseline/competing-managers.json) · [`durable`](../real-world-scenarios/band-f-multi-agent/faults/results/durable/competing-managers.json) |
+| store unavailable mid-run | **no half-transition; the store's path stopped resolving** | **failed safely, with a split store** | [`baseline`](../real-world-scenarios/band-f-multi-agent/faults/results/baseline/store-outage.json) · [`durable`](../real-world-scenarios/band-f-multi-agent/faults/results/durable/store-outage.json) |
+
+Five rows, and they are **not five wins**. Read in this order:
+
+- **Two rows are ties on observed behaviour** (`competing-managers`, and — in outcome terms — the
+  duplicate row's comparison, which the baseline cannot complete at all). `competing-managers` refuses
+  the second manager in both variants; the Durable variant's refusal names the pid holding the lock and
+  the framework's does not. That is a better error message, not a different outcome.
+- **`duplicate-delivery` is not a win, and its row is the easiest one in this file to misread.** The
+  `not doubled` verdict rests entirely on the per-turn count — one output version and zero reuse records
+  for the re-delivered turn. What stopped the second process was finding that turn's output already
+  committed, not an identity for the request: *"the variant has no record that a delivery is a repeat."*
+  The third-delivery probe proves only that a finished run is a no-op. Neither the row nor the probe
+  shows deduplication. The baseline's `not exercised` is not a baseline win either — its recovery is
+  broken, not safe.
+- **`store-outage` is the Durable variant's weakest row.** The baseline keeps a readable index and no
+  half-transition; the Durable variant survives but forks its store into two files and says nothing.
+  "Fails safe" is not "fails well", and both rows say so in those words.
+- **Then the wins, and there are two:** `kill-mid-delegation` and `restart-after-checkpoint`, the two
+  rows about interruption. Both come from one property — the checkpoint names the holder *and* the
+  resume can restore it — which the port's checkpoint store has the first half of and not the second.
+
+### The `baseline/` rows' attribution problem, stated where the rows are
+
+Two of the five baseline rows disagree with themselves: the port's resume prints `resumed with
+triage_agent holding control` while the framework's queued handoff names `return_agent`
+(`kill-mid-delegation`) or `refund_agent` (`restart-after-checkpoint`). The evidence reports from the
+checkpoint, so the table's holder is the checkpoint's, and the disagreement is recorded rather than
+smoothed over — `faults/README.md` §"How control is attributed" says why the log is not used. That is
+F3's judgement call, and a reader who trusts the printed line gets a different answer from one who reads
+the store.
+
+### Where this band's numbers stop
+
+- **Nothing here measures the sample as published on a fault.** With no checkpoint, there is no store to
+  kill against, and the four fault rows would all read "the process died". The comparison against the
+  sample is the design comparison in part two of the band README, not a fault table.
+- **The kills land between commits, not mid-write.** The band does not demonstrate the store's torn-write
+  crash safety; it demonstrates resume between two commits. `durable/README.md` §"The kill is a real kill,
+  and it is not a crash-mid-write test" is explicit about that.
+- **No cell speaks to model quality, model non-determinism, or cost.** The fault rows use scripted
+  routing and make no model call; `BAND_F_FLIP` is a controlled stand-in for a second, different answer,
+  not evidence that a model would give one. The live-model evidence is one run of `claude-sonnet-5` and
+  is not killed. No token, latency or dollar figure is recorded.
+- **`offline capability` is `not exercised` on both sides.** No run lost the network.
+
 ## Currency
 
 | | |
@@ -326,10 +440,11 @@ fail), so the two injections stop at the same business window but not the same p
 | Band A measurements recorded | 2026-11-04 (variant evidence) and 2026-11-05 (fault evidence) |
 | Band B measurements recorded | 2026-11-05 (variant evidence, `durable/evidence/run-all.sh`) and 2026-11-06 (fault evidence, `faults/run-all.sh`, 21 runs, 03:33:43Z–03:52:17Z at `32770e70b581`) |
 | Band C measurements recorded | 2026-11-05 — variant evidence (`durable/evidence.sh`, two identical runs) and fault evidence (`faults/run-all.sh`, 24 runs, 18:04:06Z–18:05:02Z) |
-| Machine | macOS arm64, .NET SDK 10.0.402; GitHub Copilot CLI 1.0.105 for Bands A and B (Band B's fault harness used the CLI bundled with the SDK build, 1.0.103, because the 1.0.105 install refused `gpt-5.1-codex-mini` as unavailable); Band C needs no CLI — it makes no model call |
+| Band F measurements recorded | 2026-11-05 — baseline run and durable `evidence.sh` (including its live-model stage against `claude-sonnet-5`), and fault evidence (`faults/run-all.sh`, 20 runs, produced at commit `272baac`). Baseline rows used an OpenAI-compatible endpoint; durable fault rows used scripted routing and made no model call |
+| Machine | macOS arm64, .NET SDK 10.0.402; GitHub Copilot CLI 1.0.105 for Bands A and B (Band B's fault harness used the CLI bundled with the SDK build, 1.0.103, because the 1.0.105 install refused `gpt-5.1-codex-mini` as unavailable); Bands C and F fault rows need no CLI — neither makes a model call there (Band F's *variant* evidence did call a model) |
 | Durable layer pinned at | the `dev` tip the scenario was built against — `lib/Copilot.Durable.csproj` reads `0.5.0`, which is **not yet released** (no `v0.5.0` tag, no CHANGELOG section). Per the program epic's versioning rule, the scenario's feature PR lands pinned to the release that cuts it; until then these rows describe `dev`, not a published package |
-| Rows added since | Band A (#147), Band C (#157), then Band B (#152) on 2026-11-06. **Band B needed no layer change**: `DurableStore.Create`'s exclusive `StoreFileLock` already refused a second writer, and the `concurrent-clients` fault showed the *variant* was the half that was missing — it caught the refusal and reports exit 4 now (`durable/ralph-loop-durable.cs:114-128`). Band C (#157), 2026-11-05, needed `Transaction.Memo` in all three ports (filed as #201) and a silent rollback fix (`UndoLog.Restore` resetting the baseline map); both are on `dev` with tests that fail without them (`durable/README.md` §*What `lib/Durable.cs` could not express*) |
-| **Fidelity differs by band** | Bands A and B ran real agent turns against a signed-in CLI; Band B's jobs are live model work over real files, so its counts are one model's and not reproducible byte for byte in their *numbers* (its *products* are, per the run-equivalence rows). **Band C's is a local reproduction of an Actions workflow and never ran the hosted Action** — see the caveat on its section. A reader comparing sections is comparing kinds of evidence, not configurations of one experiment |
+| Rows added since | Band A (#147), Band C (#157), then Band B (#152) and Band F (#174) on 2026-11-06. **Band B needed no layer change**: `DurableStore.Create`'s exclusive `StoreFileLock` already refused a second writer, and the `concurrent-clients` fault showed the *variant* was the half that was missing — it caught the refusal and reports exit 4 now (`durable/ralph-loop-durable.cs:114-128`). **Band F needed no layer change either** — documentation only, written against evidence F1–F3 already produced at `272baac`. Band C (#157), 2026-11-05, needed `Transaction.Memo` in all three ports (filed as #201) and a silent rollback fix (`UndoLog.Restore` resetting the baseline map); both are on `dev` with tests that fail without them (`durable/README.md` §*What `lib/Durable.cs` could not express*) |
+| **Fidelity differs by band** | Bands A and B ran real agent turns against a signed-in CLI; Band B's jobs are live model work over real files, so its counts are one model's and not reproducible byte for byte in their *numbers* (its *products* are, per the run-equivalence rows). **Band C's is a local reproduction of an Actions workflow and never ran the hosted Action** — see the caveat on its section. **Band F has two baselines, and each of its cells names which one it is measured against.** A reader comparing sections is comparing kinds of evidence, not configurations of one experiment |
 
 A band's rows are re-measured, not carried forward, when its scenario changes. If a later change to
 `lib/Durable.cs` invalidates a cell, the fix is a new run of `faults/run-all.sh` and a re-transcription,
