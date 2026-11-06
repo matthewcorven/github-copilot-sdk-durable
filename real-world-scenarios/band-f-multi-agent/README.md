@@ -323,6 +323,106 @@ These are observations from building and running the port, not criticisms of the
 - **There is no retry, timeout or backoff around the model calls.** A transient provider error fails
   the process and leaves the last checkpoint as the restart point.
 
+## What Durable adds over a workflow checkpoint file?
+
+The question this band exists to answer, and it has **two** answers because there are two baselines.
+The published sample has no checkpointing at all, so a comparison against "the sample" and a
+comparison against "the sample plus the port's checkpoint store" are comparisons against different
+things. They are answered separately below and must not be quoted as one.
+
+### Part one — against the port's checkpoint store
+
+This is the interesting comparison, because the baseline here really does have a workflow checkpoint
+file: `FileSystemJsonCheckpointStore` writes one JSON file per checkpoint plus `index.jsonl`, and the
+port's `resume` mode reopens the newest one. That mechanism already answers *who was speaking* — the
+fault evidence reads the holder out of it for every baseline row. A cell that treats "the baseline has
+no durability" as the gap has misread this variant.
+
+What the checkpoint store does **not** do is put the *domain* on the same footing as the position:
+
+- **The checkpoint is the workflow's state, not the domain's.** Restoring one restores the
+  conversation and the executor position. It does not know that a return for order 1234 was initiated
+  as a fact separate from the transcript, so a crash between the tool result and the next checkpoint
+  has nowhere to put that fact. In the Durable variant one commit writes the specialist's output
+  document, the control record that says it exists and the checkpoint that lets the turn settle;
+  `verify` requires the output and the record to share an entry id and a killed attempt to leave *no*
+  output at all. In the baseline, the port's own README calls the control log "derived, not
+  authoritative" — the same interval in which a log and a store can disagree does not exist here.
+- **The checkpoint does not pin the model's answer.** A position does not record which specialist the
+  model named for a turn. Here the routing decision is committed before it is acted on and read by
+  every later attempt, so a resume that would answer differently does not (`evidence.sh` stage 3, and
+  stage 3c for what happens when the read is skipped).
+
+The fault evidence for the two rows where that matters:
+
+| Fault | Baseline (port + checkpoint store) | Durable | Measured against |
+| --- | --- | --- | --- |
+| `kill-mid-delegation` | recovery failed — the resume aborts in the framework (*"Expected exactly one update for key 'SharedState'"*) and control stops at `return_agent` | resumed — a new process gives control to `return_agent`, whose first committed action is turn 0's output at `e45` | port + checkpoint store |
+| `restart-after-checkpoint` | restart failed — same abort; control stops at `refund_agent` | resumed by `refund_agent`; the first committed action is turn 1's output at `e68`; `verify` held | port + checkpoint store |
+
+Both baseline cells are *failures to recover*, not "no durability": the checkpoint was written and the
+port tried to resume from it. The comparison is therefore "a checkpoint file whose resume cannot
+finish" against "a store whose resume does".
+
+### Part two — against the sample as published
+
+Against the sample as published, Durable adds **nothing directly**. `handoff_simple.py` has no
+checkpoint manager — `grep -ci checkpoint` returns 0 for both vendored Python files — so there is no
+baseline durability mechanism to beat. What the band demonstrates about kill and resume is a property
+this project added, first in the port (F1) and then in a different place here (F2). The sample is a
+delegation baseline, not a durable-execution baseline; it never set out to be durable.
+
+The claim that *is* earned against the sample is narrower and worth stating exactly: **the delegation
+is the durable fact, rather than a log written beside one.** In the sample, "who holds the
+conversation" is an executor position inside one running workflow, and the port's log observes it from
+outside. Here the control record and the state it describes are written in one transaction. That is a
+real difference in design — and it is not a win over the sample's design goals, because surviving a
+process death was not one of them. A reader who takes part two as "we do what the sample did, but
+better" has read it backwards.
+
+## Where the Durable variant is worse
+
+Stated here rather than left to the other document, because a comparison that only lists wins is not
+evidence. All five faults are in `faults/README.md`; these are the rows and costs that count against
+this variant:
+
+- **`store-outage` splits the store.** The file is moved aside under a live handle; the process does
+  not notice, reopens the original path and finishes there. Nothing committed is lost and nothing is
+  torn, but the state is now in two files — 214 record(s) at the live path and the 36 the moved file held —
+  and nothing merges them. An operator who restores the moved file *replaces* the post-outage run.
+  The baseline's row in the same fault records no half-transition and a surviving index whose last
+  entry still names `triage_agent`; "fails safe" is not "fails well", and neither row is a pass.
+- **`competing-managers` is a tie.** Both variants refuse the second coordinator at open — the
+  baseline in 0 ms via the framework's `index.jsonl` lock, the Durable variant in 1000 ms via
+  `store.jsonl.lock`. The Durable refusal names the pid holding the lock; the framework's does not.
+  That is a better error message, not a different outcome.
+- **`duplicate-delivery` is not a win.** The row reads **not doubled**, and its basis is narrow: on
+  the per-turn count, turn 3 committed one output version and zero reuse records for the re-delivered
+  request. What stopped the second process was finding the turn's output already committed — not an
+  identity for the request. The variant has no record that a delivery is a repeat. The third-delivery
+  probe to the finished run (`resume: the run is already finished; there is nothing to resume.`) shows
+  only that **a finished run is a no-op**; it says nothing about deduplication and is not part of the
+  claim. The baseline's row is `not exercised`: its duplicate delivery was observed but its recovery
+  cannot complete, so there is no completed run to count in. That is not a baseline win either — its
+  recovery is broken, not safe.
+- **The store's single-writer lock rules out concurrency by construction.** One holder at a time is
+  the intended shape, but it is also a limit: two coordinators cannot share a store, and there is no
+  queue or hand-off between them. The baseline's framework store has the same restriction.
+- **No fork is demonstrated.** `lib/Durable.cs` can fork a conversation at an entry and the epic lists
+  forking as a candidate advantage. It is not shown here, so it is not claimed.
+- **No retry around the model calls.** A transient provider failure fails the run; the last checkpoint
+  is the restart point. The recovered attempt is a new process, not a retry loop. The baseline's port
+  has the same gap.
+- **The specialist's turn is re-entered, not continued.** A crash inside a model turn leaves the
+  attempt recorded and nothing it produced, and the resume asks again. The layer cannot continue a
+  half-finished model turn. The routing *decision* is memoized because it is cheap and must not change;
+  the model call is not, because it cannot be resumed at all.
+- **The script is not the sample's script.** Two turns differ (the opening greeting dropped, the
+  closing line folded into a request), both because a turn this coordinator cannot delegate is a turn
+  it cannot serve. The baseline runs the sample's script with one inserted turn; this variant does not.
+- **It costs more code.** 724 durability-specific lines against the port's 145, in the matrix row's
+  counting rule (§*Lines of custom durability code*).
+
 ## The Durable variant
 
 `durable/` is the sibling of `baseline/`: the same four agents and the same three tools with the same
@@ -354,3 +454,290 @@ two honest-comparison paragraphs. Three things are worth knowing before reading 
 
 `baseline/` is unmodified by this work. Its port's checkpointing and its control-transfer log are its
 own additions, and the variant's README treats them as such.
+
+## The five faults, transcribed
+
+Run against **both** variants, each fault with a `--fault-not-injected` control. Every cell below is the
+`outcome` field of `faults/results/<variant>/<fault>.json`; `faults/results/summary.txt` is rendered
+from those files by `faults/lib/summarise.py`, which fails if a variant is missing a fault's result or
+its control's. All 20 runs — 5 faults × 2 variants plus 10 controls — exited 0 (`summary.txt`
+§*Harness status*); a non-zero exit is a harness error, never a scenario losing work. Harness detail,
+the injection points and the controls are in `faults/README.md`.
+
+| Fault | `baseline/` | `durable/` | Measured against | Result files |
+| --- | --- | --- | --- | --- |
+| `kill -9` mid-delegation | **recovery failed; control stops at `return_agent`** | **resumed by `return_agent`** | port + checkpoint store | [`baseline`](faults/results/baseline/kill-mid-delegation.json) · [`durable`](faults/results/durable/kill-mid-delegation.json) |
+| restart after a committed checkpoint | **restart failed; control stops at `refund_agent`** | **resumed by `refund_agent`** | port + checkpoint store | [`baseline`](faults/results/baseline/restart-after-checkpoint.json) · [`durable`](faults/results/durable/restart-after-checkpoint.json) |
+| duplicate delivery | **`not exercised`** | **not doubled** — per-turn count only, not a win | port + checkpoint store | [`baseline`](faults/results/baseline/duplicate-delivery.json) · [`durable`](faults/results/durable/duplicate-delivery.json) |
+| two competing managers | **refused: the second manager** | **refused: the second manager** | port + checkpoint store | [`baseline`](faults/results/baseline/competing-managers.json) · [`durable`](faults/results/durable/competing-managers.json) |
+| store unavailable mid-run | **no half-transition; the store's path stopped resolving** | **failed safely, with a split store; resumed at `return_agent`** | port + checkpoint store | [`baseline`](faults/results/baseline/store-outage.json) · [`durable`](faults/results/durable/store-outage.json) |
+
+**No row in this table is measured against the sample as published**, because the sample has no
+checkpoint to fault: with nothing written, a kill, a restart, a second manager and an outage all
+simply lose the process. The sample's own row is the absence of a row, and part two above is where it
+is stated.
+
+What each cell says, in the result files' own words. The holder in every row is read from **state** —
+the Durable variant's `checkpoint.holder` in its JSONL store, the baseline's newest framework
+checkpoint — never from a log line:
+
+- **`kill-mid-delegation`, baseline — recovery failed.** Killed with `SIGKILL` while `return_agent`
+  held control and a handoff was queued at that agent's executor. The recovery did not complete:
+  attempt 1 and attempt 2 both aborted with *"Expected exactly one update for key 'SharedState'"*.
+  The first agent to act in the recovered process was `return_agent`, so control after recovery is
+  `return_agent` — read from the checkpoint, not from the port's log.
+- **`kill-mid-delegation`, durable — resumed.** *"A new process reopened the same store and gave
+  control to return_agent — not back to the coordinator — and its first committed action was
+  return_agent produced turn 0 at e45."* `verify` exited 0.
+- **`restart-after-checkpoint`, baseline — restart failed.** Stopped with `SIGTERM` at turn 1 delegated
+  to `refund_agent` with nothing produced. The restart gave control to `refund_agent`, and then
+  aborted on the same framework error. The port's own resume line named `triage_agent`.
+- **`restart-after-checkpoint`, durable — resumed.** *"The restarted process read that checkpoint,
+  took control as resumed by refund_agent, and its first committed action was refund_agent produced
+  turn 1 at e68 … verify held every claim, so nothing the checkpoint recorded was written twice."*
+- **`duplicate-delivery`, baseline — `not exercised`.** *"The request the kill interrupted was
+  delivered a second time … The delivery could not be completed … and the port refuses a fresh run
+  over a directory that already holds one, so there is no completed run to compare counts in."* The
+  row is recorded as `not exercised` rather than as a comparison. It is not a durability win for the
+  baseline — its recovery is broken, not safe.
+- **`duplicate-delivery`, durable — not doubled.** *"On the per-turn count, which is the finding, turn
+  3 committed one output version and nothing was reused, so the request arrived twice and the
+  specialist's tool ran once."* The observations are `outputVersionsForTurn3: 1` and
+  `reuseRecordsForTurn3: 0`. *"What stopped it was that committed output and not an identity for the
+  request: the variant has no record that a delivery is a repeat."* The third delivery to the finished
+  run is one separate fact — *"the run is already finished; there is nothing to resume"* — and shows
+  only that a finished run is a no-op. **Read as a green cell, this row is wrong.**
+- **`competing-managers`, baseline — refused.** *"It was refused by the framework checkpoint store's
+  lock at open, after 0ms and before it could commit anything … The refusal names no pid."*
+- **`competing-managers`, durable — refused.** *"It was refused by the store's single-writer lock at
+  open, after 1000ms … The refusal names the pid that holds the lock, so the outcome is a defined
+  winner rather than first-past-the-post."* Same outcome, better error.
+- **`store-outage`, baseline — no half-transition.** *"The moved index survived intact — 20 index
+  entr(y|ies), 0 torn, 20 whose checkpoint document is present … the checkpoint its last entry names
+  holds triage_agent. There is no half-transition in the surviving index."* The `entr(y|ies)` is the
+  harness's literal text: `faults/store-outage.sh:172` prints that placeholder unrendered instead of
+  "entries". Quoted as produced rather than tidied; the count is 20 entries.
+- **`store-outage`, durable — failed safely, with a split store.** *"The live process exited on its
+  own — it did not notice: it reopened the original path and finished the run there … The state is now
+  in two files and nothing merged them … Control was not lost; it was forked, which is the failure
+  this row records."* A limitation, not a pass.
+
+### The judgement call in the two `baseline/` recovery rows
+
+On both baseline rows the port's own resume line and the framework's queued handoff disagree about who
+holds control: the log prints `resumed with triage_agent holding control`, while the checkpoint names
+`return_agent` (`kill-mid-delegation`) or `refund_agent` (`restart-after-checkpoint`), and the first
+agent to act after recovery is that specialist. **The evidence reports from state, not from the log**,
+so the table's holder is the checkpoint's. The disagreement is real and is not smoothed over: the
+port's README already says its control log is "derived, not authoritative", and F3 found the case where
+that matters. A reader who trusts the printed line gets a different answer from a reader who reads the
+store, and only one of them is the state.
+
+### The before/after controls, and where they prove nothing
+
+Each control is the same script with the injection removed, so a difference between the pair is
+attributable to the fault. `lib/summarise.py` flags a pair whose outcome, holder *and* holder at the
+injection point all match — such a pair is indistinguishable and proves nothing. Transcribed from
+`results/summary.txt` §*Before/after controls*:
+
+| Fault | Variant | Control | Fault | Pair |
+| --- | --- | --- | --- | --- |
+| `kill-mid-delegation` | baseline | completed in one process, `triage_agent` | recovery failed, `return_agent` | differs in outcome and holder |
+| `kill-mid-delegation` | durable | completed in one process, `return_agent` | resumed, `return_agent` | same holder and injection point; differs in that one finishes and one resumes |
+| `restart-after-checkpoint` | baseline | restart failed, `triage_agent` | restart failed, `refund_agent` | outcome same, **holder differs** |
+| `restart-after-checkpoint` | durable | resumed, `refund_agent` | resumed, `refund_agent` | same outcome and holder; **differs in where it stopped** — the control stopped at phase `route` with `triage_agent` at the injection, the fault at `specialist` with `refund_agent` |
+| `duplicate-delivery` | baseline | delivered once, `triage_agent` | not exercised, `—` | differs |
+| `duplicate-delivery` | durable | delivered once, `return_agent` | not doubled, `return_agent` | same holder and injection point; the per-turn count is what the pair turns on |
+| `competing-managers` | baseline | one manager completed, `triage_agent` | refused, `refund_agent` | differs in outcome and holder |
+| `competing-managers` | durable | one manager completed, `return_agent` | refused, `return_agent` | same holder and injection point; the refusal is what the pair turns on |
+| `store-outage` | baseline | completed, `triage_agent` | no half-transition, `triage_agent` | same outcome and holder; the injection point differs (`return_agent` at the injection in the control, `triage_agent` in the fault) |
+| `store-outage` | durable | completed, `return_agent` | failed safely, `return_agent` | same holder and injection point; the split store is what the pair turns on |
+
+No pair is flagged as indistinguishable: the one that comes closest — the durable
+`restart-after-checkpoint` pair — differs in the phase it stopped in, and the evidence for each names
+it. The pairs whose holder does not change are still evidence, because in each the fault leaves a store
+state the control does not (a refused process, a moved file, an uncommitted attempt) and the result's
+`evidence` field names it. What they do not do is prove that the holder changed because of the fault:
+on those rows it did not change, and the row says so.
+
+### Recovery cost, measured on both sides
+
+| Variant | What an operator does after a mid-delegation kill |
+| --- | --- |
+| `baseline/` | Run `./run.sh --resume <checkpoint-dir>`. The port opens the newest checkpoint, prints the holder from its own log, and the framework **aborts** with *"Expected exactly one update for key 'SharedState'"*. The fault harness retried twice and both attempts aborted; the work is not recovered. |
+| `durable/` | Run `./resume.sh` (or `run.sh --resume`) against the store. The process reads `checkpoint.holder` and gives control to that agent; in the recorded fault, one process sufficed and `verify` passed. No manual repair, no flag to set. |
+
+The Durable variant's cost is smaller only because its resume finishes. The baseline's failure is not a
+missing command — the command exists and runs — it is that the workflow cannot be restored into a
+running graph that still has work outstanding.
+
+## Lines of custom durability code
+
+Measured with `wc -l` on 2026-11-05, in this directory:
+
+```bash
+wc -l baseline/BaselineHandoff.cs
+wc -l durable/Contracts.cs durable/DelegationTask.cs durable/Documents.cs durable/Program.cs \
+      durable/Router.cs durable/Script.cs durable/SpecialistRunner.cs
+```
+
+| Variant | Files counted | `wc -l` total | Code lines | Durability-specific | Split from |
+| --- | --- | ---: | ---: | ---: | --- |
+| `baseline/` | `baseline/BaselineHandoff.cs` (444) | **444** | **310** | **145** — the checkpoint store open, the resume mode, the log readers, `ControlLog`, `ControlRecord`, the checkpoint event and the handoff pairing | §*Per-file split* below; region list in the same section |
+| `durable/` | 7 files: `Contracts.cs` (211), `DelegationTask.cs` (453), `Documents.cs` (87), `Program.cs` (491), `Router.cs` (215), `Script.cs` (51), `SpecialistRunner.cs` (239) | **1747** | **1129** | **724** — 64% of the variant's code lines | §*Per-file split* below |
+
+Three numbers per variant, and the difference matters:
+
+- **`wc -l`** is every line of the files listed, blank lines and comments included. This is the literal
+  measurement; the file list and the command are above so it can be repeated. The two variants are not
+  the same size as each other and were never meant to be: the baseline is one file-based app, the
+  Durable variant is a project with seven source files.
+- **Code lines** is non-blank, non-comment lines, which is the population the durability split is taken
+  from. Both totals were computed with the same rule, and the region table below names every range so a
+  reader can re-add them.
+- **Durability-specific** is a per-region judgement, written down rather than estimated. A line is
+  durability-specific when removing it would remove a guarantee the variant exists to show: a document
+  or checkpoint definition, a guarded commit, a resume path, the memo read, the seam, the store open,
+  the verifier. It is application logic when it would be the same in any version of the agent: the
+  prompts, the tool definitions and their result strings, the scripted user, the routing keywords, the
+  command line. A reader who disagrees with a call changes the split, not the `wc -l` total.
+
+### Per-file split
+
+`baseline/BaselineHandoff.cs` — 444 `wc -l`, 310 code lines, **145 durability / 165 application**:
+
+| Region | Lines | Kind | Code lines |
+| --- | --- | --- | ---: |
+| package directives | `:19-21` | application | 3 |
+| `using` directives | `:23-32` | application | 10 |
+| endpoint and model configuration | `:34-39` | application | 6 |
+| control-log path | `:43-44` | durability | 2 |
+| checkpoint-directory validation | `:46-50` | durability | 5 |
+| client construction | `:52-54` | application | 3 |
+| `Agent` factory | `:58-65` | application | 8 |
+| the sample's three tools | `:69-85` | application | 15 |
+| the four agents | `:87-109` | application | 20 |
+| `BuildWorkflow` (handoff mesh + termination) | `:120-126` | application | 7 |
+| `JsonOptions` handed to `CheckpointManager` | `:130` | durability | 1 |
+| scripted responses | `:137-143` | application | 7 |
+| `agentIds` | `:145` | application | 1 |
+| `LogJsonOptions` | `:148` | durability | 1 |
+| `Mode()` | `:150` | durability | 1 |
+| usage check | `:152-156` | application | 5 |
+| `resumeSessionId` | `:160` | durability | 1 |
+| checkpoint store open + `CheckpointManager` + environment | `:162-164` | durability | 3 |
+| workflow construction | `:166` | application | 1 |
+| control-log construction | `:167` | durability | 1 |
+| startup banner | `:169-172` | application | 4 |
+| resume branch (`GetLatestCheckpointAsync`, `ResumeStreamingAsync`) | `:174-197` | durability | 22 |
+| run open | `:199` | application | 1 |
+| session boundary record | `:200` | durability | 1 |
+| session banner | `:201` | application | 1 |
+| `await using` close | `:202` | application | 1 |
+| user messages | `:205` | application | 1 |
+| resume skip block | `:210-216` | durability | 7 |
+| turn-loop head | `:218-227` | application | 9 |
+| status and stop checks | `:229-238` | application | 9 |
+| termination condition | `:243-251` | application | 9 |
+| loop tail | `:253-256` | application | 3 |
+| `SendTurnAsync` head | `:258-269` | application | 10 |
+| executor / handoff / waiting / checkpoint events | `:270-298` | durability | 24 |
+| output and error events | `:300-308` | application | 8 |
+| event-loop close | `:309` | application | 1 |
+| handoff pairing | `:313-326` | durability | 13 |
+| `PrintConversation` | `:330-355` | application | 22 |
+| log readers | `:358-379` | durability | 18 |
+| `ControlLog` | `:382-435` | durability | 37 |
+| `ControlRecord` | `:437-444` | durability | 8 |
+
+`durable/` — 1747 `wc -l`, 1129 code lines, **724 durability / 405 application**:
+
+| File | `wc -l` | Code lines | Durability | Application |
+| --- | ---: | ---: | ---: | ---: |
+| `Contracts.cs` | 211 | 97 | 72 | 25 |
+| `Documents.cs` | 87 | 45 | 45 | 0 |
+| `DelegationTask.cs` | 453 | 294 | 285 | 9 |
+| `Router.cs` | 215 | 150 | 0 | 150 |
+| `SpecialistRunner.cs` | 239 | 165 | 9 | 156 |
+| `Script.cs` | 51 | 11 | 0 | 11 |
+| `Program.cs` | 491 | 367 | 313 | 54 |
+| **Total** | **1747** | **1129** | **724** | **405** |
+
+The region table for the seven Durable files, in the same form as the baseline's:
+
+| File | Region | Lines | Kind | Code lines |
+| --- | --- | --- | --- | ---: |
+| `Contracts.cs` | prelude | `:1-3` | durability | 1 |
+| `Contracts.cs` | agent names, tool and instruction switches | `:4-37` | application | 25 |
+| `Contracts.cs` | store/task/document names | `:38-61` | durability | 8 |
+| `Contracts.cs` | phases | `:62-76` | durability | 6 |
+| `Contracts.cs` | `DelegationInput` | `:77-110` | durability | 8 |
+| `Contracts.cs` | `DelegationCheckpoint` | `:111-132` | durability | 9 |
+| `Contracts.cs` | `RoutingDecision` | `:133-146` | durability | 8 |
+| `Contracts.cs` | `SpecialistOutput` | `:147-169` | durability | 11 |
+| `Contracts.cs` | `UserTurnRecord` | `:170-176` | durability | 5 |
+| `Contracts.cs` | `WireRecord` | `:177-205` | durability | 10 |
+| `Contracts.cs` | `DelegationResult` | `:206-211` | durability | 6 |
+| `Documents.cs` | prelude | `:1-15` | durability | 2 |
+| `Documents.cs` | the four document definitions | `:16-42` | durability | 11 |
+| `Documents.cs` | `RunView` | `:43-87` | durability | 32 |
+| `DelegationTask.cs` | prelude | `:1-37` | durability | 3 |
+| `DelegationTask.cs` | fields and constructor | `:38-60` | durability | 20 |
+| `DelegationTask.cs` | `Definition()` | `:61-77` | durability | 10 |
+| `DelegationTask.cs` | `RouteAsync` (memo, routing commit, delegation commit) | `:78-201` | durability | 88 |
+| `DelegationTask.cs` | `SpecialistAsync` (attempt commit, output + record commit) | `:202-307` | durability | 79 |
+| `DelegationTask.cs` | `SettleAsync` | `:308-373` | durability | 43 |
+| `DelegationTask.cs` | `ShouldKillAsync` seam | `:374-416` | durability | 21 |
+| `DelegationTask.cs` | `KillPoint` seam | `:417-424` | durability | 7 |
+| `DelegationTask.cs` | `CompleteAsync` | `:425-432` | durability | 7 |
+| `DelegationTask.cs` | `WriteWire` | `:433-443` | durability | 7 |
+| `DelegationTask.cs` | `ConsoleLog` | `:444-453` | application | 9 |
+| `Router.cs` | whole file — the decision and its two sources | `:1-215` | application | 150 |
+| `SpecialistRunner.cs` | prelude, fields, `Install`, `ProduceAsync`, `Prompt`, `ToolFor`, `ToolResults` | `:1-112`, `:123-239` | application | 156 |
+| `SpecialistRunner.cs` | `PriorOutputs` (reads prior outputs from the store) | `:113-122` | durability | 9 |
+| `Script.cs` | whole file — the user's turns | `:1-51` | application | 11 |
+| `Program.cs` | prelude | `:1-16` | durability | 6 |
+| `Program.cs` | `Main` (store path, verb dispatch) | `:17-45` | durability | 25 |
+| `Program.cs` | `Usage` | `:46-67` | application | 18 |
+| `Program.cs` | `Unknown` | `:68-75` | application | 5 |
+| `Program.cs` | `RunAsync` (store open, task create, resume) | `:76-214` | durability | 107 |
+| `Program.cs` | `KillPoints` | `:215-232` | durability | 15 |
+| `Program.cs` | `Report` | `:233-254` | application | 18 |
+| `Program.cs` | `TurnsFrom` | `:255-272` | application | 13 |
+| `Program.cs` | `ReadWire` | `:273-293` | durability | 18 |
+| `Program.cs` | `Show` | `:294-327` | durability | 21 |
+| `Program.cs` | `Verify` | `:328-460` | durability | 94 |
+| `Program.cs` | `WithRun` | `:461-484` | durability | 20 |
+| `Program.cs` | `LogJson` | `:485-491` | durability | 7 |
+
+Read the two splits with three things in mind:
+
+- **`Router.cs` is 0 durability lines and that is a real call, not an oversight.** Routing — a model
+  call or three keywords — would exist in a version of this agent with no durable layer. What makes it
+  durable is the *commit* of the decision, and that lives in `DelegationTask.RouteAsync` and in
+  `RunView`. The split follows the guarantee, not the subject matter.
+- **`Contracts.cs`'s records are durability lines, its agent vocabulary is not.** A checkpoint type
+  disappears if the state goes elsewhere; `Agents.Tool("refund_agent")` does not.
+- **The baseline's 145 is a third of its file and the Durable variant's 724 is nearly two-thirds of
+  its**, which is the cost of the comparison stated in one sentence: the baseline is a port that added
+  a checkpoint store and a log, and the variant is a program whose control state *is* the store.
+- **Not counted:** `run.sh`, `durable/run.sh`, `durable/resume.sh`, `durable/evidence.sh`,
+  `durable/forge-missing-output.py`, `faults/**`. They present and check the variants; they are not
+  part of the agent. The vendored Python sample is not counted either: `handoff_simple.py` (314 `wc -l`)
+  and `handoff_autonomous.py` (167) are the reference, not the baseline's own code.
+
+## Currency and fidelity
+
+| | |
+| --- | --- |
+| Baseline run recorded | 2026-11-05 against `https://openrouter.ai/api/v1`, `OPENAI_MODEL=openai/gpt-4o-mini`, exit 0 (`evidence/run-stdout.txt`) |
+| Durable variant evidence recorded | 2026-11-05 — one full run of `durable/evidence.sh`, exit 0, including the live-model stage 4 against `claude-sonnet-5` (`durable/evidence/run-stdout.txt`) |
+| Fault evidence recorded | 2026-11-05 — `faults/run-all.sh`, 20 runs (5 faults × 2 variants plus 10 controls), all exit 0, produced at commit `272baac` (`faults/results/summary.txt`) |
+| Fault machine | macOS arm64, .NET SDK 10.0.402. The baseline rows also used an OpenAI-compatible endpoint; the Durable rows used the SDK's bundled runtime with `BAND_F_ROUTING=scripted`, so **the durable fault rows made no model call for routing** |
+| Durable layer pinned at | the `dev` tip the scenario was built against — `lib/Copilot.Durable.csproj` reads `0.5.0`, which is **not yet released**. Per the program epic's versioning rule, the scenario's feature PR lands pinned to the release that cuts it; until then these rows describe `dev`, not a published package |
+| **What the fault evidence does not cover** | A kill *mid-write* (the store's own crash safety). Every kill lands between two commits, after the commit it names returned. A kill against a **live model** in the Durable variant — the fault rows use scripted routing and the live stage 4 is not killed. A model that answers differently on a second attempt: `BAND_F_FLIP` is a controlled stand-in for that, not evidence of it. Model quality on either side. Cost: no token, latency or dollar figure is recorded for either variant. |
+| **Not exercised, and why** | `baseline/` `duplicate-delivery`: the second delivery happened, but the port's resume aborts and a fresh run over a used directory is refused, so there is no completed run to count in. Both variants' **offline** capability: no run lost the network and no cell measures it. |
+
+## Licence
+
+MIT. See `upstream/LICENSE` and `upstream/PROVENANCE.md`.
