@@ -3,14 +3,14 @@
   "fault": "store-outage",
   "outcome": "continued past the outage",
   "phase": "a tool result in flight; store moved aside",
-  "detail": "The store was moved while the application held it open, and the run neither refused nor stopped: exit 0, last line \"plan reports complete after 8 iteration(s).\", plan 'complete 16 0', files new after the outage [none], verifier 'pass'. A new store stands at the path ('present 304 0 iteration-complete/8') because the open handle kept writing to the moved inode. The moved file is 'present 24 0 turn-started/0'. That is the honest description: an outage the run did not turn into a failure, reported rather than folded into 'failed safely'.",
-  "evidence": "held 'out tool.execution_complete 1'; store before 'present 24 0 turn-started/0'; at the path after 'present 304 0 iteration-complete/8'; the moved file 'present 24 0 turn-started/0'; files new after the outage: [none]; plan before 'in-progress 0 16' after 'complete 16 0'; verifier 'pass'; exit 0; last line \"plan reports complete after 8 iteration(s).\"",
+  "detail": "The store was moved while the application held it open, and the run neither refused nor stopped: exit 0, last line \"plan reports complete after 8 iteration(s).\", plan 'complete 16 0', files new after the outage [none], verifier 'pass'. The writes made after the move went into the file the  renamed — a .NET FileStream follows the inode, not the name — so the moved file now holds 'present 24 0 turn-started/0', having held 'present 24 0 turn-started/0' when the move happened, and the path holds 'present 298 0 iteration-complete/8'. That is the honest description of the injection: the name the application opens by went away while the handle kept working, and the run did not turn that into a failure. It is reported as that, not folded into 'failed safely'.",
+  "evidence": "held 'out tool.execution_complete 1'; store before 'present 24 0 turn-started/0'; digests: /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/store-outage/before.digest and /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-151-work/.scratch/band-b-faults/durable/store-outage/after.digest; the store file after the run 'present 298 0 iteration-complete/8'; the moved file 'present 24 0 turn-started/0'; files new after the outage: [none]; plan before 'in-progress 0 16' after 'complete 16 0'; verifier 'pass'; exit 0; last line \"plan reports complete after 8 iteration(s).\"",
   "harness": {
     "dotnet": "dotnet",
     "model": "gpt-5.1-codex-mini",
     "command": "./faults/store-outage.sh --variant durable",
     "script": "store-outage.sh",
-    "commit": "3dcb0be2bfd6de7c2b5717e6b8f7b97773937cc3"
+    "commit": "599ec5c150fa3f3b6539e80b9d68f60e789d10fe"
   },
-  "recordedAt": "2026-11-06T01:59:19.106547+00:00"
+  "recordedAt": "2026-11-06T02:19:59.708766+00:00"
 }

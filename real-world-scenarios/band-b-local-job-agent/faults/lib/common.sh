@@ -147,17 +147,23 @@ start_variant() {
   # A run that starts a second loop needs each loop's output kept apart, so the log name is the
   # caller's to choose. The default is one log per run.
   local applog="${FAULTS_APP_LOG:-$rundir/app.log}"
+  # Extra environment for this start, as `NAME=value` words. The Durable variant's own stop seam is an
+  # environment variable, so a caller that wants to use it has to be able to hand one over. It goes through
+  # `env` rather than being spliced into the command line: an expansion is a word, not an assignment, and
+  # bash would run it as a command.
+  local runner=()
+  if [ ${#EXTRA_ENV[@]} -gt 0 ]; then runner=(env "${EXTRA_ENV[@]}"); fi
   pushd "$rundir/target" >/dev/null || return 1
   if [ "$variant" = "baseline" ]; then
     # Started by this shell, not in a subshell: `wait` must be able to report this process's status, and
     # `kill -9` must reach the application rather than a shell that has already exited.
     COPILOT_CLI_PATH="$rundir/copilot" \
     RALPH_MODEL="${FAULTS_MODEL:-gpt-5.1-codex-mini}" \
-      "$out/$binary" "$@" >"$applog" 2>&1 &
+      ${runner[@]+"${runner[@]}"} "$out/$binary" "$@" >"$applog" 2>&1 &
   else
     DURABLE_RUNTIME_PATH="$rundir/copilot" \
     RALPH_MODEL="${FAULTS_MODEL:-gpt-5.1-codex-mini}" \
-      "$out/$binary" "$@" >"$applog" 2>&1 &
+      ${runner[@]+"${runner[@]}"} "$out/$binary" "$@" >"$applog" 2>&1 &
   fi
   echo $! > "$rundir/pid"
   popd >/dev/null || true
@@ -241,6 +247,9 @@ stop_variant_keep() {
   reap_servers "$rundir"
   rm -f "$rundir/pid" "$rundir/inflight" "$rundir/release"
 }
+
+# Environment words handed to the next `start_variant`. Empty by default, reset by the caller after use.
+EXTRA_ENV=()
 
 # ── the target, as the fault and the observation see it ──────────────────────────────────────────────
 

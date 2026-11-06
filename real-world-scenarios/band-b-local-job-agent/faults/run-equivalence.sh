@@ -145,9 +145,12 @@ fi
 
 # ── 1. reference ───────────────────────────────────────────────────────────────────────────────────
 run_to_end() {
-  local dir="$1" cap="$2"
-  local old_log="${FAULTS_APP_LOG:-}"
-  FAULTS_APP_LOG="$dir/app.log"
+  local dir="$1" cap="$2" log_name="${4:-app.log}"
+  local old_log="${FAULTS_APP_LOG:-}" old_env=()
+  if [ ${#EXTRA_ENV[@]} -gt 0 ]; then old_env=("${EXTRA_ENV[@]}"); fi
+  # A third argument replaces the extra environment for this run; none leaves the caller's in place.
+  if [ "${3:-}" != "" ]; then EXTRA_ENV=("$3"); fi
+  FAULTS_APP_LOG="$dir/$log_name"
   export FAULTS_APP_LOG
   start_variant "$VARIANT" "$dir" "$cap"
   local pid="$STARTED_PID"
@@ -156,6 +159,7 @@ run_to_end() {
   reap_servers "$dir"
   rm -f "$dir/pid"
   FAULTS_APP_LOG="$old_log"
+  EXTRA_ENV=(${old_env[@]+"${old_env[@]}"})
   export FAULTS_APP_LOG
   echo "$status"
 }
@@ -186,39 +190,43 @@ REPRODUCIBLE="$(compare_product "$WORK/reference/target" "$WORK/repeat/target")"
 REPRODUCIBLE_NORMALISED="$(compare_normalised "$WORK/reference/target" "$WORK/repeat/target")"
 
 # ── 2. interrupted, then continued ─────────────────────────────────────────────────────────────────
-log "run-equivalence: interrupted run (killed between iterations)"
+log "run-equivalence: interrupted run (stopped after a committed iteration)"
 if [ "$VARIANT" = "durable" ]; then
-  # The earliest frame a process outside the run can stop at after an iteration has begun: the creation of
-  # the next iteration's conversation. `restart-after-checkpoint` measures what state the store is in
-  # there; it is `turn-started`, so the second process finds an unfinished turn. That ordering is the
-  # variant's, and it is what this test then reports.
-  FAULTS_HOLD="in:session.create"
-  FAULTS_COUNT=3
+  # The variant's own seam: it commits an iteration and then stops, by a cancellation it raises itself.
+  # That is the one stop this band can put *between* iterations — from outside the process the only
+  # reachable frame is inside the next turn (see restart-after-checkpoint) — and it unwinds rather than
+  # dying, so the store is closed and the next process opens it cleanly.
+  INTERRUPT_FRAME="STOP_AFTER_ITERATION=2, the variant's own committed-iteration stop"
+  STOP_WORD="STOP_AFTER_ITERATION=2"
+  EXTRA_ENV=("$STOP_WORD")
+  INTERRUPTED_STATUS="$(run_to_end "$WORK/interrupted" "$TARGET_CAP" "" app1.log)"
+  EXTRA_ENV=()
 else
-  # The baseline has no between-iterations seam in this harness (one pass finishes the job on this
-  # machine; see the band README), so the interruption is the one it does have: a tool call in flight.
+  # A SIGKILL inside the pass, which is the only stop this harness can put on the baseline: the kill lands
+  # on the application's own PID while a tool call is in flight.
   FAULTS_HOLD="out:tool.execution_start"
   FAULTS_COUNT=2
+  export FAULTS_HOLD FAULTS_COUNT
+  FAULTS_APP_LOG="$WORK/interrupted/app1.log"
+  export FAULTS_APP_LOG
+  start_variant "$VARIANT" "$WORK/interrupted" "$TARGET_CAP"
+  KILLED_PID="$STARTED_PID"
+  if ! wait_for_inflight "$WORK/interrupted" 300; then
+    log "run-equivalence: the gate never reached the interruption point"
+    exit 1
+  fi
+  INTERRUPT_FRAME="$(inflight_frame "$WORK/interrupted")"
+  kill_and_confirm "$KILLED_PID" application || exit 1
+  reap_servers "$WORK/interrupted"
+  rm -f "$WORK/interrupted/pid" "$WORK/interrupted/inflight" "$WORK/interrupted/release"
+  FAULTS_HOLD=""
+  FAULTS_COUNT=0
+  export FAULTS_HOLD FAULTS_COUNT
 fi
-export FAULTS_HOLD FAULTS_COUNT
-FAULTS_APP_LOG="$WORK/interrupted/app1.log"
-export FAULTS_APP_LOG
-start_variant "$VARIANT" "$WORK/interrupted" "$TARGET_CAP"
-KILLED_PID="$STARTED_PID"
-if ! wait_for_inflight "$WORK/interrupted" 300; then
-  log "run-equivalence: the gate never reached the interruption point"
-  exit 1
-fi
-INTERRUPT_FRAME="$(inflight_frame "$WORK/interrupted")"
-kill_and_confirm "$KILLED_PID" application || exit 1
-reap_servers "$WORK/interrupted"
-rm -f "$WORK/interrupted/pid" "$WORK/interrupted/inflight" "$WORK/interrupted/release"
 
-FAULTS_HOLD=""
-FAULTS_COUNT=0
-export FAULTS_HOLD FAULTS_COUNT
-FAULTS_APP_LOG="$WORK/interrupted/app2.log"
+FAULTS_APP_LOG="$WORK/interrupted/app.log"
 export FAULTS_APP_LOG
+
 INTERRUPTED_STATUS="$(run_to_end "$WORK/interrupted" "$TARGET_CAP")"
 INTERRUPTED_VERIFY="$(verify_target "$WORK/interrupted/target")"
 INTERRUPTED_END="$(end_line "$WORK/interrupted/app.log")"
@@ -238,10 +246,16 @@ if [ "$VARIANT" = "baseline" ]; then
   log "run-equivalence: second-pass run (the baseline's control for a second pass)"
   mkdir -p "$WORK/second-pass/target"
   cp -R "$WORK/app" "$WORK/second-pass/app"
+  # It has to start where the interrupted run started, and end the same way. The interrupted run's shape is
+  # "pass, kill, pass": the first pass writes the release-notes item and the two `release-notes.md` items,
+  # and the second pass does the rest. Copying the *template* would give the second-pass control one pass
+  # over a target the reference had already finished, whose product is the template — an identity that
+  # proves nothing. So the control runs one pass and then a second one over what that left, which is
+  # exactly the interrupted run's shape with nothing killed.
   cp -R "$WORK/template/." "$WORK/second-pass/target/"
+  # One pass, then a second process over what it left: the interrupted run's shape with nothing killed.
+  run_to_end "$WORK/second-pass" "$TARGET_CAP" "" pass1.log >/dev/null
   SECOND_PASS_STATUS="$(run_to_end "$WORK/second-pass" "$TARGET_CAP")"
-  # A second process over the same target, with nothing killed: the shape the baseline's continuation has.
-  SECOND_PASS_STATUS="$SECOND_PASS_STATUS/$(run_to_end "$WORK/second-pass" "$TARGET_CAP")"
   SECOND_PASS_VERIFY="$(verify_target "$WORK/second-pass/target")"
   SECOND_PASS_COMPARE="$(compare_product "$WORK/interrupted/target" "$WORK/second-pass/target")"
   SECOND_PASS_NORMALISED="$(compare_normalised "$WORK/interrupted/target" "$WORK/second-pass/target")"
@@ -268,7 +282,7 @@ fi
 SECOND_PASS_INFORMATIVE="not applicable"
 if [ "$VARIANT" = "baseline" ]; then
   if [[ "$REPRODUCIBLE" == identical* ]]; then
-    SECOND_PASS_INFORMATIVE="no: the two clean runs are byte-identical, so a second pass over this target has nothing to change and its agreement with the interrupted run is the template's, not the interruption's"
+    SECOND_PASS_INFORMATIVE="no: the two clean runs are byte-identical, so on this target a pass leaves nothing for a later one to change and the second-pass control's agreement with the interrupted run is the template's, not the interruption's"
   else
     SECOND_PASS_INFORMATIVE="yes: two clean runs differ, so agreement between the interrupted run and a second pass is a fact about the work rather than about an empty pass"
   fi

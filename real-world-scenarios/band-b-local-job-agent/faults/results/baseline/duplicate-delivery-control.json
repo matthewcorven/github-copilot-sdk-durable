@@ -3,14 +3,14 @@
   "fault": "duplicate-delivery-control",
   "outcome": "control: one delivery",
   "phase": "one iteration, nothing re-delivered (the control)",
-  "detail": "Control: the same run with nothing re-delivered. 1 session.sendAndWait frame(s), 4 assistant.message, 5 tool.execution_start, exit 0, plan 'complete 16 0', verifier 'pass', product digest 76524817ca57aa5b. The duplicate run is read against these counts; the re-delivery is the only difference.",
-  "evidence": "frames at the gate: 1 session.sendAndWait, 4 assistant.message, 5 tool.execution_start; frames re-delivered by the gate: 0; tool calls after the re-delivery: 0; product digest 76524817ca57aa5b; store 'missing 0 0 -'; last line \"plan reports complete after 1 iteration(s).\"",
+  "detail": "Control: the same run with nothing re-delivered. 1 session.sendAndWait frame(s), 5 assistant.message, 4 tool.execution_start, exit 0, plan 'complete 16 0', verifier 'pass', product digest 2a3c8fbb3cf3bcc1. The duplicate run is read against these counts; the re-delivery is the only difference.",
+  "evidence": "frames at the gate: 1 session.sendAndWait, 5 assistant.message, 4 tool.execution_start; frames re-delivered by the gate: 0; tool calls after the re-delivery: 0; product digest 2a3c8fbb3cf3bcc1; store 'missing 0 0 -'; last line \"plan reports complete after 1 iteration(s).\"",
   "harness": {
     "dotnet": "dotnet",
     "model": "gpt-5.1-codex-mini",
     "command": "./faults/duplicate-delivery.sh --variant baseline --fault-not-injected",
     "script": "duplicate-delivery.sh",
-    "commit": "3dcb0be2bfd6de7c2b5717e6b8f7b97773937cc3"
+    "commit": "599ec5c150fa3f3b6539e80b9d68f60e789d10fe"
   },
-  "recordedAt": "2026-11-06T01:47:00.667162+00:00"
+  "recordedAt": "2026-11-06T02:07:47.165606+00:00"
 }

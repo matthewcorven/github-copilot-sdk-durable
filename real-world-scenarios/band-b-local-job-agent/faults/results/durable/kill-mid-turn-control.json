@@ -3,14 +3,14 @@
   "fault": "kill-mid-turn-control",
   "outcome": "completed",
   "phase": "a tool call in flight (the control)",
-  "detail": "Control: the same steps, with the held tool call released instead of the process killed. 8 iteration(s), exit 0, plan 'complete 16 0' (status, ticked, open), verifier: pass, store 'present 319 0 iteration-complete/8'. This is what the killed run is measured against: the kill is the only difference.",
+  "detail": "Control: the same steps, with the held tool call released instead of the process killed. 8 iteration(s), exit 0, plan 'complete 16 0' (status, ticked, open), verifier: pass, store 'present 295 0 iteration-complete/8'. This is what the killed run is measured against: the kill is the only difference.",
   "evidence": "gate held 'out tool.execution_start 2' and released it; the run then reached its own end",
   "harness": {
     "dotnet": "dotnet",
     "model": "gpt-5.1-codex-mini",
     "command": "./faults/kill-mid-turn.sh --variant durable --fault-not-injected",
     "script": "kill-mid-turn.sh",
-    "commit": "3dcb0be2bfd6de7c2b5717e6b8f7b97773937cc3"
+    "commit": "599ec5c150fa3f3b6539e80b9d68f60e789d10fe"
   },
-  "recordedAt": "2026-11-06T01:51:48.049293+00:00"
+  "recordedAt": "2026-11-06T02:12:21.152938+00:00"
 }

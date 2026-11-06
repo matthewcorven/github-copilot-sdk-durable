@@ -10,7 +10,7 @@
     "model": "gpt-5.1-codex-mini",
     "command": "./faults/restart-after-checkpoint.sh --variant durable",
     "script": "restart-after-checkpoint.sh",
-    "commit": "3dcb0be2bfd6de7c2b5717e6b8f7b97773937cc3"
+    "commit": "599ec5c150fa3f3b6539e80b9d68f60e789d10fe"
   },
-  "recordedAt": "2026-11-06T01:52:00.252482+00:00"
+  "recordedAt": "2026-11-06T02:12:32.811224+00:00"
 }

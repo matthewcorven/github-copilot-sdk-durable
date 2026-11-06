@@ -4,13 +4,13 @@
   "outcome": "control: serialised, not corrupted",
   "phase": "loop 1 to completion, then loop 2 against the same target (the control)",
   "detail": "Control: the same two loops with no overlap — loop 1 exited 0 before loop 2 started, loop 2 exited 0, plan 'complete 16 0' (status, ticked, open), shape intact, verifier 'pass'. Two loops one after the other leave a target that is still a plan; whether the job is finished depends on the cap, and the verifier's verdict here is reported rather than required. So damage in the fault run would belong to the overlap, not to running twice.",
-  "evidence": "overlap claim: none: loop 1 had already exited (0) when loop 2 started; gate connection windows: two-connections (2 connection(s), overlap 0.000s); loop 1 exit 0, loop 2 exit 0; gate frames: 31 in / 791 out; plan shape: intact; store 'missing 0 0 -'",
+  "evidence": "overlap claim: none: loop 1 had already exited (0) when loop 2 started; gate connection windows: two-connections (2 connection(s), overlap 0.000s); loop 1 exit 0, loop 2 exit 0; gate frames: 11 in / 260 out; plan shape: intact; store 'missing 0 0 -'",
   "harness": {
     "dotnet": "dotnet",
     "model": "gpt-5.1-codex-mini",
     "command": "./faults/concurrent-clients.sh --variant baseline --fault-not-injected",
     "script": "concurrent-clients.sh",
-    "commit": "3dcb0be2bfd6de7c2b5717e6b8f7b97773937cc3"
+    "commit": "599ec5c150fa3f3b6539e80b9d68f60e789d10fe"
   },
-  "recordedAt": "2026-11-06T01:48:49.236563+00:00"
+  "recordedAt": "2026-11-06T02:08:27.241241+00:00"
 }
