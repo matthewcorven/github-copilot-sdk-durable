@@ -23,8 +23,8 @@ Dimensions are fixed by the program epic (#142) so bands are comparable:
 
 ## Scope of this document
 
-**Bands A, B, C and F, so far.** The other three bands' rows land with their own A4-equivalents —
-#163 (D), #169 (E), #179 (G) — because each band owns its README and its own rows, per the program
+**Bands A, B, C, F and G, so far.** The other two bands' rows land with their own A4-equivalents —
+#163 (D) and #169 (E) — because each band owns its README and its own rows, per the program
 epic. Nothing in this file is extrapolated from one band to another. A band whose directory exists
 but whose rows are not here has not been measured to this standard yet; the absence is deliberate.
 
@@ -32,8 +32,9 @@ but whose rows are not here has not been measured to this standard yet; the abse
 real agent turns against a signed-in Copilot runtime — A's inside a web app, B's as a CLI job whose work
 *is* the model's tool calls. **Band C's is a local reproduction of an Actions workflow and never ran the
 hosted Action** — no runner, no live GitHub API, no model call. **Band F has two baselines, and each of
-its cells names which one it is measured against.** Each band's cells carry their caveat inline; none of
-the bands' cells are an aggregate.
+its cells names which one it is measured against.** **Band G has three columns**, and its middle one is
+the vendor's extension on an emulator — one sample, with two stated residuals. Each band's cells carry
+their caveat inline; none of the bands' cells are an aggregate.
 
 ## Band A — local dev-tool agent
 
@@ -433,6 +434,72 @@ the store.
   is not killed. No token, latency or dollar figure is recorded.
 - **`offline capability` is `not exercised` on both sides.** No run lost the network.
 
+## Band G — long-running operations
+
+A Magentic orchestration with a **human plan-review gate**: a manager plans, a researcher and a writer
+execute before the gate, and a person approves before the last step runs. Baseline:
+`microsoft/agent-framework`'s `magentic_checkpoint.py` at `cf734bc4`, MIT, ported to C# against
+`Microsoft.Agents.AI.Workflows` 1.27.0 (`real-world-scenarios/band-g-long-running/upstream/PROVENANCE.md`).
+
+**This band has three columns, not two, and the middle one is measured.** The vendor's
+`Microsoft.Agents.AI.DurableTask` extension (`1.16.0-preview.261029.1`) runs the vendor's own
+human-in-the-loop sample against the DTS emulator. Two earlier rounds recorded it as *not run* because
+they believed no prerelease package existed; that was wrong, and
+[`extension/README.md`](../real-world-scenarios/band-g-long-running/extension/README.md) records the
+correction. It is **one sample**: the right shape for this band, but not the same workflow as the other
+two columns.
+
+Evidence: [`band-g-long-running/README.md`](../real-world-scenarios/band-g-long-running/README.md),
+[`faults/README.md`](../real-world-scenarios/band-g-long-running/faults/README.md),
+[`faults/results/summary.md`](../real-world-scenarios/band-g-long-running/faults/results/summary.md),
+[`durable/evidence/durable-gate-restart.md`](../real-world-scenarios/band-g-long-running/durable/evidence/durable-gate-restart.md),
+[`evidence/baseline-restart-resume.md`](../real-world-scenarios/band-g-long-running/evidence/baseline-restart-resume.md).
+
+| Dimension | `baseline/` (file checkpoint) | `extension/` (DTS emulator) | `durable/` (this variant) |
+| --- | --- | --- | --- |
+| **Where state lives** | **App store: one JSON file per checkpoint plus `index.jsonl`**, the framework's `FileSystemJsonCheckpointStore`. | **Platform service: the Durable Task Scheduler.** On the emulator that also means the emulator's lifetime. | **App store: one JSONL file.** `band-g` task, gate child task, decision document and model ledger. |
+| **Survives process death** | **Partially, and only past a checkpoint.** `kill-during-wait`: **lost** — the kill landed inside the manager's first turn, before any gate checkpoint existed, and the resume entry point exited 134 writing nothing. `restart-after-checkpoint`: **resumed, completed work re-done**. | **Yes.** `kill-during-wait`: wait survived — a killed worker did not end the parked run, and a different process delivered the answer. | **Yes.** `kill-during-wait`: wait survived — the wait is a committed checkpoint, not a call the killed process held. `restart-after-checkpoint`: **resumed, no calls repeated**. |
+| **Mid-turn failure behaviour** | **Lost if no checkpoint exists; otherwise resumed, with the stopped process's work redone.** The checkpoint carries the workflow's state, not a completed turn inside a process. | **Resumed.** A fresh process with its own host and worker finished the parked run; the history holds one task completion, not a second copy. | **Resumed from the last committed step**, and the memo means the re-entered step is not re-served. |
+| **Duplicate delivery** | **Doubled.** `duplicate-approval`: a second resume approves again. | **The second delivery does not run the next step twice** — the event is recorded, and schedules nothing. | **Second delivery refused**, by the decision document's first-writer-wins rule — *"ignored: a decision is already on file (alice, approved)"* — and the refusal did **not** come from the terminal guard. |
+| **Concurrent clients** | **`not exercised`** — the port advertises exactly two modes, `run` and `resume`; there is no abort verb and no second-writer path to test. | **`not exercised`** — same gap at the orchestration level; the emulator was not driven by two clients. | **`not exercised`** — the store's exclusive lock refuses a second writer, so a concurrent client never reaches the workflow. Not measured as a row. |
+| **Store outage** | **Failed safely, gate still answerable.** | **Lost with the scheduler** — stopping the emulator destroyed the instance record; this is the substrate being the record, not a durable-store finding. | **Failed safely.** `store-outage` refused the commit (exit 70) and left the run `waiting` with the decision still on file: a refused commit left no partial write. |
+| **Offline capability** | **`not exercised`.** | **`not exercised`.** | **`not exercised`.** No run lost the network on any column. |
+| **Recovery cost** | Restart the process with the checkpoint id; the pre-gate model calls **are** repeated for work the stopped process had completed inside itself (2 calls, twice). | Restart the host; the run continues from the scheduler. One prerequisite the other two columns do not have: a scheduler (or its emulator) must be running. | Restart the process; **no** manual step, and **0** model calls added by the resume (1 memo hit). |
+| **Operational burden** | A directory on disk; the framework's store refuses a second writer. | **The heaviest.** A scheduler or its emulator is a prerequisite even for one run, and stopping it under a live run did not fail over. | **A store file, one writer.** No server, no scheduler. Measured only in that shape. |
+| **Lines of custom durability code** | **0.** `baseline/BaselineCheckpoint.cs` is **332** `wc -l`; the framework's checkpoint store does the persistence, so none of it is durability code. | **0.** The vendor's extension, vendored byte-identical at `3ffe3fb`; the harness adds fault verbs, not durability. | **1 586 `wc -l` across five files** (`band-g-durable.cs` 647, `BriefWorkflow.cs` 341, `Gate.cs` 262, `Model.cs` 189, `Workflow.cs` 147). **No durability-specific split is claimed**: unlike Bands A, B and C, this band has no region classifier, so the number is total code, not the durable share of it. |
+
+### Fault outcomes, transcribed
+
+Rendered from `faults/results/` by `faults/lib/three_way.py`, with a drift check
+(`check_readme_table.py`) that fails the run if the generated table and the README disagree.
+
+| Fault | `baseline` | `extension` | `durable` |
+| --- | --- | --- | --- |
+| kill during wait | **lost** | **wait survived** | **wait survived** |
+| restart after a checkpoint | **resumed, completed work re-done** | **resumed** | **resumed, no calls repeated** |
+| duplicate approval | **doubled** | **second delivery did not run the next step twice** | **second delivery refused** |
+| late approval | **applied again** | **terminal state held** | **terminal state held** |
+| abort mid-wait | **not exercised** | **cancelled** | **cancelled** |
+| store outage | **failed safely, gate still answerable** | **lost with the scheduler** | **failed safely** |
+
+### Where this band's rows diverge from the easy story
+
+- **Three of the six rows are ties**, and the band says so before listing any feature: restart/resume,
+  memoization and a durable timed wait are all covered by the vendor's extension. The extension covers the
+  operational story better than this variant does.
+- **The one real difference is small.** A decision here is a **value** with a first-writer-wins rule, where
+  the extension treats it as a **delivery** on an orchestration instance. That is a real difference and it is
+  not worth adopting a store file over a scheduler for.
+- **`kill-during-wait` is two differently-shaped interventions**, not one fault. The baseline's kill lands
+  *before* the gate (a pre-gate crash); the Durable kill lands on a process blocked in the commit. The
+  injection column in `faults/README.md` exists so nobody reads `lost` against `wait survived` as one
+  measurement.
+- **Two rows are not baseline losses:** it fails cleanly on a store outage, and it has nothing to abort.
+- **`abort-mid-wait` for the extension is `cancelled` but proves less**: its ports live inside one
+  orchestration, so "children cancelled" is not observable there and is not claimed.
+- **The middle column's two residuals are holes, not wins for this variant:** no model-call count (its
+  executors call no model) and no observable child cascade.
+
 ## Currency
 
 | | |
@@ -440,11 +507,12 @@ the store.
 | Band A measurements recorded | 2026-11-04 (variant evidence) and 2026-11-05 (fault evidence) |
 | Band B measurements recorded | 2026-11-05 (variant evidence, `durable/evidence/run-all.sh`) and 2026-11-06 (fault evidence, `faults/run-all.sh`, 21 runs, 03:33:43Z–03:52:17Z at `32770e70b581`) |
 | Band C measurements recorded | 2026-11-05 — variant evidence (`durable/evidence.sh`, two identical runs) and fault evidence (`faults/run-all.sh`, 24 runs, 18:04:06Z–18:05:02Z) |
+| Band G measurements recorded | 2026-11-05 — baseline `run.sh`/`resume.sh`, durable `evidence.sh` (six flows, 30 claims), and fault evidence (`faults/run-all.sh`, 34 runs across three columns at `cfbea21`); the extension column was run on the DTS emulator, `1.16.0-preview.261029.1` |
 | Band F measurements recorded | 2026-11-05 — baseline run and durable `evidence.sh` (including its live-model stage against `claude-sonnet-5`), and fault evidence (`faults/run-all.sh`, 20 runs, produced at commit `272baac`). Baseline rows used an OpenAI-compatible endpoint; durable fault rows used scripted routing and made no model call |
 | Machine | macOS arm64, .NET SDK 10.0.402; GitHub Copilot CLI 1.0.105 for Bands A and B (Band B's fault harness used the CLI bundled with the SDK build, 1.0.103, because the 1.0.105 install refused `gpt-5.1-codex-mini` as unavailable); Bands C and F fault rows need no CLI — neither makes a model call there (Band F's *variant* evidence did call a model) |
 | Durable layer pinned at | the `dev` tip the scenario was built against — `lib/Copilot.Durable.csproj` reads `0.5.0`, which is **not yet released** (no `v0.5.0` tag, no CHANGELOG section). Per the program epic's versioning rule, the scenario's feature PR lands pinned to the release that cuts it; until then these rows describe `dev`, not a published package |
-| Rows added since | Band A (#147), Band C (#157), then Band B (#152) and Band F (#174) on 2026-11-06. **Band B needed no layer change**: `DurableStore.Create`'s exclusive `StoreFileLock` already refused a second writer, and the `concurrent-clients` fault showed the *variant* was the half that was missing — it caught the refusal and reports exit 4 now (`durable/ralph-loop-durable.cs:114-128`). **Band F needed no layer change either** — documentation only, written against evidence F1–F3 already produced at `272baac`. Band C (#157), 2026-11-05, needed `Transaction.Memo` in all three ports (filed as #201) and a silent rollback fix (`UndoLog.Restore` resetting the baseline map); both are on `dev` with tests that fail without them (`durable/README.md` §*What `lib/Durable.cs` could not express*) |
-| **Fidelity differs by band** | Bands A and B ran real agent turns against a signed-in CLI; Band B's jobs are live model work over real files, so its counts are one model's and not reproducible byte for byte in their *numbers* (its *products* are, per the run-equivalence rows). **Band C's is a local reproduction of an Actions workflow and never ran the hosted Action** — see the caveat on its section. **Band F has two baselines, and each of its cells names which one it is measured against.** A reader comparing sections is comparing kinds of evidence, not configurations of one experiment |
+| Rows added since | Band A (#147), Band C (#157), then Band B (#152), Band F (#174) and Band G (#179) on 2026-11-06. **Band B needed no layer change**: `DurableStore.Create`'s exclusive `StoreFileLock` already refused a second writer, and the `concurrent-clients` fault showed the *variant* was the half that was missing — it caught the refusal and reports exit 4 now (`durable/ralph-loop-durable.cs:114-128`). **Band F needed no layer change either** — documentation only, written against evidence F1–F3 already produced at `272baac`. Band C (#157), 2026-11-05, needed `Transaction.Memo` in all three ports (filed as #201) and a silent rollback fix (`UndoLog.Restore` resetting the baseline map); both are on `dev` with tests that fail without them (`durable/README.md` §*What `lib/Durable.cs` could not express*) |
+| **Fidelity differs by band** | Bands A and B ran real agent turns against a signed-in CLI; Band B's jobs are live model work over real files, so its counts are one model's and not reproducible byte for byte in their *numbers* (its *products* are, per the run-equivalence rows). **Band C's is a local reproduction of an Actions workflow and never ran the hosted Action** — see the caveat on its section. **Band F has two baselines, and each of its cells names which one it is measured against.** **Band G has three columns**, and its middle column is the vendor's extension on an emulator — one sample, with two stated residuals. A reader comparing sections is comparing kinds of evidence, not configurations of one experiment |
 
 A band's rows are re-measured, not carried forward, when its scenario changes. If a later change to
 `lib/Durable.cs` invalidates a cell, the fix is a new run of `faults/run-all.sh` and a re-transcription,

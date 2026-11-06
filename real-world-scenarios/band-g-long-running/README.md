@@ -102,8 +102,11 @@ count is what differs. The counts are in `faults/results/` and rendered in `faul
 ### The three-way comparison, with the measured cells
 
 Every measured cell below is read from `faults/results/` by `faults/lib/three_way.py`, so it cannot drift
-from the run. The middle column is marked exactly as G2 marked it — **not run** — and the marking is
-carried here so a reader cannot infer a measurement that does not exist.
+from the run. The middle column is **measured**, against the vendor's Durable Task extension on the DTS
+emulator (`extension/`), and it carries two stated residuals rather than filled cells: its executors call no
+model, so there is no call count for it, and its ports live inside one orchestration, so "children cancelled"
+is not observable. G2 and the first G3 draft recorded this column as *not run* because they believed no
+prerelease package existed; that was wrong, and `extension/README.md` records the correction.
 
 | | File checkpoint (baseline, #176) | Durable Task extension on DTS (`extension/`) | This variant (#177) |
 | --- | --- | --- | --- |
@@ -115,10 +118,9 @@ carried here so a reader cannot infer a measurement that does not exist.
 | **Abort mid-wait** | **Not exercised.** The baseline's port advertises exactly two modes, 'run' and 'resume' — checked in this run, where an unknown mode answers 'Use run or resume'. | **Stops, with no tree to cascade.** `abort-mid-wait`: cancelled — the run was terminated and an answer delivered by a live worker completed 1 step(s) against 1 at the gate, i.e. the step after the port did not run. There is no child work: the ports live inside one orchestration. | **Cascades, measured.** cancelled — the parent's handler saw the child already terminal (t59=Terminal:aborted). |
 | **Operational weight** | A directory on disk, one writer (the framework's store refuses a second). | **The heaviest, and the least forgiving.** A scheduler (or its emulator) is a prerequisite even for one run. Stopping it under a live run did not fail over: the run was gone when the scheduler came back (`store-outage`: lost with the scheduler). That is the cost the other two columns do not have — their store is a file this harness can move and restore. | A store file, one writer. Measured only in that shape: no server, no scheduler. |
 
-Read the middle column's markings as a claim about this repository, not about the extension: it was not
-stood up, so every sentence there is documentation.
-
-
+Read the middle column as **one sample, measured**: it is the vendor's human-in-the-loop workflow, the right
+shape (a human gate over a durable wait) but not the same workflow as the other two columns. Its two residuals
+— no model-call count, no observable child cascade — are holes in the comparison, not wins for this variant.
 
 ## Prerequisites
 
