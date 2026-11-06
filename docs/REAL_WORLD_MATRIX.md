@@ -23,16 +23,17 @@ Dimensions are fixed by the program epic (#142) so bands are comparable:
 
 ## Scope of this document
 
-**Bands A and C, so far.** The other five bands' rows land with their own A4-equivalents — #152 (B),
-#163 (D), #169 (E), #174 (F), #179 (G) — because each band owns its README and its own rows, per the
-program epic. Nothing in this file is extrapolated from one band to another. A band whose directory
-exists but whose rows are not here has not been measured to this standard yet; the absence is
-deliberate.
+**Bands A, B and C, so far.** The other four bands' rows land with their own A4-equivalents — #163 (D),
+#169 (E), #174 (F), #179 (G) — because each band owns its README and its own rows, per the program epic.
+Nothing in this file is extrapolated from one band to another. A band whose directory exists but whose
+rows are not here has not been measured to this standard yet; the absence is deliberate.
 
-**Two kinds of evidence are in this file, and they are not interchangeable.** Band A's variant did run
-a real agent turn against a signed-in Copilot runtime. **Band C's is a local reproduction of an Actions
-workflow and never ran the hosted Action** — no runner, no live GitHub API, no model call. Every Band C
-cell carries that caveat inline, and the two bands' cells are not an aggregate.
+**Three kinds of evidence are in this file, and they are not interchangeable.** Bands A and B both ran
+real agent turns against a signed-in Copilot runtime — A's inside a web app, B's as a CLI job whose work
+*is* the model's tool calls. **Band C's is a local reproduction of an Actions workflow and never ran the
+hosted Action** — no runner, no live GitHub API, no model call. Band C's cells carry that caveat inline;
+Band B's carry a different one, that its counts are one model's on one machine and that its jobs are live.
+The three bands' cells are not an aggregate.
 
 ## Band A — local dev-tool agent
 
@@ -84,6 +85,132 @@ runs — 5 faults × 2 variants plus 10 controls — exited 0
   row, and the row is not upgraded for it.
 - **`store-outage` is the Durable variant's weakest row**, and it is recorded as such: recovering
   needs an operator who notices the file changed identity.
+
+## Band B — local job agent (the Ralph Loop)
+
+An unattended agent job on a developer's machine: a plan file lists work, the loop sends a prompt to a
+**fresh** session per iteration, lets the agent edit files in a scratch target, re-reads the plan, and stops
+when the plan reports complete. Baseline: `github/awesome-copilot`'s Ralph Loop recipe at `7e40881`, MIT,
+vendored byte-identical (`real-world-scenarios/band-b-local-job-agent/upstream/PROVENANCE.md`), ported to C#
+against the plain SDK. Durable variant: the same loop, the same prompt, the same `baseline/verify.sh`, with
+the loop position in a Durable task instead of a local variable.
+
+Evidence: [`band-b-local-job-agent/README.md`](../real-world-scenarios/band-b-local-job-agent/README.md),
+[`faults/README.md`](../real-world-scenarios/band-b-local-job-agent/faults/README.md),
+[`faults/results/summary.txt`](../real-world-scenarios/band-b-local-job-agent/faults/results/summary.txt),
+[`durable-kill-and-resume.md`](../real-world-scenarios/band-b-local-job-agent/evidence/durable-kill-and-resume.md).
+
+> **This band's runtime was real, and its jobs were live model turns.** Every run here called
+> `gpt-5.1-codex-mini` through the Copilot CLI on a signed-in account; the work *is* the model's tool calls
+> inside the target, so there is no fixture to substitute and Band A's fixture approach does not transfer.
+> What that buys is that the interruption is a real process death over real files. What it costs is
+> reproducibility: a different model groups the plan's items differently per pass, so every tool-call count
+> and every "N iterations" in these cells is that model's, on that machine. The fault rows are each pinned by
+> a **control** — the same steps with the injection removed — and a row is quoted only where the control's
+> outcome differs from the fault's.
+
+| Dimension | `baseline/` | `durable/` |
+| --- | --- | --- |
+| **Where state lives** | **A local variable and a markdown file.** `var iteration = 0;` in `RalphLoopAsync` — nothing else remembers it, and no event is journaled — `baseline/ralph-loop.cs:68`. The only artifact between iterations is `PLAN.md`, which the agent edits. | **An app store: one JSONL file inside the target.** One durable task (`band-b.ralph-loop`) whose checkpoint is the loop position; `<target>/.durable/store.jsonl` by default, `DURABLE_STORE` overrides — `durable/ralph-loop-durable.cs:89`. The plan file stays an input, not a record. |
+| **Survives process death** | **No.** *"The baseline's position is a local variable, so nothing continued the killed turn: the second process re-read the plan and began at its own iteration 1."* Not partial — there is no mechanism — [`faults/results/baseline/kill-mid-turn.json`](../real-world-scenarios/band-b-local-job-agent/faults/results/baseline/kill-mid-turn.json) | **Yes — from the last committed iteration, and only from there.** One iteration is one checkpoint (`turn-started` → `turn-complete` → `iteration-complete`), so a stop *after* an iteration commits resumes at the next one: the store makes the second process print *"resuming durable task t8 … resuming at iteration 4"* and *"last stage: iteration-complete"*, with no cap on its command line — [`evidence/durable-kill-and-resume.md`](../real-world-scenarios/band-b-local-job-agent/evidence/durable-kill-and-resume.md) §1, and the same banner in [`faults/results/durable/kill-mid-turn.json`](../real-world-scenarios/band-b-local-job-agent/faults/results/durable/kill-mid-turn.json)'s second process, which reads it and then refuses. **The fault row for this dimension is `not exercised`, not this banner** — see below |
+| **Mid-turn failure behaviour** | **Lost.** Killed with `SIGKILL` at the runtime's second `tool.execution_start`: *"Whatever the half-turn had already written stays on disk and is not recorded anywhere — that is what 'lost its position' means here, not 'lost its files'."* — [`faults/results/baseline/kill-mid-turn.json`](../real-world-scenarios/band-b-local-job-agent/faults/results/baseline/kill-mid-turn.json) | **Neither replayed nor resumed — refused, and that is the variant's stated limit, not a win.** The store records `turn-started` with no outcome, and the second process reports what it holds and **fails the run** rather than re-issuing a turn that may already have written files: *"the turn was issued (plan digest 07426b11a9af6214) and its outcome was never recorded"*, exit 1 — [`faults/results/durable/kill-mid-turn.json`](../real-world-scenarios/band-b-local-job-agent/faults/results/durable/kill-mid-turn.json). The layer queues each tool record on the conversation's serial chain and drains it only at the turn's completion barrier, so a turn that does not return leaves *no* tool record — not a partial list. A dead turn is observable as *issued* and never replayable |
+| **Duplicate delivery** | **Duplicated side effects — a tie.** One `session.sendAndWait` forwarded twice; **4 of the run's 4** `tool.execution_start` frames crossed the gate after the re-delivery: *"a second set of tool calls over the same files, not an error the loop reports."* — [`faults/results/baseline/duplicate-delivery.json`](../real-world-scenarios/band-b-local-job-agent/faults/results/baseline/duplicate-delivery.json) | **Duplicated side effects — the same tie.** One `session.send` forwarded twice; **8 of the run's 8** tool starts came after the re-delivery, and the loop reported nothing. *"This is a measured count of frames, not an assumption about the variant: the same words would be chosen for either variant."* Neither variant names a delivery, so neither can deduplicate one — [`faults/results/durable/duplicate-delivery.json`](../real-world-scenarios/band-b-local-job-agent/faults/results/durable/duplicate-delivery.json) |
+| **Concurrent clients** | **Not corrupted, and nothing serialised them.** Two loops over one folder, loop 1 blocked at its gate when loop 2 started: *"Neither refused the other, both finished (exit 0 and 0), the plan is still a plan (intact), and the verifier passes … Nothing serialised them and nothing broke: that is the finding, and it is not the same claim as 'serialised'."* — [`faults/results/baseline/concurrent-clients.json`](../real-world-scenarios/band-b-local-job-agent/faults/results/baseline/concurrent-clients.json) | **Refused the second client.** Loop 2 exited **4** before reading the plan, sending a prompt or writing a file: *"The second loop did not read the plan, send a prompt or touch a file: the refusal comes from the layer's exclusive lock on the store file."* The lock is `lib/Durable.cs`'s `StoreFileLock` (`FileShare.None` on a `.lock` sidecar), and the variant now reports the refusal as itself — [`faults/results/durable/concurrent-clients.json`](../real-world-scenarios/band-b-local-job-agent/faults/results/durable/concurrent-clients.json) |
+| **Store outage** | **`not exercised` — there is no store to break.** *"The baseline keeps no state outside the job's own files, so there is no store to take away … its target holds no file but PLAN.md, PROMPT.md, release-notes.md and docs/*.md."* Checked on every run, not assumed; removing one of those would fault the file the job is rewriting, which is a different fault — [`faults/results/baseline/store-outage.json`](../real-world-scenarios/band-b-local-job-agent/faults/results/baseline/store-outage.json) | **Continued past the outage — not "failed safely".** The store was `mv`'d while the process held it open; exit 0, plan complete, verifier passed: *"The writes made after the move went into the file the renamed — a .NET FileStream follows the inode, not the name … the run did not turn that into a failure. It is reported as that, not folded into 'failed safely'."* The live path ended at `iteration-complete/8`, the moved file at `turn-started/0` — a split store — [`faults/results/durable/store-outage.json`](../real-world-scenarios/band-b-local-job-agent/faults/results/durable/store-outage.json) |
+| **Offline capability** | **`not exercised` — no offline claim in either direction.** Both variants need the Copilot runtime reachable to finish a turn; no run drove a network loss, so nothing is claimed. | **`not exercised`, same reason.** A resumed *process* is not an offline *turn*: every resume in this band re-enters against the runtime for its next turn. Not tested, so not claimed — and not upgraded to "partial" because the store is local |
+| **Recovery cost** | **Re-run the job; nothing continues.** The operator restarts and the second process re-reads the plan and starts at its own iteration 1 — for the `SIGKILL` row *"the second process re-read the plan and began at its own iteration 1"*; for the stopped pass *"the iteration the first process committed is not known to it"* — [`faults/results/baseline/kill-mid-turn.json`](../real-world-scenarios/band-b-local-job-agent/faults/results/baseline/kill-mid-turn.json), [`faults/results/baseline/restart-after-checkpoint.json`](../real-world-scenarios/band-b-local-job-agent/faults/results/baseline/restart-after-checkpoint.json) | **One command, no manual step — after an iteration boundary only.** `KEEP=1 durable/resume.sh` resumes at iteration 3 and finishes at 8 with no operator input — §1 of [`durable-kill-and-resume.md`](../real-world-scenarios/band-b-local-job-agent/evidence/durable-kill-and-resume.md). **The caveat is load-bearing:** after a death *inside* a turn the restart is not a resume, it is a refusal (exit 1) and the operator must decide, because nothing durable records what the dead turn did — [`faults/results/durable/kill-mid-turn.json`](../real-world-scenarios/band-b-local-job-agent/faults/results/durable/kill-mid-turn.json) |
+| **Operational burden** | **None.** One file-based .NET app, one shell runner, no service, no store, no credential beyond the Copilot CLI's own sign-in. The flip side is that it has no drift surface because it has no state — `baseline/ralph-loop.cs`, `run.sh` | **One store file inside the job's own working directory, plus two sidecars while it is held.** `<target>/.durable/store.jsonl` and, for the store's lifetime, `<store>.lock` and `<store>.lock.owner` (`StoreFileLock`, `lib/Durable.cs:1230`). The scratch target is the whole footprint, so it travels with the job — and so does its drift surface: the store is a record the target's own agent can write inside. No Azure resource, no rotated secret, plus the Copilot sign-in both variants need |
+| **Lines of custom durability code** | **0.** `baseline/ralph-loop.cs` is **163** `wc -l` / **104** code lines, of which none makes state durable — the progress model is one `int` and the markdown. `wc -l` command and file list: band README §*Lines of custom durability code* | **294 durability-specific lines** out of **674** code lines (**44%**); **989** `wc -l`. Per-region classification whose 22 rows sum to 674/294/380: [`evidence/durable-kill-and-resume.md`](../real-world-scenarios/band-b-local-job-agent/evidence/durable-kill-and-resume.md) §6, recomputed by `python3 durable/evidence/table.py` (which aborts rather than render if the regions stop covering the file). The honest reading is "294 durability lines added to a 104-line baseline"; the other 276 of the 570-line difference is application code the baseline keeps in its prompt or in `verify.sh` |
+
+### Fault outcomes, transcribed
+
+Five faults, both variants, **nine controls** (the baseline has no `store-outage` control to run) and the two run-equivalence tests — 21 runs, all exited 0
+([`run-all.log`](../real-world-scenarios/band-b-local-job-agent/faults/results/run-all.log)), recorded
+2026-11-06T03:33:43Z–03:52:17Z at `harness.commit 32770e70b581`. Rendered from the result files by
+`faults/lib/summarise.py` into [`summary.txt`](../real-world-scenarios/band-b-local-job-agent/faults/results/summary.txt);
+`summarise.py` exits non-zero on a missing result, a result from the wrong script, a result from a different
+commit, or an outcome not in the defined vocabulary.
+
+| Fault | `baseline` | `durable` | Result files |
+| --- | --- | --- | --- |
+| `kill -9` mid-turn | **lost its position** | **refused to resume the dead turn** | [`baseline`](../real-world-scenarios/band-b-local-job-agent/faults/results/baseline/kill-mid-turn.json) · [`durable`](../real-world-scenarios/band-b-local-job-agent/faults/results/durable/kill-mid-turn.json) |
+| restart after a committed iteration | **restarted from the plan** | **not exercised** | [`baseline`](../real-world-scenarios/band-b-local-job-agent/faults/results/baseline/restart-after-checkpoint.json) · [`durable`](../real-world-scenarios/band-b-local-job-agent/faults/results/durable/restart-after-checkpoint.json) |
+| duplicate delivery | **doubled** | **doubled** | [`baseline`](../real-world-scenarios/band-b-local-job-agent/faults/results/baseline/duplicate-delivery.json) · [`durable`](../real-world-scenarios/band-b-local-job-agent/faults/results/durable/duplicate-delivery.json) |
+| two concurrent clients | **not corrupted** | **refused the second client** | [`baseline`](../real-world-scenarios/band-b-local-job-agent/faults/results/baseline/concurrent-clients.json) · [`durable`](../real-world-scenarios/band-b-local-job-agent/faults/results/durable/concurrent-clients.json) |
+| store unavailable mid-run | **not exercised** | **continued past the outage** | [`baseline`](../real-world-scenarios/band-b-local-job-agent/faults/results/baseline/store-outage.json) · [`durable`](../real-world-scenarios/band-b-local-job-agent/faults/results/durable/store-outage.json) |
+
+Five rows: **two `not exercised`, one tie, and two where the wording differs**. Read in this order:
+
+- **`kill-mid-turn` is not a win, and the durable cell says so.** The word is `refused to resume the dead
+  turn`, not `resumed`. The variant stops rather than repeat writes it cannot see, which is defensible and
+  is still a run that did not finish: exit 1, plan still open, verifier fail. It is the variant's stated
+  limit, measured from outside the process for the first time.
+- **`restart-after-checkpoint` is `not exercised` on the durable side, and the reason is a finding, not a
+  gap.** A restart "after a committed iteration" needs a moment between two iterations that a process
+  *outside* the run can stop at, and there is none: the only such frame is the creation of the next
+  iteration's conversation, and at that frame the store already says `turn-started/n` — because the
+  checkpoint that opens a turn is committed *before* its conversation is created and the settle that closes
+  it is inside the same iteration — so a stop there leaves exactly what `kill-mid-turn` leaves. *"A restart
+  from a settled boundary exists only inside the process, and a fault injected from outside cannot land on
+  it."* The harness does not move the seam inside the variant to make the row green. **`kill-mid-turn` and
+  `restart-after-checkpoint` therefore overlap on this variant** — one externally reachable stop, two names.
+- **`duplicate-delivery` is a tie on both.** Both variants did a second set of tool calls and neither
+  reported an error. The Durable variant's `run.sh` exit 3 on that run is its **iteration cap**, not a
+  refusal, and the row is not upgraded for it.
+- **`store-outage` / `baseline` is the second `not exercised`**, and it is checked: the target holds no
+  file but the job's own, so there is nothing to take away. Removing one of those would fault the file the
+  job is rewriting, which is a different fault and is not reported under this name.
+- **Then the two rows whose wording differs**, and they differ for one property each: `concurrent-clients`
+  is exclusion (a lock on the store file the second process cannot open), and `store-outage` / `durable` is
+  *survival without detection* — it continued past the outage, which is not the same as failing safely.
+  Neither of the interruption rows finished on the durable side.
+- **One variant change is visible and should not be read as a scenario behaviour.** `concurrent-clients`
+  proved the *layer* refuses a second store writer while the *variant* died of an unhandled exception; the
+  variant now catches that refusal, prints it as a refusal, and exits **4** (`durable/run.sh:140`, `durable/resume.sh:84`).
+  `lib/Durable.cs` was not changed — the half that was missing was the variant's.
+
+### The headline: a run that was interrupted and continued
+
+The one claim that holds on the files. Per variant, three runs over three copies of one staged target —
+reference, repeat, interrupted — compared as **the same file set, with the same SHA-256 per file, at the
+same relative path**, every regular file under the target except `.durable/` (the store, which differs by
+construction) and the harness's build directory. **17 files** in each case.
+
+| Variant | Interruption | Repeat vs reference | Interrupted vs reference |
+| --- | --- | --- | --- |
+| `durable` | `STOP_AFTER_ITERATION=2`, then `resume.sh` — resumed at iteration 3, finished at 8 | **identical**, 17 files, sha256 per file and path | **identical**, 17 files, sha256 per file and path |
+| `baseline` | `SIGKILL` at `out tool.execution_start 2`, then the same command again | differs byte-for-byte in **14 of 17** files; identical after dropping blank lines | differs byte-for-byte in **14 of 17** files; identical after dropping blank lines |
+
+Both verdicts are taken from the **normalised** comparison, because on the baseline two *clean* runs are not
+byte-identical — 14 of 17 files differ in spacing. The comparator is proved able to fail on every run: one
+appended byte reports `differs` (`./PLAN.md`, 17 vs 17), one extra file reports `differs` (`./extra.txt`,
+17 vs 18), an unmodified tree reports `identical`, and an appended line still differs after normalising
+(`1 of 17 file(s)`). If the repeat run disagrees the result is `not comparable: two clean runs differed` and
+nothing is claimed about the interruption.
+
+**What the baseline's `identical` does and does not mean.** Its "continuation" is a second process
+**starting over** after a `SIGKILL` — no position restored, no work skipped, every iteration after the kill
+re-done. So its agreement says *the job can be finished by starting over and the end state is the same*; it
+says nothing about recovery, and a product comparison cannot distinguish *resumed* from *redone*. It also
+rests on the normaliser. **What the Durable variant's `identical` does not say:** it is over the files; the
+store's account of the interruption differs from the uninterrupted run's and is not compared. And its
+interruption is the variant's own committed-iteration stop, not a fault injected from outside.
+
+### Where this band's numbers stop
+
+- **No cell says a dead turn's work is recoverable.** It does not, and the `kill-mid-turn` durable cell is
+  where that is measured. The memo boundary is the *turn*, not the tool call inside it, and the layer is
+  asymmetric about it: a turn that returns is fully recorded, a turn that does not leaves only `turn-started`.
+- **No cell says the baseline is unsafe.** Two concurrent loops did not corrupt the target, and a duplicate
+  delivery and a kill both produced a *finished* job. The baseline's weakness is that recovery is rework;
+  its strength is that it has nothing to corrupt and nothing to migrate.
+- **Every count is one model's.** `gpt-5.1-codex-mini` on macOS arm64, .NET SDK 10.0.402. Tool-call counts,
+  iteration counts and the "8 iterations" in the variant's runs are properties of that model's grouping of
+  the plan, not constants of the variants.
+- **The kill seam has a measured limit.** `tool.execution_start` is emitted *before* the tool runs, and a
+  probe that held the 2nd and 4th start on a cold target found 0 changed files. The recorded runs did land
+  after writes; the result reports the files the half-turn left, new and modified, so a run whose kill landed
+  before any write says so rather than implying a half-written target (`faults/README.md`).
 
 ## Band C — CI repo agent
 
@@ -192,17 +319,17 @@ fail), so the two injections stop at the same business window but not the same p
 - **The one-comment window is measured, not closed.** A stop between the comment file and its ledger
   entry costs exactly one duplicate, however often it is repeated (`durable/evidence.sh` stage 4c).
 
-
 ## Currency
 
 | | |
 | --- | --- |
 | Band A measurements recorded | 2026-11-04 (variant evidence) and 2026-11-05 (fault evidence) |
+| Band B measurements recorded | 2026-11-05 (variant evidence, `durable/evidence/run-all.sh`) and 2026-11-06 (fault evidence, `faults/run-all.sh`, 21 runs, 03:33:43Z–03:52:17Z at `32770e70b581`) |
 | Band C measurements recorded | 2026-11-05 — variant evidence (`durable/evidence.sh`, two identical runs) and fault evidence (`faults/run-all.sh`, 24 runs, 18:04:06Z–18:05:02Z) |
-| Machine | macOS arm64, .NET SDK 10.0.402, GitHub Copilot CLI 1.0.105 (Band A; Band C needs no CLI — it makes no model call) |
+| Machine | macOS arm64, .NET SDK 10.0.402; GitHub Copilot CLI 1.0.105 for Bands A and B (Band B's fault harness used the CLI bundled with the SDK build, 1.0.103, because the 1.0.105 install refused `gpt-5.1-codex-mini` as unavailable); Band C needs no CLI — it makes no model call |
 | Durable layer pinned at | the `dev` tip the scenario was built against — `lib/Copilot.Durable.csproj` reads `0.5.0`, which is **not yet released** (no `v0.5.0` tag, no CHANGELOG section). Per the program epic's versioning rule, the scenario's feature PR lands pinned to the release that cuts it; until then these rows describe `dev`, not a published package |
-| Rows added since | Band C (#157), 2026-11-05. The Band C variant needed one layer change — `Transaction.Memo` in all three ports, filed as #201 — and one silent rollback fix (`UndoLog.Restore` resetting the baseline map); both are on `dev` and both have tests that fail without them (`durable/README.md` §*What `lib/Durable.cs` could not express*) |
-| **Fidelity differs by band** | Band A's runtime was real (signed-in CLI). **Band C's is a local reproduction of an Actions workflow and never ran the hosted Action** — see the caveat on its section. A reader comparing the two sections is comparing two kinds of evidence, not two configurations of one experiment |
+| Rows added since | Band A (#147), Band C (#157), then Band B (#152) on 2026-11-06. **Band B needed no layer change**: `DurableStore.Create`'s exclusive `StoreFileLock` already refused a second writer, and the `concurrent-clients` fault showed the *variant* was the half that was missing — it caught the refusal and reports exit 4 now (`durable/ralph-loop-durable.cs:114-128`). Band C (#157), 2026-11-05, needed `Transaction.Memo` in all three ports (filed as #201) and a silent rollback fix (`UndoLog.Restore` resetting the baseline map); both are on `dev` with tests that fail without them (`durable/README.md` §*What `lib/Durable.cs` could not express*) |
+| **Fidelity differs by band** | Bands A and B ran real agent turns against a signed-in CLI; Band B's jobs are live model work over real files, so its counts are one model's and not reproducible byte for byte in their *numbers* (its *products* are, per the run-equivalence rows). **Band C's is a local reproduction of an Actions workflow and never ran the hosted Action** — see the caveat on its section. A reader comparing sections is comparing kinds of evidence, not configurations of one experiment |
 
 A band's rows are re-measured, not carried forward, when its scenario changes. If a later change to
 `lib/Durable.cs` invalidates a cell, the fix is a new run of `faults/run-all.sh` and a re-transcription,
