@@ -1,72 +1,73 @@
 # Ralph Instructions
-<!-- User-owned: customize this file to override Ralph's autonomous-execution behavior.
-     squad init creates this file on first install; squad upgrade never overwrites it. -->
+<!-- User-owned current policy. Historical handoffs below are retained as evidence only. -->
 
-<!--
-  PURPOSE
-  -------
-  When `.squad/ralph-instructions.md` exists, `squad watch --execute` instructs the
-  spawned Copilot session to read this file and follow ALL sections here instead of
-  the built-in fallback prompt.  If the file is absent, the built-in prompt is used.
+## Current Policy — bounded admission and fail-closed evidence
 
-  CONTRACT (stable — safe to build on)
-  --------------------------------------
-  YOU CAN  customize via this file:
-    • Extra instructions given to Ralph at session start (Teams/Slack notifications,
-      calendar checks, post-task hooks, MCP-powered side effects, escalation paths)
-    • Additional eligibility rules or priority ordering for issue selection
-    • Agent persona, tone, or verbosity for session output
+This opening section governs current operations. Every section beginning with
+`## Session Handoff` and everything following it is **historical, nonauthoritative**:
+retain it as evidence, not live state or executable instructions. Historical queue,
+board/native-link precedence, parallelism, branch/merge and authorization claims do
+not override current repository policy or the current user mandate.
 
-  YOU CANNOT override via this file:
-    • Parallelism — Ralph always spawns agents for all actionable issues simultaneously
-    • Core eligibility filter (squad/squad:* label required, not blocked, not assigned)
-    • The underlying `gh` / Copilot CLI command used to spawn each session
+### Queue readiness
 
-  TRUST IMPLICATIONS
-  ------------------
-  This file is read by the spawned Copilot session with full agent permissions.
-  Treat it like code — never paste untrusted content here.  Anyone with write access
-  to this file can influence what the agent does on your behalf.
+Before backlog, triage, readiness, ordering, blocker or board-status reporting, run
+the authoritative repository helper first (use `github-issues` when available):
 
-  If this file is missing or empty, `squad watch --execute` falls back to the
-  built-in prompt with no behavioral change.
+```bash
+python3 ~/.copilot/installed-plugins/corven-agent-tools/github-issues/skills/issue-work-queue/scripts/issue_queue.py \
+  --repo matthewcorven/github-copilot-sdk-durable --limit 100 --format text
+# add --mode status for the board breakdown and drift diagnostic
+```
 
-  PLACEHOLDERS
-  ------------
-  The following values are injected by execute.ts before the session reads this file:
-    (none currently — Ralph builds the issue list dynamically at runtime)
+Issue-body `## Depends On` / `## Blocked By` govern readiness. The board is a
+projection and may drift; native links alone do not establish helper readiness.
+Targeted issue/PR reads are permitted; PR scans use `gh pr list` / `gh pr view`.
+If the helper or dependency evidence is unavailable, report Unknown and do not
+infer readiness. No live queue scan is needed for static-configuration work.
 
-  FORMAT
-  ------
-  Plain markdown.  Structure with ## sections.  The spawned session reads the whole
-  file, so keep it concise — one screen of instructions is ideal.
--->
+### Admission and runtime boundary
 
-## Ralph, Go!
+- Coordinator + Ralph remain the core; Lead is the existing Architect. Admit a
+  default maximum of **two active implementation issues**, one accountable engineer
+  per issue. Queue additional work; do not launch anticipatory downstream work.
+- Serialize shared store/wire-contract changes and scarce emulator use, coordinated
+  by Lead/Core Engineer. Core Engineer owns Aspire/emulator/test dependencies.
+- The external watcher contract says instruction files cannot override parallelism.
+  Installed CLI v1.1.0 help exposes `--max-concurrent N` (default 1) and timeout;
+  the supported bounded invocation is `squad watch --execute --max-concurrent 2`.
+  **Do not run it now.** Help proves the flag exists, not authoritative-helper
+  readiness, safe claims, global/shared-resource serialization or invocation-level
+  independent reviewer limits. Verify those boundaries before future authorized
+  execution. This static policy is not proof of full runtime enforcement.
+- Preserve accountable handoffs and user scope/spend/deployment authority. Labels
+  and readiness do not authorize commits, external writes, automations or deployment
+  beyond the active user mandate. Escalate blockers without inventing approvals.
 
-Read this file for your full instructions.  Follow ALL sections.
-MAXIMIZE PARALLELISM — spawn agents for ALL actionable issues simultaneously.
+### Evidence and deployment gate
 
-### Issue Selection
+Tester owns actual local line/branch coverage, criteria-to-E2E mapping and evidence
+completeness. Require exact committed SHA/configuration/artifact identities and
+screenshots of every E2E pass/fail, including the actual terminal for CLI cases.
+Missing, failed or skipped required evidence is not completion; mocks are not live.
+Final independent review and explicit human evidence/deployment review are
+fail-closed requirements. Changes invalidate approval; green tests never imply
+deployment. This assigns operating responsibility, not implemented infrastructure.
 
-Work on every open, unblocked, unassigned issue labeled `squad` or `squad:{member}`.
-Skip issues that are assigned to a human, blocked, or marked `status:on-hold`.
+### Commitment and meeting support
 
-### Post-Task Actions
+Commitments Facilitator coordinates readiness, evidence/data-source gaps,
+presentation critique and next-meeting feedback closure with owner/due time/status/
+evidence. Keep Unknown distinct from On-Track/At-Risk/Complete. Scribe remains a
+narrow durable decision merger, not a session logger; never fabricate missing records.
+Follow `ceremonies.md` for twice-weekly report preparation, weekly measurable
+performance feedback and deeper milestone/PI review. Provisional Tue/Thu 10:00 local
+is **report preparation only**, not confirmed calls or active timers. Calendar,
+voice, recipients, timezone and organization-finance sources remain unconfirmed.
+Automation `8f8bd7c5-bc7b-45c4-a274-4fc2f84e6105` is recorded as disabled with no
+runs; do not enable/update it. No silence-as-consent, unauthorized CC or bookings.
 
-<!-- Uncomment and customize to add post-task hooks, e.g. Teams notifications:
-
-After completing work on each issue:
-- Post a brief summary to the team channel via your Teams MCP tool.
-- Update the issue with a progress comment if no PR has been opened yet.
--->
-
-### Escalation
-
-If you are blocked on an issue, comment on it explaining why, add a `status:blocked`
-label, and move to the next actionable item.  Do not halt the loop.
-
-
+---
 
 ## Session Handoff — read this before your first dispatch
 

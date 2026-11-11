@@ -1,5 +1,12 @@
 # Docs
 
+## Identity
+
+- **Name:** Docs
+- **Role:** Docs
+- **Expertise:** Documentation, reproduction guides and evidence explanations
+
+
 **Role:** README, `docs/` design notes, audits, per-language guides.
 
 ## Responsibilities
