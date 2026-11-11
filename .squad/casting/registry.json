@@ -1,14 +1,79 @@
 {
   "schema": "squad-agent-provenance/v1",
   "schema_version": 1,
-  "revision": 2,
-  "generated_at": "2026-10-23T12:50:00.000Z",
+  "revision": 6,
+  "generated_at": "2026-11-11T04:25:47.254Z",
   "agents": {
-    "lead": {"persistent_name": "lead", "universe": "descriptive", "created_at": "2026-10-23T12:50:00.000Z", "legacy_named": false, "status": "active"},
-    "core-engineer": {"persistent_name": "core-engineer", "universe": "descriptive", "created_at": "2026-10-23T12:50:00.000Z", "legacy_named": false, "status": "active"},
-    "polyglot-engineer": {"persistent_name": "polyglot-engineer", "universe": "descriptive", "created_at": "2026-10-23T12:50:00.000Z", "legacy_named": false, "status": "active"},
-    "tester": {"persistent_name": "tester", "universe": "descriptive", "created_at": "2026-10-23T12:50:00.000Z", "legacy_named": false, "status": "active"},
-    "docs": {"persistent_name": "docs", "universe": "descriptive", "created_at": "2026-10-23T12:50:00.000Z", "legacy_named": false, "status": "active"}
+    "lead": {
+      "display_name": "Lead",
+      "persistent_name": "Lead",
+      "role": "Lead / Architect",
+      "universe": "descriptive",
+      "status": "active",
+      "created_at": "2026-10-23T12:50:00.000Z",
+      "updated_at": "2026-11-11T04:10:45.430Z",
+      "legacy_named": false
+    },
+    "core-engineer": {
+      "display_name": "Core Engineer",
+      "persistent_name": "Core Engineer",
+      "role": "Core Engineer",
+      "universe": "descriptive",
+      "status": "active",
+      "created_at": "2026-10-23T12:50:00.000Z",
+      "updated_at": "2026-11-11T04:10:45.430Z",
+      "legacy_named": false
+    },
+    "polyglot-engineer": {
+      "display_name": "Polyglot Engineer",
+      "persistent_name": "Polyglot Engineer",
+      "role": "Polyglot Engineer",
+      "universe": "descriptive",
+      "status": "active",
+      "created_at": "2026-10-23T12:50:00.000Z",
+      "updated_at": "2026-11-11T04:10:45.430Z",
+      "legacy_named": false
+    },
+    "tester": {
+      "display_name": "Tester",
+      "persistent_name": "Tester",
+      "role": "Tester",
+      "universe": "descriptive",
+      "status": "active",
+      "created_at": "2026-10-23T12:50:00.000Z",
+      "updated_at": "2026-11-11T04:10:45.430Z",
+      "legacy_named": false
+    },
+    "docs": {
+      "display_name": "Docs",
+      "persistent_name": "Docs",
+      "role": "Docs",
+      "universe": "descriptive",
+      "status": "active",
+      "created_at": "2026-10-23T12:50:00.000Z",
+      "updated_at": "2026-11-11T04:10:45.430Z",
+      "legacy_named": false
+    },
+    "commitments-facilitator": {
+      "display_name": "Commitments Facilitator",
+      "persistent_name": "Commitments Facilitator",
+      "role": "Commitments Facilitator",
+      "universe": "descriptive",
+      "status": "active",
+      "created_at": "2026-11-10T23:01:50.522-05:00",
+      "updated_at": "2026-11-11T04:10:45.430Z",
+      "legacy_named": false
+    },
+    "po": {
+      "display_name": "PO",
+      "persistent_name": "PO",
+      "role": "Product Owner",
+      "universe": "descriptive",
+      "status": "active",
+      "created_at": "2026-11-11T04:25:47.254Z",
+      "updated_at": "2026-11-11T04:25:47.254Z",
+      "legacy_named": false
+    }
   },
-  "transaction_id": "41de27ee-4f39-4748-935a-995aa4dc8d32"
+  "transaction_id": "7f417cf4-72b2-4d04-aa6b-94cce18294fe"
 }

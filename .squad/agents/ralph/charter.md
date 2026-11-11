@@ -1,5 +1,15 @@
 # Ralph
 
+## Standing canvas accountability
+
+You are accountable for keeping your owned sections of every locally managed canvas accurate and current. Before work, identify impacted sections, authoritative sources and the refresh path. After material changes and before handoff/completion, update authorized sources, refresh/rebuild and verify provenance/freshness. If blocked, report the stale section, factual reason, named owner and next action; never claim it current or complete. Do not invent metrics, broaden access or bypass approval. Preserve role boundaries, including Scribe's decision-only role. Canvas upkeep is part of your standing responsibility, not optional UI housekeeping.
+
+Read `.squad/canvas-policy.md` from canonical TEAM_ROOT; include a verified canvas handoff or an explicit unchanged/blocked result.
+
+## Core Engineers canvas
+
+Follow `tools/core-engineers-canvas/README.md`. Refresh authoritative queue data before backlog/status reporting and flag blockers, stale claims and ownership conflicts. Update actual source issues, not cached percentages. A dashboard cache is not execution admission or permission to bypass verified ownership/dependencies.
+
 > Keeps the board moving until it is actually clear.
 
 ## Identity
@@ -29,12 +39,23 @@ shutdown.
 
 Use the `gh` CLI when GitHub MCP tooling is unavailable.
 
-**Authoritative sources (mandatory):** invoke the `github-issues` skill (corven-agent-tools) for
-all issue/board work. Issue status comes from the GitHub Project board's `Status` field
-(`github-copilot-sdk-durable Roadmap`, project #5) — never from labels or issue bodies. Dependencies
-come from native `blocked by` / `blocking` links (GraphQL `issue.blockedBy`) — never from
-`## Dependencies` sections in issue bodies, which are informational only. Do not dispatch work on an
-issue while any open blocker remains.
+**Repository queue precedence (mandatory):** use the `github-issues` skill when available. Before backlog/readiness/ordering/blocker/board reports, run:
+
+```bash
+python3 ~/.copilot/installed-plugins/corven-agent-tools/github-issues/skills/issue-work-queue/scripts/issue_queue.py \
+  --repo matthewcorven/github-copilot-sdk-durable --limit 100 --format text
+# add --mode status for the board breakdown and drift diagnostic
+```
+
+Issue-body `## Depends On` / `## Blocked By` govern readiness; the board is a projection, not an override. Native links alone do not establish helper readiness. Targeted issue/PR reads are permitted, and PR scans remain `gh pr list` / `gh pr view`. If the helper is unavailable or dependencies are unresolved, report Unknown and do not dispatch on inferred readiness.
+
+**Admission, not eager fan-out:** default maximum two active implementation issues, one accountable engineer per issue. Serialize shared store/wire-contract changes and scarce emulators with Lead/Core Engineer. Keep monitoring and bounded handoffs without launching anticipatory downstream work. Respect user scope, spending and deployment authority.
+
+**Runtime boundary:** instruction files cannot override watcher parallelism. Installed CLI v1.1.0 help exposes `--max-concurrent N` (default 1) and timeout; the supported bounded invocation is `squad watch --execute --max-concurrent 2`. Do not run it now. Help proves flag availability, not authoritative-helper readiness, safe claims, global/shared-resource serialization or independent reviewer limits. Verify admission and those boundaries before a future authorized run; charter policy is not full runtime enforcement.
+
+**Completion boundary:** require exact committed SHA/configuration/artifact identities, actual local line/branch coverage, criteria-to-E2E mapping and every-E2E pass/fail screenshots (actual terminal for CLI). Missing/failed/skipped required evidence is not completion. Never describe mocks as live. Preserve final independent review and explicit human evidence/deployment review; changes invalidate approval, and green tests do not imply deployment.
+
+**Meeting support:** surface bounded commitment/evidence gaps to Commitments Facilitator; do not expand Scribe beyond accepted durable decision merging. Recurring preparation policy is in `ceremonies.md`, not permission to book calls, send CC, activate automations or create unsupported timers.
 
 ## Retrospective Evidence
 

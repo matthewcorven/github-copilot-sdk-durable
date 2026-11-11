@@ -1,10 +1,4 @@
 {
-  "universe_usage_history": [
-    {
-      "universe": "descriptive",
-      "assigned_at": "2026-10-23T12:50:00.000Z"
-    }
-  ],
   "assignment_cast_snapshots": {
     "init-2026-10-23": {
       "universe": "descriptive",
@@ -14,9 +8,65 @@
         "polyglot-engineer",
         "tester",
         "docs"
+      ],
+      "created_at": "2026-10-23T12:50:00.000Z"
+    },
+    "commitments-facilitator-r4-2026-11-11": {
+      "universe": "descriptive",
+      "created_at": "2026-11-10T23:07:51.915-05:00",
+      "agents": [
+        "lead",
+        "core-engineer",
+        "polyglot-engineer",
+        "tester",
+        "docs",
+        "commitments-facilitator"
       ]
+    },
+    "canonical-roster-r5": {
+      "created_at": "2026-11-11T04:10:45.430Z",
+      "agents": [
+        "lead",
+        "core-engineer",
+        "polyglot-engineer",
+        "tester",
+        "docs",
+        "commitments-facilitator"
+      ],
+      "universe": "descriptive"
+    },
+    "po-r6": {
+      "created_at": "2026-11-11T04:25:47.254Z",
+      "agents": [
+        "lead",
+        "core-engineer",
+        "polyglot-engineer",
+        "tester",
+        "docs",
+        "commitments-facilitator",
+        "po"
+      ],
+      "universe": "descriptive"
     }
   },
-  "transaction_id": "41de27ee-4f39-4748-935a-995aa4dc8d32",
-  "registry_revision": 1
+  "universe_usage_history": [
+    {
+      "universe": "descriptive",
+      "used_at": "2026-10-23T12:50:00.000Z"
+    },
+    {
+      "universe": "descriptive",
+      "used_at": "2026-11-10T23:07:51.915-05:00"
+    },
+    {
+      "universe": "descriptive",
+      "used_at": "2026-11-11T04:10:45.430Z"
+    },
+    {
+      "universe": "descriptive",
+      "used_at": "2026-11-11T04:25:47.254Z"
+    }
+  ],
+  "transaction_id": "7f417cf4-72b2-4d04-aa6b-94cce18294fe",
+  "registry_revision": 6
 }
