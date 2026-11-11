@@ -1,0 +1,72 @@
+{
+  "schema": "core-engineers-scope/v1",
+  "status": "provisional",
+  "note": "Provisional MVP acceptance inventory derived from the user's service requirements and issue #222. PO must approve the denominator before this is an official MVP forecast. Repository setup and closed issues are not service acceptance or deployment permission.",
+  "repository": "matthewcorven/github-copilot-sdk-durable",
+  "maxAgeSeconds": 3600,
+  "evidenceManifest": "docs/core-engineers-evidence.json",
+  "slices": [
+    {"id":"durability","title":"Durable foundation","owner":"Core Engineer","priority":"P1","criteria":[
+      {"id":"durable-recovery","title":"Committed checkpoints survive process death with tested recovery","sourcePaths":["lib/Durable.cs","tests/Durable.Tests/RuntimeHostCliTests.cs"],"requiresE2E":true},
+      {"id":"isolation","title":"Concurrent clients, forks and store failures preserve documented guarantees","sourcePaths":["lib/Durable.cs","tests/Durable.Tests/ForkTests.cs"],"requiresE2E":true},
+      {"id":"ports","title":"C#/TypeScript/Python contracts and existing stores remain compatible","sourcePaths":["lib/ts/durable.ts","lib/py/durable.py","examples/parity.json"],"requiresE2E":true}
+    ]},
+    {"id":"lifecycle","title":"Squad member lifecycle","owner":"Core Engineer","priority":"P1","criteria":[
+      {"id":"configure-members","title":"Client architect can configure and activate service agents","sourcePaths":["src/Durable.Runtime/AgentDefinitionValidator.cs"],"requiresE2E":true},
+      {"id":"pause-resume","title":"Pause/resume drains or preserves in-flight ownership without loss","sourcePaths":["src/Durable.Runtime/Scheduler.cs"],"requiresE2E":true},
+      {"id":"handoff","title":"Replacement and interrupted shifts resume through audited durable handoffs","sourcePaths":["lib/Durable.cs","src/Durable.Runtime/Scheduler.cs"],"requiresE2E":true}
+    ]},
+    {"id":"customization","title":"Workflow, skills and tools","owner":"Lead","priority":"P1","criteria":[
+      {"id":"workflow-config","title":"Versioned configuration defines bounded workflows and ownership","sourcePaths":["src/Durable.Runtime/AgentDefinitionValidator.cs","src/Durable.Runtime/Scheduler.cs"],"requiresE2E":true},
+      {"id":"linked-tools","title":"Optional linked skills/MCPs/tools require explicit permission and fail safely","sourcePaths":["src/Durable.Runtime/AgentDefinitionValidator.cs","lib/SandboxSupport.cs"],"requiresE2E":true},
+      {"id":"prompt-hooks","title":"System-prompt arrangement and hooks have tested precedence and trust boundaries","sourcePaths":["lib/Durable.cs","src/Durable.Runtime/AgentDefinitionValidator.cs"],"requiresE2E":true}
+    ]},
+    {"id":"operations","title":"Shifts and commitment communication","owner":"PO","priority":"P1","criteria":[
+      {"id":"shift-order","title":"Service shifts resume priority or select eligible work by priority then age","sourcePaths":["src/Durable.Runtime/Scheduler.cs"],"requiresE2E":true},
+      {"id":"notifications","title":"Daily snapshot publication, offline gaps and overlap are observable","sourcePaths":["src/Durable.Runtime/RunResult.cs","src/Durable.Runtime/HostShutdown.cs"],"requiresE2E":true},
+      {"id":"eta-risk","title":"Product goals, ETA assumptions, dependencies and support runway are reviewable","sourcePaths":[".squad/agents/po/charter.md",".squad/agents/commitments-facilitator/charter.md"],"requiresE2E":false}
+    ]},
+    {"id":"evidence","title":"Local evidence and deployment gate","owner":"Tester","priority":"P1","criteria":[
+      {"id":"local-environment","title":"Aspire/emulators/disposable dependencies reproduce the service locally","sourcePaths":["src/Durable.Runtime/Program.cs"],"requiresE2E":true},
+      {"id":"e2e-evidence","title":"Every acceptance path has local tests, coverage and per-E2E screenshots","sourcePaths":["scripts/validate.sh","tests/Durable.Tests/Durable.Tests.csproj"],"requiresE2E":true},
+      {"id":"deployment-gate","title":"Deployment fails closed without reviewed candidate-specific human approval","sourcePaths":["docs/RELEASING.md","real-world-scenarios/band-d-hosted-foundry-agent/infra/deploy.sh"],"requiresE2E":true}
+    ]},
+    {"id":"adoption","title":"Product scope, onboarding and support","owner":"PO","priority":"P1","criteria":[
+      {"id":"scope-plan","title":"PO/Architect approve MVP scope, dependency-complete breakdown and estimates","sourcePaths":[".squad/agents/po/charter.md","docs/DESIGN.md"],"requiresE2E":false},
+      {"id":"worked-use-case","title":"Team hiring/pausing and workflow customization are a real service walkthrough","sourcePaths":["README.md","docs/DESIGN.md"],"requiresE2E":true},
+      {"id":"support","title":"Configuration migration, troubleshooting, rollback and support ownership documented","sourcePaths":["docs/RELEASING.md","docs/DESIGN.md"],"requiresE2E":false}
+    ]}
+  ],
+  "systems": [
+    {"id":"store","title":"Durability / stores","owner":"Core Engineer","paths":["lib/Durable.cs","lib/Durable.DependencyInjection.cs"],"description":"Shared checkpoint, fork, transaction and recovery semantics; no scenario-private fork."},
+    {"id":"runtime","title":"Runtime / transports / scheduling","owner":"Core Engineer","paths":["src/Durable.Runtime/Scheduler.cs","src/Durable.Runtime/HttpTransport.cs","src/Durable.Runtime/RpcTransport.cs"],"description":"Lifecycle, admission, process recovery and transport behavior."},
+    {"id":"ports","title":"Language ports","owner":"Polyglot Engineer","paths":["lib/ts/durable.ts","lib/py/durable.py","examples/parity.json"],"description":"Cross-language semantics, store compatibility and parity evidence."},
+    {"id":"quality","title":"Quality and acceptance","owner":"Tester","paths":["scripts/validate.sh","tests/Durable.Tests/Durable.Tests.csproj"],"description":"Local results, coverage, every-E2E screenshots and independent evidence review."},
+    {"id":"product","title":"Goals / ownership / roadmap","owner":"PO","paths":[".squad/team.md",".squad/routing.md",".squad/agents/po/charter.md"],"description":"Client-architect-configured lifecycle/workflow product scope; ETA/risk and support runway."},
+    {"id":"communication","title":"Readiness and presentations","owner":"Commitments Facilitator","paths":[".squad/ceremonies.md",".squad/agents/commitments-facilitator/charter.md"],"description":"Source freshness, traceable snapshots, meeting preparation and corrective-action closure."}
+  ],
+  "duties": {
+    "squad":"Coordinator: reconcile cross-slice ownership, stale blockers and the admission budget before dispatch and at handoff.",
+    "po":"PO: approve/version the MVP denominator; update priorities, goal/ETA assumptions and acceptance links each shift.",
+    "lead":"Architect: maintain system boundaries, technical dependencies and acceptance design; resolve scope/configuration conflicts.",
+    "core-engineer":"Canvas technical maintainer: local process/restart, source-cache/integration configuration, credential availability, lock recovery and dependency/test maintenance; also own runtime/store evidence.",
+    "polyglot-engineer":"Update language parity/store-compatibility evidence and cross-port risks after each change.",
+    "tester":"Publish qualifying local reports, coverage, every-E2E screenshots and independent acceptance records; never infer completion from source presence.",
+    "docs":"Keep source/runbook links, onboarding and support gaps current; flag missing provenance before presentations.",
+    "commitments-facilitator":"Canvas accountable operating owner: refresh/publication and freshness, configuration-review scheduling/agenda, missed-run escalation and unresolved owner/deadline/evidence gaps.",
+    "scribe":"Merge accepted decisions only; notify the facilitator when canonical decision evidence changes. Do not fabricate canvas/meeting records.",
+    "ralph":"Refresh the authoritative queue before priority/status reporting; flag blockers and ownership conflicts without rewriting acceptance.",
+    "rai":"Report relevant responsible-AI/content-safety findings and evidence links through governed decisions; do not change completion percentages.",
+    "fact-checker":"Check canvas claims, source SHA/time, evidence mode and denominator before external presentations; flag unsupported completion claims."
+  },
+  "programBands": [
+    {"id":"a","title":"A · Local dev tool","label":"band:a"},
+    {"id":"b","title":"B · Local automation","label":"band:b"},
+    {"id":"c","title":"C · CI / repository","label":"band:c"},
+    {"id":"d","title":"D · Hosted agent","label":"band:d"},
+    {"id":"e","title":"E · Mobile / offline","label":"band:e"},
+    {"id":"f","title":"F · Multi-agent","label":"band:f"},
+    {"id":"g","title":"G · Long-running","label":"band:g"},
+    {"id":"matrix","title":"Matrix / assessment","issues":[180,181]}
+  ]
+}

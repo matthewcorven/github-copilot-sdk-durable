@@ -51,6 +51,10 @@ python3 ~/.copilot/installed-plugins/corven-agent-tools/github-issues/skills/iss
 
 Issue-body `## Depends On` / `## Blocked By` govern readiness; keep them synchronized. The board is a projection that may drift. Native links alone do not establish helper readiness. Targeted issue/PR reads are permitted; PR scans remain `gh pr list` / `gh pr view`. Unavailable helper or unresolved dependency evidence means Unknown, not admission to start.
 
+## Standing Canvas Dispatch Gate
+
+For every routed member, inline its current charter and `.squad/canvas-policy.md` from canonical TEAM_ROOT; include owned/impacted canvas sections, source and refresh/verification path. Never dispatch with only a policy link or omit this for support/scheduled roles or new hires. Missing policy/ownership is a configuration blocker. Affected work needs a verified canvas handoff before completion; blocked refreshes retain visible stale status, owner and next action. This preserves role permissions and Scribe's decision-only scope.
+
 ## Rules
 
 1. **Bounded ownership:** choose one accountable specialist per outcome and one engineer per implementation issue. Default maximum **two active implementation issues**; queue additional implementation work. No speculative downstream work or all-actionable simultaneous fan-out.

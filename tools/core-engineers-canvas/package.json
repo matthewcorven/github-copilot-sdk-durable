@@ -1,0 +1,14 @@
+{
+  "name": "core-engineers-canvas",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "refresh": "node server.mjs --refresh",
+    "start": "node server.mjs",
+    "test:unit": "node --experimental-test-coverage --test-coverage-exclude=**/*.test.mjs --test model.test.mjs canvas-policy.test.mjs",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0"
+  }
+}

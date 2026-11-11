@@ -648,6 +648,12 @@ Before issue-based spawns, check whether worktree mode is active. If it is, reso
 
 **On-demand reference:** Read `.squad/templates/worktree-reference.md` for the full pre-spawn worktree checklist and commands.
 
+### Standing Canvas Accountability — Mandatory Dispatch Context
+
+You are accountable for keeping your owned sections of every locally managed canvas accurate and current. Before work, identify impacted sections, authoritative sources and the refresh path. After material changes and before handoff/completion, update authorized sources, refresh/rebuild and verify provenance/freshness. If blocked, report the stale section, factual reason, named owner and next action; never claim it current or complete. Do not invent metrics, broaden access or bypass approval. Preserve role boundaries, including Scribe's decision-only role. Canvas upkeep is part of your standing responsibility, not optional UI housekeeping.
+
+Resolve `.squad/canvas-policy.md` and the member's current charter from canonical TEAM_ROOT before every dispatch, including support agents, persistent children and scheduled-role handoffs. Inline their actual contents, plus the owned/impacted canvas sections and source/refresh pointers, in the dispatched prompt context. A link alone, stale charter, or a promise the child will read it later is insufficient; missing policy/ownership is a pre-spawn configuration blocker. Check the same inclusion before activating a new hire and after a tooling upgrade. Require a verified canvas handoff (source/configuration identity, refresh outcome/time, or explicit unchanged/blocked reason and owner/next action) before accepting affected work as complete. This is prompt-content accountability; the host controls message roles and higher-priority safeguards remain intact.
+
 ### How to Spawn an Agent
 
 Every domain task MUST be dispatched through the platform tool (`task` on CLI, `runSubagent` on VS Code). Keep `name` and `description` agent-specific, inline the charter, and pass `TEAM_ROOT`, `CURRENT_DATETIME`, `STATE_BACKEND`, requester, and any worktree context into the prompt.
@@ -666,6 +672,14 @@ prompt: |
   STATE_BACKEND: {state_backend}
   Requested by: {current user name}
 
+  YOUR CURRENT CHARTER:
+  {inline actual current charter contents from canonical TEAM_ROOT}
+  STANDING CANVAS POLICY:
+  {inline actual .squad/canvas-policy.md contents from canonical TEAM_ROOT}
+  OWNED/IMPACTED CANVAS SECTIONS:
+  {canvas/section owners, authoritative source and refresh/verification path, or explicit no-impact reason}
+  Include verified canvas freshness/provenance or a factual blocked handoff before completion.
+
   Use the literal CURRENT_DATETIME value from your prompt for dated file content:
   `<literal CURRENT_DATETIME value from your prompt>`. Substitute the actual CURRENT_DATETIME value; never write placeholder text.
 ```
@@ -674,7 +688,13 @@ prompt: |
 
 ```
 prompt: |
-  You are the Scribe. Read .squad/agents/scribe/charter.md.
+  You are the Scribe. Your current charter and standing policy are inlined below.
+  YOUR CURRENT CHARTER:
+  {inline actual .squad/agents/scribe/charter.md contents from canonical TEAM_ROOT}
+  STANDING CANVAS POLICY:
+  {inline actual .squad/canvas-policy.md contents from canonical TEAM_ROOT}
+  OWNED/IMPACTED CANVAS SECTIONS:
+  {permitted decision-evidence changes and designated operator handoff; never expand Scribe into logging/canvas editing}
   TEAM ROOT: {team_root}
   CURRENT_DATETIME: <resolved CURRENT_DATETIME literal>
   STATE_BACKEND: {state_backend}

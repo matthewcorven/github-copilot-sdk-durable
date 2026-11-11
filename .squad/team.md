@@ -55,6 +55,14 @@ python3 ~/.copilot/installed-plugins/corven-agent-tools/github-issues/skills/iss
 - The project board is a projection and may drift, not an overriding source. Targeted issue/PR reads are permitted; PR scans use `gh pr list` / `gh pr view`.
 - Use the `github-issues` skill when available for issue work; if the helper is unavailable or dependencies are ambiguous, report Unknown and do not infer readiness from board/native links.
 
+## Standing accountability for every locally managed canvas
+
+The user requires every involved AI agent to own the accuracy and freshness of its canvas sections as part of its standing role, not optional UI housekeeping. Canonical policy: `.squad/canvas-policy.md`. Every member charter contains the mandatory clause; Coordinator must inline the full current charter and policy at every dispatch, identify affected sections/source/refresh integration, and verify the freshness/provenance handoff before accepting affected work as complete. Scheduled roles and new hires follow the same requirement. Missing permissions/tooling/ownership means an explicit stale/blocked handoff with owner and next action, never fabricated completion. The runtime controls prompt message roles; this repository does not override platform safeguards.
+
+## Core Engineers Canvas — all-member upkeep
+
+Project dashboard: `tools/core-engineers-canvas/README.md`. Accountable operating owner: Commitments Facilitator; technical maintainer: Core Engineer; MVP scope/configuration product owner: PO; technical configuration approver: Lead / Architect, with Tester owning evidence contracts. First configuration-review proposal and scheduling prerequisites are recorded in that runbook; no calendar booking is implied. Explicit ownership/slice/duty configuration: `tools/core-engineers-canvas/scope.json`. Every member follows its charter's canvas duty. Coordinator reconciles cross-slice ownership, blockers and admission budget before dispatch and handoff. Refresh the detached committed-source clone and authoritative queue before user-facing status/meeting snapshots with `node tools/core-engineers-canvas/server.mjs --refresh`; disclose failures, stale data and uncommitted source excluded from that clone. Never hand-edit cached percentages. PO must approve/version the provisional MVP denominator; Tester/independent review supply genuine acceptance evidence. Source presence, reference-program issue closure, accepted criteria, code coverage and deployment authorization are distinct facts. No cache or dashboard grants execution/deployment permission.
+
 ## Operating Responsibilities and Limits
 
 - Coordinator + Ralph remain the coordination core. PO owns product goals, the delivery path, priority, ETA/risk communication and collaboration within the user's mandate. Lead (persistent key `lead`) remains the Architect and technical authority; the user retains scope, spend and deployment authority.
