@@ -220,6 +220,62 @@ public class EffectiveModelTests
         Assert.Equal("turn-model", runtime.EffectiveModel.Model);
     }
 
+    /// <summary>
+    /// A session.start emitted before the conversation subscribes is recovered from session
+    /// history when the conversation attaches.
+    /// </summary>
+    [Fact]
+    public async Task Attach_RecoversSessionStartEmittedBeforeTheSubscription()
+    {
+        await using var client = new CopilotClient(new CopilotClientOptions
+        {
+            Connection = RuntimeConnection.ForStdio(
+                ReplayRuntimePath(), ["--fixture", ReplayFixturePath("tool-round-trip.json")]),
+        });
+        await client.StartAsync();
+
+        using var store = DurableStore.CreateEphemeral();
+        await using var runtime = new DurableRuntime(new ExtensionRegistry());
+        runtime.Attach(client, store, ownsClient: false, ownsStore: false);
+
+        var session = await client.CreateSessionAsync(new SessionConfig
+        {
+            SessionId = "session-lost-start",
+            Model = "replay-model",
+        });
+
+        var history = await session.GetEventsAsync();
+        var emittedStart = Assert.IsType<SessionStartEvent>(Assert.Single(history));
+        Assert.Equal("replay-model", emittedStart.Data.SelectedModel);
+
+        var record = await store.CommitAsync(tx => Task.FromResult(tx.CreateConversation()));
+        var conversation = new DurableConversation(runtime, session, record);
+        conversation.Attach(session);
+
+        var report = await conversation.WaitForEffectiveModelAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(report.HasModel);
+        Assert.Equal("replay-model", report.Model);
+        Assert.Equal("session", report.Source);
+
+        conversation.Detach();
+    }
+
+    private static string ReplayRuntimePath()
+    {
+        var name = OperatingSystem.IsWindows() ? "ReplayRuntime.exe" : "ReplayRuntime";
+        var path = Path.Combine(AppContext.BaseDirectory, name);
+        Assert.True(File.Exists(path), $"the replay runtime was not built next to the tests: {path}");
+        return path;
+    }
+
+    private static string ReplayFixturePath(string name)
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "fixtures", name);
+        Assert.True(File.Exists(path), $"the fixture was not copied next to the tests: {path}");
+        return path;
+    }
+
     private static SessionEvent Event(string json) => SessionEvent.FromJson(json);
 
     /// <summary>
