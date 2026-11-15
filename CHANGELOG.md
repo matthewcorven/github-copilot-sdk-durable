@@ -31,6 +31,17 @@ See [`docs/RELEASING.md`](docs/RELEASING.md) for the release procedure.
   parked on an external event settles with `TaskOutcome("pending")`; `failed` is reserved for a
   run that had nowhere to continue. Every port agrees. (#160)
 
+- **A re-entrant memo call fails instead of hanging: `DurableCommitReentryException`**
+  (`DurableCommitReentryException` in all three ports). The store's commit gate is not
+  reentrant, so `TaskRuntime.MemoAsync` called from inside a `CommitAsync` / `commitAsync` /
+  `commit_async` callback used to wait for a release only the enclosing commit could give — a
+  silent infinite hang with no stack trace. An async-local commit scope now makes the gate
+  refuse that re-entry with a catchable exception that names the operation, the commit and the fix
+  (`Transaction.Memo` / `transaction.memo`). A *different* task or thread calling the same method
+  while a commit is in flight is outside the committing flow and waits normally, and
+  `TaskRuntime.MemoAsync` from a phase handler outside a commit is unchanged.
+  No store bytes change: the guard is in-memory runtime state. C#, TypeScript and Python. (#201)
+
 ### Fixed
 
 - **The non-transaction task commit dropped `WaitingOn`.** `TaskCommit.Waiting` through

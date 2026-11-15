@@ -526,9 +526,15 @@ export class TaskRuntime {
   /**
    * Reads an idempotency memo, or writes one when `value` is supplied.
    *
-   * Call this from a phase handler, not from inside a `commitAsync` callback: it takes the
-   * store's commit gate, which the commit already holds, so it does not return. Use
-   * `transaction.memo` inside a transaction.
+   * Call this from a phase handler, not from inside a `commitAsync` callback: it takes the store's
+   * commit gate, and the commit running the callback already holds it, so the call cannot make
+   * progress. Rather than wait for a release the commit cannot give, it throws
+   * `DurableCommitReentryException` -- an error a caller can catch, log and fix, instead of a run
+   * that stops.
+   *
+   * Inside a transaction, use `transaction.memo`. It writes the memo into the task's memo map
+   * before the transaction commits, so the memo is saved with the checkpoint that surrounds it and
+   * discarded if that commit rolls back.
    */
   memoAsync(key: string, value?: JsonValue): Promise<JsonValue | null> {
     return this.store.memoAsync(this.task.id, key, value);
@@ -661,6 +667,34 @@ export class DurableRecoveryRequiredError extends Error {
         "The transcript is gone, so re-create the conversation deliberately rather than continuing with an empty replacement.",
     );
     this.name = "DurableRecoveryRequiredError";
+  }
+}
+
+/**
+ * Raised when an operation that takes the store's commit gate is called from inside a commit on
+ * that same store.
+ *
+ * The gate is held for the whole of a commit's callback and is not reentrant, so a re-entry would
+ * wait for a release only the enclosing commit can perform -- and the enclosing commit is awaiting
+ * the call. That is a hang with no stack trace and no time limit, so the gate refuses the re-entry
+ * instead of queueing it.
+ *
+ * The catchable path is also the fix: inside a transaction, write the memo with `transaction.memo`.
+ */
+export class DurableCommitReentryException extends Error {
+  constructor(
+    readonly operation: string,
+    readonly commitOperation: string,
+  ) {
+    super(
+      `${operation} was called from inside ${commitOperation}'s callback, on the same store. ` +
+        "That commit holds the store's commit gate for the whole callback and the gate is not " +
+        "reentrant, so the inner call would wait for a release that only the outer commit can " +
+        "give -- it would not return. Use transaction.memo inside the transaction: it writes the " +
+        "memo in the same commit as the checkpoint, so nothing is written twice and the memo is " +
+        "never lost between two commits.",
+    );
+    this.name = "DurableCommitReentryException";
   }
 }
 
@@ -1477,6 +1511,19 @@ export class DurableStore {
   private readonly listeners = new Set<CommitListener>();
 
   private gateTail: Promise<void> = Promise.resolve();
+
+  /**
+   * The commit whose callback is running on this store in the current async flow, if any.
+   *
+   * This is what makes the non-reentrant gate refuse a re-entry instead of hanging on it. It
+   * deliberately does not identify the gate's owner: an async context is captured by each flow
+   * that awaits inside the callback, so it cannot say whether a caller is the committing flow
+   * itself or a different one. What it does answer reliably is "this flow is inside a commit",
+   * and that is exactly the condition under which the gate would deadlock. A different task is
+   * outside this flow, so it sees no context and waits normally.
+   */
+  private commitScope: AsyncLocalStorage<string> | null = null;
+
   private schedulerOwner: object | null = null;
   private taskScheduler: ((taskId: string, cancellationToken: AbortSignal) => void) | null = null;
 
@@ -1648,7 +1695,7 @@ export class DurableStore {
 
   /** Runs a transaction. Everything written inside is saved together, or discarded if it throws. */
   async commitAsync<T>(body: (tx: Transaction) => T | Promise<T>): Promise<T> {
-    return this.withGate(async () => {
+    return this.withGate("DurableStore.commitAsync", async () => {
       const transaction = new Transaction(this);
       this.provider.beginTransaction();
       let result: T;
@@ -1698,7 +1745,7 @@ export class DurableStore {
       );
     }
 
-    return this.withGate(async () => {
+    return this.withGate("DurableStore.raiseEventAsync", async () => {
       const waiting = this.provider.tasks
         .filter((task) => task.status === TaskStatus.Waiting && task.waitingOn.includes(eventName))
         .map((task) => task.id);
@@ -1765,7 +1812,7 @@ export class DurableStore {
     taskId: string,
     commit: (tx: Transaction) => TaskCommit | Promise<TaskCommit>,
   ): Promise<TaskCommit> {
-    return this.withGate(async () => {
+    return this.withGate("TaskRuntime.commitInTransactionAsync", async () => {
       const task = this.provider.task(taskId);
       if (task === null) {
         return TaskCommit.failed("unknown task");
@@ -1824,7 +1871,7 @@ export class DurableStore {
     taskId: string,
     commit: () => TaskCommit | Promise<TaskCommit>,
   ): Promise<TaskCommit> {
-    return this.withGate(async () => {
+    return this.withGate("TaskRuntime.commitAsync", async () => {
       const task = this.provider.task(taskId);
       if (task === null) {
         return TaskCommit.failed("unknown task");
@@ -1870,7 +1917,7 @@ export class DurableStore {
 
   /** Reads or writes an idempotency memo. */
   async memoAsync(taskId: string, key: string, value?: JsonValue): Promise<JsonValue | null> {
-    return this.withGate(async () => {
+    return this.withGate("TaskRuntime.memoAsync", async () => {
       const task = this.provider.task(taskId);
       if (task === null) {
         return null;
@@ -1971,7 +2018,7 @@ export class DurableStore {
    * no-op.
    */
   async refreshAsync(): Promise<void> {
-    await this.withGate(async () => {
+    await this.withGate("DurableStore.refreshAsync", async () => {
       if (this.provider.isPersistent) {
         return;
       }
@@ -2003,7 +2050,20 @@ export class DurableStore {
     }
   }
 
-  private async withGate<T>(body: () => Promise<T>): Promise<T> {
+  /**
+   * Runs a gate-held operation, marking the flow as inside it so a re-entry from its callback is
+   * refused rather than queued behind it.
+   *
+   * A re-entry is not a slow call, it is a hang: the gate is not reentrant, so the inner call
+   * waits for the release the outer one is holding and cannot reach. Refusing it here turns that
+   * into an error a caller can catch.
+   */
+  private async withGate<T>(operation: string, body: () => Promise<T>): Promise<T> {
+    const commit = this.commitScope?.getStore();
+    if (commit !== undefined) {
+      throw new DurableCommitReentryException(operation, commit);
+    }
+
     const previous = this.gateTail;
     let release!: () => void;
     this.gateTail = new Promise<void>((resolve) => {
@@ -2011,8 +2071,9 @@ export class DurableStore {
     });
 
     await previous;
+    this.commitScope ??= new AsyncLocalStorage<string>();
     try {
-      return await body();
+      return await this.commitScope.run(operation, body);
     } finally {
       release();
     }
@@ -2091,8 +2152,9 @@ export class Transaction {
    *
    * `taskRuntime.memoAsync` is the form to call from a phase handler, outside a transaction.
    * It takes the store's commit gate, and so does the commit that is running the handler, so
-   * calling it from inside a commit callback waits for a release that cannot happen: the gate
-   * is not reentrant and the callback cannot return. That is a hang, not an error.
+   * calling it from inside a commit callback cannot make progress: the gate is not reentrant and
+   * the callback cannot return. It therefore throws `DurableCommitReentryException` rather than
+   * waiting.
    *
    * This method exists for the one shape the other cannot express: an external effect whose
    * memo has to commit with the checkpoint, so a crash between the effect and its record

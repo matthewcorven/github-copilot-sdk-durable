@@ -21,6 +21,7 @@ from durable import (
     DocumentDefinition, DocumentHistory, ForkPolicy, PromptSection, ForkIntent, ForkIntentState, FORK_DOCUMENT,
     EXTERNAL_EVENT_MEMO_KEY,
     DurableRecoveryRequiredException,
+    DurableCommitReentryException,
 )
 from copilot.tools import Tool, ToolResult
 from copilot import CopilotClient, RuntimeConnection
@@ -2213,6 +2214,106 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):
             await asyncio.wait_for(store.commit_async(fail), 10)
         self.assertNotIn("effect/half-done", store.task(record.id).memos)
+        store.close()
+
+    async def test_memo_async_inside_a_commit_raises_instead_of_hanging(self):
+        store = DurableStore.create(DurableStoreOptions())
+        definition = DurableTask.define_phases(
+            "memo-async-inside-commit", lambda: {"phase": "run"}, {"run": lambda i, c, r: r.commit_async(
+                lambda: TaskCommit.running({"phase": "run"}))})
+
+        async def create(tx):
+            return tx.create_task(definition)
+
+        record = await store.commit_async(create)
+
+        async def stage(tx):
+            # A watchdog turns a regression back to the hang into a fast failure rather than a
+            # stalled suite.
+            with self.assertRaises(DurableCommitReentryException) as raised:
+                await asyncio.wait_for(store.memo_async(record.id, "k", "written"), 5)
+            self.assertEqual(raised.exception.operation, "TaskRuntime.memo_async")
+            self.assertIn("transaction.memo", str(raised.exception))
+
+            # The guard rejected the call before it touched any state, so the documented route
+            # still works in the same transaction.
+            tx.memo(record.id, "k", "written")
+
+        await asyncio.wait_for(store.commit_async(stage), 10)
+        self.assertEqual(store.task(record.id).memos["k"], "written")
+        store.close()
+
+    async def test_memo_async_inside_a_store_commit_raises_the_same_exception(self):
+        store = DurableStore.create(DurableStoreOptions())
+        definition = DurableTask.define_phases(
+            "memo-async-inside-store-commit", lambda: {"phase": "run"}, {"run": lambda i, c, r: r.commit_async(
+                lambda: TaskCommit.running({"phase": "run"}))})
+
+        async def create(tx):
+            return tx.create_task(definition)
+
+        record = await store.commit_async(create)
+
+        async def stage(tx):
+            await asyncio.wait_for(store.memo_async(record.id, "k", "written"), 5)
+            return tx
+
+        with self.assertRaises(DurableCommitReentryException) as raised:
+            await asyncio.wait_for(store.commit_async(stage), 10)
+
+        self.assertEqual(raised.exception.operation, "TaskRuntime.memo_async")
+        self.assertEqual(raised.exception.commit_operation, "DurableStore.commit_async")
+        self.assertNotIn("k", store.task(record.id).memos)
+        store.close()
+
+    async def test_memo_async_from_another_task_while_a_commit_is_in_flight_still_completes(self):
+        store = DurableStore.create(DurableStoreOptions())
+        definition = DurableTask.define_phases(
+            "memo-async-concurrent-commit", lambda: {"phase": "run"}, {"run": lambda i, c, r: r.commit_async(
+                lambda: TaskCommit.running({"phase": "run"}))})
+
+        async def create(tx):
+            return tx.create_task(definition)
+
+        record = await store.commit_async(create)
+
+        inside = asyncio.Event()
+        finish = asyncio.Event()
+
+        async def stage(tx):
+            inside.set()
+            await finish.wait()
+            return tx
+
+        commit = asyncio.create_task(store.commit_async(stage))
+        await asyncio.wait_for(inside.wait(), 10)
+
+        # Started while the commit holds the gate: it must queue, not raise. A detector keyed on
+        # the store rather than the context would fail this and pass the re-entry test above.
+        memo = asyncio.create_task(store.memo_async(record.id, "k", "written"))
+        await asyncio.sleep(0.05)
+        self.assertFalse(memo.done(), "the second caller must wait for the commit, not fail")
+
+        finish.set()
+        await asyncio.wait_for(commit, 10)
+        self.assertEqual(await asyncio.wait_for(memo, 10), "written")
+        self.assertEqual(store.task(record.id).memos["k"], "written")
+        store.close()
+
+    async def test_memo_async_outside_a_commit_still_reads_and_writes(self):
+        store = DurableStore.create(DurableStoreOptions())
+        definition = DurableTask.define_phases(
+            "memo-async-outside-commit", lambda: {"phase": "run"}, {"run": lambda i, c, r: r.commit_async(
+                lambda: TaskCommit.running({"phase": "run"}))})
+
+        async def create(tx):
+            return tx.create_task(definition)
+
+        record = await store.commit_async(create)
+
+        self.assertIsNone(await asyncio.wait_for(store.memo_async(record.id, "k"), 10))
+        self.assertEqual(await asyncio.wait_for(store.memo_async(record.id, "k", "written"), 10), "written")
+        self.assertEqual(await asyncio.wait_for(store.memo_async(record.id, "k"), 10), "written")
         store.close()
 
     async def test_initiating_run_cancellation_settles_and_reopens_checkpoint_and_memo(self):

@@ -547,18 +547,18 @@ public class TaskResumeTests
     }
 
     /// <summary>
-    /// The behaviour this pair replaces: `TaskRuntime.MemoAsync` called from inside a commit does
-    /// not return, because it takes the gate the commit already holds.
+    /// The shape that used to hang: `TaskRuntime.MemoAsync` called from inside a commit callback
+    /// now throws a catchable exception that names the fix, instead of waiting for the gate the
+    /// commit already holds.
     /// </summary>
     /// <remarks>
-    /// This is the before half of the before/after control, and it compiles and runs against the
-    /// layer without the transaction-scoped overload. It deliberately exercises the *public* failure
-    /// a caller meets, with a budget, so the hang is a failing assertion rather than a hung suite.
-    /// Delete it when the memo-inside-commit shape is no longer a trap worth fixturing; keep it while
-    /// two entry points for the same concept exist, because the wrong one is the obvious one.
+    /// Before the guard this was an infinite wait — the inner `WaitAsync` queued behind the outer
+    /// hold and the outer hold was awaiting the inner call — so the expectation is deliberately
+    /// expressed as an exception rather than as a completion. The watchdog is still here: a
+    /// regression to the old behaviour must fail this test in seconds rather than hang CI.
     /// </remarks>
     [Fact]
-    public async Task MemoAsyncInsideCommit_DoesNotReturn_BecauseTheGateIsNotReentrant()
+    public async Task MemoAsyncInsideCommit_ThrowsAndNamesTransactionMemo_InsteadOfHanging()
     {
         var store = DurableStore.CreateEphemeral();
         var definition = DurableTask.DefinePhases<Dictionary<string, string>, Dictionary<string, string>>(
@@ -566,13 +566,25 @@ public class TaskResumeTests
             () => new Dictionary<string, string> { ["phase"] = "run" },
             new Dictionary<string, Func<Dictionary<string, string>, Dictionary<string, string>, TaskRuntime, Task<TaskCommit>>>
             {
-                ["run"] = (_, _, runtime) => runtime.CommitAsync(async tx =>
+                ["run"] = (_, _, runtime) => runtime.CommitAsync(async (Transaction tx) =>
                 {
                     var memo = runtime.MemoAsync("k", DurableJson.ToElement("written"));
-                    var finished = await Task.WhenAny(memo, Task.Delay(TimeSpan.FromSeconds(2)));
-                    Assert.NotSame(memo, finished);
-                    return TaskCommit.Completed(DurableJson.ToElement(new Dictionary<string, string>()));
+                    Assert.True(
+                        ReferenceEquals(memo, await Task.WhenAny(memo, Task.Delay(TimeSpan.FromSeconds(5)))),
+                        "the re-entry did not fail within 5s; it is waiting on the commit gate again");
+
+                    var error = await Assert.ThrowsAsync<DurableCommitReentryException>(() => memo);
+                    Assert.Equal("TaskRuntime.MemoAsync", error.Operation);
+                    Assert.Contains("Transaction.Memo", error.Message);
+
+                    // The guard rejected the call before it touched any state, so the documented
+                    // route still works in the same callback: one commit for the effect and its
+                    // record.
+                    tx.Memo(runtime.Task.Id, "k", DurableJson.ToElement("written"));
+                    return TaskCommit.Running(DurableJson.ToElement(new Dictionary<string, string> { ["phase"] = "done" }));
                 }),
+                ["done"] = (_, _, runtime) => runtime.CommitAsync(
+                    () => TaskCommit.Completed(DurableJson.ToElement(new Dictionary<string, string> { ["ok"] = "yes" }))),
             });
 
         var registry = new ExtensionRegistry();
@@ -582,11 +594,100 @@ public class TaskResumeTests
             definition,
             DurableJson.ToElement(new Dictionary<string, string>())));
 
-        // The task never settles: the phase handler is stuck in the inner gate wait, so the run it
-        // sits in cannot finish. The assertion above is what the test is really about; this proves
-        // the stuck run is observable as unfinished rather than as a spurious completion.
-        var settled = await Task.WhenAny(harness.WaitForTaskAsync(record.Id), Task.Delay(TimeSpan.FromSeconds(2)));
-        Assert.NotSame(settled, harness.WaitForTaskAsync(record.Id));
+        var outcome = await WithTimeout(harness.WaitForTaskAsync(record.Id));
+        Assert.Equal("completed", outcome.Status);
+        Assert.Equal("written", store.Task(record.Id)!.Memos["k"].GetString());
+    }
+
+    /// <summary>
+    /// The memo re-entry is refused by, and inside, a `DurableStore.CommitAsync` transaction too —
+    /// the other public way into the gate.
+    /// </summary>
+    [Fact]
+    public async Task MemoAsyncInsideStoreCommit_ThrowsTheSameException()
+    {
+        var store = DurableStore.CreateEphemeral();
+        var definition = CounterTask();
+        var record = await WithTimeout(store.CommitAsync(tx => Task.FromResult(
+            tx.CreateTask(definition, DurableJson.ToElement(new Dictionary<string, int> { ["target"] = 1 })))));
+
+        // The refusal is thrown out of the inner call, so it fails the enclosing commit and the
+        // caller sees it from `CommitAsync` -- a catchable error at the call site, not a stuck
+        // await. The inner call is awaited under a watchdog so a regression to the hang fails here
+        // rather than stalling the suite.
+        var error = await WithTimeout(Assert.ThrowsAsync<DurableCommitReentryException>(() =>
+            store.CommitAsync(async tx =>
+            {
+                var memo = store.MemoAsync(record.Id, "k", DurableJson.ToElement("written"));
+                await Task.WhenAny(memo, Task.Delay(TimeSpan.FromSeconds(5)));
+                await memo;
+                return tx;
+            })));
+
+        Assert.Equal("TaskRuntime.MemoAsync", error.Operation);
+        Assert.Equal("DurableStore.CommitAsync", error.CommitOperation);
+
+        // Nothing was written: the refusal happens before the inner call reaches the provider.
+        Assert.False(store.Task(record.Id)!.Memos.ContainsKey("k"));
+    }
+
+    /// <summary>
+    /// A different task calling `MemoAsync` while a commit is in flight waits for the commit and
+    /// then completes: the guard keys on the async flow, not on the store.
+    /// </summary>
+    /// <remarks>
+    /// This is the false-positive control. A detector that keyed on the store — "a commit is in
+    /// progress, so every memo call fails" — would pass the re-entry test above and break every
+    /// legitimate concurrent caller; the assertion here is what distinguishes the two.
+    /// </remarks>
+    [Fact]
+    public async Task MemoAsyncFromAnotherTaskWhileACommitIsInFlight_StillWaitsAndCompletes()
+    {
+        var store = DurableStore.CreateEphemeral();
+        var definition = CounterTask();
+        var record = await WithTimeout(store.CommitAsync(tx => Task.FromResult(
+            tx.CreateTask(definition, DurableJson.ToElement(new Dictionary<string, int> { ["target"] = 1 })))));
+
+        var insideCommit = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var letTheCommitFinish = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var commit = store.CommitAsync(async (Transaction tx) =>
+        {
+            insideCommit.SetResult(true);
+            await letTheCommitFinish.Task;
+            return tx;
+        });
+
+        await WithTimeout(insideCommit.Task);
+
+        // Started while the commit holds the gate. It must not throw; it must queue behind the
+        // commit, which is the behaviour every concurrent caller depends on.
+        var memo = store.MemoAsync(record.Id, "k", DurableJson.ToElement("written"));
+        Assert.NotSame(memo, await Task.WhenAny(memo, Task.Delay(TimeSpan.FromSeconds(1))));
+
+        letTheCommitFinish.SetResult(true);
+        await WithTimeout(commit);
+
+        Assert.Equal("written", (await WithTimeout(memo))!.Value.GetString());
+        Assert.Equal("written", store.Task(record.Id)!.Memos["k"].GetString());
+    }
+
+    /// <summary>
+    /// The ordinary published path is unchanged: a memo from a phase handler, outside any commit,
+    /// writes and reads back.
+    /// </summary>
+    [Fact]
+    public async Task MemoAsyncOutsideACommit_StillReadsAndWrites()
+    {
+        var store = DurableStore.CreateEphemeral();
+        var definition = CounterTask();
+        var record = await WithTimeout(store.CommitAsync(tx => Task.FromResult(
+            tx.CreateTask(definition, DurableJson.ToElement(new Dictionary<string, int> { ["target"] = 1 })))));
+
+        Assert.Null(await WithTimeout(store.MemoAsync(record.Id, "k", null)));
+        Assert.Equal("written", (await WithTimeout(store.MemoAsync(record.Id, "k", DurableJson.ToElement("written"))))!
+            .Value.GetString());
+        Assert.Equal("written", (await WithTimeout(store.MemoAsync(record.Id, "k", null)))!.Value.GetString());
     }
 
     /// <summary>
