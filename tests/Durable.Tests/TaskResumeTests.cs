@@ -673,6 +673,56 @@ public class TaskResumeTests
     }
 
     /// <summary>
+    /// A task created and scheduled from inside a commit's callback runs on its own flow, so its
+    /// own commit must succeed: the scope belongs to the committing flow, not to work that flow
+    /// started.
+    /// </summary>
+    /// <remarks>
+    /// This is the false-positive control that the concurrent-caller test above does not cover.
+    /// The scope is an `AsyncLocal`, so a fan-out that schedules a child from inside the callback
+    /// inherited it, and the child's first commit was refused as a re-entry it was not — which
+    /// broke `examples/23-child-tasks.cs`. The child here is deliberately scheduled from inside
+    /// the callback, which is exactly the shape that regressed.
+    /// </remarks>
+    [Fact]
+    public async Task ChildTaskScheduledFromInsideACommit_CommitsOnItsOwnFlow()
+    {
+        var store = DurableStore.CreateEphemeral();
+        var registry = new ExtensionRegistry();
+        var childDefinition = CounterTask();
+        var parentDefinition = DurableTask.DefinePhases<Dictionary<string, int>, Dictionary<string, string>>(
+            "test.parent",
+            () => new Dictionary<string, string> { ["phase"] = "fan-out" },
+            new Dictionary<string, Func<Dictionary<string, int>, Dictionary<string, string>, TaskRuntime, Task<TaskCommit>>>
+            {
+                ["fan-out"] = (_, _, runtime) => runtime.CommitAsync(async tx =>
+                {
+                    var child = runtime.CreateChildTask(
+                        tx,
+                        childDefinition,
+                        DurableJson.ToElement(new Dictionary<string, int> { ["target"] = 1 }));
+                    runtime.ScheduleTask(child.Id);
+                    return TaskCommit.Completed(DurableJson.ToElement(new Dictionary<string, int>()));
+                }),
+            });
+        registry.Install(new Extension("fan-out", tasks: [parentDefinition, childDefinition]));
+
+        await using var harness = await DurableHarness.OpenAsync(store, registry);
+
+        var parent = await harness.CreateTaskAsync(
+            parentDefinition, DurableJson.ToElement(new Dictionary<string, int> { ["target"] = 1 }));
+        await WithTimeout(harness.WaitForTaskAsync(parent.Id));
+
+        var child = Assert.Single(store.Tasks, candidate => candidate.OwnerTaskId == parent.Id);
+        var outcome = await WithTimeout(harness.WaitForTaskAsync(child.Id));
+
+        // The refusal would surface as a failed child, so the status is the assertion that the
+        // child's own commit was allowed.
+        Assert.Equal("completed", outcome.Status);
+        Assert.Equal(Durable.TaskStatus.Terminal, store.Task(child.Id)!.Status);
+    }
+
+    /// <summary>
     /// The ordinary published path is unchanged: a memo from a phase handler, outside any commit,
     /// writes and reads back.
     /// </summary>

@@ -4445,6 +4445,11 @@ class DurableHarness:
 
         async def run_core() -> TaskOutcome:
             token = _active_task.set((self, task_id))
+            # The commit scope is a ContextVar, so it flows into tasks created from inside a
+            # commit's callback: a fan-out would inherit the parent's scope and the child's own
+            # commit would be refused as a re-entry it is not. A run is a new flow, so it starts
+            # outside any scope.
+            scope_token = self.store._commit_scope.set(None)
             try:
                 if record is None:
                     missing = TaskOutcome.failed("unknown task")
@@ -4468,6 +4473,7 @@ class DurableHarness:
                 raise
             finally:
                 _active_task.reset(token)
+                self.store._commit_scope.reset(scope_token)
                 self._running_tasks.discard(task_id)
                 self._in_flight.pop(task_id, None)
 

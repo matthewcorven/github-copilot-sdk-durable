@@ -2222,6 +2222,36 @@ public sealed class DurableStore : IDisposable
         }
     }
 
+    /// <summary>
+    /// Runs <paramref name="body"/> outside any commit scope, then restores the caller's scope.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The scope is an <see cref="AsyncLocal{T}"/>, so it flows into continuations — including work
+    /// started from inside a commit's callback. A task created and scheduled by a callback (a
+    /// fan-out) therefore inherits the parent's scope, and its own commit would be refused as a
+    /// re-entry it is not: the child is a new run on its own flow, not a call nested inside the
+    /// parent's commit.
+    /// </para>
+    /// <para>
+    /// Every task run crosses this boundary, so a child always starts outside a scope. Without it
+    /// the guard would turn a legal fan-out into <see cref="DurableCommitReentryException"/>.
+    /// </para>
+    /// </remarks>
+    internal async Task<T> OutsideCommitScopeAsync<T>(Func<Task<T>> body)
+    {
+        var previous = _commitScope.Value;
+        _commitScope.Value = null;
+        try
+        {
+            return await body();
+        }
+        finally
+        {
+            _commitScope.Value = previous;
+        }
+    }
+
     /// <summary>The conversations known to this store.</summary>
     public IReadOnlyCollection<ConversationRecord> Conversations => _provider.Conversations;
 
@@ -5540,7 +5570,7 @@ internal sealed class DurableRuntime : IAsyncDisposable
             return await completion.Task.WaitAsync(cancellationToken);
         }
 
-        var run = RunTaskCoreAsync(taskId, record, completion, cancellationToken);
+        var run = Store.OutsideCommitScopeAsync(() => RunTaskCoreAsync(taskId, record, completion, cancellationToken));
         // Recorded before the first await so disposal can drain a run that is mid-commit.
         _inFlight[taskId] = run;
         try

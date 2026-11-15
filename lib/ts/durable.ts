@@ -2078,6 +2078,23 @@ export class DurableStore {
       release();
     }
   }
+
+  /**
+   * Runs `body` outside any commit scope, then restores the caller's scope.
+   *
+   * The scope is an `AsyncLocalStorage` store, so it flows into continuations — including work
+   * started from inside a commit's callback. A task created and scheduled by a callback (a
+   * fan-out) therefore inherits the parent's scope, and its own commit would be refused as a
+   * re-entry it is not: the child is a new run on its own flow, not a call nested inside the
+   * parent's commit. Every task run crosses this boundary, so a child always starts outside a
+   * scope.
+   */
+  async outsideCommitScope<T>(body: () => Promise<T>): Promise<T> {
+    if (this.commitScope === null) {
+      return body();
+    }
+    return this.commitScope.exit(() => body());
+  }
 }
 
 /** A transaction: the only way to write durable state. */
@@ -2424,7 +2441,8 @@ export class DurableTaskRunner {
 
     this.running.add(taskId);
     const context = { store: this.store, taskId, active: true };
-    const run = activeTask.run(context, () => this.runTaskCoreAsync(taskId, record, completion, cancellationToken));
+    const run = this.store.outsideCommitScope(() =>
+      activeTask.run(context, () => this.runTaskCoreAsync(taskId, record, completion, cancellationToken)));
     // Recorded before the first await so disposal can drain a run that is mid-commit.
     this.inFlight.set(taskId, run);
     try {

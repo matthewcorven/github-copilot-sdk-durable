@@ -2300,6 +2300,39 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.task(record.id).memos["k"], "written")
         store.close()
 
+    async def test_child_task_scheduled_from_inside_a_commit_commits_on_its_own_flow(self):
+        # The commit scope is a ContextVar, so it flows into tasks created from inside a
+        # commit's callback: a fan-out would inherit the parent's scope and the child's own
+        # commit would be refused as a re-entry it is not.
+        store = DurableStore.create(DurableStoreOptions())
+        child = DurableTask.define_phases(
+            "memo-child-own-flow", lambda: {"phase": "go"},
+            {"go": lambda i, c, r: r.commit_async(lambda: TaskCommit.completed({"done": 1}))})
+
+        async def fan_out(_input, _checkpoint, runtime):
+            async def commit(tx):
+                created = runtime.create_child_task(tx, child, {"sample": 1})
+                runtime.schedule_task(created.id)
+                return TaskCommit.completed({"done": 1})
+            return await runtime.commit_async(commit)
+
+        parent = DurableTask.define_phases(
+            "memo-parent-fan-out", lambda: {"phase": "fan-out"}, {"fan-out": fan_out})
+        registry = ExtensionRegistry()
+        registry.install(Extension("memo-fan-out", tasks=[parent, child]))
+        harness = DurableHarness(sdk_client(sdk_session()), store, registry)
+        try:
+            created = await harness.create_task_async(parent, {"sample": 1})
+            await asyncio.wait_for(harness.wait_for_task_async(created.id), 10)
+
+            children = [t for t in store.tasks if t.owner_task_id == created.id]
+            self.assertEqual(len(children), 1, "the fan-out created exactly one child")
+            outcome = await asyncio.wait_for(harness.wait_for_task_async(children[0].id), 10)
+            self.assertEqual(outcome.status, "completed", getattr(outcome, "error", None))
+        finally:
+            await harness.close_async()
+            store.close()
+
     async def test_memo_async_outside_a_commit_still_reads_and_writes(self):
         store = DurableStore.create(DurableStoreOptions())
         definition = DurableTask.define_phases(
