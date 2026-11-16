@@ -2,8 +2,10 @@
 
 **Status:** product planning — proposal, not delivered capability, not an approved forecast.
 **Owner:** PO (`squad:po`), under parent issue #222.
-**Technical design:** `docs/ARCHITECT_CONFIG_DESIGN.md` — introduced by PR #234, design only,
-review pending. It is **not yet on `dev`**, so it is referenced by path rather than linked.
+**Technical design:** `docs/ARCHITECT_CONFIG_DESIGN.md` — introduced by PR #234, design only.
+Per the user's status report, PR #234 was approved and closed and #223 was closed as completed;
+the PR is **closed but unmerged** (`mergedAt` is null), so its content has **not** landed on `dev`
+and is referenced by path rather than linked.
 **Source baseline:** `dev` at `131649e`; every `file:line` below was read at that commit.
 
 This brief covers the product half of #222: goal, users, boundaries, measurable outcomes, the
@@ -146,22 +148,31 @@ Children already exist; this shift created none and changed no owner, priority o
 
 | Issue | Slice | Owner route | Priority | Declared `## Depends On` | Helper readiness |
 |---|---|---|---|---|---|
-| #223 | S1 design (spike) | `squad:lead` | p1 | none | **available** (open PR #234) |
-| #224 | S2 member lifecycle | `squad:core-engineer` | p1 | #223 | blocked |
-| #225 | S3 shift handoff / claims | `squad:core-engineer` | p1 | #223 | blocked |
-| #226 | S4 linked skills/MCP/tools | `squad:core-engineer` | p1 | #223 | blocked |
-| #227 | S5 prompt layers / hooks | `squad:core-engineer` | p1 | #223 | blocked |
-| #228 | S6 workflow gates / admission | `squad:core-engineer` | p1 | #223, #224 | blocked |
-| #230 | S8 evidence harness | `squad:tester` | p1 | #223 | blocked |
-| #229 | S7 scheduling / snapshots | `squad:core-engineer` | p2 | #223, #225 | blocked |
-| #231 | S9 parity / migration / rollback | `squad:polyglot-engineer` | p2 | #224, #227 | blocked |
+| #223 | S1 design (spike) | `squad:lead` | p1 | none | **closed as completed** — PR #234 closed by the user, unmerged |
+| #224 | S2 member lifecycle | `squad:core-engineer` | p1 | #223 | **available** (referent closed) |
+| #225 | S3 shift handoff / claims | `squad:core-engineer` | p1 | #223 | **available** (referent closed) |
+| #226 | S4 linked skills/MCP/tools | `squad:core-engineer` | p1 | #223 | **available** (referent closed) |
+| #227 | S5 prompt layers / hooks | `squad:core-engineer` | p1 | #223 | **available** (referent closed) |
+| #228 | S6 workflow gates / admission | `squad:core-engineer` | p1 | #223, #224 | blocked on #224 |
+| #230 | S8 evidence harness | `squad:tester` | p1 | #223 | **available** (referent closed) |
+| #229 | S7 scheduling / snapshots | `squad:core-engineer` | p2 | #223, #225 | blocked on #225 |
+| #231 | S9 parity / migration / rollback | `squad:polyglot-engineer` | p2 | #224, #227 | blocked on #224, #227 |
 | #232 | S10 reference use case / support | `squad:docs` | p2 | #224, #226, #227, #228, #229 | blocked |
-| #233 | S11 release gate | `squad:tester` | p2 | #230 | blocked |
+| #233 | S11 release gate | `squad:tester` | p2 | #230 | blocked on #230 |
+
+**Readiness re-derived** from the authoritative helper after #223 closed. A closed referent is
+satisfied, so #224, #225, #226, #227 and #230 became eligible; the queue lists exactly those five
+alongside #222. #228 now waits only on #224, #229 only on #225, and #231 on #224 and #227.
 
 **Ordering rule applied.** Priority first (`p1` before `p2`), then oldest `createdAt` within equal
-priority, then issue number. p1 order: #223, #224, #225, #226, #227, #228, #230. p2 order: #229,
-#231, #232, #233. Readiness overrides this refinement: only #223 is eligible, and #230 — though p1
-— cannot start before it.
+priority, then issue number. p1 order among eligible work: #224, #225, #226, #227, #230. p2 order:
+#229, #231, #232, #233 — all still blocked. Readiness overrides this refinement; no other owner's
+claim was bypassed.
+
+**Closure is not review evidence.** #223 closed as `COMPLETED` and PR #234 closed with
+`mergedAt: null` and no recorded review submissions. That is the user's disposition of the item,
+not a PO or Core Engineer sign-off, and the design content is not on `dev`. This brief records the
+disposition as given rather than claiming the gate was satisfied by a recorded review.
 
 **Dependency gap found (planning, not a change).** #233 (release gate) depends only on #230
 (evidence harness), and #230 depends only on #223. Nothing in that chain requires the
@@ -177,7 +188,8 @@ six slices. **This brief does not approve that denominator.** Reasons, stated pl
 
 1. The acceptance criterion "PO/Architect approve MVP scope" needs the Architect's review of the
    design's boundaries (§A2 reuse claims, §A4 persistence) before PO can freeze a denominator that
-   depends on them.
+   depends on them. Closing #223 settled the *item*; it did not produce that review, and the
+   design content is unmerged, so the boundary claims are still unconfirmed.
 2. Approving 18 equal-weight criteria would imply a forecast this shift cannot support: no
    capacity, environment or cost facts exist (P8).
 3. Several criteria are only measurable once #230's evidence harness defines the mapping.
@@ -189,8 +201,10 @@ this shift.
 ## P7. PO positions on the design's product questions
 
 `ARCHITECT_CONFIG_DESIGN.md` §A9 lists twelve open questions. These are PO's product-scope
-positions; they are **inputs to review, not a sign-off**. §A10's reviewer table stays pending until
-a reviewer posts on PR #234 — this shift did not review or approve that PR.
+positions; they are **inputs to review, not a sign-off**. §A10's reviewer table was never filled
+in: PR #234 was closed by the user with no recorded review submissions and is unmerged, so the
+design is dispositioned but not merged into `dev`. These positions therefore stand as PO's
+product input for the implementation issues, not as an approval of the document.
 
 | Q | PO position | Confidence |
 |---|---|---|
@@ -208,7 +222,7 @@ Q2, Q5, Q6, Q7, Q8, Q9, Q12 remain for Core Engineer / Lead / Polyglot Engineer 
 
 | Input | Status |
 |---|---|
-| Architect sizing of S1 (#223) | Pending — PR #234 is design only and unreviewed. |
+| Architect sizing of S1 (#223) | Item closed by the user; no sizing was published and the design is unmerged. Sizing of #224–#228 still comes from Core Engineer, not from this closure. |
 | Core Engineer sizing of #224–#228 | Unknown. |
 | Implementation admission | Coordinator has not admitted any implementation issue; parent #222 caps it at two implementation issues. |
 | Capacity / people / hours | Unknown. No capacity data exists in this repository. |
@@ -216,9 +230,9 @@ Q2, Q5, Q6, Q7, Q8, Q9, Q12 remain for Core Engineer / Lead / Polyglot Engineer 
 | Cost | No spend authorized; local-only assumption stands. |
 | Schedule/notification guarantees | None. Local jobs need the machine and app to be present. |
 
-**Confidence: low**, and it cannot rise until #223 is reviewed and at least one implementation
-issue is sized. Any ETA published before then would be a fabricated date, which the charter
-prohibits.
+**Confidence: low**, and it cannot rise until at least one implementation issue is sized. The user
+closed #223 and PR #234, which settles the design item; it does not publish a size, a capacity or a
+cost. Any ETA published before sizing would be a fabricated date, which the charter prohibits.
 
 **Assumption to verify first:** that the design's reuse claim (§A2) holds — that the architect
 layer compiles onto `AgentDefinition`, `DurableSchedule` and `DurableTaskDefinition` without
@@ -244,34 +258,37 @@ at all until a migration story exists.
 | Gate | What satisfies it | Current state |
 |---|---|---|
 | Local completion | Mapped tests pass locally against a committed candidate SHA; per-E2E screenshots retained; coverage reported. | Not met — no implementation admitted. |
-| Independent review / evidence | Tester's criterion-to-test mapping and a recorded independent reviewer sign-off for the exact candidate. | Not met — #230 not started; #223 review pending. |
+| Independent review / evidence | Tester's criterion-to-test mapping and a recorded independent reviewer sign-off for the exact candidate. | Not met — #230 not started. The #223 closure records the user's disposition of the design item; it is not a candidate-specific acceptance review, and no review submission is recorded on PR #234. |
 | Deployment authorization | Explicit human approval naming candidate SHA, configuration and target; tooling fails closed without it. | Not met and not requested. This brief authorizes nothing. |
 
 Parent #222 stays open until every planning deliverable in its body is met, including the
-Architect review, the denominator decision and the follow-through record. Child issues existing is
-not completion; PR #234 being green is not review.
+denominator decision and the follow-through record. Child issues existing is not completion; a
+green check on PR #234 was not review, and its closure is not acceptance evidence for a candidate
+that does not exist yet.
 
 ## P11. Follow-through and next actions
 
 | Action | Owner | Depends on |
 |---|---|---|
-| Review `ARCHITECT_CONFIG_DESIGN.md` (product scope: §A1, §A5, §A8, §A9 Q1/Q4/Q11) and post the sign-off row on PR #234 | PO | — (next PO shift) |
-| Review §A2 reuse claims, §A3 validation, §A4 persistence, §A6 concurrency | Core Engineer | — |
 | Rule on the #233 → #230 dependency gap in P5 | Coordinator / Lead | — |
-| Admit #223 to Lead and settle the design review gate | Coordinator | PO + Core Engineer review |
-| Approve/version the 18-criterion denominator, or amend it | PO + Architect | Design review, #230 mapping |
+| Approve/version the 18-criterion denominator, or amend it | PO + Architect | #230 criterion mapping |
 | Answer Q5 (secrets location), Q7 (migration chain), Q12 (config change while active) | Core Engineer / Lead | — |
-| Size #224–#228 and publish the first defensible ETA range | Core Engineer / Lead | Design review |
+| Size #224–#228 and publish the first defensible ETA range | Core Engineer / Lead | — |
+| Confirm how `ARCHITECT_CONFIG_DESIGN.md` reaches `dev`, given PR #234 is closed unmerged | Coordinator / Lead | — |
 
 **Next PO shift priority:** resume #222 (still eligible, p1, oldest eligible PO item). The bounded
-deliverable is the PO review record for PR #234 — not new scope.
+deliverable is the denominator decision once #230's mapping exists — not new scope, and not a
+re-review of a closed PR.
 
 ## P12. Provenance
 
 - Baseline: `dev` at `131649e`.
 - Queue facts: `issue-work-queue` helper over `matthewcorven/github-copilot-sdk-durable`, all
-  states; no board drift reported.
-- Design facts: `docs/ARCHITECT_CONFIG_DESIGN.md` on `squad/223-architect-config-design` (PR #234,
-  open, no reviews).
+  states, re-run after #223 closed; #224/#225/#226/#227/#230 became available and no board drift
+  was reported.
+- Design facts: `docs/ARCHITECT_CONFIG_DESIGN.md` on `squad/223-architect-config-design`; PR #234
+  **closed unmerged** (`mergedAt: null`, `closedAt` 2026-11-16T11:29:49Z, no review submissions),
+  #223 **closed as COMPLETED** at 2026-11-16T11:30:04Z. Reported by the user; verified against the
+  GitHub API before this text was written.
 - Source facts: read at `131649e`; no source change was made by this brief.
 - Scope facts: `tools/core-engineers-canvas/scope.json`, `status: "provisional"`, unmodified.
