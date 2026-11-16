@@ -289,7 +289,8 @@ class LateJoinParityTests(unittest.TestCase):
         adapt('if (scenario == "stalled-read")', 'if (submitted && scenario == "stalled-read")')
         adapt('if (scenario == "delayed-user" && reads >= 3)',
               'if (submitted && scenario == "delayed-user" && reads >= 3)')
-        adapt('if (scenario == "mid-join-error")', 'if (submitted && scenario == "mid-join-error")')
+        adapt('if (scenario == "mid-join-error" && userAdded)',
+              'if (submitted && scenario == "mid-join-error" && userAdded)')
         adapt('if (scenario == "gap" && !resultReceived)',
               'if (submitted && scenario == "gap" && !resultReceived)')
         adapt('await EventAsync("assistant.message", new JsonObject',

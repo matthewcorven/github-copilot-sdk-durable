@@ -3946,6 +3946,8 @@ public sealed class DurableConversation
     private readonly List<(Func<SandboxDecisionEvent, bool> Match, TaskCompletionSource<SandboxDecisionEvent> Completion)> _sandboxWaiters = [];
     private readonly DurableModelTracker _modelTracker = new();
     private readonly List<TaskCompletionSource<DurableModelReport>> _modelWaiters = [];
+    private readonly object _modelObservationGate = new();
+    private bool _hasObservedModelReport;
     private readonly object _checkpointGate = new();
     private readonly ConcurrentDictionary<string, (string? Name, JsonElement? Arguments)> _toolCalls = [];
 
@@ -3973,6 +3975,37 @@ public sealed class DurableConversation
         // A permanent subscription records every answer the session produces, so a
         // review loop can look at the passes it has already made.
         _subscription = session.On<SessionEvent>(Observe);
+
+        // Session creation can emit session.start before Attach has a chance to subscribe.
+        // Read the session's history to recover a model report lost in that window.
+        _ = RecoverMissedModelEventsAsync(session);
+    }
+
+    private async Task RecoverMissedModelEventsAsync(CopilotSession session)
+    {
+        try
+        {
+            var history = await session.GetEventsAsync().ConfigureAwait(false);
+            lock (_modelObservationGate)
+            {
+                if (_hasObservedModelReport)
+                {
+                    return;
+                }
+
+                foreach (var evt in history)
+                {
+                    if (evt is SessionStartEvent or SessionModelChangeEvent)
+                    {
+                        ObserveModel(evt);
+                    }
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Recovery is best-effort; a failed history read leaves the conversation unchanged.
+        }
     }
 
     /// <summary>
@@ -4005,13 +4038,24 @@ public sealed class DurableConversation
         // The model the runtime actually used rides the same subscription too. It is
         // recorded from the runtime's own reports, never from the requested model, so a
         // substitution is visible.
-        if (_modelTracker.Record(evt) is { } report)
+        lock (_modelObservationGate)
         {
+            ObserveModel(evt);
+        }
+    }
+
+    private void ObserveModel(SessionEvent evt)
+    {
+        if (_modelTracker.Record(evt) is not { } report)
+        {
+            return;
+        }
+
+        if (report.HasModel)
+        {
+            _hasObservedModelReport = true;
             _runtime.PublishModel(report);
-            if (report.HasModel)
-            {
-                ReleaseModelWaiters(report);
-            }
+            ReleaseModelWaiters(report);
         }
     }
 
