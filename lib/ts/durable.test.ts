@@ -10,7 +10,8 @@ import {
   DurableStoreOptions, DurableStoreFormat, ExtensionRegistry, PermissionPolicy, DurableTask,
   TaskCommit, DurableSandboxPolicy,
   Extension, ToolWrapper, DurableTaskRunner, TaskStatus, DurableConversation,
-  DurableJson, type SessionEvent, type SessionConfig,
+  DurableJson, DurableCommitReentryException, TaskRuntime, Transaction,
+  type PhaseHandler, type SessionEvent, type SessionConfig,
 } from "./durable.js";
 import { CopilotClient, RuntimeConnection } from "@github/copilot-sdk";
 import { createServer } from "node:net";
@@ -2598,6 +2599,156 @@ test("JSONL retains exact CRLF/mixed UTF8 boundaries and discards all unterminat
       } finally { store.dispose(); rmSync(dir, { recursive: true }); }
     }
   }
+});
+
+test("memoAsync inside a commit throws a named exception instead of hanging", async () => {
+  const store = DurableStore.createEphemeral();
+  const definition = DurableTask.definePhases<Record<string, string>, Record<string, string>>(
+    "memo-async-inside-commit",
+    () => ({ phase: "run" }),
+    new Map([
+      ["run", (_input: Record<string, string>, _checkpoint: Record<string, string>, runtime: TaskRuntime) =>
+        runtime.commitInTransactionAsync(async (tx: Transaction) => {
+          // A watchdog turns a regression back to the hang into a fast failure. The gate is
+          // not reentrant, so before the guard this await never settled.
+          const memo = runtime.memoAsync("k", "written");
+          const error = await Promise.race([
+            memo.then(() => null, (raised: unknown) => raised),
+            new Promise<null>(resolve => setTimeout(() => resolve(null), 2000)),
+          ]);
+
+          assert.ok(error instanceof DurableCommitReentryException,
+            `expected DurableCommitReentryException, got ${String(error)}`);
+          assert.equal(error.operation, "TaskRuntime.memoAsync");
+          assert.match(error.message, /transaction\.memo/);
+
+          // The guard rejected the call before it touched state, so the documented route works
+          // in the same transaction.
+          tx.memo(runtime.task.id, "k", "written");
+          return TaskCommit.completed(DurableJson.toElement({ ok: "yes" }));
+        })],
+    ]) as Map<string, PhaseHandler<Record<string, string>, Record<string, string>>>,
+  );
+
+  const record = await store.commitAsync(_tx => _tx.createTask(definition));
+  const runner = new ExtensionRegistry();
+  runner.install(new Extension("memo-async-inside-commit", [], [], [definition]));
+  const runtime = new DurableTaskRunner(store, runner);
+  try {
+    const outcome = await runtime.runTaskAsync(record.id);
+    assert.equal(outcome.status, "completed", `failed: ${outcome.error ?? "(no error)"}`);
+    assert.equal(store.task(record.id)!.memos["k"], "written");
+  } finally {
+    await runtime.disposeAsync();
+    store.dispose();
+  }
+});
+
+test("memoAsync from another task while a commit is in flight still waits and completes", async () => {
+  const store = DurableStore.createEphemeral();
+  const definition = DurableTask.definePhases<Record<string, string>, Record<string, string>>(
+    "memo-async-concurrent-commit",
+    () => ({ phase: "run" }),
+    new Map<string, PhaseHandler<Record<string, string>, Record<string, string>>>([
+      ["run", (_input, _checkpoint, runtime) =>
+        runtime.commitAsync(() => TaskCommit.running(DurableJson.toElement({ phase: "run" })))],
+    ]),
+  );
+
+  const record = await store.commitAsync(tx => tx.createTask(definition));
+
+  let inside!: () => void;
+  const entered = new Promise<void>(resolve => { inside = resolve; });
+  let finish!: () => void;
+  const release = new Promise<void>(resolve => { finish = resolve; });
+
+  const commit = store.commitAsync(async _tx => {
+    inside();
+    await release;
+  });
+
+  await entered;
+
+  // Started while the commit holds the gate: it must queue, not throw. A detector keyed on the
+  // store rather than the async context would fail here and pass the re-entry test above.
+  let settled = false;
+  const memo = store.memoAsync(record.id, "k", "written").then(value => {
+    settled = true;
+    return value;
+  });
+
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(settled, false, "the second caller must wait for the commit, not fail");
+
+  finish();
+  await commit;
+  assert.equal(await memo, "written");
+  assert.equal(store.task(record.id)!.memos["k"], "written");
+  store.dispose();
+});
+
+test("a child task scheduled from inside a commit commits on its own flow", async () => {
+  // The commit scope is an AsyncLocalStorage store: it flows into work started from inside a
+  // callback. A fan-out that schedules a child from the callback must not hand the child the
+  // parent's scope, or the child's own commit is refused as a re-entry it is not.
+  const store = DurableStore.createEphemeral();
+  const childDefinition = DurableTask.definePhases<Record<string, number>, Record<string, number>>(
+    "memo-child-own-flow",
+    () => ({ phase: "go", n: 0 }),
+    new Map<string, PhaseHandler<Record<string, number>, Record<string, number>>>([
+      ["go", (_input, _checkpoint, runtime) =>
+        runtime.commitAsync(() => TaskCommit.completed(DurableJson.toElement({ done: 1 })))],
+    ]),
+  );
+  const parentDefinition = DurableTask.definePhases<Record<string, number>, Record<string, number>>(
+    "memo-parent-fan-out",
+    () => ({ phase: "fan-out" }),
+    new Map<string, PhaseHandler<Record<string, number>, Record<string, number>>>([
+      ["fan-out", (_input, _checkpoint, runtime) =>
+        runtime.commitInTransactionAsync(tx => {
+          const child = runtime.createChildTask(
+            tx, childDefinition, DurableJson.toElement({ sample: 1 }));
+          runtime.scheduleTask(child.id);
+          return TaskCommit.completed(DurableJson.toElement({ done: 1 }));
+        })],
+    ]),
+  );
+
+  const registry = new ExtensionRegistry();
+  registry.install(new Extension("memo-fan-out", [], [], [parentDefinition, childDefinition]));
+  const runtime = new DurableTaskRunner(store, registry);
+  try {
+    const parent = await runtime.createTaskAsync(
+      parentDefinition, DurableJson.toElement({ sample: 1 }));
+    await runtime.waitForTaskAsync(parent.id);
+
+    const child = store.tasks.filter(candidate => candidate.ownerTaskId === parent.id);
+    assert.equal(child.length, 1, "the fan-out created exactly one child");
+    const outcome = await runtime.waitForTaskAsync(child[0].id);
+    assert.equal(outcome.status, "completed", `child failed: ${outcome.error ?? "(no error)"}`);
+  } finally {
+    await runtime.disposeAsync();
+    store.dispose();
+  }
+});
+
+test("memoAsync outside a commit still reads and writes", async () => {
+  const store = DurableStore.createEphemeral();
+  const definition = DurableTask.definePhases<Record<string, string>, Record<string, string>>(
+    "memo-async-outside-commit",
+    () => ({ phase: "run" }),
+    new Map<string, PhaseHandler<Record<string, string>, Record<string, string>>>([
+      ["run", (_input, _checkpoint, runtime) =>
+        runtime.commitAsync(() => TaskCommit.running(DurableJson.toElement({ phase: "run" })))],
+    ]),
+  );
+
+  const record = await store.commitAsync(tx => tx.createTask(definition));
+
+  assert.equal(await store.memoAsync(record.id, "k"), null);
+  assert.equal(await store.memoAsync(record.id, "k", "written"), "written");
+  assert.equal(await store.memoAsync(record.id, "k"), "written");
+  store.dispose();
 });
 
 test("JSONL truncates a file containing only an unterminated record to zero", () => {

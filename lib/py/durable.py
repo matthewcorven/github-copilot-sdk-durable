@@ -446,8 +446,14 @@ class TaskRuntime:
         """Reads an idempotency memo, or writes one when ``value`` is supplied.
 
         Call this from a phase handler, not from inside a ``commit_async`` callback: it takes
-        the store's commit gate, which the commit already holds, so it does not return. Use
-        ``transaction.memo`` inside a transaction.
+        the store's commit gate, and the commit running the callback already holds it, so the
+        call cannot make progress. Rather than wait for a release the commit cannot give, it
+        raises :class:`DurableCommitReentryException` -- an error a caller can catch, log and
+        fix, instead of a run that stops.
+
+        Inside a transaction, use ``transaction.memo``. It writes the memo into the task's memo
+        map before the transaction commits, so the memo is saved with the checkpoint that
+        surrounds it and discarded if that commit rolls back.
         """
         return await self._store.memo_async(self.task.id, key, value)
 
@@ -809,6 +815,32 @@ class DurableSandboxPolicyException(RuntimeError):
         )
         self.reason = reason
         self.policy = policy
+
+
+class DurableCommitReentryException(RuntimeError):
+    """Raised when an operation that takes the store's commit gate is called from inside a
+    commit on that same store.
+
+    The gate is held for the whole of a commit's callback and is not reentrant, so a re-entry
+    would wait for a release only the enclosing commit can perform -- and the enclosing commit
+    is awaiting the call. That is a hang with no stack trace and no time limit, so the gate
+    refuses the re-entry instead of queueing it.
+
+    The catchable path is also the fix: inside a transaction, write the memo with
+    ``transaction.memo``.
+    """
+
+    def __init__(self, operation: str, commit_operation: str) -> None:
+        super().__init__(
+            f"{operation} was called from inside {commit_operation}'s callback, on the same "
+            "store. That commit holds the store's commit gate for the whole callback and the "
+            "gate is not reentrant, so the inner call would wait for a release that only the "
+            "outer commit can give -- it would not return. Use transaction.memo inside the "
+            "transaction: it writes the memo in the same commit as the checkpoint, so nothing "
+            "is written twice and the memo is never lost between two commits."
+        )
+        self.operation = operation
+        self.commit_operation = commit_operation
 
 
 # ---------------------------------------------------------------------------
@@ -1821,6 +1853,16 @@ class DurableStore:
             DurableStoreFormat.IN_MEMORY if path is None else DurableStoreFormat.LEGACY_JSON
         )
         self._gate = asyncio.Lock()
+        # The commit whose callback is running in the current context, if any. This is what
+        # makes the non-reentrant gate refuse a re-entry instead of hanging on it. It
+        # deliberately does not identify the gate's owner: a context variable is captured by
+        # each task that awaits inside the callback, so it cannot say whether a caller is the
+        # committing task itself or a different one. What it does answer reliably is "this
+        # context is inside a commit", and that is exactly the condition under which the gate
+        # would deadlock. A different task is outside this context, so it sees no scope and
+        # waits normally.
+        self._commit_scope: ContextVar[str | None] = ContextVar(
+            f"durable_commit_scope_{id(self)}", default=None)
         self._scheduler_gate = threading.Lock()
         self._scheduler_owner: object | None = None
         self._task_scheduler: Callable[[str, asyncio.Event | None], None] | None = None
@@ -2042,11 +2084,41 @@ class DurableStore:
         store._path = path
         store._format = format
         store._gate = asyncio.Lock()
+        store._commit_scope = ContextVar(f"durable_commit_scope_{id(store)}", default=None)
         store._scheduler_gate = threading.Lock()
         store._scheduler_owner = None
         store._task_scheduler = None
         store._closed = False
         return store
+
+    # -- the commit gate -----------------------------------------------------
+
+    async def _enter_gate(self, operation: str) -> None:
+        """Takes the commit gate, refusing a call that would re-enter a commit this context is
+        already inside.
+
+        A re-entry is not a slow call, it is a hang: the gate is not reentrant, so the inner
+        call waits for the release the outer one is holding and cannot reach. Refusing it here
+        turns that into an error a caller can catch.
+        """
+        commit_operation = self._commit_scope.get()
+        if commit_operation is not None:
+            raise DurableCommitReentryException(operation, commit_operation)
+
+        await self._gate.acquire()
+
+    @contextlib.asynccontextmanager
+    async def _in_commit(self, operation: str) -> AsyncIterator[None]:
+        """Runs a gate-held operation, marking the context as inside it so a re-entry from its
+        callback is refused rather than queued behind it.
+        """
+        await self._enter_gate(operation)
+        token = self._commit_scope.set(operation)
+        try:
+            yield
+        finally:
+            self._commit_scope.reset(token)
+            self._gate.release()
 
     # -- reads ---------------------------------------------------------------
 
@@ -2125,7 +2197,7 @@ class DurableStore:
                 f"'{event_name}' would be read back as a child task id."
             )
 
-        async with self._gate:
+        async with self._in_commit("DurableStore.raise_event_async"):
             waiting = [
                 task.id
                 for task in self._provider.tasks
@@ -2178,8 +2250,14 @@ class DurableStore:
         self,
         body: Callable[[Transaction], Awaitable[T]],
     ) -> T:
-        """Runs a transaction. Everything written inside is saved together, or discarded."""
-        async with self._gate:
+        """Runs a transaction. Everything written inside is saved together, or discarded.
+
+        The callback runs inside the store's commit gate. An operation that takes the gate
+        again from inside it -- ``task_runtime.memo_async``, say -- raises
+        :class:`DurableCommitReentryException` instead of waiting for a release that cannot
+        happen; a caller inside this callback writes a memo with ``transaction.memo``.
+        """
+        async with self._in_commit("DurableStore.commit_async"):
             transaction = Transaction(self)
             self._provider.begin_transaction()
             try:
@@ -2212,7 +2290,7 @@ class DurableStore:
         task_id: str,
         commit: Callable[[Transaction], Awaitable[TaskCommit]],
     ) -> TaskCommit:
-        async with self._gate:
+        async with self._in_commit("TaskRuntime.commit_async"):
             task = self._provider.task(task_id)
             if task is None:
                 return TaskCommit.failed("unknown task")
@@ -2248,7 +2326,7 @@ class DurableStore:
         task_id: str,
         commit: Callable[[], TaskCommit],
     ) -> TaskCommit:
-        async with self._gate:
+        async with self._in_commit("TaskRuntime.commit_async"):
             task = self._provider.task(task_id)
             if task is None:
                 return TaskCommit.failed("unknown task")
@@ -2287,8 +2365,13 @@ class DurableStore:
 
         ``None`` reads, which is what the C# ``JsonElement?`` parameter means: a memo
         holds a JSON value, and a JSON null is not a memo worth writing.
+
+        This takes the store's commit gate. Called from inside a commit's callback -- where the
+        gate is already held by a commit this context is running -- it raises
+        :class:`DurableCommitReentryException` instead of waiting for a release that cannot
+        happen. ``transaction.memo`` is the form that writes a memo inside a transaction.
         """
-        async with self._gate:
+        async with self._in_commit("TaskRuntime.memo_async"):
             task = self._provider.task(task_id)
             if task is None:
                 return None
@@ -2384,7 +2467,7 @@ class DurableStore:
         A persistent store holds the file's exclusive lock for its lifetime, so it is the
         only writer and its memory is already current: for such a store this is a no-op.
         """
-        async with self._gate:
+        async with self._in_commit("DurableStore.refresh_async"):
             if self._provider.is_persistent:
                 return
 
@@ -2479,9 +2562,9 @@ class Transaction:
 
         ``task_runtime.memo_async`` is the form to call from a phase handler, outside a
         transaction. It takes the store's commit gate, and so does the commit that is running
-        the handler, so calling it from inside a commit callback waits for a release that
-        cannot happen: the gate is not reentrant and the callback cannot return. That is a
-        hang, not an error.
+        the handler, so calling it from inside a commit callback cannot make progress: the gate
+        is not reentrant and the callback cannot return. It therefore raises
+        :class:`DurableCommitReentryException` rather than waiting.
 
         This method exists for the one shape the other cannot express: an external effect
         whose memo has to commit with the checkpoint, so a crash between the effect and its
@@ -4362,6 +4445,11 @@ class DurableHarness:
 
         async def run_core() -> TaskOutcome:
             token = _active_task.set((self, task_id))
+            # The commit scope is a ContextVar, so it flows into tasks created from inside a
+            # commit's callback: a fan-out would inherit the parent's scope and the child's own
+            # commit would be refused as a re-entry it is not. A run is a new flow, so it starts
+            # outside any scope.
+            scope_token = self.store._commit_scope.set(None)
             try:
                 if record is None:
                     missing = TaskOutcome.failed("unknown task")
@@ -4385,6 +4473,7 @@ class DurableHarness:
                 raise
             finally:
                 _active_task.reset(token)
+                self.store._commit_scope.reset(scope_token)
                 self._running_tasks.discard(task_id)
                 self._in_flight.pop(task_id, None)
 

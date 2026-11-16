@@ -418,7 +418,7 @@ exactly 0 "${PIPESTATUS[0]}" "every declaration is classified and the split adds
 say "8. the layer gap (filed as #201): a memo written inside a commit does not return"
 run blocked "dotnet run evidence/blocked-input.cs" \
   -- "$dotnet" run "$here/evidence/blocked-input.cs"
-exactly 7 "$?" "the pre-fix shape is confirmed unreachable (7 = the watchdog fired)"
+exactly 7 "$?" "the pre-fix shape stays refused: 7 = the recorded pre-guard exit, and the guard now answers instead of hanging"
 
 echo
 echo "════════════════════════════════════════════════════════════════════════════════════════"

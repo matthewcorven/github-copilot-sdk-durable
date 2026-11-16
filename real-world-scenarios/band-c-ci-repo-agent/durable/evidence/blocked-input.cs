@@ -1,14 +1,16 @@
-// The pre-fix shape: `TaskRuntime.MemoAsync` called from inside a commit callback.
+// The shape that used to hang: `TaskRuntime.MemoAsync` called from inside a commit callback.
 //
 // `MemoAsync` takes the store's commit gate (`lib/Durable.cs`, `DurableStore.MemoAsync`), and so
 // does the commit that is running this handler. `SemaphoreSlim` is not reentrant, so the inner
 // `WaitAsync` waits for a release only the outer call can perform — and the outer call is awaiting
-// the inner one. The process does not fail, it stops.
+// the inner one. Before the guard the process did not fail, it stopped.
 //
 // A watchdog turns "hangs for ever" into a distinguishable exit code, so this file can be part of
-// an automated check instead of a note. It is run by `evidence.sh` stage 8 and is expected to exit
-// 7. It uses only the API that exists *before* the layer change on this branch, which is what makes
-// it the before half of the before/after control for that change.
+// an automated check instead of a note. `evidence.sh` stage 8 runs it: exit 7 is the recorded
+// pre-guard result this stage was captured with (the evidence log is the record of that run), and
+// the guard added for #201 is what turns it into exit 0 today. The call is still the pre-fix
+// *shape* — only the released API, no `Transaction.Memo` — so it remains the before half of the
+// before/after control.
 //
 // The fix is `Transaction.Memo`, used by `TriageStore.RecordCommentAsync` in this variant.
 
@@ -27,7 +29,7 @@ var definition = DurableTask.DefinePhases<Dictionary<string, string>, Dictionary
     () => new Dictionary<string, string> { ["phase"] = "run" },
     new Dictionary<string, Func<Dictionary<string, string>, Dictionary<string, string>, TaskRuntime, Task<TaskCommit>>>
     {
-        ["run"] = (_, _, runtime) => runtime.CommitAsync(async tx =>
+        ["run"] = (_, _, runtime) => runtime.CommitAsync(async (Transaction tx) =>
         {
             Console.WriteLine("inside the transaction; calling runtime.MemoAsync");
             var memo = runtime.MemoAsync("comment/101/abc", DurableJson.ToElement(new { posted = "yes" }));
@@ -38,7 +40,18 @@ var definition = DurableTask.DefinePhases<Dictionary<string, string>, Dictionary
                 Environment.Exit(7);
             }
 
-            await memo;
+            try
+            {
+                await memo;
+                Console.WriteLine("RESULT: MemoAsync returned from inside the commit");
+            }
+            catch (Exception error)
+            {
+                Console.WriteLine($"RESULT: MemoAsync threw {error.GetType().Name} instead of hanging");
+            }
+
+            // The documented route, in the same transaction the refused call would have used.
+            tx.Memo(runtime.Task.Id, "comment/101/abc", DurableJson.ToElement(new { posted = "yes" }));
             return TaskCommit.Completed(DurableJson.ToElement(new { }));
         }),
     });

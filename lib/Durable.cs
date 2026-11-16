@@ -385,10 +385,20 @@ public sealed class TaskRuntime
 
     /// <summary>Reads an idempotency memo, or writes one when <paramref name="value"/> is supplied.</summary>
     /// <remarks>
+    /// <para>
     /// Call this from a phase handler, not from inside a
     /// <see cref="CommitAsync(Func{Transaction, Task{TaskCommit}})"/> callback: it takes the store's
-    /// commit gate, which the commit already holds, so it does not return. Use
-    /// <see cref="Transaction.Memo"/> inside a transaction.
+    /// commit gate, and the commit running the callback already holds it, so the call cannot make
+    /// progress. Rather than wait for a release that the commit cannot give, it throws
+    /// <see cref="DurableCommitReentryException"/> — an error a caller can catch, log and fix,
+    /// instead of a run that stops.
+    /// </para>
+    /// <para>
+    /// Inside a transaction, use <see cref="Transaction.Memo"/>. It writes the memo into the task's
+    /// memo map before the transaction commits, so the memo is saved with the checkpoint that
+    /// surrounds it and discarded if that commit rolls back — one commit for the effect and its
+    /// record, rather than two.
+    /// </para>
     /// </remarks>
     public Task<JsonElement?> MemoAsync(string key, JsonElement? value = null) =>
         _store.MemoAsync(Task.Id, key, value);
@@ -750,6 +760,54 @@ public sealed class DurableSandboxPolicyException : InvalidOperationException
 
     /// <summary>The stored policy that could not be applied.</summary>
     public DurableSandboxPolicy Policy { get; }
+}
+
+/// <summary>
+/// Thrown when an operation that takes the store's commit gate is called from inside a commit
+/// on that same store.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The gate is held for the whole of a commit's callback and is not reentrant, so a call that
+/// re-entered it would wait for a release only the enclosing commit can perform — and the
+/// enclosing commit is awaiting the call. That is a hang with no stack trace and no time limit,
+/// which is the worst failure mode an idempotency API can have. The gate therefore refuses the
+/// re-entry instead of queueing it.
+/// </para>
+/// <para>
+/// The guard is scoped to the async flow: a <em>different</em> task or thread calling the same
+/// method while the commit is in progress waits normally, because it is outside the context the
+/// commit set. Only re-entry from inside the committing callback throws.
+/// </para>
+/// <para>
+/// The catchable path is also the fix. Inside a transaction, write the memo through
+/// <see cref="Transaction.Memo"/> — it lands in the task's memo map before the transaction
+/// commits, so it is saved with the checkpoint and rolled back with it.
+/// </para>
+/// </remarks>
+public sealed class DurableCommitReentryException : InvalidOperationException
+{
+    /// <summary>Creates the exception.</summary>
+    /// <param name="operation">The operation that tried to re-enter the commit gate.</param>
+    /// <param name="commitOperation">The commit whose callback is running.</param>
+    public DurableCommitReentryException(string operation, string commitOperation)
+        : base(
+            $"{operation} was called from inside {commitOperation}'s callback, on the same store. "
+            + "That commit holds the store's commit gate for the whole callback and the gate is not "
+            + "reentrant, so the inner call would wait for a release that only the outer commit can "
+            + "give -- it would not return. Use Transaction.Memo inside the transaction: it writes "
+            + "the memo in the same commit as the checkpoint, so nothing is written twice and the "
+            + "memo is never lost between two commits.")
+    {
+        Operation = operation;
+        CommitOperation = commitOperation;
+    }
+
+    /// <summary>The operation that re-entered the gate.</summary>
+    public string Operation { get; }
+
+    /// <summary>The commit whose callback was running.</summary>
+    public string CommitOperation { get; }
 }
 
 /// <summary>The on-disk format of a durable store.</summary>
@@ -1790,6 +1848,22 @@ public sealed class DurableStore : IDisposable
     private readonly DurableStoreFormat _format;
 
     /// <summary>
+    /// The commit whose callback is running on this store in the current async flow, if any.
+    /// </summary>
+    /// <remarks>
+    /// This is what makes the non-reentrant gate refuse a re-entry instead of hanging on it. It
+    /// deliberately <em>does not</em> identify the gate's owner: an async-local is captured by
+    /// each flow that awaits inside the callback, so it cannot say whether a caller is the
+    /// committing flow itself or a different one. What it does answer reliably is "this flow is
+    /// inside a commit", and that is exactly the condition under which the gate would deadlock.
+    /// A different task or thread is outside this flow, so it sees no context and waits normally;
+    /// a callback that hops to a fresh context sees no context either, and falls back to the
+    /// wait it had before this guard existed — slower than the guard, never a false positive, and
+    /// still not a re-entry of the committing flow itself, which the gate would not deadlock on.
+    /// </remarks>
+    private readonly AsyncLocal<CommitScope?> _commitScope = new();
+
+    /// <summary>
     /// Registers a provider factory under a name, so a store can be opened over that
     /// provider with <see cref="DurableStoreOptions.ProviderName"/>. Registering the
     /// same name again replaces the factory.
@@ -2106,6 +2180,78 @@ public sealed class DurableStore : IDisposable
         _format = format;
     }
 
+    /// <summary>What the commit in flight in the current flow is, for the re-entry guard's message.</summary>
+    private sealed record CommitScope(string Operation);
+
+    /// <summary>
+    /// Takes the commit gate, refusing a call that would re-enter a commit this flow is already
+    /// inside.
+    /// </summary>
+    /// <param name="operation">The gate-taking operation, used to name it in the refusal.</param>
+    /// <exception cref="DurableCommitReentryException">
+    /// The current flow is inside a commit's callback on this store, so waiting for the gate would
+    /// never return.
+    /// </exception>
+    private async Task EnterGateAsync(string operation)
+    {
+        if (_commitScope.Value is { } commit)
+        {
+            throw new DurableCommitReentryException(operation, commit.Operation);
+        }
+
+        await _gate.WaitAsync();
+    }
+
+    /// <summary>
+    /// Runs a gate-held operation, marking the flow as inside it so a re-entry from inside its
+    /// callback is refused rather than queued behind it.
+    /// </summary>
+    private async Task<T> InCommitAsync<T>(string operation, Func<Task<T>> body)
+    {
+        await EnterGateAsync(operation);
+        var previous = _commitScope.Value;
+        _commitScope.Value = new CommitScope(operation);
+        try
+        {
+            return await body();
+        }
+        finally
+        {
+            _commitScope.Value = previous;
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Runs <paramref name="body"/> outside any commit scope, then restores the caller's scope.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The scope is an <see cref="AsyncLocal{T}"/>, so it flows into continuations — including work
+    /// started from inside a commit's callback. A task created and scheduled by a callback (a
+    /// fan-out) therefore inherits the parent's scope, and its own commit would be refused as a
+    /// re-entry it is not: the child is a new run on its own flow, not a call nested inside the
+    /// parent's commit.
+    /// </para>
+    /// <para>
+    /// Every task run crosses this boundary, so a child always starts outside a scope. Without it
+    /// the guard would turn a legal fan-out into <see cref="DurableCommitReentryException"/>.
+    /// </para>
+    /// </remarks>
+    internal async Task<T> OutsideCommitScopeAsync<T>(Func<Task<T>> body)
+    {
+        var previous = _commitScope.Value;
+        _commitScope.Value = null;
+        try
+        {
+            return await body();
+        }
+        finally
+        {
+            _commitScope.Value = previous;
+        }
+    }
+
     /// <summary>The conversations known to this store.</summary>
     public IReadOnlyCollection<ConversationRecord> Conversations => _provider.Conversations;
 
@@ -2116,10 +2262,15 @@ public sealed class DurableStore : IDisposable
     public IReadOnlyCollection<DocumentState> Documents => _provider.Documents;
 
     /// <summary>Runs a transaction. Everything written inside is saved together, or discarded if it throws.</summary>
-    public async Task<T> CommitAsync<T>(Func<Transaction, Task<T>> body)
+    /// <remarks>
+    /// The callback runs inside the store's commit gate. An operation that takes the gate again
+    /// from inside it — <see cref="TaskRuntime.MemoAsync"/>, say — throws
+    /// <see cref="DurableCommitReentryException"/> instead of waiting for a release that cannot
+    /// happen; a caller inside this callback writes a memo through <see cref="Transaction.Memo"/>.
+    /// </remarks>
+    public Task<T> CommitAsync<T>(Func<Transaction, Task<T>> body)
     {
-        await _gate.WaitAsync();
-        try
+        return InCommitAsync("DurableStore.CommitAsync", async () =>
         {
             var transaction = new Transaction(this);
             _provider.BeginTransaction();
@@ -2138,11 +2289,7 @@ public sealed class DurableStore : IDisposable
 
             _provider.Commit();
             return result;
-        }
-        finally
-        {
-            _gate.Release();
-        }
+        });
     }
 
     /// <summary>Runs a transaction that produces no value.</summary>
@@ -2202,8 +2349,7 @@ public sealed class DurableStore : IDisposable
                 nameof(eventName));
         }
 
-        await _gate.WaitAsync();
-        try
+        return await InCommitAsync<IReadOnlyList<string>>("DurableStore.RaiseEventAsync", () =>
         {
             var waiting = _provider.Tasks
                 .Where(task => task.Status == TaskStatus.Waiting && task.WaitingOn.Contains(eventName))
@@ -2211,7 +2357,7 @@ public sealed class DurableStore : IDisposable
                 .ToList();
             if (waiting.Count == 0)
             {
-                return [];
+                return System.Threading.Tasks.Task.FromResult<IReadOnlyList<string>>([]);
             }
 
             var transaction = new Transaction(this);
@@ -2253,12 +2399,8 @@ public sealed class DurableStore : IDisposable
                 throw;
             }
 
-            return woken;
-        }
-        finally
-        {
-            _gate.Release();
-        }
+            return System.Threading.Tasks.Task.FromResult<IReadOnlyList<string>>(woken);
+        });
     }
 
     /// <summary>
@@ -2285,10 +2427,9 @@ public sealed class DurableStore : IDisposable
     /// the same transaction. Everything the callback writes is saved together with the
     /// checkpoint, or discarded if the callback throws.
     /// </summary>
-    internal async Task<TaskCommit> CommitTaskAsync(string taskId, Func<Transaction, Task<TaskCommit>> commit)
+    internal Task<TaskCommit> CommitTaskAsync(string taskId, Func<Transaction, Task<TaskCommit>> commit)
     {
-        await _gate.WaitAsync();
-        try
+        return InCommitAsync<TaskCommit>("TaskRuntime.CommitAsync", async () =>
         {
             var task = _provider.Task(taskId);
             if (task is null)
@@ -2346,30 +2487,25 @@ public sealed class DurableStore : IDisposable
             _provider.UpdateTask(task);
             _provider.Commit();
             return next;
-        }
-        finally
-        {
-            _gate.Release();
-        }
+        });
     }
 
-    internal async Task<TaskCommit> CommitTaskAsync(string taskId, Func<TaskCommit> commit)
+    internal Task<TaskCommit> CommitTaskAsync(string taskId, Func<TaskCommit> commit)
     {
-        await _gate.WaitAsync();
-        try
+        return InCommitAsync<TaskCommit>("TaskRuntime.CommitAsync", () =>
         {
             var task = _provider.Task(taskId);
             if (task is null)
             {
-                return TaskCommit.Failed("unknown task");
+                return System.Threading.Tasks.Task.FromResult(TaskCommit.Failed("unknown task"));
             }
 
             // A terminal task's outcome is final.
             if (task.Status == TaskStatus.Terminal)
             {
-                return task.Outcome is { } existing
+                return System.Threading.Tasks.Task.FromResult(task.Outcome is { } existing
                     ? TaskCommit.Completed(existing)
-                    : TaskCommit.Completed(DurableJson.ToElement(new TaskOutcome("completed")));
+                    : TaskCommit.Completed(DurableJson.ToElement(new TaskOutcome("completed"))));
             }
 
             var next = commit();
@@ -2399,18 +2535,20 @@ public sealed class DurableStore : IDisposable
 
             _provider.UpdateTask(task);
             _provider.Commit();
-            return next;
-        }
-        finally
-        {
-            _gate.Release();
-        }
+            return System.Threading.Tasks.Task.FromResult(next);
+        });
     }
 
     /// <summary>Reads or writes an idempotency memo.</summary>
+    /// <remarks>
+    /// This takes the store's commit gate. Called from inside a commit's callback — where the
+    /// gate is already held by a commit this flow is running — it throws
+    /// <see cref="DurableCommitReentryException"/> instead of waiting for a release that cannot
+    /// happen. <see cref="Transaction.Memo"/> is the form that writes a memo inside a transaction.
+    /// </remarks>
     internal async Task<JsonElement?> MemoAsync(string taskId, string key, JsonElement? value)
     {
-        await _gate.WaitAsync();
+        await EnterGateAsync("TaskRuntime.MemoAsync");
         try
         {
             var task = _provider.Task(taskId);
@@ -2556,7 +2694,7 @@ public sealed class DurableStore : IDisposable
     /// </remarks>
     public async Task RefreshAsync()
     {
-        await _gate.WaitAsync();
+        await EnterGateAsync("DurableStore.RefreshAsync");
         try
         {
             if (_provider.IsPersistent)
@@ -2675,9 +2813,9 @@ public sealed class Transaction
     /// <para>
     /// <see cref="TaskRuntime.MemoAsync"/> is the form to call from a phase handler, outside a
     /// transaction. It takes the store's commit gate, and so does the commit that is running the
-    /// handler, so calling it from inside a commit callback waits for a release that cannot happen:
-    /// the gate is not reentrant and the callback cannot return. That is not a deadlock a caller can
-    /// detect — it is a hang.
+    /// handler, so calling it from inside a commit callback cannot make progress: the gate is not
+    /// reentrant and the callback cannot return. It therefore throws
+    /// <see cref="DurableCommitReentryException"/> rather than waiting.
     /// </para>
     /// <para>
     /// This overload exists for the one shape the other cannot express: an external effect whose
@@ -5432,7 +5570,7 @@ internal sealed class DurableRuntime : IAsyncDisposable
             return await completion.Task.WaitAsync(cancellationToken);
         }
 
-        var run = RunTaskCoreAsync(taskId, record, completion, cancellationToken);
+        var run = Store.OutsideCommitScopeAsync(() => RunTaskCoreAsync(taskId, record, completion, cancellationToken));
         // Recorded before the first await so disposal can drain a run that is mid-commit.
         _inFlight[taskId] = run;
         try
