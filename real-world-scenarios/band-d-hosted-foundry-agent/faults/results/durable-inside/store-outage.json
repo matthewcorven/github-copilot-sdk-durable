@@ -2,13 +2,18 @@
  "application": {
   "observations": {
    "assess_exit": 0,
-   "error_during_outage": "Errno 17] File exists: '/home/session/durable'",
+   "committed_state_read_back": "committed",
+   "error_during_outage": "OSError: [Errno 30] Read-only file system: '/home/session/durable/working-state.jsonl.lock'",
    "outage_injected": true,
+   "outage_kind": "the session volume was mounted read-only for the process that ran while the store was unavailable",
+   "phase_committed_before_outage": "awaiting-approval",
    "read_after_outage_exit": 0,
-   "read_during_outage_exit": 1,
-   "store_directory_after_restore": ""
+   "resume_exit_during_outage": 1,
+   "store_bytes_unchanged": true,
+   "store_sha256_after_outage": "76a68a6630ab52d1831ec9b64003c8dbf47c1f04018bcbd9a30f9229750347df",
+   "store_sha256_before_outage": "76a68a6630ab52d1831ec9b64003c8dbf47c1f04018bcbd9a30f9229750347df"
   },
-  "outcome_detail": "The store's directory inside the session volume was replaced by a regular file while the container was between processes. The next process could not open the store: it exited 1 with 'Errno 17] File exists: '/home/session/durable'' and wrote nothing. The outage was then removed and the same volume re-read: the approval committed before it is still there (exit 0). So the app fails closed rather than writing through an unavailable store, and committed state survives the outage because the outage was an unavailability rather than a corruption."
+  "outcome_detail": "The store's volume was made read-only for the process that ran while it was unavailable, so the commit was refused by the filesystem: the process exited 1 with 'OSError: [Errno 30] Read-only file system: '/home/session/durable/working-state.jsonl.lock'' and the store's digest was unchanged. The same volume was then writable again and read back: the state the first process committed is still there (approval state 'pending', its deadline present) and the process reads it with exit 0. Nothing was deleted to produce the outage - it was an unavailability the store came back from, which is what separates it from a corruption."
  },
  "environment": {
   "foundry_deployment": "none - nothing was provisioned for this run",
@@ -17,14 +22,18 @@
  "fault": "store-outage",
  "harness": {
   "command": "./faults/store-outage.sh --variant durable-inside",
-  "commit": "371efc1369eb18064442a445c418d3834204bdd8",
-  "docker": "not used by this fault",
+  "commit": "9ddda215f2a59a28d94c09b425c107cded6c09c0",
+  "docker": "client and server: client 29.9.2 / server 29.9.2; image band-d4-d2:c9a23873ca15 (sha256:0718a048b2db03fff192e3b2d6568d97613408edf43d4cb3d701e733ceeebb5a)",
   "live_azure_calls": 0,
   "network": "none - every call a fault makes is to 127.0.0.1",
+  "paths_normalised": {
+   "$FAULTS_SCRATCH": "the harness scratch root",
+   "<repo>": "the repository root"
+  },
   "python": "3.15.2",
   "what_runs_where": "the D2 hosted-agent image, built locally from real-world-scenarios/band-d-durable-inside/agent/ plus lib/py with D2's own Dockerfile. Each process is its own container over one named Docker volume standing in for the platform's per-session mount, so a container restart is a real stop and start."
  },
- "outcome": "failed safely: the store was unavailable, so the step did not run",
+ "outcome": "failed closed, and the committed state was still there afterwards",
  "platform": {
   "behaviours": [
    {
@@ -63,8 +72,8 @@
   "live_foundry_called": false,
   "session_survived": "not applicable - no platform session existed",
   "what_the_platform_did": "not exercised in this run: the Durable store is the application's, and Foundry has no part in it. Nothing here says anything about the platform's own availability.",
-  "what_the_platform_is_not_represented_by": "The outage was injected inside the session volume, which is this harness's stand-in for the platform's per-session filesystem. The platform's behaviour under a storage failure is not measured and is not claimed."
+  "what_the_platform_is_not_represented_by": "The outage was imposed on the session volume's mount, which is this harness's stand-in for the platform's per-session filesystem: the container runtime refused the write, the store was not deleted, and the platform was not asked what it does when its own storage fails. Its behaviour under a storage failure is not measured and is not claimed."
  },
- "recordedAt": "2026-11-16T12:57:07.083836+00:00",
+ "recordedAt": "2026-11-16T14:31:24.249608+00:00",
  "variant": "durable-inside"
 }

@@ -24,11 +24,15 @@
  },
  "fault": "store-outage",
  "harness": {
-  "command": "./faults/store-outage.sh --variant durable-outside",
-  "commit": "371efc1369eb18064442a445c418d3834204bdd8",
-  "docker": "not used by this fault",
+  "command": "./faults/store-outage.sh --variant durable-outside --fault-not-injected",
+  "commit": "9ddda215f2a59a28d94c09b425c107cded6c09c0",
+  "docker": "not used by this fault - D3's orchestrator is a host process and its store a host file",
   "live_azure_calls": 0,
   "network": "none - every call a fault makes is to 127.0.0.1",
+  "paths_normalised": {
+   "$FAULTS_SCRATCH": "the harness scratch root",
+   "<repo>": "the repository root"
+  },
   "python": "3.15.2",
   "what_runs_where": "D3's orchestrator, dotnet-published from real-world-scenarios/band-d3-outside-orchestrator so the PID the harness starts is the application. Its agent calls go to lib/fake_foundry.py, the same local stand-in, whose request log is the call count."
  },
@@ -73,6 +77,6 @@
   "what_the_platform_did": "not exercised in this run: the store is local and Durable's, not the platform's",
   "what_the_platform_is_not_represented_by": "D3's store is a file on this machine. The outage is an operating-system write refusal, which is a stronger injection than an application-level flag and is not a statement about Azure storage."
  },
- "recordedAt": "2026-11-16T13:02:27.584851+00:00",
+ "recordedAt": "2026-11-16T14:36:42.402737+00:00",
  "variant": "durable-outside"
 }

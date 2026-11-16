@@ -17,11 +17,15 @@
  },
  "fault": "duplicate-delivery",
  "harness": {
-  "command": "./faults/duplicate-delivery.sh --variant baseline",
-  "commit": "371efc1369eb18064442a445c418d3834204bdd8",
-  "docker": "not used by this fault",
+  "command": "./faults/duplicate-delivery.sh --variant baseline --fault-not-injected",
+  "commit": "9ddda215f2a59a28d94c09b425c107cded6c09c0",
+  "docker": "not used by this fault - the decision is delivered by host processes",
   "live_azure_calls": 0,
   "network": "none - every call a fault makes is to 127.0.0.1",
+  "paths_normalised": {
+   "$FAULTS_SCRATCH": "the harness scratch root",
+   "<repo>": "the repository root"
+  },
   "python": "3.15.2",
   "what_runs_where": "lib/baseline_driver.py against lib/fake_foundry.py, a local stand-in for the Foundry data plane that is never claimed to be Foundry. D1's hosted agents were not deployed, so the baseline column is its decision path as a client."
  },
@@ -66,6 +70,6 @@
   "what_the_platform_did": "not exercised in this run: the platform's response records are not the application's decision record, and no hosted deployment existed to deliver anything twice to",
   "what_the_platform_is_not_represented_by": "The duplicate here is two processes over one stateless driver. The baseline keeps its progress only in result files, so what it lacks is an identity for a step - a property of the accelerator's design, not of Foundry."
  },
- "recordedAt": "2026-11-16T12:54:45.524522+00:00",
+ "recordedAt": "2026-11-16T14:29:01.800915+00:00",
  "variant": "baseline"
 }

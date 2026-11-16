@@ -16,11 +16,15 @@
  },
  "fault": "concurrent-clients",
  "harness": {
-  "command": "./faults/concurrent-clients.sh --variant durable-inside",
-  "commit": "371efc1369eb18064442a445c418d3834204bdd8",
-  "docker": "not used by this fault",
+  "command": "./faults/concurrent-clients.sh --variant durable-inside --fault-not-injected",
+  "commit": "9ddda215f2a59a28d94c09b425c107cded6c09c0",
+  "docker": "client and server: client 29.9.2 / server 29.9.2; image band-d4-d2:c9a23873ca15 (sha256:0718a048b2db03fff192e3b2d6568d97613408edf43d4cb3d701e733ceeebb5a)",
   "live_azure_calls": 0,
   "network": "none - every call a fault makes is to 127.0.0.1",
+  "paths_normalised": {
+   "$FAULTS_SCRATCH": "the harness scratch root",
+   "<repo>": "the repository root"
+  },
   "python": "3.15.2",
   "what_runs_where": "the D2 hosted-agent image, built locally from real-world-scenarios/band-d-durable-inside/agent/ plus lib/py with D2's own Dockerfile. Each process is its own container over one named Docker volume standing in for the platform's per-session mount, so a container restart is a real stop and start."
  },
@@ -65,6 +69,6 @@
   "what_the_platform_did": "not exercised in this run: two clients against one *platform* session is not something this harness can reach without a deployment. What it measures is two local processes against one durable store, which is the application's contention and not the platform's.",
   "what_the_platform_is_not_represented_by": "The platform's own concurrency behaviour - whether Foundry serialises two requests on one agent_session_id - is not measured here and is not claimed. lib/fake_foundry.py serves requests concurrently and knows nothing about sessions."
  },
- "recordedAt": "2026-11-16T12:57:02.604445+00:00",
+ "recordedAt": "2026-11-16T14:31:19.830700+00:00",
  "variant": "durable-inside"
 }

@@ -36,10 +36,14 @@
  "fault": "agent-call-failure",
  "harness": {
   "command": "./faults/agent-call-failure.sh --variant durable-outside",
-  "commit": "371efc1369eb18064442a445c418d3834204bdd8",
-  "docker": "not used by this fault",
+  "commit": "9ddda215f2a59a28d94c09b425c107cded6c09c0",
+  "docker": "not used by this fault - both arms are host processes",
   "live_azure_calls": 0,
   "network": "none - every call a fault makes is to 127.0.0.1",
+  "paths_normalised": {
+   "$FAULTS_SCRATCH": "the harness scratch root",
+   "<repo>": "the repository root"
+  },
   "python": "3.15.2",
   "what_runs_where": "D3's orchestrator, dotnet-published from real-world-scenarios/band-d3-outside-orchestrator so the PID the harness starts is the application. Its agent calls go to lib/fake_foundry.py, the same local stand-in, whose request log is the call count."
  },
@@ -84,6 +88,6 @@
   "what_the_platform_did": "not exercised in this run: the 503 came from lib/fake_foundry.py, this harness's stand-in for the data plane, not from Foundry. What a hosted agent does when its model call fails is a different question and is not answered here.",
   "what_the_platform_is_not_represented_by": "The call failure is an application-visible 5xx from a local server, which is the shape Azure returns but not Azure. Nothing in this result says anything about the platform's own agent reliability."
  },
- "recordedAt": "2026-11-16T13:02:48.549051+00:00",
+ "recordedAt": "2026-11-16T14:37:03.399868+00:00",
  "variant": "durable-outside"
 }

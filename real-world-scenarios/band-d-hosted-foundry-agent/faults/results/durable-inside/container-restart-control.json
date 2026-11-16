@@ -2,8 +2,8 @@
  "application": {
   "observations": {
    "container_restarted": "no (control: the same container finished its own step instead)",
-   "deadline_after_restart": "1794920105.0639973",
-   "deadline_before_restart": "1794920105.0639973",
+   "deadline_after_restart": "1794925762.282814",
+   "deadline_before_restart": "1794925762.282814",
    "deadline_identical": true,
    "deliver_exit": 0,
    "docker_stop_exit": 0,
@@ -12,7 +12,7 @@
    "task_settled": "completed",
    "work_state_phase_after_resume": "decided"
   },
-  "outcome_detail": "The same commits and the same resume, with the hold released instead of the container stopped: the approval deadline is 1794920105.0639973, the resume settled completed. Nothing in the two-container shape is what produced the survival in the fault row \u2014 the commits are."
+  "outcome_detail": "The same commits and the same resume, with the hold released instead of the container stopped: the approval deadline is 1794925762.282814, the resume settled completed. Nothing in the two-container shape is what produced the survival in the fault row \u2014 the commits are."
  },
  "artifacts": [
   "10-before-restart.json",
@@ -27,11 +27,15 @@
  },
  "fault": "container-restart",
  "harness": {
-  "command": "./faults/container-restart.sh --variant durable-inside",
-  "commit": "371efc1369eb18064442a445c418d3834204bdd8",
-  "docker": "not used by this fault",
+  "command": "./faults/container-restart.sh --variant durable-inside --fault-not-injected",
+  "commit": "9ddda215f2a59a28d94c09b425c107cded6c09c0",
+  "docker": "client and server: client 29.9.2 / server 29.9.2; image band-d4-d2:c9a23873ca15 (sha256:0718a048b2db03fff192e3b2d6568d97613408edf43d4cb3d701e733ceeebb5a)",
   "live_azure_calls": 0,
   "network": "none - every call a fault makes is to 127.0.0.1",
+  "paths_normalised": {
+   "$FAULTS_SCRATCH": "the harness scratch root",
+   "<repo>": "the repository root"
+  },
   "python": "3.15.2",
   "what_runs_where": "the D2 hosted-agent image, built locally from real-world-scenarios/band-d-durable-inside/agent/ plus lib/py with D2's own Dockerfile. Each process is its own container over one named Docker volume standing in for the platform's per-session mount, so a container restart is a real stop and start."
  },
@@ -73,9 +77,9 @@
   ],
   "live_foundry_called": false,
   "session_survived": "not applicable - the restart was a local container, not a hosted session",
-  "what_the_platform_did": "not exercised in this run: nothing was provisioned, so the platform's own session behaviour is quoted from D1 rather than reproduced. The container restarted here is a local Docker container, and the session volume is a host directory.",
+  "what_the_platform_did": "not exercised in this run: nothing was provisioned, so the platform's own session behaviour is quoted from D1 rather than reproduced. The container restarted here is a local Docker container over a named Docker volume, not a hosted session.",
   "what_the_platform_is_not_represented_by": "The D2 image is D2's own Dockerfile over D2's own build context, so the code that survived is the scenario's. The *platform* behaviour - that a real hosted session outlives a container - is not what this measured; see behaviours[id=session-persistence] and [id=idle-timeout] for its documented answer."
  },
- "recordedAt": "2026-11-16T12:56:38.745149+00:00",
+ "recordedAt": "2026-11-16T14:30:55.982794+00:00",
  "variant": "durable-inside"
 }

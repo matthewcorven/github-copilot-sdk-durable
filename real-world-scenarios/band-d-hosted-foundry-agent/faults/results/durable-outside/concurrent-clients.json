@@ -17,10 +17,14 @@
  "fault": "concurrent-clients",
  "harness": {
   "command": "./faults/concurrent-clients.sh --variant durable-outside",
-  "commit": "371efc1369eb18064442a445c418d3834204bdd8",
-  "docker": "not used by this fault",
+  "commit": "9ddda215f2a59a28d94c09b425c107cded6c09c0",
+  "docker": "not used by this fault - both clients are host processes",
   "live_azure_calls": 0,
   "network": "none - every call a fault makes is to 127.0.0.1",
+  "paths_normalised": {
+   "$FAULTS_SCRATCH": "the harness scratch root",
+   "<repo>": "the repository root"
+  },
   "python": "3.15.2",
   "what_runs_where": "D3's orchestrator, dotnet-published from real-world-scenarios/band-d3-outside-orchestrator so the PID the harness starts is the application. Its agent calls go to lib/fake_foundry.py, the same local stand-in, whose request log is the call count."
  },
@@ -65,6 +69,6 @@
   "what_the_platform_did": "not exercised in this run: two clients against one *platform* session is not something this harness can reach without a deployment. What it measures is two local processes against one durable store, which is the application's contention and not the platform's.",
   "what_the_platform_is_not_represented_by": "The platform's own concurrency behaviour - whether Foundry serialises two requests on one agent_session_id - is not measured here and is not claimed. lib/fake_foundry.py serves requests concurrently and knows nothing about sessions."
  },
- "recordedAt": "2026-11-16T13:01:22.459070+00:00",
+ "recordedAt": "2026-11-16T14:35:37.168624+00:00",
  "variant": "durable-outside"
 }

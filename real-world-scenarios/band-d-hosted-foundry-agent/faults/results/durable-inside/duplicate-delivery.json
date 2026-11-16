@@ -21,10 +21,14 @@
  "fault": "duplicate-delivery",
  "harness": {
   "command": "./faults/duplicate-delivery.sh --variant durable-inside",
-  "commit": "371efc1369eb18064442a445c418d3834204bdd8",
-  "docker": "not used by this fault",
+  "commit": "9ddda215f2a59a28d94c09b425c107cded6c09c0",
+  "docker": "not used by this fault - the decision is delivered by host processes",
   "live_azure_calls": 0,
   "network": "none - every call a fault makes is to 127.0.0.1",
+  "paths_normalised": {
+   "$FAULTS_SCRATCH": "the harness scratch root",
+   "<repo>": "the repository root"
+  },
   "python": "3.15.2",
   "what_runs_where": "the D2 hosted-agent image, built locally from real-world-scenarios/band-d-durable-inside/agent/ plus lib/py with D2's own Dockerfile. Each process is its own container over one named Docker volume standing in for the platform's per-session mount, so a container restart is a real stop and start."
  },
@@ -69,6 +73,6 @@
   "what_the_platform_did": "not exercised in this run: Foundry was not asked to deliver anything twice, and it has no application-level deduplication for the application to rely on - the decision document is the application's, not the platform's",
   "what_the_platform_is_not_represented_by": "A duplicate delivery here is two processes writing to one durable store. The platform is not in that path at all, so nothing in this result describes the platform's behaviour."
  },
- "recordedAt": "2026-11-16T12:56:45.976106+00:00",
+ "recordedAt": "2026-11-16T14:31:03.231060+00:00",
  "variant": "durable-inside"
 }

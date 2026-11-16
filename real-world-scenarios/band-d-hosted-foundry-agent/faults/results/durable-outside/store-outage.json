@@ -2,7 +2,7 @@
  "application": {
   "observations": {
    "outage_injected": true,
-   "outcome_line": "orchestrator: run did not complete: failed Access to the path '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/matthewcorven-redesigned-fiesta/.scratch/band-d4-faults/runs/durable-outside/store-outage/run/store/orchestrator.jsonl' is denied.",
+   "outcome_line": "orchestrator: run did not complete: failed Access to the path '$FAULTS_SCRATCH/runs/durable-outside/store-outage/run/store/orchestrator.jsonl' is denied.",
    "process_exit": 1,
    "store_after_flag_removed": {
     "readable": true,
@@ -16,7 +16,7 @@
     ]
    }
   },
-  "outcome_detail": "The store file was made immutable (chflags uchg) while the run was live and waiting at its human gate. The gate was then answered. The process exited 1 with 'orchestrator: run did not complete: failed Access to the path '/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/matthewcorven-redesigned-fiesta/.scratch/band-d4-faults/runs/durable-outside/store-outage/run/store/orchestrator.jsonl' is denied.'. After the flag was removed the store was read back: {\"readable\": true, \"records\": 3, \"tasks\": [{\"id\": \"t1\", \"status\": 1, \"checkpoint\": \"gate\"}]}. The refused write is the observation - the run did not silently continue past a store it could not write, and the committed prefix is intact."
+  "outcome_detail": "The store file was made immutable (chflags uchg) while the run was live and waiting at its human gate. The gate was then answered. The process exited 1 with 'orchestrator: run did not complete: failed Access to the path '$FAULTS_SCRATCH/runs/durable-outside/store-outage/run/store/orchestrator.jsonl' is denied.'. After the flag was removed the store was read back: {\"readable\": true, \"records\": 3, \"tasks\": [{\"id\": \"t1\", \"status\": 1, \"checkpoint\": \"gate\"}]}. The refused write is the observation - the run did not silently continue past a store it could not write, and the committed prefix is intact."
  },
  "environment": {
   "foundry_deployment": "none - nothing was provisioned for this run",
@@ -25,10 +25,14 @@
  "fault": "store-outage",
  "harness": {
   "command": "./faults/store-outage.sh --variant durable-outside",
-  "commit": "371efc1369eb18064442a445c418d3834204bdd8",
-  "docker": "not used by this fault",
+  "commit": "9ddda215f2a59a28d94c09b425c107cded6c09c0",
+  "docker": "not used by this fault - D3's orchestrator is a host process and its store a host file",
   "live_azure_calls": 0,
   "network": "none - every call a fault makes is to 127.0.0.1",
+  "paths_normalised": {
+   "$FAULTS_SCRATCH": "the harness scratch root",
+   "<repo>": "the repository root"
+  },
   "python": "3.15.2",
   "what_runs_where": "D3's orchestrator, dotnet-published from real-world-scenarios/band-d3-outside-orchestrator so the PID the harness starts is the application. Its agent calls go to lib/fake_foundry.py, the same local stand-in, whose request log is the call count."
  },
@@ -73,6 +77,6 @@
   "what_the_platform_did": "not exercised in this run: the store is local and Durable's, not the platform's",
   "what_the_platform_is_not_represented_by": "D3's store is a file on this machine. The outage is an operating-system write refusal, which is a stronger injection than an application-level flag and is not a statement about Azure storage."
  },
- "recordedAt": "2026-11-16T13:02:25.970057+00:00",
+ "recordedAt": "2026-11-16T14:36:40.732526+00:00",
  "variant": "durable-outside"
 }
