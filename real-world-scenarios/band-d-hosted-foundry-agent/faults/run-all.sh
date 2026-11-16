@@ -42,6 +42,7 @@ fi
 STATUS_FILE="$RESULTS_DIR/run-status.txt"
 
 require_tools || exit 1
+mkdir -p "$SCRATCH_ROOT"
 
 # The result guard is a test, not a claim: a matrix is only as good as the refusals behind it.
 log "run-all.sh: running the result guard's own tests"
@@ -112,7 +113,8 @@ for variant in "${VARIANTS[@]}"; do
         "$HERE/lib/not_exercised.sh" --variant "$variant" --fault "$fault" \
           --out "$RESULTS_DIR/$variant/$fault-control.json" \
           --reason "control for a fault this variant cannot have" \
-          --detail "No control exists for a fault that is not injected. Recorded so a control column is a reason rather than a blank." >/dev/null 2>&1
+          --detail "No control exists for a fault that is not injected. Recorded so a control column is a reason rather than a blank." \
+          --control >/dev/null 2>&1
         printf '%s %s-control %s\n' "$variant" "$fault" "$?" >> "$STATUS_FILE"
       fi
       continue

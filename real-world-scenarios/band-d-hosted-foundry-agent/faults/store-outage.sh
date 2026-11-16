@@ -160,7 +160,14 @@ doc = {
         "outcome_detail": os.environ["FAULT_DETAIL"],
         "observations": {
             "outage_injected": os.environ["FAULT_INJECTED"] == "yes",
-            "outage_kind": "the session volume was mounted read-only for the process that ran while the store was unavailable",
+            # Only the injected arm had an outage, and only the injected arm's kind is a fact
+            # about the run. A control that named a read-only mount it never applied would be
+            # describing an injection the run did not make.
+            "outage_kind": (
+                "the session volume was mounted read-only for the process that ran while the store was unavailable"
+                if os.environ["FAULT_INJECTED"] == "yes"
+                else None
+            ),
             "assess_exit": int(os.environ["FAULT_ASSESS"]),
             "phase_committed_before_outage": os.environ["FAULT_COMMITTED"],
             "resume_exit_during_outage": int(os.environ["FAULT_DURING"]),

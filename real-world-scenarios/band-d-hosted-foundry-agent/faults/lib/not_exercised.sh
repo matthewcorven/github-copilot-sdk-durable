@@ -2,7 +2,10 @@
 # Write the result a fault gets when this variant cannot have it, so a matrix cell is a
 # recorded reason rather than an empty square.
 #
-#   not_exercised.sh --variant V --fault F --out FILE --reason "..." --detail "..."
+#   not_exercised.sh --variant V --fault F --out FILE --reason "..." --detail "..." [--control]
+#
+# `--control` records the control cell for a fault this variant cannot have, so the file's
+# `harness.command` carries `--fault-not-injected` instead of repeating the fault's line.
 #
 # A missing result and a `not exercised` result are different claims: the first says the
 # run did not happen, the second says it happened and this variant cannot be asked this
@@ -15,6 +18,7 @@ FAULT=""
 OUT=""
 REASON=""
 DETAIL=""
+CONTROL=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --variant) VARIANT="$2"; shift 2 ;;
@@ -22,12 +26,20 @@ while [ $# -gt 0 ]; do
     --out) OUT="$2"; shift 2 ;;
     --reason) REASON="$2"; shift 2 ;;
     --detail) DETAIL="$2"; shift 2 ;;
+    # A control cell is not the fault's row; `lib/result.py` spells the invocation from
+    # FAULT_INJECT, so the flag has to reach it from here as well.
+    --control) CONTROL=1; shift ;;
     *) printf 'not_exercised: unknown argument %s\n' "$1" >&2; exit 2 ;;
   esac
 done
 [ -n "$VARIANT" ] && [ -n "$FAULT" ] && [ -n "$OUT" ] || {
   printf 'not_exercised: --variant, --fault and --out are required\n' >&2; exit 2
 }
+if [ "$CONTROL" = "1" ]; then
+  export FAULT_INJECT=0
+else
+  export FAULT_INJECT=1
+fi
 
 # A cell a variant cannot have was never run, so it never used a container. Said explicitly
 # rather than left to the envelope's default, because a reader comparing rows should not

@@ -25,7 +25,7 @@
  "fault": "store-outage",
  "harness": {
   "command": "./faults/store-outage.sh --variant durable-outside --fault-not-injected",
-  "commit": "9ddda215f2a59a28d94c09b425c107cded6c09c0",
+  "commit": "56cf8282cf98d6acf37b64ff462d5f86f929fb05",
   "docker": "not used by this fault - D3's orchestrator is a host process and its store a host file",
   "live_azure_calls": 0,
   "network": "none - every call a fault makes is to 127.0.0.1",
@@ -77,6 +77,6 @@
   "what_the_platform_did": "not exercised in this run: the store is local and Durable's, not the platform's",
   "what_the_platform_is_not_represented_by": "D3's store is a file on this machine. The outage is an operating-system write refusal, which is a stronger injection than an application-level flag and is not a statement about Azure storage."
  },
- "recordedAt": "2026-11-16T14:36:42.402737+00:00",
+ "recordedAt": "2026-11-16T15:10:43.351639+00:00",
  "variant": "durable-outside"
 }

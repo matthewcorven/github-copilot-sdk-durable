@@ -197,5 +197,103 @@ class CommandLine(unittest.TestCase):
         self.assertTrue(self.wrote)
 
 
+class DockerIdentity(unittest.TestCase):
+    """A cached identity must name the image this run used, not an earlier commit's."""
+
+    def _record(self, scratch: str, image: str, digest: str) -> subprocess.CompletedProcess:
+        script = os.path.join(HERE, "..", "lib", "common.sh")
+        # `record_docker_identity` reads the daemon; `docker` is replaced by a stub so the
+        # test is about the cache key, not about a machine having a daemon.
+        stub_dir = os.path.join(scratch, "bin")
+        os.makedirs(stub_dir, exist_ok=True)
+        stub = os.path.join(stub_dir, "docker")
+        with open(stub, "w", encoding="utf-8") as handle:
+            handle.write(
+                "#!/usr/bin/env bash\n"
+                "case \"$1 $2\" in\n"
+                "  'version --format') echo 'client 1.0 / server 1.0' ;;\n"
+                f"  'image inspect') printf '%s\\n' '{digest}' ;;\n"
+                "  *) exit 1 ;;\n"
+                "esac\n"
+            )
+        os.chmod(stub, 0o755)
+        # `common.sh` derives SCRATCH_ROOT from FAULTS_SCRATCH (it ignores a bare
+        # SCRATCH_ROOT), so the cache layout under test is the one a run really uses.
+        environment = dict(
+            os.environ, PATH=f"{stub_dir}:{os.environ['PATH']}", FAULTS_SCRATCH=scratch
+        )
+        return subprocess.run(
+            [
+                "bash", "-c",
+                '. "$0"; D2_IMAGE="$1"; record_docker_identity',
+                script, image,
+            ],
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+
+    def test_a_cached_identity_for_another_image_is_not_reused(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            first = self._record(scratch, "band-d4-d2:aaaa", "1111")
+            self.assertIn("band-d4-d2:aaaa", first.stdout)
+            second = self._record(scratch, "band-d4-d2:bbbb", "2222")
+            self.assertIn("band-d4-d2:bbbb", second.stdout, second.stderr)
+            self.assertIn("2222", second.stdout)
+            self.assertNotIn("band-d4-d2:aaaa", second.stdout)
+
+    def test_a_cached_identity_is_reused_for_the_same_image(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            self._record(scratch, "band-d4-d2:aaaa", "1111")
+            again = self._record(scratch, "band-d4-d2:aaaa", "1111")
+            self.assertIn("band-d4-d2:aaaa", again.stdout, again.stderr)
+            self.assertTrue(
+                any(name.startswith("docker-identity-band-d4-d2_aaaa") for name in os.listdir(scratch)),
+                os.listdir(scratch),
+            )
+
+    def test_a_stale_unkeyed_identity_is_ignored(self):
+        """The old cache path wrote a file that survived a rebuild; it must not be read."""
+        with tempfile.TemporaryDirectory() as scratch:
+            with open(os.path.join(scratch, "docker-identity.txt"), "w", encoding="utf-8") as handle:
+                handle.write("client and server: client 1 / server 1; image band-d4-d2:c9a23873ca15 (sha256:aaaa)\n")
+            current = self._record(scratch, "band-d4-d2:bbbb", "2222")
+            self.assertNotIn("c9a23873ca15", current.stdout)
+            self.assertIn("band-d4-d2:bbbb", current.stdout)
+
+
+class NotExercisedControls(unittest.TestCase):
+    """A control cell's command must not repeat the fault's invocation."""
+
+    def run_not_exercised(self, control: bool) -> dict:
+        with tempfile.TemporaryDirectory() as directory:
+            out = os.path.join(directory, "x", "container-restart-control.json")
+            args = [
+                "bash", os.path.join(HERE, "not_exercised.sh"),
+                "--variant", "durable-outside", "--fault", "container-restart",
+                "--out", out, "--reason", "no container", "--detail", "recorded",
+            ]
+            if control:
+                args.append("--control")
+            process = subprocess.run(args, capture_output=True, text=True)
+            self.assertEqual(process.returncode, 0, process.stderr)
+            with open(out, encoding="utf-8") as handle:
+                return json.load(handle)
+
+    def test_the_control_cell_carries_the_flag(self):
+        document = self.run_not_exercised(control=True)
+        self.assertEqual(
+            document["harness"]["command"],
+            "./faults/container-restart.sh --variant durable-outside --fault-not-injected",
+        )
+
+    def test_the_fault_cell_does_not_carry_the_flag(self):
+        document = self.run_not_exercised(control=False)
+        self.assertEqual(
+            document["harness"]["command"],
+            "./faults/container-restart.sh --variant durable-outside",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

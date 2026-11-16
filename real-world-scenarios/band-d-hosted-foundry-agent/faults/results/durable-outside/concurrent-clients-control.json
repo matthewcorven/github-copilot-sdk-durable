@@ -17,7 +17,7 @@
  "fault": "concurrent-clients",
  "harness": {
   "command": "./faults/concurrent-clients.sh --variant durable-outside --fault-not-injected",
-  "commit": "9ddda215f2a59a28d94c09b425c107cded6c09c0",
+  "commit": "56cf8282cf98d6acf37b64ff462d5f86f929fb05",
   "docker": "not used by this fault - both clients are host processes",
   "live_azure_calls": 0,
   "network": "none - every call a fault makes is to 127.0.0.1",
@@ -69,6 +69,6 @@
   "what_the_platform_did": "not exercised in this run: two clients against one *platform* session is not something this harness can reach without a deployment. What it measures is two local processes against one durable store, which is the application's contention and not the platform's.",
   "what_the_platform_is_not_represented_by": "The platform's own concurrency behaviour - whether Foundry serialises two requests on one agent_session_id - is not measured here and is not claimed. lib/fake_foundry.py serves requests concurrently and knows nothing about sessions."
  },
- "recordedAt": "2026-11-16T14:36:39.115989+00:00",
+ "recordedAt": "2026-11-16T15:10:40.157369+00:00",
  "variant": "durable-outside"
 }

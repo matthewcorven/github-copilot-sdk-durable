@@ -14,7 +14,7 @@
  "fault": "agent-call-failure",
  "harness": {
   "command": "./faults/agent-call-failure.sh --variant durable-inside --fault-not-injected",
-  "commit": "9ddda215f2a59a28d94c09b425c107cded6c09c0",
+  "commit": "56cf8282cf98d6acf37b64ff462d5f86f929fb05",
   "docker": "not used by this fault - both arms are host processes",
   "live_azure_calls": 0,
   "network": "none - every call a fault makes is to 127.0.0.1",
@@ -66,6 +66,6 @@
   "what_the_platform_did": "not exercised in this run: the only model call in D2 is the platform's own, inside the hosted turn, and this harness has no deployment to fail it in",
   "what_the_platform_is_not_represented_by": "D2's durable task parks on a human event; it issues no agent call and holds no memo of one. Failing a call it does not make would have produced a fabrication, so the row is recorded as not exercised instead."
  },
- "recordedAt": "2026-11-16T14:31:30.412781+00:00",
+ "recordedAt": "2026-11-16T15:05:22.895635+00:00",
  "variant": "durable-inside"
 }

@@ -36,8 +36,14 @@ esac
 
 require_tools || exit 1
 install_cleanup
-FAULTS_DOCKER="not used by this fault - the decision is delivered by host processes"; export FAULTS_DOCKER
-[ "$VARIANT" = "durable-inside" ] && { require_d2 || exit 1; }
+if [ "$VARIANT" = "durable-inside" ]; then
+  # D2's deliveries are d2_run containers over one named volume, so this arm's identity is
+  # read from the daemon once the image is the one this commit built.
+  require_d2 || exit 1
+  FAULTS_DOCKER="$(record_docker_identity)"; export FAULTS_DOCKER
+else
+  FAULTS_DOCKER="not used by this fault - the baseline delivers the duplicate from host processes"; export FAULTS_DOCKER
+fi
 
 RUN_DIR="$(new_run_dir "$VARIANT" "$FAULT")"
 track_path "$RUN_DIR"

@@ -196,7 +196,9 @@ Two things in the envelope exist so a result can be checked later rather than be
 
 - **`harness.docker` names the container a result actually used**, read from the daemon when the image is
   built or found — client and server versions, the image tag and its digest — and says plainly when a
-  fault used no container. A run that ran in Docker and a run that did not are therefore distinguishable
+  fault used no container. The per-run cache is keyed by the image and revalidated against the daemon's
+  digest, so a scratch directory left over from an earlier commit cannot make a result name an image
+  this run did not start. A run that ran in Docker and a run that did not are therefore distinguishable
   from the file alone.
 - **`harness.command` is the invocation that produced that file**, so a control carries
   `--fault-not-injected` and is never read as its fault's row.
@@ -218,11 +220,11 @@ Two things in the envelope exist so a result can be checked later rather than be
   that left the task running would have let the first arm show a memo hit directly; that path is not
   reachable through D3's current retry-and-throw, and the memo arm is the substitute.
 - **That the result guard is complete.** `lib/test_result.py` proves the refusals `lib/result.py`
-  actually makes — eighteen cases, one of which is the exact misattribution this band exists to prevent,
-  and three of which pin the path normalisation and the control's command line —
-  but it cannot prove there is no *other* way for a result to blur the two blocks. What it does prove is
-  that the guard is not decorative: `run-all.sh` runs it before writing any result, and a refusal is an
-  exit status with no file written.
+  actually makes — twenty-four cases, one of which is the exact misattribution this band exists to
+  prevent, and nine of which pin the path normalisation, the control's command line and the
+  container-identity cache key — but it cannot prove there is no *other* way for a result to blur the
+  two blocks. What it does prove is that the guard is not decorative: `run-all.sh` runs it before
+  writing any result, and a refusal is an exit status with no file written.
 
 ## How many runs, and at which commit
 

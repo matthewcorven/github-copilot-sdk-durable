@@ -277,24 +277,45 @@ require_d2() {
 }
 
 # The identity a result records when it used a container: the daemon's own versions, the
-# image the fault ran in, and that image's digest. Written once per harness process, beside
-# the build log, so every fault on a run records the same container it actually used.
+# image the fault ran in, and that image's digest.
+#
+# The cache is keyed by the image and revalidated against the daemon on every read. A
+# scratch directory survives across commits, so an identity file written for an earlier
+# commit's image is still lying there; reporting it would name a container this run never
+# started. The image tag carries the commit (`band-d4-d2:<sha>`), and a rebuilt image at the
+# same tag is a different digest, so both are checked before a cached line is reused.
 DOCKER_IDENTITY_FILE=""
 record_docker_identity() {
-  DOCKER_IDENTITY_FILE="$SCRATCH_ROOT/docker-identity.txt"
-  if [ -s "$DOCKER_IDENTITY_FILE" ]; then
-    cat "$DOCKER_IDENTITY_FILE"
-    return 0
+  local digest versions text cached_image cached_digest
+  digest="$(docker image inspect "$D2_IMAGE" --format '{{.Id}}' 2>/dev/null)"
+  digest="${digest#sha256:}"
+  DOCKER_IDENTITY_FILE="$SCRATCH_ROOT/docker-identity-$(printf '%s' "$D2_IMAGE" | tr -c 'A-Za-z0-9._-' '_').txt"
+
+  if [ -s "$DOCKER_IDENTITY_FILE" ] && [ -n "$digest" ]; then
+    cached_image="$(sed -n 's/^image=//p' "$DOCKER_IDENTITY_FILE")"
+    cached_digest="$(sed -n 's/^digest=//p' "$DOCKER_IDENTITY_FILE")"
+    if [ "$cached_image" = "$D2_IMAGE" ] && [ "$cached_digest" = "$digest" ]; then
+      printf '%s\n' "$(sed -n 's/^text=//p' "$DOCKER_IDENTITY_FILE")"
+      return 0
+    fi
   fi
+
   mkdir -p "$SCRATCH_ROOT"
-  {
-    local versions digest
-    versions="$(docker version --format 'client {{.Client.Version}} / server {{.Server.Version}}' 2>/dev/null)"
-    digest="$(docker image inspect "$D2_IMAGE" --format '{{.Id}}' 2>/dev/null)"
-    printf 'client and server: %s; image %s (%s)\n' \
-      "${versions:-versions unavailable}" "$D2_IMAGE" "sha256:${digest#sha256:}"
-  } > "$DOCKER_IDENTITY_FILE"
-  cat "$DOCKER_IDENTITY_FILE"
+  versions="$(docker version --format 'client {{.Client.Version}} / server {{.Server.Version}}' 2>/dev/null)"
+  text="$(printf 'client and server: %s; image %s (%s)' \
+    "${versions:-versions unavailable}" "$D2_IMAGE" \
+    "$( [ -n "$digest" ] && printf 'sha256:%s' "$digest" || printf 'digest unavailable' )")"
+
+  # Only a resolved image is worth caching: an identity without a digest would be reused
+  # for whatever image the tag later resolves to.
+  if [ -n "$digest" ]; then
+    {
+      printf 'image=%s\n' "$D2_IMAGE"
+      printf 'digest=%s\n' "$digest"
+      printf 'text=%s\n' "$text"
+    } > "$DOCKER_IDENTITY_FILE"
+  fi
+  printf '%s\n' "$text"
 }
 
 # Run one command in a fresh D2 container over this fault's session volume.

@@ -18,8 +18,8 @@
  "fault": "duplicate-delivery",
  "harness": {
   "command": "./faults/duplicate-delivery.sh --variant baseline",
-  "commit": "9ddda215f2a59a28d94c09b425c107cded6c09c0",
-  "docker": "not used by this fault - the decision is delivered by host processes",
+  "commit": "56cf8282cf98d6acf37b64ff462d5f86f929fb05",
+  "docker": "not used by this fault - the baseline delivers the duplicate from host processes",
   "live_azure_calls": 0,
   "network": "none - every call a fault makes is to 127.0.0.1",
   "paths_normalised": {
@@ -70,6 +70,6 @@
   "what_the_platform_did": "not exercised in this run: the platform's response records are not the application's decision record, and no hosted deployment existed to deliver anything twice to",
   "what_the_platform_is_not_represented_by": "The duplicate here is two processes over one stateless driver. The baseline keeps its progress only in result files, so what it lacks is an identity for a step - a property of the accelerator's design, not of Foundry."
  },
- "recordedAt": "2026-11-16T14:29:00.866036+00:00",
+ "recordedAt": "2026-11-16T15:02:53.717129+00:00",
  "variant": "baseline"
 }

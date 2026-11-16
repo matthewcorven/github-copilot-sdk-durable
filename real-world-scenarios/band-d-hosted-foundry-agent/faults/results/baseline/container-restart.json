@@ -15,7 +15,7 @@
  "fault": "container-restart",
  "harness": {
   "command": "./faults/container-restart.sh --variant baseline",
-  "commit": "9ddda215f2a59a28d94c09b425c107cded6c09c0",
+  "commit": "56cf8282cf98d6acf37b64ff462d5f86f929fb05",
   "docker": "not used by this fault - the baseline restart is a client process, not a container",
   "live_azure_calls": 0,
   "network": "none - every call a fault makes is to 127.0.0.1",
@@ -67,6 +67,6 @@
   "what_the_platform_did": "not exercised in this run: no hosted deployment existed, so the platform's session and idle behaviour is quoted from D1, not reproduced",
   "what_the_platform_is_not_represented_by": "The baseline has no container to restart, so what this fault measured is a client restart against a stateless driver. That is a statement about D1's design (the platform owns the session) and not about the platform's own restart behaviour."
  },
- "recordedAt": "2026-11-16T14:28:58.594556+00:00",
+ "recordedAt": "2026-11-16T15:02:51.304684+00:00",
  "variant": "baseline"
 }

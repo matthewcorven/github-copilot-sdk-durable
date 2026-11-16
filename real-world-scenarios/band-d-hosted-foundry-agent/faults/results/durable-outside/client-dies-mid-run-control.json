@@ -18,7 +18,7 @@
  "fault": "client-dies-mid-run",
  "harness": {
   "command": "./faults/client-dies-mid-run.sh --variant durable-outside --fault-not-injected",
-  "commit": "9ddda215f2a59a28d94c09b425c107cded6c09c0",
+  "commit": "56cf8282cf98d6acf37b64ff462d5f86f929fb05",
   "docker": "not used by this fault - the client is a host process",
   "live_azure_calls": 0,
   "network": "none - every call a fault makes is to 127.0.0.1",
@@ -70,7 +70,7 @@
   "what_the_platform_did": "not exercised in this run: no hosted deployment was reachable, so what Foundry would have done is quoted from D1's captures and the documentation, in behaviours[] below",
   "what_the_platform_is_not_represented_by": "lib/fake_foundry.py is a local stand-in for the data plane. It logs every request so a call count is a measurement; it is not Foundry and it recovers nothing. Every number in `application` is about the application's response to a dead client, never about the platform's."
  },
- "recordedAt": "2026-11-16T14:35:35.020364+00:00",
+ "recordedAt": "2026-11-16T15:09:36.125580+00:00",
  "variant": "durable-outside",
  "variant_notes": {
   "baseline": "the client is the run: D1's hosted agents have no orchestration of their own, so this driver is the accelerator's decision path reproduced without the platform",

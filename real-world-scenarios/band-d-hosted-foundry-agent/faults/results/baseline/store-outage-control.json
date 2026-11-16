@@ -14,7 +14,7 @@
  "fault": "store-outage",
  "harness": {
   "command": "./faults/store-outage.sh --variant baseline --fault-not-injected",
-  "commit": "9ddda215f2a59a28d94c09b425c107cded6c09c0",
+  "commit": "56cf8282cf98d6acf37b64ff462d5f86f929fb05",
   "docker": "not used by this fault - the baseline client is a host process and has no store",
   "live_azure_calls": 0,
   "network": "none - every call a fault makes is to 127.0.0.1",
@@ -66,6 +66,6 @@
   "what_the_platform_did": "not exercised in this run: no platform session existed, and the stand-in service is not the platform's data plane",
   "what_the_platform_is_not_represented_by": "Baseline has no store, so this fault cannot mean the same thing on both sides. The row is an unavailable service against a stateless client, and it is labelled as the analogue it is rather than as a store outage."
  },
- "recordedAt": "2026-11-16T14:29:06.167810+00:00",
+ "recordedAt": "2026-11-16T15:02:59.226715+00:00",
  "variant": "baseline"
 }
