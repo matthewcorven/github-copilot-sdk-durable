@@ -1,0 +1,89 @@
+{
+ "application": {
+  "observations": {
+   "coverage_calls_before_resume": 1,
+   "coverage_calls_repeated_by_resume": 0,
+   "coverage_calls_total": 1,
+   "failed_agent": "d3-decision-letter",
+   "failure_injected": true,
+   "first_process_exit": 1,
+   "letter_calls_before_resume": 4,
+   "letter_calls_repeated_by_resume": 0,
+   "letter_calls_total": 4,
+   "memo_arm": {
+    "coverage_calls_after_resume": 2,
+    "coverage_calls_before_resume": 2,
+    "coverage_calls_repeated_by_resume": 0,
+    "first_process_exit": 0,
+    "injection": "STOP_AFTER_COVERAGE=stuck on a fresh store - the coverage memo is written, the checkpoint is not advanced, the process stops with the task still at `coverage`",
+    "phase_the_resume_re_entered": "coverage",
+    "resume_reported_a_memo_hit": true
+   },
+   "memos_before_resume": "",
+   "memos_seen_by_resume": "memos:      2 on record",
+   "phase_before_resume": "new run (no checkpoint before this process)",
+   "phase_seen_by_resume": "letter",
+   "resume_exit": 1,
+   "run_completed_after_resume": false,
+   "task_was_terminal_before_resume": true
+  },
+  "outcome_detail": "The decision-letter agent answered 503 for every attempt (the orchestrator retries 4x), and the failure settled the task as failed rather than leaving it running: the first process exited 1, and its store is at phase 'new run (no checkpoint before this process)' with 4 letter call attempt(s). 'already finished' in the resume log is the reason nothing was called again: 'memos:      2 on record'. Coverage was not repeated and the letter was not retried, but not because of a memo \u2014 the run was terminal. This is a real limitation of the fault as aimed: it shows what a terminal failure does, not what a memo does. The memo's own evidence is D3's kill-at-gate run (+0 calls) and the coverage memo that this store still holds (2 memos on record)."
+ },
+ "environment": {
+  "foundry_deployment": "none - nothing was provisioned for this run",
+  "model": "none - the stand-in serves fixed answers; no model was called"
+ },
+ "fault": "agent-call-failure",
+ "harness": {
+  "command": "./faults/agent-call-failure.sh --variant durable-outside",
+  "commit": "131649e0be69a7d086c503f57966f9923d883352",
+  "docker": "not used by this fault",
+  "live_azure_calls": 0,
+  "network": "none - every call a fault makes is to 127.0.0.1",
+  "python": "3.15.2",
+  "what_runs_where": "D3's orchestrator, dotnet-published from real-world-scenarios/band-d3-outside-orchestrator so the PID the harness starts is the application. Its agent calls go to lib/fake_foundry.py, the same local stand-in, whose request log is the call count."
+ },
+ "outcome": "the failure ended the run, so the resume had nothing to re-enter",
+ "platform": {
+  "behaviours": [
+   {
+    "documented": "30 days, sliding on activity. The session persists the sandbox ($HOME, uploaded files), not the conversation: continuing a conversation needs previous_response_id or a conversation id.",
+    "id": "session-persistence",
+    "question": "How long does a hosted agent session persist?",
+    "source": "learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions; D1 evidence/session-resume/*.json (expires_at - created_at = 30 days, sliding)",
+    "spoken_to_by_this_fault": false,
+    "status": "documented, not exercised here"
+   },
+   {
+    "documented": "900 s (15 min) by default, configurable 120 s-14400 s per agent version. On timeout the platform deprovisions compute and saves the session state until the session is referenced again.",
+    "id": "idle-timeout",
+    "question": "What ends a session's idle lifetime, and what happens to its state?",
+    "source": "learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions; D1 evidence/platform-behaviour.md section 2 (default applied, eviction not waited out)",
+    "spoken_to_by_this_fault": false,
+    "status": "documented, not exercised here"
+   },
+   {
+    "documented": "Foreground responses stay tied to the client connection: the response is resolved cancelled, background=false, and the in-flight work is not preserved for a later lifetime.",
+    "id": "foreground-cancelled",
+    "question": "What happens to a foreground response when the driving client disappears mid-run?",
+    "source": "learn.microsoft.com/azure/foundry/agents/concepts/long-running-agent-resilience; D1 evidence/platform-behaviour.md section 3 (status cancelled, background false)",
+    "spoken_to_by_this_fault": false,
+    "status": "documented, not exercised here"
+   },
+   {
+    "documented": "No for foreground. Only stored background responses with resilient_background opted in are re-entered, and re-entry starts at the handler's beginning - not deterministic replay, no restored local variables or call stack.",
+    "id": "no-replay",
+    "question": "Does the platform replay the interrupted response?",
+    "source": "learn.microsoft.com/azure/foundry/agents/how-to/recover-long-running-work; D1 evidence/platform-behaviour.md section 4",
+    "spoken_to_by_this_fault": false,
+    "status": "documented, not exercised here"
+   }
+  ],
+  "live_foundry_called": false,
+  "session_survived": "not applicable - no platform session existed",
+  "what_the_platform_did": "not exercised in this run: the 503 came from lib/fake_foundry.py, this harness's stand-in for the data plane, not from Foundry. What a hosted agent does when its model call fails is a different question and is not answered here.",
+  "what_the_platform_is_not_represented_by": "The call failure is an application-visible 5xx from a local server, which is the shape Azure returns but not Azure. Nothing in this result says anything about the platform's own agent reliability."
+ },
+ "recordedAt": "2026-11-16T12:40:14.599127+00:00",
+ "variant": "durable-outside"
+}

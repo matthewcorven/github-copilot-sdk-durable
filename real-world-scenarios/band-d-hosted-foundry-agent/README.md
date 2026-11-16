@@ -1,13 +1,14 @@
 # Band D (D1) — the Prior-Authorization hosted agent, running, and what the platform does
 
-> **Band D has three scenarios, and this is the baseline.** They are separate directories because they
-> prove different things about the same platform:
+> **Band D has three scenarios plus its fault sweep, and this is the baseline.** They are separate
+> directories because they prove different things about the same platform:
 >
 > | | Directory | What it is |
 > | --- | --- | --- |
 > | **D1** | *this one* | The accelerator deployed as Foundry hosted agents, run for real, and torn down. |
 > | **D2** | [`band-d-durable-inside/`](../band-d-durable-inside/README.md) | Durable *inside* the platform: the agent's working state is the library's, while Foundry keeps the transcript. |
 > | **D3** | [`band-d3-outside-orchestrator/`](../band-d3-outside-orchestrator/README.md) | Durable *outside*: a local orchestrator that treats Foundry agents as tools. |
+> | **D4** | [`faults/`](faults/README.md) | The six-fault sweep across all three, with **the platform's behaviour and the application's behaviour recorded separately** in every result. |
 >
 > The band's rows and its platform caveat are in
 > [`docs/REAL_WORLD_MATRIX.md`](../../docs/REAL_WORLD_MATRIX.md) § *Band D*.
@@ -16,6 +17,11 @@
 > session, the platform's history. Durable owns **what is true** — the working state, the decision, its
 > deadline, the process. [`BOUNDARY.md`](../band-d-durable-inside/BOUNDARY.md) states the split and which
 > side wins when they disagree.
+>
+> D4 is what tests that split under failure, and its own boundary is
+> [`evidence/attribution.md`](evidence/attribution.md): which observations belong to Foundry, which to
+> this code, and why none of the platform's four documented behaviours was reproduced without a
+> deployment.
 
 The baseline side of Band D: `microsoft/Prior-Authorization-Multi-Agent-Solution-Accelerator`
 (MIT) deployed as **Foundry hosted agents** on a real subscription, invoked for real, and
@@ -178,6 +184,9 @@ transcript; recovering in-flight work is the builder's job.**
 | `evidence/local-compose-path.md` | The local path: what was run, three verbatim failures, and where it stops. |
 | `evidence/inventory.md` | What the deployment contained, captured before teardown. |
 | `evidence/teardown.md` | Teardown output, including the second (harmless) invocation and the `az resource list` verification. |
+| `faults/README.md` | D4's fault sweep: the six faults, the platform/application split, and the limits of each row. |
+| `faults/results/` | One checked-in result per fault per variant plus its control, and the summary rendered from them. |
+| `evidence/attribution.md` | Why every platform row is `documented, not exercised here`, and what a future run with a deployment would have to show to change that. |
 
 ## Preview gates, honestly
 

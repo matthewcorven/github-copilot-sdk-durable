@@ -1,0 +1,81 @@
+{
+ "application": {
+  "observations": {
+   "container_restarted": "yes",
+   "deadline_after_restart": "1794918741.876773",
+   "deadline_before_restart": "1794918741.876773",
+   "deadline_identical": true,
+   "deliver_exit": 0,
+   "docker_stop_exit": 0,
+   "resume_exit": 0,
+   "state_read_after_restart_exit": 0,
+   "task_settled": "completed",
+   "work_state_phase_after_resume": "decided"
+  },
+  "outcome_detail": "A container committed the assessment and a parked approval (task t4), then was stopped with SIGTERM while a later step was held open. A new container over the same session volume read the approval back with the same deadline (1794918741.876773) \u2014 byte-identical, yes \u2014 and a third process delivered the decision, which woke the parked task: resume settled completed and the work state reached 'decided' decided by 'D4 harness reviewer'. The restart is a real container stop and start; the session volume is a host directory, which is this harness's stand-in for the platform's per-session mount."
+ },
+ "artifacts": [
+  "10-before-restart.json",
+  "20-stop.log",
+  "30-after-restart-state.json",
+  "40-deliver.json",
+  "50-resume.json"
+ ],
+ "environment": {
+  "foundry_deployment": "none - nothing was provisioned for this run",
+  "model": "none - the stand-in serves fixed answers; no model was called"
+ },
+ "fault": "container-restart",
+ "harness": {
+  "command": "./faults/container-restart.sh --variant durable-inside",
+  "commit": "131649e0be69a7d086c503f57966f9923d883352",
+  "docker": "not used by this fault",
+  "live_azure_calls": 0,
+  "network": "none - every call a fault makes is to 127.0.0.1",
+  "python": "3.15.2",
+  "what_runs_where": "the D2 hosted-agent image, built locally from real-world-scenarios/band-d-durable-inside/agent/ plus lib/py with D2's own Dockerfile. Each process is its own container over one named Docker volume standing in for the platform's per-session mount, so a container restart is a real stop and start."
+ },
+ "outcome": "working state and pending approval survived the container restart",
+ "platform": {
+  "behaviours": [
+   {
+    "documented": "30 days, sliding on activity. The session persists the sandbox ($HOME, uploaded files), not the conversation: continuing a conversation needs previous_response_id or a conversation id.",
+    "id": "session-persistence",
+    "question": "How long does a hosted agent session persist?",
+    "source": "learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions; D1 evidence/session-resume/*.json (expires_at - created_at = 30 days, sliding)",
+    "spoken_to_by_this_fault": true,
+    "status": "documented, not exercised here"
+   },
+   {
+    "documented": "900 s (15 min) by default, configurable 120 s-14400 s per agent version. On timeout the platform deprovisions compute and saves the session state until the session is referenced again.",
+    "id": "idle-timeout",
+    "question": "What ends a session's idle lifetime, and what happens to its state?",
+    "source": "learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions; D1 evidence/platform-behaviour.md section 2 (default applied, eviction not waited out)",
+    "spoken_to_by_this_fault": true,
+    "status": "documented, not exercised here"
+   },
+   {
+    "documented": "Foreground responses stay tied to the client connection: the response is resolved cancelled, background=false, and the in-flight work is not preserved for a later lifetime.",
+    "id": "foreground-cancelled",
+    "question": "What happens to a foreground response when the driving client disappears mid-run?",
+    "source": "learn.microsoft.com/azure/foundry/agents/concepts/long-running-agent-resilience; D1 evidence/platform-behaviour.md section 3 (status cancelled, background false)",
+    "spoken_to_by_this_fault": false,
+    "status": "documented, not exercised here"
+   },
+   {
+    "documented": "No for foreground. Only stored background responses with resilient_background opted in are re-entered, and re-entry starts at the handler's beginning - not deterministic replay, no restored local variables or call stack.",
+    "id": "no-replay",
+    "question": "Does the platform replay the interrupted response?",
+    "source": "learn.microsoft.com/azure/foundry/agents/how-to/recover-long-running-work; D1 evidence/platform-behaviour.md section 4",
+    "spoken_to_by_this_fault": false,
+    "status": "documented, not exercised here"
+   }
+  ],
+  "live_foundry_called": false,
+  "session_survived": "not applicable - the restart was a local container, not a hosted session",
+  "what_the_platform_did": "not exercised in this run: nothing was provisioned, so the platform's own session behaviour is quoted from D1 rather than reproduced. The container restarted here is a local Docker container, and the session volume is a host directory.",
+  "what_the_platform_is_not_represented_by": "The D2 image is D2's own Dockerfile over D2's own build context, so the code that survived is the scenario's. The *platform* behaviour - that a real hosted session outlives a container - is not what this measured; see behaviours[id=session-persistence] and [id=idle-timeout] for its documented answer."
+ },
+ "recordedAt": "2026-11-16T12:32:30.853695+00:00",
+ "variant": "durable-inside"
+}
