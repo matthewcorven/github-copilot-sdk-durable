@@ -36,7 +36,7 @@
  "fault": "agent-call-failure",
  "harness": {
   "command": "./faults/agent-call-failure.sh --variant durable-outside",
-  "commit": "131649e0be69a7d086c503f57966f9923d883352",
+  "commit": "371efc1369eb18064442a445c418d3834204bdd8",
   "docker": "not used by this fault",
   "live_azure_calls": 0,
   "network": "none - every call a fault makes is to 127.0.0.1",
@@ -84,6 +84,6 @@
   "what_the_platform_did": "not exercised in this run: the 503 came from lib/fake_foundry.py, this harness's stand-in for the data plane, not from Foundry. What a hosted agent does when its model call fails is a different question and is not answered here.",
   "what_the_platform_is_not_represented_by": "The call failure is an application-visible 5xx from a local server, which is the shape Azure returns but not Azure. Nothing in this result says anything about the platform's own agent reliability."
  },
- "recordedAt": "2026-11-16T12:40:14.599127+00:00",
+ "recordedAt": "2026-11-16T13:02:48.549051+00:00",
  "variant": "durable-outside"
 }

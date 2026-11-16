@@ -2,8 +2,8 @@
  "application": {
   "observations": {
    "container_restarted": "yes",
-   "deadline_after_restart": "1794918741.876773",
-   "deadline_before_restart": "1794918741.876773",
+   "deadline_after_restart": "1794920094.0650766",
+   "deadline_before_restart": "1794920094.0650766",
    "deadline_identical": true,
    "deliver_exit": 0,
    "docker_stop_exit": 0,
@@ -12,7 +12,7 @@
    "task_settled": "completed",
    "work_state_phase_after_resume": "decided"
   },
-  "outcome_detail": "A container committed the assessment and a parked approval (task t4), then was stopped with SIGTERM while a later step was held open. A new container over the same session volume read the approval back with the same deadline (1794918741.876773) \u2014 byte-identical, yes \u2014 and a third process delivered the decision, which woke the parked task: resume settled completed and the work state reached 'decided' decided by 'D4 harness reviewer'. The restart is a real container stop and start; the session volume is a host directory, which is this harness's stand-in for the platform's per-session mount."
+  "outcome_detail": "A container committed the assessment and a parked approval (task t4), then was stopped with SIGTERM while a later step was held open. A new container over the same session volume read the approval back with the same deadline (1794920094.0650766) \u2014 byte-identical, yes \u2014 and a third process delivered the decision, which woke the parked task: resume settled completed and the work state reached 'decided' decided by 'D4 harness reviewer'. The restart is a real container stop and start; the session volume is a named Docker volume standing in for the platform's per-session mount - a volume and not a bind mount, because the store's writer lock is an flock and a bind mounted host directory does not carry it between containers."
  },
  "artifacts": [
   "10-before-restart.json",
@@ -28,7 +28,7 @@
  "fault": "container-restart",
  "harness": {
   "command": "./faults/container-restart.sh --variant durable-inside",
-  "commit": "131649e0be69a7d086c503f57966f9923d883352",
+  "commit": "371efc1369eb18064442a445c418d3834204bdd8",
   "docker": "not used by this fault",
   "live_azure_calls": 0,
   "network": "none - every call a fault makes is to 127.0.0.1",
@@ -76,6 +76,6 @@
   "what_the_platform_did": "not exercised in this run: nothing was provisioned, so the platform's own session behaviour is quoted from D1 rather than reproduced. The container restarted here is a local Docker container, and the session volume is a host directory.",
   "what_the_platform_is_not_represented_by": "The D2 image is D2's own Dockerfile over D2's own build context, so the code that survived is the scenario's. The *platform* behaviour - that a real hosted session outlives a container - is not what this measured; see behaviours[id=session-persistence] and [id=idle-timeout] for its documented answer."
  },
- "recordedAt": "2026-11-16T12:32:30.853695+00:00",
+ "recordedAt": "2026-11-16T12:55:03.027607+00:00",
  "variant": "durable-inside"
 }

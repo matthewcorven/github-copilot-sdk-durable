@@ -21,7 +21,7 @@
  "fault": "agent-call-failure",
  "harness": {
   "command": "./faults/agent-call-failure.sh --variant baseline",
-  "commit": "131649e0be69a7d086c503f57966f9923d883352",
+  "commit": "371efc1369eb18064442a445c418d3834204bdd8",
   "docker": "not used by this fault",
   "live_azure_calls": 0,
   "network": "none - every call a fault makes is to 127.0.0.1",
@@ -69,6 +69,6 @@
   "what_the_platform_did": "not exercised in this run: the failure came from this harness's stand-in service, and no hosted deployment existed to fail a real call in",
   "what_the_platform_is_not_represented_by": "The 5xx is local. The baseline has no memo, and that is a statement about the accelerator's design rather than about the platform."
  },
- "recordedAt": "2026-11-16T12:32:19.789717+00:00",
+ "recordedAt": "2026-11-16T12:54:51.946934+00:00",
  "variant": "baseline"
 }

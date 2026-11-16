@@ -13,7 +13,7 @@
  "fault": "client-dies-mid-run",
  "harness": {
   "command": "./faults/client-dies-mid-run.sh --variant durable-inside",
-  "commit": "131649e0be69a7d086c503f57966f9923d883352",
+  "commit": "371efc1369eb18064442a445c418d3834204bdd8",
   "docker": "not used by this fault",
   "live_azure_calls": 0,
   "network": "none - every call a fault makes is to 127.0.0.1",
@@ -61,6 +61,6 @@
   "what_the_platform_did": "not exercised in this run: this fault has no platform-side question in it, and no hosted deployment existed to ask one",
   "what_the_platform_is_not_represented_by": "Recorded as not exercised rather than borrowed from another variant's result. A fault a variant cannot have is a fact about the variant's shape, not a gap in the harness."
  },
- "recordedAt": "2026-11-16T12:32:19.890944+00:00",
+ "recordedAt": "2026-11-16T12:54:52.046403+00:00",
  "variant": "durable-inside"
 }

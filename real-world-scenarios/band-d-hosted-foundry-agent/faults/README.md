@@ -87,8 +87,8 @@ A real container commits the assessment and a parked approval, then is stopped w
 later step is held open. A **new** container reads the same session volume:
 
 ```
-deadline before restart   1794918741.876773
-deadline after restart    1794918741.876773       identical: yes
+deadline before restart   1794920094.0650766
+deadline after restart    1794920094.0650766      identical: yes
 task                       t4, WAITING on external:approval/PA-D4-0001
 after a third process delivered the decision:
   settled                 completed
