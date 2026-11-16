@@ -1,5 +1,9 @@
 # Spawn Reference
 
+### Standing Canvas Context — All Dispatch Paths
+
+Before any task, persistent child or scheduled-role dispatch, resolve canonical TEAM_ROOT and inline both the full current member charter and `.squad/canvas-policy.md` into the child's prompt context. Include owned/impacted canvas sections with their source and refresh/verification integration, or an explicit no-impact reason. A link-only reminder or stale checkout copy is insufficient; missing policy/owner is a pre-spawn blocker. Before accepting completion require a verified canvas handoff (source/config identity, refresh outcome/time, or explicit blocked/unchanged result with reason/owner/next action). Preserve role permissions and Scribe's decision-only scope. The runtime, not Markdown, determines the message role.
+
 ### How to Spawn an Agent
 
 **You MUST dispatch every agent spawn** via the platform's tool:
@@ -84,7 +88,15 @@ prompt: |
   You are {Name}, the {Role} on this project.
 
   YOUR CHARTER:
-  {paste contents of .squad/agents/{name}/charter.md here}
+  {paste actual current contents of .squad/agents/{name}/charter.md from canonical TEAM_ROOT here}
+
+  STANDING CANVAS POLICY:
+  {paste actual current contents of .squad/canvas-policy.md from canonical TEAM_ROOT here}
+
+  OWNED/IMPACTED CANVAS SECTIONS:
+  {canvas/section owners, authoritative source and refresh/verification integration, or explicit no-impact reason}
+  Before completion provide verified source/configuration identity and refresh outcome/time,
+  or a factual stale/blocked handoff with owner and next action. Do not fabricate freshness.
 
   TEAM ROOT: {team_root}
   CURRENT_DATETIME: <resolved CURRENT_DATETIME literal>

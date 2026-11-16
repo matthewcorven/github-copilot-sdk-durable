@@ -7,6 +7,7 @@ runtime detected on each platform and asserts nothing about enforcement. This no
 platform matrix, what each CI level proves, and the rule that bounds the job.
 
 - Workflow: `.github/workflows/build.yml`, job `sandbox-advisory`
+- Cadence: nightly schedule and pushes to `main`; skipped on pull requests
 - Script: `scripts/sandbox-advisory.sh`
 - Report format: `SandboxReport.Describe()` in `lib/SandboxSupport.cs`
 - Backends and capabilities: [`SANDBOX_MATRIX.md`](SANDBOX_MATRIX.md)
@@ -39,7 +40,7 @@ proof.
 |---|---|---|---|
 | `build` job, `Validate examples` | live, recorded runtime | The deterministic set runs against the recording. Examples that need sign-in are skipped before they are compiled, so this step neither compiles nor runs 33/34/35 (`SKIP_LIVE=1`); the `build` step above it compiles `lib/` and the tests, and `dotnet test` compiles the test projects. | `ubuntu-latest` only, required. |
 | `build` job, `Validate examples (deterministic)` | `Replayed` | Policy propagation: the sandbox policy is built, the `{workspace}` token expands, and the wire mapping is field-for-field. Policy assertions only. | `ubuntu-latest` only, required. |
-| `sandbox-advisory` job | `Replayed` | The same policy propagation, on three platforms, plus the runtime's reported backend and platform per example. Advisory only. | All three runners; the reporting step is tolerate-on-error, the report-complete assertion is not. |
+| `sandbox-advisory` job | `Replayed` | The same policy propagation, on three platforms, plus the runtime's reported backend and platform per example. Advisory only. | All three runners; nightly, plus pushes to `main`. The reporting step is tolerate-on-error, the report-complete assertion is not. |
 | A signed-in developer host with a real backend | `Enforced` | The three-part enforcement proof: the permission layer did not deny the call, the sandbox did deny it, and the durable layer and the sandbox did their separate jobs. | Not in CI. |
 
 **Replay/offline is not enforcement.** `SandboxSupport.Resolve()` reports
