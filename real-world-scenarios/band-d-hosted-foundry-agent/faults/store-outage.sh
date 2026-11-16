@@ -6,12 +6,16 @@
 #
 # "Unavailable" is the operating system's answer, not a flag the application reads:
 #
-#   durable-inside  the store *directory* inside the session volume is replaced by a file
-#                   (`rm -rf durable && : > durable`). The container's next store open cannot
-#                   create its file under it, and the process fails on the OS error. The
-#                   outage is put back afterwards by removing the file, so the same volume
-#                   can be read again — which is how "the committed state is still readable"
-#                   is checked rather than assumed.
+#   durable-inside  the session volume is mounted read-only for the process that runs while
+#                   the store is out, so the store's write path is refused by the filesystem
+#                   (`EROFS`) and the committed bytes are left exactly where they were. That
+#                   is a *temporary unavailability*, not a deletion: nothing is removed, and
+#                   the same volume is used again as soon as the mount is gone. The store's
+#                   bytes are digested before and after so "the committed state survived"
+#                   is a comparison of content, and the read-back is required to show a
+#                   field the first process committed - a store that was missing would
+#                   answer with the document's default and be caught here rather than
+#                   reported as a survival.
 #   durable-outside the store file is made immutable with `chflags uchg` while the process is
 #                   alive, so a commit cannot append. The flag is removed afterwards and the
 #                   store is read back, so a half-committed record would be visible.
@@ -39,58 +43,99 @@ REQUEST="Prior authorization PA-D4-0004: hip replacement, 2 of 2 criteria met."
 
 case "$VARIANT" in
   durable-inside)
+    require_d2 || exit 1
     VOLUME="$(d2_volume "$RUN_DIR")"
     track_volume "$VOLUME"
+    FAULTS_DOCKER="$(record_docker_identity)"; export FAULTS_DOCKER
 
+    # What the store held the moment the first process finished. Everything after this is
+    # compared against these two facts, not asserted.
+    STORE_PATH=/home/session/durable/working-state.jsonl
     d2_run "$VOLUME" python3 d2_tool.py assess --request "$REQUEST_ID" --text "criteria met" \
       > "$RUN_DIR/10-assess.json" 2>/dev/null
     assess_status=$?
+    store_sha_before="$(d2_run "$VOLUME" sha256sum "$STORE_PATH" 2>/dev/null | cut -d' ' -f1)"
+    if [ -z "$store_sha_before" ]; then
+      # Without a before-image there is nothing to compare, and a comparison that cannot be
+      # made must not become a result that reads like one.
+      log "fault: the store's digest could not be read after the first process; no result written"
+      exit 1
+    fi
+    committed_assessment="$(python3 - "$RUN_DIR/10-assess.json" <<'PY'
+import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get("phase") or "")
+except (OSError, ValueError):
+    print("")
+PY
+)"
 
-    # The outage, injected from another container over the same volume: the store's directory
-    # becomes a regular file, so no file can be created under it.
+    # The outage, imposed by the container runtime over the same volume: the store is left
+    # in place and made unwritable, so a commit is refused by the filesystem rather than by
+    # a flag the application reads. Nothing is deleted, which is what makes it an outage
+    # the same store can come back from.
     if [ "$INJECT" = "1" ]; then
-      docker run --rm -v "$VOLUME:/home/session" "$D2_IMAGE" sh -c \
-        'rm -rf /home/session/durable && : > /home/session/durable' 2>/dev/null
+      d2_run_readonly "$VOLUME" python3 d2_tool.py resume --request "$REQUEST_ID" \
+        > "$RUN_DIR/20-during-outage.json" 2> "$RUN_DIR/20-during-outage.err"
+      during_status=$?
       injected="yes"
     else
+      d2_run "$VOLUME" python3 d2_tool.py resume --request "$REQUEST_ID" \
+        > "$RUN_DIR/20-during-outage.json" 2> "$RUN_DIR/20-during-outage.err"
+      during_status=$?
       injected="no"
     fi
 
-    d2_run "$VOLUME" python3 d2_tool.py approval --request "$REQUEST_ID" \
-      > "$RUN_DIR/20-during-outage.json" 2> "$RUN_DIR/20-during-outage.err"
-    during_status=$?
-
-    # Put it back and read again: what was committed before the outage must still be there.
-    if [ "$INJECT" = "1" ]; then
-      docker run --rm -v "$VOLUME:/home/session" "$D2_IMAGE" sh -c 'rm -f /home/session/durable' 2>/dev/null
-    fi
-    store_back="$(d2_ls "$VOLUME" /home/session/durable)"
+    # The same volume, writable again: what was committed before the outage must still be
+    # there, byte for byte, and readable as the document the first process wrote.
+    store_sha_after="$(d2_run "$VOLUME" sha256sum "$STORE_PATH" 2>/dev/null | cut -d' ' -f1)"
     d2_run "$VOLUME" python3 d2_tool.py approval --request "$REQUEST_ID" \
       > "$RUN_DIR/30-after-outage.json" 2> "$RUN_DIR/30-after-outage.err"
     after_status=$?
-    printf '%s' "$store_back" > "$RUN_DIR/40-store-dir-after.txt"
 
-    error_text="$(grep -m1 -o 'Errno [0-9]*[^"]*' "$RUN_DIR/20-during-outage.err" 2>/dev/null)"
+    read_back="$(python3 - "$RUN_DIR/30-after-outage.json" <<'PY'
+import json, sys
+try:
+    doc = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    print("unreadable"); raise SystemExit
+approval = doc.get("approval") if "approval" in doc else doc
+if not isinstance(approval, dict):
+    print("unreadable"); raise SystemExit
+if approval.get("state") != "pending" or not approval.get("deadline"):
+    print("default"); raise SystemExit
+print("committed")
+PY
+)"
+    printf '%s\n' "sha256 before: $store_sha_before" "sha256 after:  $store_sha_after" \
+      "phase committed by the first process: $committed_assessment" \
+      "read back after the outage: $read_back" > "$RUN_DIR/40-store-after.txt"
+
+    error_text="$(grep -m1 -o 'OSError: .*' "$RUN_DIR/20-during-outage.err" 2>/dev/null | head -1)"
     [ -n "$error_text" ] || error_text="nothing raised"
 
     if [ "$INJECT" = "1" ]; then
-      if [ "$during_status" != "0" ]; then
-        outcome="failed safely: the store was unavailable, so the step did not run"
-        detail="The store's directory inside the session volume was replaced by a regular file while the container was between processes. The next process could not open the store: it exited $during_status with '$error_text' and wrote nothing. The outage was then removed and the same volume re-read: the approval committed before it is still there (exit $after_status). So the app fails closed rather than writing through an unavailable store, and committed state survives the outage because the outage was an unavailability rather than a corruption."
+      if [ "$during_status" = "0" ]; then
+        outcome="the commit succeeded during the outage - unexpected"
+        detail="The session volume was mounted read-only for the process that ran while the store was out, but it exited 0. That is a finding, not a pass: the injection did not reach the store's write path, and nothing here should be read as the layer refusing a write. See 20-during-outage.json."
+      elif [ "$read_back" != "committed" ] || [ "$store_sha_before" != "$store_sha_after" ]; then
+        outcome="the store did not survive the outage as a store"
+        detail="The write was refused while the store was unavailable (exit $during_status, '$error_text'), but the read-back is not the state the first process committed: the store reads back as '$read_back' and its digest changed from $store_sha_before to $store_sha_after. A process that failed to find the state, or found a different one, is a lost store rather than a protected one, and this fault must not be reported as a survival."
       else
-        outcome="the store open succeeded during the outage - unexpected"
-        detail="The store directory was replaced by a file, but the next process still opened the store (exit 0). That is a finding, not a pass: record it before drawing any conclusion from this fault. See 20-during-outage.json."
+        outcome="failed closed, and the committed state was still there afterwards"
+        detail="The store's volume was made read-only for the process that ran while it was unavailable, so the commit was refused by the filesystem: the process exited $during_status with '$error_text' and the store's digest was unchanged. The same volume was then writable again and read back: the state the first process committed is still there (approval state 'pending', its deadline present) and the process reads it with exit $after_status. Nothing was deleted to produce the outage - it was an unavailability the store came back from, which is what separates it from a corruption."
       fi
     else
       outcome="control: the store stayed available"
-      detail="The same sequence with no outage: the approval was read ($during_status) and read again ($after_status) from the same volume. The unavailability in the fault row is what changed the outcome."
+      detail="The same sequence with no read-only mount: the resuming process ran (exit $during_status), so the store was written and its digest moved from $store_sha_before to $store_sha_after. The approval reads back as the document the first process committed (exit $after_status). The refused write in the fault row is what changed the outcome."
     fi
 
     TEMPLATE="$RUN_DIR/template.json"
     FAULT_LIB="$HERE/lib" FAULT_VARIANT="$VARIANT" FAULT_INJECT="$INJECT" \
     FAULT_OUTCOME="$outcome" FAULT_DETAIL="$detail" FAULT_INJECTED="$injected" \
     FAULT_ASSESS="$assess_status" FAULT_DURING="$during_status" FAULT_AFTER="$after_status" \
-    FAULT_ERROR="$error_text" FAULT_BACK="$store_back" \
+    FAULT_ERROR="$error_text" FAULT_SHA_BEFORE="$store_sha_before" FAULT_SHA_AFTER="$store_sha_after" \
+    FAULT_COMMITTED="$committed_assessment" FAULT_READ_BACK="$read_back" \
     python3 - "$TEMPLATE" <<'PY'
 import json, os, sys
 sys.path.insert(0, os.environ["FAULT_LIB"])
@@ -105,20 +150,27 @@ doc = {
             "in it. Nothing here says anything about the platform's own availability."
         ),
         note=(
-            "The outage was injected inside the session volume, which is this harness's stand-in for "
-            "the platform's per-session filesystem. The platform's behaviour under a storage failure "
-            "is not measured and is not claimed."
+            "The outage was imposed on the session volume's mount, which is this harness's stand-in for "
+            "the platform's per-session filesystem: the container runtime refused the write, the store "
+            "was not deleted, and the platform was not asked what it does when its own storage fails. "
+            "Its behaviour under a storage failure is not measured and is not claimed."
         ),
     ) | {"session_survived": "not applicable - no platform session existed"},
     "application": {
         "outcome_detail": os.environ["FAULT_DETAIL"],
         "observations": {
             "outage_injected": os.environ["FAULT_INJECTED"] == "yes",
+            "outage_kind": "the session volume was mounted read-only for the process that ran while the store was unavailable",
             "assess_exit": int(os.environ["FAULT_ASSESS"]),
-            "read_during_outage_exit": int(os.environ["FAULT_DURING"]),
+            "phase_committed_before_outage": os.environ["FAULT_COMMITTED"],
+            "resume_exit_during_outage": int(os.environ["FAULT_DURING"]),
             "read_after_outage_exit": int(os.environ["FAULT_AFTER"]),
             "error_during_outage": os.environ["FAULT_ERROR"],
-            "store_directory_after_restore": os.environ["FAULT_BACK"],
+            "store_sha256_before_outage": os.environ["FAULT_SHA_BEFORE"],
+            "store_sha256_after_outage": os.environ["FAULT_SHA_AFTER"],
+            "store_bytes_unchanged": os.environ["FAULT_SHA_BEFORE"] != ""
+            and os.environ["FAULT_SHA_BEFORE"] == os.environ["FAULT_SHA_AFTER"],
+            "committed_state_read_back": os.environ["FAULT_READ_BACK"],
         },
     },
 }
@@ -131,6 +183,7 @@ PY
 
   durable-outside)
     build_durable_outside || exit 1
+    FAULTS_DOCKER="$DEFAULT_DOCKER_NOTE - D3's orchestrator is a host process and its store a host file"; export FAULTS_DOCKER
     # D3 names its scratch directory `RUN_DIR`, so the harness's own directory is captured
     # first and used for every path this script writes.
     HARNESS_RUN="$RUN_DIR"
@@ -252,6 +305,7 @@ PY
     # service its whole run depends on: the driver is made to fail on the *first* call by
     # pointing it at a port nothing is listening on, and the result is labelled as the
     # analogue it is rather than as a store outage.
+    FAULTS_DOCKER="$DEFAULT_DOCKER_NOTE - the baseline client is a host process and has no store"; export FAULTS_DOCKER
     if [ "$INJECT" = "1" ]; then
       stop_service
       FOUNDRY_BASE_URL="http://127.0.0.1:$PORT" FOUNDRY_TOKEN="offline-no-credential" \

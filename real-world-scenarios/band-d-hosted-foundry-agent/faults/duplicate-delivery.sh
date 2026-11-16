@@ -36,7 +36,8 @@ esac
 
 require_tools || exit 1
 install_cleanup
-[ "$VARIANT" = "durable-inside" ] && { require_docker || exit 1; build_durable_inside || exit 1; }
+FAULTS_DOCKER="not used by this fault - the decision is delivered by host processes"; export FAULTS_DOCKER
+[ "$VARIANT" = "durable-inside" ] && { require_d2 || exit 1; }
 
 RUN_DIR="$(new_run_dir "$VARIANT" "$FAULT")"
 track_path "$RUN_DIR"

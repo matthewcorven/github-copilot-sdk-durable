@@ -38,7 +38,12 @@ esac
 
 require_tools || exit 1
 install_cleanup
-[ "$VARIANT" = "durable-inside" ] && { require_docker || exit 1; build_durable_inside || exit 1; }
+[ "$VARIANT" = "durable-inside" ] && { require_d2 || exit 1; }
+if [ "$VARIANT" = "durable-inside" ]; then
+  FAULTS_DOCKER="$(record_docker_identity)"; export FAULTS_DOCKER
+else
+  FAULTS_DOCKER="$DEFAULT_DOCKER_NOTE - the baseline restart is a client process, not a container"; export FAULTS_DOCKER
+fi
 
 RUN_DIR="$(new_run_dir "$VARIANT" "$FAULT")"
 track_path "$RUN_DIR"
@@ -200,7 +205,7 @@ from platform import block
 observed = (
     "not exercised in this run: nothing was provisioned, so the platform's own session "
     "behaviour is quoted from D1 rather than reproduced. The container restarted here is a "
-    "local Docker container, and the session volume is a host directory."
+    "local Docker container over a named Docker volume, not a hosted session."
 )
 note = (
     "The D2 image is D2's own Dockerfile over D2's own build context, so the code that "

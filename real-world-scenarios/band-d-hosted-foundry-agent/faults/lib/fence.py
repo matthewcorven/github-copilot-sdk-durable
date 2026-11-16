@@ -10,9 +10,9 @@ application's account of itself.
 This script does the two-step:
 
 1. wait for a marker file the container's own command writes when it reaches the step
-   (the marker is read through the bind mount, so the harness never enters the container
-   to inject);
-2. read the store file over the same mount and record its SHA-256, its length, and the
+   (the marker is read through the session volume, a named Docker volume, so the harness
+   never enters the container to inject);
+2. read the store file over the same volume and record its SHA-256, its length, and the
    task ids/statuses it holds, as the *before* reading.
 
 If the container has already exited when the marker appears, the store may be mid-flight;
@@ -20,6 +20,11 @@ that is recorded rather than guessed at.
 
 Usage:
     fence.py --wait MARKER --store PATH [--timeout SECONDS] [--out FILE]
+
+This is a standalone reader, not a step in the sweep: `run-all.sh` does not call it, and no
+fault script invokes it. It is kept because a reader that summarises the store's shape from
+outside the layer is what a future fault would need, and because the alternative reading of
+it - "the harness takes its before-image through this" - would be false.
 """
 
 from __future__ import annotations

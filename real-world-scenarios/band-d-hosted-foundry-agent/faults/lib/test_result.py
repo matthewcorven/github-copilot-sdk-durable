@@ -99,6 +99,49 @@ class Refusals(unittest.TestCase):
         self.assertTrue(any("outcome_detail" in p for p in result.validate(doc)))
 
 
+class Paths(unittest.TestCase):
+    """A checked-in result must not name one reader's home directory."""
+
+    def test_the_repository_and_scratch_roots_become_tokens(self):
+        text = (
+            f"failed Access to the path '{result.SCRATCH_ROOT}/runs/durable-outside/x' is denied; "
+            f"harness at {result.REPO_ROOT}"
+        )
+        normalised = result.normalise_paths(text)
+        self.assertNotIn(result.REPO_ROOT, normalised)
+        self.assertNotIn(result.SCRATCH_ROOT, normalised)
+        self.assertIn("$FAULTS_SCRATCH/runs/durable-outside/x", normalised)
+        self.assertIn("<repo>", normalised)
+
+    def test_nested_text_is_normalised_and_other_values_untouched(self):
+        document = {
+            "application": {"observations": {"outcome_line": f"{result.REPO_ROOT}/a", "exit": 1}},
+            "list": [f"{result.SCRATCH_ROOT}/b"],
+        }
+        normalised = result.normalise_paths(document)
+        self.assertEqual(normalised["application"]["observations"]["outcome_line"], "<repo>/a")
+        self.assertEqual(normalised["list"], ["$FAULTS_SCRATCH/b"])
+        self.assertEqual(normalised["application"]["observations"]["exit"], 1)
+
+    def test_the_normalisation_record_does_not_spell_the_roots(self):
+        block = result._harness_block("store-outage", "durable-inside")
+        written = json.dumps(block)
+        self.assertNotIn(result.REPO_ROOT, written)
+        self.assertNotIn(result.SCRATCH_ROOT, written)
+        self.assertIn("<repo>", block["harness"]["paths_normalised"])
+
+    def test_the_control_command_carries_the_flag(self):
+        os.environ["FAULT_INJECT"] = "0"
+        try:
+            block = result._harness_block("store-outage", "durable-inside")
+        finally:
+            os.environ.pop("FAULT_INJECT", None)
+        self.assertEqual(
+            block["harness"]["command"],
+            "./faults/store-outage.sh --variant durable-inside --fault-not-injected",
+        )
+
+
 class Behaviours(unittest.TestCase):
     def test_all_four_behaviours_are_present_and_documented_only(self):
         block = platform_module.block(touched=[], observed="nothing", note="nothing")

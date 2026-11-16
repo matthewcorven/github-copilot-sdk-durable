@@ -31,6 +31,11 @@ SCRATCH_ROOT="${FAULTS_SCRATCH:-$REPO_ROOT/.scratch/band-d4-faults}"
 COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
 export FAULTS_COMMIT="$COMMIT"
 
+# What a result records in `harness.docker`. A run that used a container records the daemon
+# and the image, read from the daemon rather than typed in; a run that used none says so,
+# and says which kind of process it used instead.
+DEFAULT_DOCKER_NOTE="not used by this fault"
+
 # A partial run is a diagnostic, not evidence, so it never lands in the checked-in tree.
 # Band G's rule, kept: a summary that describes a matrix nobody ran is worse than none.
 RESULTS_DIR="${FAULTS_RESULTS_DIR:-$CHECKED_IN_RESULTS}"
@@ -150,6 +155,9 @@ parse_fault_args() { # script_path "$@"
     baseline|durable-inside|durable-outside) ;;
     *) log "fault: --variant baseline|durable-inside|durable-outside is required"; exit 2 ;;
   esac
+  # Exported because `lib/result.py` spells the invocation that produced the file, and a
+  # control's command line is not the fault's.
+  export FAULT_INJECT="$INJECT"
 }
 
 new_run_dir() { # variant fault
@@ -240,6 +248,7 @@ build_durable_outside() {
 
 build_durable_inside() {
   if docker image inspect "$D2_IMAGE" >/dev/null 2>&1; then
+    record_docker_identity >/dev/null
     return 0
   fi
   log "harness: building the D2 image $D2_IMAGE (once, from agent/ + lib/py)"
@@ -254,6 +263,38 @@ build_durable_inside() {
     log "harness: the D2 image build failed; see ${SCRATCH_ROOT#"$REPO_ROOT"/}/d2-build.log"
     return 1
   }
+  record_docker_identity >/dev/null
+}
+
+# The container a fault will use, required and identified before it writes any result.
+# Calling it twice is cheap and idempotent, which is why the durable-inside branches can
+# call it without tracking whether the image was already there.
+# shellcheck source=/dev/null
+require_d2() {
+  require_docker || return 1
+  build_durable_inside || return 1
+  record_docker_identity >/dev/null
+}
+
+# The identity a result records when it used a container: the daemon's own versions, the
+# image the fault ran in, and that image's digest. Written once per harness process, beside
+# the build log, so every fault on a run records the same container it actually used.
+DOCKER_IDENTITY_FILE=""
+record_docker_identity() {
+  DOCKER_IDENTITY_FILE="$SCRATCH_ROOT/docker-identity.txt"
+  if [ -s "$DOCKER_IDENTITY_FILE" ]; then
+    cat "$DOCKER_IDENTITY_FILE"
+    return 0
+  fi
+  mkdir -p "$SCRATCH_ROOT"
+  {
+    local versions digest
+    versions="$(docker version --format 'client {{.Client.Version}} / server {{.Server.Version}}' 2>/dev/null)"
+    digest="$(docker image inspect "$D2_IMAGE" --format '{{.Id}}' 2>/dev/null)"
+    printf 'client and server: %s; image %s (%s)\n' \
+      "${versions:-versions unavailable}" "$D2_IMAGE" "sha256:${digest#sha256:}"
+  } > "$DOCKER_IDENTITY_FILE"
+  cat "$DOCKER_IDENTITY_FILE"
 }
 
 # Run one command in a fresh D2 container over this fault's session volume.
@@ -275,6 +316,19 @@ d2_run() { # session_volume [command...]
   local volume="$1"; shift
   docker volume create "$volume" >/dev/null
   docker run --rm -v "$volume:/home/session" -e HOME=/home/session -w /app \
+    "$D2_IMAGE" "$@"
+}
+
+# Run one command over this fault's volume with the volume mounted read-only.
+#
+# This is the store-outage injection: the store is left exactly where it is and the
+# *filesystem* refuses the write, which is an unavailability the same store survives. It is
+# deliberately not `rm -rf` of the store — deleting the state and then reporting that the
+# state was protected is the mistake this shape exists to make impossible.
+d2_run_readonly() { # session_volume [command...]
+  local volume="$1"; shift
+  docker volume create "$volume" >/dev/null
+  docker run --rm -v "$volume:/home/session:ro" -e HOME=/home/session -w /app \
     "$D2_IMAGE" "$@"
 }
 

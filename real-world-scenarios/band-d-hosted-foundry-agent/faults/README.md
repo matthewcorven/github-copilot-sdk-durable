@@ -53,12 +53,17 @@ protocol — driven by a client, because that is all it has. `durable-inside` is
 | `container-restart` | `docker stop` **and start** on a real container over one session volume | **cold start; nothing survives** (it has no container) | **the parked approval and its deadline survive byte-identically** | `not exercised` — its restart is its client's death |
 | `duplicate-delivery` | the same input / the same decision, twice | **both steps applied twice; nothing refused** | **one decision applied once; the second delivery woke nothing** | `not exercised` — its gate refuses by construction |
 | `concurrent-clients` | two live clients over one run | **both applied both steps; no conflict detected** | **the second refused by the store's file lock** | **the second refused by the store's file lock** |
-| `store-outage` | the store made unavailable by the OS | **failed loudly; nothing kept** (the analogue: the service withdrawn) | **failed closed; nothing written through the outage** | **the commit was refused; the run did not advance** |
+| `store-outage` | the store made unwritable by the OS, then left in place | **failed loudly; nothing kept** (the analogue: the service withdrawn) | **failed closed; the store's bytes unchanged, and readable again afterwards** | **the commit was refused; the run did not advance** |
 | `agent-call-failure` | the **last** call answers 503, then the failure is lifted | **the failed call retried; the earlier step skipped by a file check** | `not exercised` — no application-issued call | **the failure settled the run; a separate memo arm shows +0 calls on a re-entered phase** |
 
-Three rows are `not exercised`, and each says which variant and why in its own result file. That is a
-statement about the variant's shape, not a gap in the harness: D2 has no client to kill and no call to
-fail, and D3's restart *is* the death of its client.
+**Four cells are `not exercised`**, and each says which variant and why in its own result file: D2 has no
+client to kill (`client-dies-mid-run`) and no application-issued call to fail (`agent-call-failure`); D3's
+restart *is* the death of its client (`container-restart`), and its gate refuses a second answer by
+construction (`duplicate-delivery`). That is a statement about the variant's shape, not a gap in the
+harness. Each of the four also has a `-control` result, which records *why no control exists* for a fault
+that was never injected — it is a control for the cell, not a fifth non-exercised cell, and the counts in
+`results/run-status.txt` are only legible with that distinction: 36 results = 14 exercised runs + 14
+controls + 4 non-exercised cells + 4 controls-for-a-cell-that-cannot-be-run.
 
 ## The headline: the four faults worth reading
 
@@ -140,6 +145,11 @@ vocabulary.
 Each control runs the same steps with the injection removed. The outcomes are named `control: …` so a
 control is never read as the fault's.
 
+Two controls are worth naming because their *shape* differs from the rest: `durable-inside` /
+`store-outage` has no deletion in it at all — the volume is mounted read-only, so the control differs from
+the fault by the mount and by nothing else — and the four controls for a cell a variant cannot have say so
+in their own outcome rather than borrowing `control: …` from a run that happened.
+
 The row that does not flip, and why it is stated rather than hidden: **`baseline` / `container-restart`
 control`. The baseline has no container, so the control is a client restart with no kill — and it
 records a *completed* run against the fault row's cold start. That does flip. What does **not** flip is
@@ -182,6 +192,19 @@ what the stand-in is not:
 - **D3's binary** is `dotnet publish`ed so the PID the shell starts is the application, not a `dotnet`
   host in front of it. `dotnet run` would have made every `kill -9` land on the wrapper.
 
+Two things in the envelope exist so a result can be checked later rather than believed:
+
+- **`harness.docker` names the container a result actually used**, read from the daemon when the image is
+  built or found — client and server versions, the image tag and its digest — and says plainly when a
+  fault used no container. A run that ran in Docker and a run that did not are therefore distinguishable
+  from the file alone.
+- **`harness.command` is the invocation that produced that file**, so a control carries
+  `--fault-not-injected` and is never read as its fault's row.
+- **Paths are normalised**: a quoted application message can contain the absolute path the run happened
+  in, and a checked-in result must not name one reader's checkout. `<repo>` and `$FAULTS_SCRATCH` replace
+  the repository root and the scratch root; `harness.paths_normalised` records the substitution, so the
+  rewrite is visible instead of silent.
+
 ## Not proven here
 
 - **That a real Foundry session outlives a real container restart.** Documented, observed once by D1, not
@@ -195,7 +218,8 @@ what the stand-in is not:
   that left the task running would have let the first arm show a memo hit directly; that path is not
   reachable through D3's current retry-and-throw, and the memo arm is the substitute.
 - **That the result guard is complete.** `lib/test_result.py` proves the refusals `lib/result.py`
-  actually makes — fifteen cases, one of which is the exact misattribution this band exists to prevent —
+  actually makes — eighteen cases, one of which is the exact misattribution this band exists to prevent,
+  and three of which pin the path normalisation and the control's command line —
   but it cannot prove there is no *other* way for a result to blur the two blocks. What it does prove is
   that the guard is not decorative: `run-all.sh` runs it before writing any result, and a refusal is an
   exit status with no file written.
@@ -221,7 +245,7 @@ faults/
   lib/common.sh                 scratch dir, service, variants, volumes, cleanup
   lib/fake_foundry.py           the stand-in data plane; its request log is the call count
   lib/baseline_driver.py        D1's decision path as a client, with a hold seam
-  lib/fence.py                  reads the store from outside, before the fault
+  lib/fence.py                  a standalone reader of the store's shape; not called by the sweep
   lib/platform.py               the four documented behaviours, one place
   lib/result.py                 writes a result and refuses a blurred one
   lib/not_exercised.sh          records a variant's "cannot have this fault" as a result

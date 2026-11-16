@@ -34,8 +34,42 @@ import sys
 
 HARNESS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ROOT = os.path.abspath(os.path.join(HARNESS, "..", "..", ".."))
+# `FAULTS_SCRATCH` can put the per-run directories outside the repository, so the scratch
+# path the harness used is normalised too - a checked-in result must not carry a reader's
+# absolute home directory.
+SCRATCH_ROOT = os.path.abspath(
+    os.environ.get("FAULTS_SCRATCH") or os.path.join(REPO_ROOT, ".scratch", "band-d4-faults")
+)
 
 REQUIRED_TOP = ["outcome", "platform", "application"]
+
+#: The variables a harness may spell a machine path as, longest first so `<repo>/.scratch`
+#: is not rewritten as `<repo>` plus a literal `/.scratch`.
+_PATH_FORMS = (
+    ("$FAULTS_SCRATCH", SCRATCH_ROOT),
+    ("<repo>", REPO_ROOT),
+)
+
+
+def normalise_paths(value):
+    """Replace this machine's absolute paths with the harness's own spellings.
+
+    A fault's text is quoted verbatim from what the application printed, which can contain
+    the full path the run happened in. That path is true but not evidence: it names one
+    checkout of one reader. The substitution is recorded in `harness.paths_normalised`, so
+    the rewrite is visible rather than a quiet edit of a quoted line.
+    """
+    if isinstance(value, str):
+        text = value
+        for token, root in _PATH_FORMS:
+            if root:
+                text = text.replace(root, token)
+        return text
+    if isinstance(value, list):
+        return [normalise_paths(item) for item in value]
+    if isinstance(value, dict):
+        return {key: normalise_paths(item) for key, item in value.items()}
+    return value
 
 
 def _harness_block(fault: str, variant: str) -> dict:
@@ -58,6 +92,13 @@ def _harness_block(fault: str, variant: str) -> dict:
             "the PID the harness starts is the application. Its agent calls go to lib/fake_foundry.py, the "
             "same local stand-in, whose request log is the call count."
         )
+    # The invocation is the one that produced *this* file: a control run is a different
+    # injection (none), and its result must not claim the fault's command line.
+    injected = os.environ.get("FAULT_INJECT", "1") != "0"
+    command = f"./faults/{fault}.sh --variant {variant}"
+    if not injected:
+        command += " --fault-not-injected"
+
     return {
         "harness": {
             "commit": os.environ.get("FAULTS_COMMIT", "unknown"),
@@ -65,7 +106,13 @@ def _harness_block(fault: str, variant: str) -> dict:
             "docker": os.environ.get("FAULTS_DOCKER", "not used by this fault"),
             "live_azure_calls": 0,
             "network": "none - every call a fault makes is to 127.0.0.1",
-            "command": f"./faults/{fault}.sh --variant {variant}",
+            "command": command,
+            # The tokens, not the roots: a normalisation record that spelled the absolute
+            # path would leak the very thing it exists to remove.
+            "paths_normalised": {
+                "<repo>": "the repository root",
+                "$FAULTS_SCRATCH": "the harness scratch root",
+            },
             "what_runs_where": runs_where,
         },
         "environment": {
@@ -134,6 +181,7 @@ def main(argv: list[str] | None = None) -> int:
         "recordedAt",
         datetime.datetime.now(datetime.timezone.utc).isoformat(),
     )
+    document = normalise_paths(document)
 
     problems = validate(document)
     if problems:

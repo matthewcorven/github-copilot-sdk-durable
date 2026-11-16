@@ -30,6 +30,7 @@ FAULT=agent-call-failure
 parse_fault_args "${BASH_SOURCE[0]}" "$@"
 require_tools || exit 1
 install_cleanup
+FAULTS_DOCKER="not used by this fault - both arms are host processes"; export FAULTS_DOCKER
 
 RUN_DIR="$(new_run_dir "$VARIANT" "$FAULT")"
 track_path "$RUN_DIR"

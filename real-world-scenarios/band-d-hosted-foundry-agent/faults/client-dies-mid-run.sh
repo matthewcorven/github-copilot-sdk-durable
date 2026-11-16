@@ -42,6 +42,7 @@ esac
 
 require_tools || exit 1
 install_cleanup
+FAULTS_DOCKER="not used by this fault - the client is a host process"; export FAULTS_DOCKER
 [ "$VARIANT" = "durable-outside" ] && { build_durable_outside || exit 1; }
 
 RUN_DIR="$(new_run_dir "$VARIANT" "$FAULT")"

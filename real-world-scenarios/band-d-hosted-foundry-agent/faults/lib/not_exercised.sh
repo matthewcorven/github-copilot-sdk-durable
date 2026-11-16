@@ -29,6 +29,12 @@ done
   printf 'not_exercised: --variant, --fault and --out are required\n' >&2; exit 2
 }
 
+# A cell a variant cannot have was never run, so it never used a container. Said explicitly
+# rather than left to the envelope's default, because a reader comparing rows should not
+# have to infer which six results are records rather than runs.
+FAULTS_DOCKER="not used - this cell records why the fault cannot be run, so nothing was started"
+export FAULTS_DOCKER
+
 TEMPLATE="$(mktemp -t band-d4-nae)"
 FAULT_LIB="$HERE_LIB" FAULT_VARIANT="$VARIANT" FAULT_REASON="$REASON" FAULT_DETAIL="$DETAIL" \
 python3 - "$TEMPLATE" <<'PY'

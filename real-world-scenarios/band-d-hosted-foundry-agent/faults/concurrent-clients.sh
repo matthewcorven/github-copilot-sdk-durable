@@ -23,6 +23,12 @@ FAULT=concurrent-clients
 parse_fault_args "${BASH_SOURCE[0]}" "$@"
 require_tools || exit 1
 install_cleanup
+if [ "$VARIANT" = "durable-inside" ]; then
+  require_d2 || exit 1
+  FAULTS_DOCKER="$(record_docker_identity)"; export FAULTS_DOCKER
+else
+  FAULTS_DOCKER="$DEFAULT_DOCKER_NOTE - both clients are host processes"; export FAULTS_DOCKER
+fi
 
 RUN_DIR="$(new_run_dir "$VARIANT" "$FAULT")"
 track_path "$RUN_DIR"
@@ -47,8 +53,9 @@ hold_first() { # volume
 
 case "$VARIANT" in
   baseline)
-    cov=""
-    syn=""
+    # The count is what the control outcome quotes, so it is read from the service's own
+    # log after both clients finished. The outcome text is built below it for that reason:
+    # interpolating these before they were read is what left the two blanks here.
     if [ "$INJECT" = "1" ]; then
       python3 "$HERE/lib/baseline_driver.py" run --run-dir "$RUN_DIR/run-a" --request "$REQUEST" \
         > "$RUN_DIR/10-client-a.log" 2>&1 &
@@ -63,7 +70,6 @@ case "$VARIANT" in
       wait "$pid_b"; status_b=$?
       overlapped="yes"
       outcome_dup="both clients applied both steps"
-      detail="Two driver processes were started against the one service. The service accepted $cov coverage POST(s) and $syn synthesis POST(s): two of each, for one request. Neither process refused, because the baseline has no store and therefore nothing that could see the other. A retried request on this design costs a second full run of every step."
     else
       python3 "$HERE/lib/baseline_driver.py" run --run-dir "$RUN_DIR/run-a" --request "$REQUEST" \
         > "$RUN_DIR/10-client-a.log" 2>&1
@@ -77,6 +83,9 @@ case "$VARIANT" in
     fi
     cov="$(service_posts "$RUN_DIR" coverage-assessment-agent)"
     syn="$(service_posts "$RUN_DIR" synthesis-agent)"
+    if [ "$INJECT" = "1" ]; then
+      detail="Two driver processes were started against the one service. The service accepted $cov coverage POST(s) and $syn synthesis POST(s), for one request. Neither process refused, because the baseline has no store and therefore nothing that could see the other. A retried request on this design costs a second full run of every step."
+    fi
     status_second="$status_b"
     refusal="none - there is no shared record for a refusal to come from"
     ;;
