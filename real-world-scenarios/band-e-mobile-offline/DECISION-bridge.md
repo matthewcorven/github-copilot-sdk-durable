@@ -1,9 +1,15 @@
 # Decision: the Foundry Local Android bridge
 
-**Status:** accepted, 2026-11-05. Nothing here has been compiled yet — see
-[`README.md`](README.md) for the toolchain block on this machine and
-[`evidence/maui-toolchain-probe.txt`](evidence/maui-toolchain-probe.txt) for the failure. This
-document decides the *shape*; the toolchain decides when the shape can be run.
+**Status:** accepted, 2026-11-05; updated 2026-11-17. The toolchain block this record was written
+under is gone: the MAUI head in [`app/`](app/) builds and runs on an API 36 emulator, and
+[`evidence/e1-maui-run.txt`](evidence/e1-maui-run.txt) captures it. **The Kotlin facade in §3.1 is
+now compiled** with Gradle 8.13 / Kotlin 1.9.25 / AGP 8.13.0 in [`bridge/`](bridge/), bound into
+the app, and exercised on the emulator: [`evidence/e1-bridge.txt`](evidence/e1-bridge.txt) shows
+the SDK raising `FoundryLocalException` through the JNI boundary. **The on-device completion is
+still not met** — the IPC service app `com.microsoft.foundrylocal.app` is not installed, and
+installing it needs a Play Store sign-in. This record's prediction about binding the raw AAR was
+also confirmed: it fails with CS0260/CS0579, which is why `Bind="false"` is used and the facade is
+the binding.
 
 **Question.** How does .NET code on an Android device call an on-device model, such that the same
 `IChatClient`-shaped seam also accepts a remote model, without letting Android types into the durable

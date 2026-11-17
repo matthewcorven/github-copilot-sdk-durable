@@ -1,0 +1,81 @@
+Band E / issue #165 — MAUI app build and on-device run
+Captured 2026-11-17 (local machine, Darwin arm64). Every command below was run on this
+machine; the output is transcribed, not reconstructed.
+
+=== environment ===
+dotnet (pinned for the build)   10.0.404      via a temporary global.json in the worktree
+dotnet (machine default)        11.0.100      SDK 11 has no maui-android workload
+JAVA_HOME / JavaSdkDirectory    /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+                                openjdk version "17.0.21.0.3" 2026-10-24
+ANDROID_HOME / ANDROID_SDK_ROOT /Users/core/Library/Android/sdk
+AVD                             band-e-api36-playstore-arm64
+                                Android 16 "Baklava", google_apis_playstore/arm64-v8a
+
+=== toolchain probe (checked in) ===
+$ ./probe-toolchain.sh
+Build succeeded.
+    0 Error(s)
+exit=0
+The probe pins 10.0.404 inside its own scratch directory; see the script's comment.
+
+=== app build ===
+$ dotnet build -f net10.0-android
+Build succeeded.
+    0 Error(s)
+The Android head is net10.0-android only, minSdk 33 (the AAR's declared floor), targetSdk 36.
+
+=== signed APK ===
+$ dotnet build -f net10.0-android -c Release -t:SignAndroidPackage -p:EmbedAssembliesIntoApk=true
+Build succeeded.
+APK: bin/Release/net10.0-android/dev.durable.band.e.mobile-Signed.apk   29,008,716 B
+
+Note: a Debug build installed with Fast Deployment aborts at launch with
+  F monodroid: No assemblies found in '/data/user/0/.../files/.__override__/arm64-v8a'
+because the assemblies live outside the APK. The Release build embeds them and launches.
+
+=== install and launch ===
+$ adb install --no-incremental dev.durable.band.e.mobile-Signed.apk
+Success
+$ adb shell am start -n dev.durable.band.e.mobile/crc64cf2f27458e91f277.MainActivity
+$ adb shell dumpsys activity activities | grep topResumedActivity
+topResumedActivity=ActivityRecord{... u0 dev.durable.band.e.mobile/crc64cf2f27458e91f277.MainActivity t9}
+
+Package on device:
+$ adb shell dumpsys package dev.durable.band.e.mobile | grep -E 'version|Sdk'
+    versionCode=1 minSdk=33 targetSdk=36
+    versionName=1.0
+
+=== what the app displays (uiautomator dump of the running window) ===
+"Band E - Foundry Local"
+"transport: Foundry Local (IPC)"
+"companion: absent — com.microsoft.foundrylocal.app is not installed (API 36)"
+"Send turn"
+after tapping "Send turn":
+"failed [TransportUnavailable] retryable: companion app com.microsoft.foundrylocal.app absent — com.microsoft.foundrylocal.app is not installed (API 36)"
+
+=== the Foundry Local completion criterion is NOT met ===
+$ adb shell pm list packages | grep -c foundry
+0
+The IPC companion app is not installed, so no on-device completion was possible. Google Play
+is present on the image (com.android.vending 45.3.21-31) but the emulator has no signed-in
+account, so the app cannot be installed from it non-interactively. Installing it requires a
+manual sign-in by the operator; that is outside what this run may do.
+
+=== AAR pinning (unchanged by this run) ===
+$ ./fetch-aar.sh ipc
+OK       foundry-local-ipc-sdk-0.1.6.aar  sha256=7dc74260d2dbd16c2c3c02bcd9de1d852bb89366f71a63ea9813fe764c2665c1
+libs/ is gitignored; the binary is not committed.
+
+=== bridge compilation is not possible on this machine ===
+The AAR's public surface is Kotlin suspend functions returning kotlin.Unit / Continuation
+(javap of com.microsoft.foundrylocal.api.FoundryLocalManager and .Catalog). It bundles no
+kotlin-stdlib, and this machine has no Kotlin compiler and no Gradle:
+  $ command -v kotlinc gradle
+  (neither resolves)
+So the Kotlin facade in DECISION-bridge.md §3.1 cannot be compiled here without installing a
+Kotlin toolchain (kotlin-compiler plus kotlin-stdlib from Maven Central). That was not
+approved and was not done.
+
+=== scope statement ===
+Local/device facts only. Nothing in this file was produced by, or claims anything about, a
+hosted Foundry service. No cloud resource was provisioned and no paid call was made.

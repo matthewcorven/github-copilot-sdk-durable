@@ -6,21 +6,92 @@ device to call an on-device model. This directory is the foundation issue E1 (#1
 decision record for the bridge and the evidence for what the toolchain allowed.
 
 ```
-README.md                        this file — prerequisites, what is blocked, what is here
+README.md                        this file — status, prerequisites, what runs, what is blocked
 DECISION-bridge.md               the bridge decision: mode, technology, disconnection, licensing
-probe-toolchain.sh               reproduces evidence/maui-toolchain-probe.txt
+probe-toolchain.sh               reports the toolchain and builds a throwaway MAUI app
 fetch-aar.sh                     downloads and verifies the pinned Foundry Local AAR
+app/                             the MAUI Android head (net10.0-android), with the IChatClient seam
+bridge/                          the Kotlin facade (Gradle 8.13, Kotlin 1.9.25, AGP 8.13.0)
 evidence/                        captured command output; see evidence/README.md
 ```
 
-**Nothing here builds yet, and no project has been checked in.** The acceptance criterion for #165
-is a MAUI app that builds and runs on an Android emulator and completes one turn against Foundry
-Local. The toolchain on the machine this was prepared on cannot produce that, and committing a
-project that has never compiled would be a guess dressed as an artifact. What is here is the part
-that does not depend on the toolchain: the decision, the pinned and verified AAR hashes, and the
-exact failure.
+## Status
 
-## What is blocked, and by what
+| Acceptance criterion (issue #165) | State |
+| --- | --- |
+| A MAUI app builds on this machine | **met** — `app/` builds with 0 errors; `./probe-toolchain.sh` exits 0 |
+| The app runs on an Android emulator (API 33+) | **met** — installed and resumed on API 36, arm64-v8a |
+| Kotlin bridge compiled and bound | **met** — facade AAR builds; JNI call reaches the SDK on device |
+| One completion against Foundry Local, answer displayed | **not met** — the IPC companion app is not installed |
+| AAR version and SHA-256 pinned and documented | **met** — 0.1.6, verified by `./fetch-aar.sh` |
+| License forbids vendoring, `fetch-aar.sh` used instead | **met** — `.gitignore` excludes `libs/`; stated below |
+
+`evidence/e1-maui-run.txt` is the capture for the build and run rows: the exact build and install
+commands, the package on the device, and the text the running window displays.
+`evidence/e1-bridge.txt` is the capture for the bridge row.
+
+The completion row is a device precondition, not a code defect. IPC mode needs Microsoft's companion
+app `com.microsoft.foundrylocal.app`, which is distributed through Google Play. The emulator image
+ships Play but has no signed-in account, so installing it needs a manual sign-in. Until it is
+installed the app reports the fact it can verify rather than a fabricated answer:
+
+```
+companion: absent — com.microsoft.foundrylocal.app is not installed (API 36)
+failed [TransportUnavailable] retryable: companion app com.microsoft.foundrylocal.app absent ...
+```
+
+## The bridge, and what is still missing
+
+`bridge/` holds the Kotlin facade `DECISION-bridge.md` §3.1 specifies. It compiles
+(Gradle **8.13**, Kotlin **1.9.25**, AGP **8.13.0**, Java 17, compileSdk 36) and the app binds it:
+
+```
+app (C# net10.0-android)
+  └─ Chat/BridgeShim.cs      : Java.Lang.Object, FoundryBridge.IListener   ← the boundary
+       └─ FoundryBridge.kt   : Kotlin facade, no suspend types in its surface
+            └─ foundry-local-ipc-sdk-0.1.6.aar → com.microsoft.foundrylocal.app
+```
+
+`evidence/e1-bridge.txt` captures the proof that the boundary is real rather than merely
+compiled: on the emulator, tapping "Send turn" runs the Kotlin `start()`, the SDK raises
+`FoundryLocalException: Failed to bind to service using explicit intent`, and that exception
+crosses the generated invoker into a classified `ChatFailureKind` on screen. **The cross-language
+path works; the service it talks to is not installed.**
+
+Two things are worth knowing before editing this:
+
+- The raw AAR is referenced with `Bind="false"` and
+  `AndroidGenerateJavaBindingAnnotations=false`. Binding it directly fails with `CS0260`/`CS0579`
+  on the obfuscator-kept synthetic classes — precisely the failure §3.2(a) predicts. **The facade
+  is the binding.**
+- The facade files it compiles to a 19.7 KB AAR that contains **no** Microsoft classes: the binary
+  is a `compileOnly` input and the app supplies it at runtime. Nothing is redistributed.
+
+To build the bridge before the app:
+
+```bash
+cd real-world-scenarios/band-e-mobile-offline
+./fetch-aar.sh                       # verify the pinned binary into libs/ (gitignored)
+cd bridge && ./gradlew :assembleRelease
+```
+
+**What is still missing** is the service app itself. IPC mode needs
+`com.microsoft.foundrylocal.app` from Google Play. The emulator image ships Play but has no
+signed-in account, so installing it needs a manual operator sign-in; no agent entered
+credentials. Until it is installed the app reports the fact it can verify:
+
+```
+companion: absent — com.microsoft.foundrylocal.app is not installed (API 36)
+failed [TransportUnavailable] retryable: ... bridge loaded; start() failed [TransportUnavailable]:
+FoundryLocalException: Failed to bind to service using explicit intent
+```
+
+## Historical record: the toolchain block this issue started from
+
+> **This section describes the machine and state the issue was opened on, and is kept for
+> provenance. It no longer describes the current machine** — the Android SDK, a JDK 17 and an
+> emulator were installed, and `app/` now builds and runs (see "Status" above). Do not read the
+> table below as the present state.
 
 `evidence/maui-toolchain-probe.txt` is the whole story — it is the stdout of
 `./probe-toolchain.sh` captured after the workload was installed, so it shows the state the build
