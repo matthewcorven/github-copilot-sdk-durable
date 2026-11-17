@@ -58,7 +58,12 @@ call. Every one of the 36 records `platform.live_foundry_called: false`, and all
 behaviours stay **`documented, not exercised here`**, quoted from this directory's captures
 rather than reproduced. So a container that survives a local `docker stop`, or a store whose
 bytes survive a local outage, is **evidence about Docker and about this code — never evidence
-about Foundry**. [`faults/README.md`](faults/README.md) carries the full matrix and the limits
+about Foundry**. One provenance limit belongs here too, because it is easy to over-read: all 36
+checked-in records contain `harness.commit = 56cf828`, but the sweep ran from a dirty worktree and that
+commit's timestamp is later than the run recorded beside it — so the field captures `HEAD`, not the
+harness code that executed, and the exact working-tree state cannot be verified from it. The counts and
+outcomes stand on each result's own observations; the harness revision behind them is **not** a verified
+execution provenance. [`faults/README.md`](faults/README.md) carries the full matrix and the limits
 of each row; [`evidence/attribution.md`](evidence/attribution.md) says what a run with a live
 deployment would have to show to move a platform row.
 
