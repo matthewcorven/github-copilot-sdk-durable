@@ -229,9 +229,18 @@ Two things in the envelope exist so a result can be checked later rather than be
 ## How many runs, and at which commit
 
 `results/run-status.txt` is the record, not the prose here: **36 entries**, one per fault, control and
-recorded-not-exercised cell, every one exit `0`, produced by one invocation of `./faults/run-all.sh`.
-The commit each result was measured at is in its own `harness.commit`, so a reader does not have to
-trust this paragraph for it.
+recorded-not-exercised cell, every one exit `0`, produced by one invocation of `./faults/run-all.sh` that
+started at `2026-11-16T15:02:45Z`. That is 14 exercised runs, 18 controls and 4 recorded-not-exercised
+cells. The commit each result was measured at is in its own `harness.commit`, so a reader does not have
+to trust this paragraph for it — and that field is **not** the commit that merged them: every one of the
+36 names `56cf828`, the re-run made by the corrected harness, while `dc25137` (the merge) is a later
+commit that changed nothing in `faults/` at all. Read `harness.commit` as "the code this result came
+from", which is exactly why it is recorded per file rather than in this prose.
+
+The harness itself is **3 951 lines across 16 files** of `sh`/`py` — the six fault scripts, `run-all.sh`
+and `lib/` — plus the 39 checked-in results and the rendered summary, which are evidence rather than code.
+None of it is durability code for any variant: it measures all three, so the band's line-count row does
+not add it to a column.
 
 ## Layout
 
