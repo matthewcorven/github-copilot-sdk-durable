@@ -46,6 +46,27 @@ absent from every run and every transcript says so. The honest one-line version:
 issue proves *one* decision path through the platform, not the accelerator's whole
 application.
 
+**D4, the fault sweep, added 2026-11-16 — and what it does not prove either.** Six faults
+(`client-dies-mid-run`, `container-restart`, `duplicate-delivery`, `concurrent-clients`,
+`store-outage`, `agent-call-failure`) were run across this baseline and the two Durable
+positions: **36 results, every one exit 0**, recorded in
+[`faults/results/run-status.txt`](faults/results/run-status.txt) and rendered into
+[`faults/results/summary.txt`](faults/results/summary.txt). That is 14 exercised runs, 18
+controls, and 4 cells recorded `not exercised` because the variant cannot have the fault —
+not four gaps. **D4 provisioned nothing**: no Foundry deployment, no Azure resource, no model
+call. Every one of the 36 records `platform.live_foundry_called: false`, and all four platform
+behaviours stay **`documented, not exercised here`**, quoted from this directory's captures
+rather than reproduced. So a container that survives a local `docker stop`, or a store whose
+bytes survive a local outage, is **evidence about Docker and about this code — never evidence
+about Foundry**. One provenance limit belongs here too, because it is easy to over-read: all 36
+checked-in records contain `harness.commit = 56cf828`, but the sweep ran from a dirty worktree and that
+commit's timestamp is later than the run recorded beside it — so the field captures `HEAD`, not the
+harness code that executed, and the exact working-tree state cannot be verified from it. The counts and
+outcomes stand on each result's own observations; the harness revision behind them is **not** a verified
+execution provenance. [`faults/README.md`](faults/README.md) carries the full matrix and the limits
+of each row; [`evidence/attribution.md`](evidence/attribution.md) says what a run with a live
+deployment would have to show to move a platform row.
+
 ## What is here
 
 | Path | What it is |
@@ -185,7 +206,7 @@ transcript; recovering in-flight work is the builder's job.**
 | `evidence/inventory.md` | What the deployment contained, captured before teardown. |
 | `evidence/teardown.md` | Teardown output, including the second (harmless) invocation and the `az resource list` verification. |
 | `faults/README.md` | D4's fault sweep: the six faults, the platform/application split, and the limits of each row. |
-| `faults/results/` | One checked-in result per fault per variant plus its control, and the summary rendered from them. |
+| `faults/results/` | 36 checked-in results — one per fault per variant plus its control, or a recorded `not exercised` cell — with `run-status.txt` as the run record and `summary.txt` the matrix rendered from them. |
 | `evidence/attribution.md` | Why every platform row is `documented, not exercised here`, and what a future run with a deployment would have to show to change that. |
 
 ## Preview gates, honestly

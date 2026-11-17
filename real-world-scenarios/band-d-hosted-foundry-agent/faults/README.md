@@ -225,13 +225,34 @@ Two things in the envelope exist so a result can be checked later rather than be
   container-identity cache key — but it cannot prove there is no *other* way for a result to blur the
   two blocks. What it does prove is that the guard is not decorative: `run-all.sh` runs it before
   writing any result, and a refusal is an exit status with no file written.
+- **The exact harness working-tree state behind these results.** All 36 checked-in records contain
+  `harness.commit = 56cf828`, and that commit's timestamp (`14:39:10Z`) is later than the run recorded
+  beside it, so the sweep ran from a dirty worktree and the field captured `HEAD` rather than the code
+  that executed. The specific uncommitted harness revision used cannot be reconstructed from the field,
+  and this directory does not claim it. What the artifacts do support is each result's own observations —
+  call counts, deadlines, exit codes, messages — which is what the tables use.
 
-## How many runs, and at which commit
+## How many runs, and the limits of the commit field
 
 `results/run-status.txt` is the record, not the prose here: **36 entries**, one per fault, control and
 recorded-not-exercised cell, every one exit `0`, produced by one invocation of `./faults/run-all.sh`.
-The commit each result was measured at is in its own `harness.commit`, so a reader does not have to
-trust this paragraph for it.
+That is 14 exercised runs, 18 controls and 4 recorded-not-exercised cells.
+
+**What `harness.commit` does and does not establish.** Every checked-in result reports
+`harness.commit = 56cf828`, and `run-status.txt` in the merged tree starts at `2026-11-16T15:02:45Z`.
+Neither is a verified execution SHA, and this directory does not claim one. `56cf828` was created at
+`14:39:10Z`, after the run that recorded `14:28:53Z`, and several harness behaviours in the merged code
+landed in later commits — so the sweep ran from a **dirty worktree** and the field records the commit the
+harness was prepared against, not the worktree that executed it. Read it as "the checked-in artifacts
+report `56cf828`", which is all the file itself supports. The exact worktree state the runs came from was
+not verified, and a reader should not treat the field as proof that this reviewable code produced these
+results. What *is* verifiable from the artifacts is everything in the tables: call counts, deadlines,
+exit codes and messages, each in the file that recorded it.
+
+The harness itself is **3 951 lines across 16 files** of `sh`/`py` — the six fault scripts, `run-all.sh`
+and `lib/` — plus the 39 checked-in results and the rendered summary, which are evidence rather than code.
+None of it is durability code for any variant: it measures all three, so the band's line-count row does
+not add it to a column.
 
 ## Layout
 

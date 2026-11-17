@@ -529,8 +529,10 @@ Evidence: [`band-d-hosted-foundry-agent/evidence/platform-behaviour.md`](../real
 [`band-d-durable-inside/evidence/restart-across-stop.md`](../real-world-scenarios/band-d-durable-inside/evidence/restart-across-stop.md),
 [`band-d3-outside-orchestrator/evidence/run/`](../real-world-scenarios/band-d3-outside-orchestrator/evidence/run/),
 [`band-d-durable-inside/BOUNDARY.md`](../real-world-scenarios/band-d-durable-inside/BOUNDARY.md), and for the
-fault rows [`band-d-hosted-foundry-agent/faults/results/`](../real-world-scenarios/band-d-hosted-foundry-agent/faults/results/summary.txt)
-with its attribution rule in [`band-d-hosted-foundry-agent/evidence/attribution.md`](../real-world-scenarios/band-d-hosted-foundry-agent/evidence/attribution.md).
+fault rows [`faults/README.md`](../real-world-scenarios/band-d-hosted-foundry-agent/faults/README.md),
+the rendered [`faults/results/summary.txt`](../real-world-scenarios/band-d-hosted-foundry-agent/faults/results/summary.txt),
+the run record [`faults/results/run-status.txt`](../real-world-scenarios/band-d-hosted-foundry-agent/faults/results/run-status.txt)
+and the attribution rule in [`band-d-hosted-foundry-agent/evidence/attribution.md`](../real-world-scenarios/band-d-hosted-foundry-agent/evidence/attribution.md).
 
 | Dimension | `D1` baseline (platform) | `D2` Durable inside | `D3` Durable outside |
 | --- | --- | --- | --- |
@@ -543,7 +545,7 @@ with its attribution rule in [`band-d-hosted-foundry-agent/evidence/attribution.
 | **Offline capability** | **`not exercised`.** | **`not exercised`.** | **`not exercised`.** |
 | **Recovery cost** | **Resubmit; the foreground work is gone.** Sessions resume with context after an explicit `:stop`, and a fresh session answers `NO PRIOR CONTEXT` — that control pair is what separates "the platform resumed the session" from "the platform replayed the transcript". | **Restart the container; no manual step.** Measured over the restart as **7 s, 6 s, 7 s and 8 s** of session compute with a 5 s stop gap. | **Restart the orchestrator; no manual step, and no repeated call.** The whole run across two processes made **+2** calls, one per agent. |
 | **Operational burden** | **Nothing on you, and a preview surface on the platform.** No server, no store, no credential to rotate — the platform owns the session. What preview status adds: region and enrollment limits, a 30-day session window, a 900 s default idle timeout that bills while the session idles, and behaviour that may change. | **A deployment you own, plus a store inside the container.** The working state is a file the container must keep; the platform-removed burden is unchanged. | **The platform's burden stays, and you add a store.** One local scheduler, one store file, one writer — and the agent calls are now a cost you can count. |
-| **Lines of custom durability code** | **0.** `band-d-hosted-foundry-agent/` is 8 files, 1 134 lines — vendored agent source, `infra/`, and scripts. The reference has no durability code because it delegates that to the platform. | **2 348 lines across 12 files**, of which the durability-specific part is the work-state document and the parking task in `agent/durable_state.py` and the verbs in `agent/main.py`. | **1 837 lines across 7 files**, of which the orchestrator's task/memo/gate wiring is the durability code. |
+| **Lines of custom durability code** | **0.** D1's own code is 8 files, 1 134 lines of `infra/` (scripts and Bicep) — the reference has no durability code because it delegates that to the platform. That figure is `infra/` at the current tree; it grew from 944 after D1's merge because D3 added the two teardown verifications it reproduces, so the number is the deployment's present cost, not the day it first ran. D4's fault harness is in the same directory but is not counted in any column, because it measures all three variants rather than being any one of them; its own size is stated in [`faults/README.md`](../real-world-scenarios/band-d-hosted-foundry-agent/faults/README.md) § *How many runs, and the limits of the commit field*. | **2 348 lines across 12 files**, of which the durability-specific part is the work-state document and the parking task in `agent/durable_state.py` and the verbs in `agent/main.py`. | **1 837 lines across 7 files**, of which the orchestrator's task/memo/gate wiring is the durability code. |
 
 ### What each position actually shows
 
@@ -559,6 +561,38 @@ with its attribution rule in [`band-d-hosted-foundry-agent/evidence/attribution.
   Its strongest control is the **memo key**: a naive key wrongly reused v1's result (`+0` calls), and the
   identity-bearing key correctly missed (`+1`) — a control that demonstrates the wrong answer, which is
   worth more than one that only shows the right one.
+
+### Fault outcomes, transcribed
+
+Six faults, three columns, one control per cell that could carry one. Rendered from
+`faults/results/*/*.json` by `faults/lib/summarise.py` into
+[`summary.txt`](../real-world-scenarios/band-d-hosted-foundry-agent/faults/results/summary.txt). All 36 runs
+exited 0 (`faults/results/run-status.txt`): **14 exercised runs, 18 controls and 4 recorded not-exercised
+cells**. Nothing in this table is typed by hand — each cell is its result file's own `application` block,
+and the `platform` block beside it is `documented, not exercised here` in all 36.
+
+**These results are not pinned to a reviewable harness revision.** All 36 checked-in records contain
+`harness.commit = 56cf828`, but the sweep ran from a dirty worktree: that commit's timestamp is later than
+the run recorded beside it, and harness behaviours present in the merged code landed afterwards. The field
+therefore captures `HEAD`, not the code that executed, and the exact working-tree state used cannot be
+verified from it. The counts and outcomes below stand on each file's own observations; the *provenance* of
+the harness that produced them is a stated limitation, not a claim
+([`faults/README.md`](../real-world-scenarios/band-d-hosted-foundry-agent/faults/README.md) § *How many runs, and the limits of the commit field*).
+
+| Fault | `baseline` | `durable-inside` | `durable-outside` |
+| --- | --- | --- | --- |
+| `client-dies-mid-run` | **an already-accepted call is paid for twice** — 1 coverage POST before the kill, 2 in total | `not exercised` — D2 has no client of its own to kill | **the unfinished step is re-called; nothing completed is repeated** — also 2 POSTs, and that is the finding |
+| `container-restart` | **cold start; nothing survives** (the restart is the client's, since D1 has no container) | **the parked approval and its deadline survive byte-identically** — `1794927783.686035` before and after | `not exercised` — its restart *is* its client's death |
+| `duplicate-delivery` | **both steps applied twice; nothing refused** — 2 coverage and 2 synthesis calls for one request | **one decision applied once; the second delivery woke nothing** — `tasks_woken_by_second_delivery: 0`, decision on file `approved` by `Dr Chen` | `not exercised` — its gate refuses by construction |
+| `concurrent-clients` | **both applied both steps; no conflict detected** — 2 and 2, neither client exited non-zero | **the second refused by the store's file lock** — exit 1, *"already open in another process"*, one version held | **the second refused by the store's file lock** — exit 134, *"is already open in another process"* |
+| `store-outage` | **failed loudly; nothing kept** — exit 3, failure record, service withdrawn (an analogue, labelled as one) | **failed closed; the store's bytes unchanged and readable again** — `Errno 30`, identical SHA-256 before and after | **the commit was refused; the run did not advance** — exit 1 on `chflags uchg`, committed prefix intact |
+| `agent-call-failure` | **the failed call retried; the earlier step skipped** — and the skip is a *file check*, not a memo | `not exercised` — D2's application code makes no agent call | **the terminal 5xx settled the run**; a separate memo arm on a fresh store shows `+0` calls on a re-entered phase |
+
+Four cells are `not exercised` because the variant cannot have the fault, and each has a control recorded as
+a control for a cell that cannot be run — not as a fifth exercised cell. Both `client-dies-mid-run` columns
+and both `concurrent-clients` columns point the same way, and the two rows where the columns **agree** are
+the honest part of this table: durability moves the cost of an in-flight kill from "repeat everything" to
+"repeat the one step that was in flight", and it does not remove that repeat.
 
 ### Where this band's rows diverge from the easy story
 
