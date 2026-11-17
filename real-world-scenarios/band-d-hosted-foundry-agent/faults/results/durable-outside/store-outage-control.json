@@ -1,0 +1,82 @@
+{
+ "application": {
+  "observations": {
+   "outage_injected": false,
+   "outcome_line": "(the process printed no outcome line)",
+   "process_exit": 0,
+   "store_after_flag_removed": {
+    "readable": true,
+    "records": 7,
+    "tasks": [
+     {
+      "checkpoint": "letter",
+      "id": "t1",
+      "status": 4
+     }
+    ]
+   }
+  },
+  "outcome_detail": "The same run with no immutable flag: the process exited 0 and the store reads back as {\"readable\": true, \"records\": 7, \"tasks\": [{\"id\": \"t1\", \"status\": 4, \"checkpoint\": \"letter\"}]}. The refused write in the fault row is what the flag caused."
+ },
+ "environment": {
+  "foundry_deployment": "none - nothing was provisioned for this run",
+  "model": "none - the stand-in serves fixed answers; no model was called"
+ },
+ "fault": "store-outage",
+ "harness": {
+  "command": "./faults/store-outage.sh --variant durable-outside --fault-not-injected",
+  "commit": "56cf8282cf98d6acf37b64ff462d5f86f929fb05",
+  "docker": "not used by this fault - D3's orchestrator is a host process and its store a host file",
+  "live_azure_calls": 0,
+  "network": "none - every call a fault makes is to 127.0.0.1",
+  "paths_normalised": {
+   "$FAULTS_SCRATCH": "the harness scratch root",
+   "<repo>": "the repository root"
+  },
+  "python": "3.15.2",
+  "what_runs_where": "D3's orchestrator, dotnet-published from real-world-scenarios/band-d3-outside-orchestrator so the PID the harness starts is the application. Its agent calls go to lib/fake_foundry.py, the same local stand-in, whose request log is the call count."
+ },
+ "outcome": "control: the run completed normally",
+ "platform": {
+  "behaviours": [
+   {
+    "documented": "30 days, sliding on activity. The session persists the sandbox ($HOME, uploaded files), not the conversation: continuing a conversation needs previous_response_id or a conversation id.",
+    "id": "session-persistence",
+    "question": "How long does a hosted agent session persist?",
+    "source": "learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions; D1 evidence/session-resume/*.json (expires_at - created_at = 30 days, sliding)",
+    "spoken_to_by_this_fault": false,
+    "status": "documented, not exercised here"
+   },
+   {
+    "documented": "900 s (15 min) by default, configurable 120 s-14400 s per agent version. On timeout the platform deprovisions compute and saves the session state until the session is referenced again.",
+    "id": "idle-timeout",
+    "question": "What ends a session's idle lifetime, and what happens to its state?",
+    "source": "learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions; D1 evidence/platform-behaviour.md section 2 (default applied, eviction not waited out)",
+    "spoken_to_by_this_fault": false,
+    "status": "documented, not exercised here"
+   },
+   {
+    "documented": "Foreground responses stay tied to the client connection: the response is resolved cancelled, background=false, and the in-flight work is not preserved for a later lifetime.",
+    "id": "foreground-cancelled",
+    "question": "What happens to a foreground response when the driving client disappears mid-run?",
+    "source": "learn.microsoft.com/azure/foundry/agents/concepts/long-running-agent-resilience; D1 evidence/platform-behaviour.md section 3 (status cancelled, background false)",
+    "spoken_to_by_this_fault": false,
+    "status": "documented, not exercised here"
+   },
+   {
+    "documented": "No for foreground. Only stored background responses with resilient_background opted in are re-entered, and re-entry starts at the handler's beginning - not deterministic replay, no restored local variables or call stack.",
+    "id": "no-replay",
+    "question": "Does the platform replay the interrupted response?",
+    "source": "learn.microsoft.com/azure/foundry/agents/how-to/recover-long-running-work; D1 evidence/platform-behaviour.md section 4",
+    "spoken_to_by_this_fault": false,
+    "status": "documented, not exercised here"
+   }
+  ],
+  "live_foundry_called": false,
+  "session_survived": "not applicable - no platform session existed",
+  "what_the_platform_did": "not exercised in this run: the store is local and Durable's, not the platform's",
+  "what_the_platform_is_not_represented_by": "D3's store is a file on this machine. The outage is an operating-system write refusal, which is a stronger injection than an application-level flag and is not a statement about Azure storage."
+ },
+ "recordedAt": "2026-11-16T15:10:43.351639+00:00",
+ "variant": "durable-outside"
+}

@@ -1,0 +1,79 @@
+{
+ "application": {
+  "observations": {
+   "final_exit_status": 0,
+   "killed_inside_a_held_call": false,
+   "resume_reported_a_stored_run": true,
+   "run_step_artifacts": 2,
+   "second_process_completed_the_run": true,
+   "service_posts_for_coverage_before_the_kill": 0,
+   "service_posts_for_coverage_in_total": 1
+  },
+  "outcome_detail": "The same drive with no kill: one coverage call, one synthesis call, the run finished. The two-run shape alone repeats nothing, so the repetition in the fault row belongs to the kill and not to driving twice."
+ },
+ "environment": {
+  "foundry_deployment": "none - nothing was provisioned for this run",
+  "model": "none - the stand-in serves fixed answers; no model was called"
+ },
+ "fault": "client-dies-mid-run",
+ "harness": {
+  "command": "./faults/client-dies-mid-run.sh --variant baseline --fault-not-injected",
+  "commit": "56cf8282cf98d6acf37b64ff462d5f86f929fb05",
+  "docker": "not used by this fault - the client is a host process",
+  "live_azure_calls": 0,
+  "network": "none - every call a fault makes is to 127.0.0.1",
+  "paths_normalised": {
+   "$FAULTS_SCRATCH": "the harness scratch root",
+   "<repo>": "the repository root"
+  },
+  "python": "3.15.2",
+  "what_runs_where": "lib/baseline_driver.py against lib/fake_foundry.py, a local stand-in for the Foundry data plane that is never claimed to be Foundry. D1's hosted agents were not deployed, so the baseline column is its decision path as a client."
+ },
+ "outcome": "control: completed in one client",
+ "platform": {
+  "behaviours": [
+   {
+    "documented": "30 days, sliding on activity. The session persists the sandbox ($HOME, uploaded files), not the conversation: continuing a conversation needs previous_response_id or a conversation id.",
+    "id": "session-persistence",
+    "question": "How long does a hosted agent session persist?",
+    "source": "learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions; D1 evidence/session-resume/*.json (expires_at - created_at = 30 days, sliding)",
+    "spoken_to_by_this_fault": false,
+    "status": "documented, not exercised here"
+   },
+   {
+    "documented": "900 s (15 min) by default, configurable 120 s-14400 s per agent version. On timeout the platform deprovisions compute and saves the session state until the session is referenced again.",
+    "id": "idle-timeout",
+    "question": "What ends a session's idle lifetime, and what happens to its state?",
+    "source": "learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions; D1 evidence/platform-behaviour.md section 2 (default applied, eviction not waited out)",
+    "spoken_to_by_this_fault": false,
+    "status": "documented, not exercised here"
+   },
+   {
+    "documented": "Foreground responses stay tied to the client connection: the response is resolved cancelled, background=false, and the in-flight work is not preserved for a later lifetime.",
+    "id": "foreground-cancelled",
+    "question": "What happens to a foreground response when the driving client disappears mid-run?",
+    "source": "learn.microsoft.com/azure/foundry/agents/concepts/long-running-agent-resilience; D1 evidence/platform-behaviour.md section 3 (status cancelled, background false)",
+    "spoken_to_by_this_fault": true,
+    "status": "documented, not exercised here"
+   },
+   {
+    "documented": "No for foreground. Only stored background responses with resilient_background opted in are re-entered, and re-entry starts at the handler's beginning - not deterministic replay, no restored local variables or call stack.",
+    "id": "no-replay",
+    "question": "Does the platform replay the interrupted response?",
+    "source": "learn.microsoft.com/azure/foundry/agents/how-to/recover-long-running-work; D1 evidence/platform-behaviour.md section 4",
+    "spoken_to_by_this_fault": true,
+    "status": "documented, not exercised here"
+   }
+  ],
+  "live_foundry_called": false,
+  "session_survived": "not applicable - no platform session existed",
+  "what_the_platform_did": "not exercised in this run: no hosted deployment was reachable, so what Foundry would have done is quoted from D1's captures and the documentation, in behaviours[] below",
+  "what_the_platform_is_not_represented_by": "lib/fake_foundry.py is a local stand-in for the data plane. It logs every request so a call count is a measurement; it is not Foundry and it recovers nothing. Every number in `application` is about the application's response to a dead client, never about the platform's."
+ },
+ "recordedAt": "2026-11-16T15:02:49.391296+00:00",
+ "variant": "baseline",
+ "variant_notes": {
+  "baseline": "the client is the run: D1's hosted agents have no orchestration of their own, so this driver is the accelerator's decision path reproduced without the platform",
+  "durable-outside": "the store is the run: D3's task and memos decide what a restart repeats"
+ }
+}
