@@ -1530,6 +1530,13 @@ export class DurableStore {
    */
   private commitScope: AsyncLocalStorage<string> | null = null;
 
+  /**
+   * The operation whose commit currently holds the gate, or `null` when the gate is free. Read by
+   * `withGate` to tell a live re-entry (or a child started while its parent still holds the gate)
+   * from a fan-out child whose parent has already released.
+   */
+  private gateHolder: string | null = null;
+
   private schedulerOwner: object | null = null;
   private taskScheduler: ((taskId: string, cancellationToken: AbortSignal) => void) | null = null;
 
@@ -2063,11 +2070,18 @@ export class DurableStore {
    * A re-entry is not a slow call, it is a hang: the gate is not reentrant, so the inner call
    * waits for the release the outer one is holding and cannot reach. Refusing it here turns that
    * into an error a caller can catch.
+   *
+   * The refusal is keyed on the commit that currently holds the gate, not merely on "this flow
+   * inherited a scope". A scope inherited from a commit that has since released is a fan-out —
+   * a child started inside a callback — and waiting for the gate is correct and completes. A
+   * child that starts while the callback still holds the gate is indistinguishable from a
+   * re-entry, and queuing on it would deadlock whenever the callback awaits the child, so it is
+   * refused as well.
    */
   private async withGate<T>(operation: string, body: () => Promise<T>): Promise<T> {
-    const commit = this.commitScope?.getStore();
-    if (commit !== undefined) {
-      throw new DurableCommitReentryException(operation, commit);
+    const inherited = this.commitScope?.getStore();
+    if (inherited !== undefined && inherited === this.gateHolder) {
+      throw new DurableCommitReentryException(operation, inherited);
     }
 
     const previous = this.gateTail;
@@ -2078,9 +2092,11 @@ export class DurableStore {
 
     await previous;
     this.commitScope ??= new AsyncLocalStorage<string>();
+    this.gateHolder = operation;
     try {
       return await this.commitScope.run(operation, body);
     } finally {
+      this.gateHolder = null;
       release();
     }
   }
@@ -2090,10 +2106,9 @@ export class DurableStore {
    *
    * The scope is an `AsyncLocalStorage` store, so it flows into continuations — including work
    * started from inside a commit's callback. A task created and scheduled by a callback (a
-   * fan-out) therefore inherits the parent's scope, and its own commit would be refused as a
-   * re-entry it is not: the child is a new run on its own flow, not a call nested inside the
-   * parent's commit. Every task run crosses this boundary, so a child always starts outside a
-   * scope.
+   * fan-out) therefore inherits the parent's scope; this boundary makes it start with no scope at
+   * all, so its own commit is never judged against a parent's lifetime. Every task run crosses
+   * this boundary.
    */
   async outsideCommitScope<T>(body: () => Promise<T>): Promise<T> {
     if (this.commitScope === null) {
@@ -2315,11 +2330,10 @@ export class DurableShiftClaim {
     readonly owner: string,
     /** The owner's session, when it has one. */
     readonly sessionId: string | null,
-    /** The claim state, as this build reads it. */
-    readonly status: ShiftClaimStatus,
     /**
-     * The status exactly as the store holds it. Preserved so an unrecognized value survives a
-     * read and is reported rather than being rewritten into a value this build understands.
+     * The status exactly as the store holds it: the single authority for what the record says.
+     * Preserved so an unrecognized value survives a read and is reported rather than being
+     * rewritten into a value this build understands.
      */
     readonly statusText: string | null,
     /** The acquisition counter. Every new grant increments it. */
@@ -2332,13 +2346,32 @@ export class DurableShiftClaim {
     readonly releasedAt: string | null = null,
   ) {}
 
+  /**
+   * The claim state, as this build reads it: a view of `statusText`, resolved through this
+   * build's vocabulary. An unknown or missing text reads as `Uncertain`, never as a default.
+   */
+  get status(): ShiftClaimStatus {
+    const text = this.statusText;
+    if (text === null || text.trim().length === 0) return ShiftClaimStatus.Uncertain;
+    if (text === ShiftClaimStatus.Active) return ShiftClaimStatus.Active;
+    if (text === ShiftClaimStatus.Released) return ShiftClaimStatus.Released;
+    return ShiftClaimStatus.Uncertain;
+  }
+
   /** How many times this shift has been granted. Equal to `attempt`. */
   get grants(): number {
     return this.attempt;
   }
 }
 
-/** What a committed handoff means: work is starting, or work has stopped. */
+/**
+ * What a committed handoff means: work is starting, or work has stopped.
+ *
+ * The canonical wire spelling is the lowercase one here, shared with the C# and Python ports.
+ * A record written by an earlier C# build holds `HandedOff`/`Running`, which `phaseFromWire`
+ * still reads: misreading a running shift as handed off would let a second session claim it and
+ * duplicate the run.
+ */
 export const ShiftHandoffPhase = {
   /**
    * Committed before the turn runs. The owner may be mid-work, so only the same session —
@@ -2444,21 +2477,30 @@ function shiftClaimFromWire(value: JsonValue | null): DurableShiftClaim | null {
   }
 
   const data = value;
-  const status: ShiftClaimStatus = data["status"] === ShiftClaimStatus.Released
-    ? ShiftClaimStatus.Released
-    : data["status"] === ShiftClaimStatus.Active ? ShiftClaimStatus.Active : ShiftClaimStatus.Uncertain;
   return new DurableShiftClaim(
     String(data["key"]),
     typeof data["member"] === "string" ? data["member"] : null,
     String(data["owner"]),
     typeof data["sessionId"] === "string" ? data["sessionId"] : null,
-    status,
     typeof data["statusText"] === "string" ? data["statusText"] : null,
     Number(data["attempt"]),
     typeof data["resumedFrom"] === "number" ? data["resumedFrom"] : null,
     String(data["claimedAt"] ?? ""),
     typeof data["releasedAt"] === "string" ? data["releasedAt"] : null,
   );
+}
+
+/**
+ * Reads a stored handoff phase. `running` is the only spelling that means "in flight"; every
+ * other value — including the earlier build's `HandedOff`/`Running` capitalization — is
+ * resolved case-insensitively so an existing store keeps its meaning. An unrecognized value is
+ * the permissive `handedOff`: refusing the record would make a newer store unreadable, and a
+ * successor resuming a stopped shift is safe even if it should have been held.
+ */
+export function shiftHandoffPhaseFromWire(value: JsonValue | null): ShiftHandoffPhase {
+  return typeof value === "string" && value.toLowerCase() === ShiftHandoffPhase.Running
+    ? ShiftHandoffPhase.Running
+    : ShiftHandoffPhase.HandedOff;
 }
 
 function shiftHandoffFromWire(value: JsonValue | null): DurableShiftHandoff | null {
@@ -2471,7 +2513,7 @@ function shiftHandoffFromWire(value: JsonValue | null): DurableShiftHandoff | nu
     String(data["key"]),
     Number(data["attempt"]),
     String(data["owner"]),
-    data["phase"] === ShiftHandoffPhase.Running ? ShiftHandoffPhase.Running : ShiftHandoffPhase.HandedOff,
+    shiftHandoffPhaseFromWire(data["phase"] ?? null),
     typeof data["selected"] === "string" ? data["selected"] : null,
     typeof data["achieved"] === "string" ? data["achieved"] : null,
     typeof data["remaining"] === "string" ? data["remaining"] : null,
@@ -2487,7 +2529,6 @@ function shiftClaimValue(claim: DurableShiftClaim): JsonObject {
     member: claim.member,
     owner: claim.owner,
     sessionId: claim.sessionId,
-    status: claim.status,
     statusText: claim.statusText,
     attempt: claim.attempt,
     resumedFrom: claim.resumedFrom,
@@ -2517,6 +2558,17 @@ export function shiftClaimText(status: ShiftClaimStatus): string {
 }
 
 /**
+ * Reads a stored status text through this build's vocabulary. A value this build does not
+ * recognize — including a missing one — is `Uncertain`.
+ */
+export function readShiftClaimStatusText(text: string | null): ShiftClaimStatus {
+  if (text === null || text.trim().length === 0) return ShiftClaimStatus.Uncertain;
+  return text === ShiftClaimStatus.Active || text === ShiftClaimStatus.Released
+    ? text
+    : ShiftClaimStatus.Uncertain;
+}
+
+/**
  * Reads a stored claim's status, resolving the text through this build's vocabulary.
  * A value this build does not recognize — including a missing one — is `Uncertain`, which
  * is the only safe reading of "unknown".
@@ -2530,11 +2582,7 @@ function readShiftClaimStatus(claim: DurableShiftClaim): { status: ShiftClaimSta
     return { status: ShiftClaimStatus.Uncertain, text: null };
   }
 
-  if (text === ShiftClaimStatus.Active || text === ShiftClaimStatus.Released) {
-    return { status: text, text };
-  }
-
-  return { status: ShiftClaimStatus.Uncertain, text };
+  return { status: readShiftClaimStatusText(text), text };
 }
 
 /**
@@ -2606,7 +2654,7 @@ export const DurableShifts = {
       // back claim leaves nothing behind.
       if (!documentExists) {
         const created = new DurableShiftClaim(
-          key, member, owner, sessionId, ShiftClaimStatus.Active, shiftClaimText(ShiftClaimStatus.Active),
+          key, member, owner, sessionId, shiftClaimText(ShiftClaimStatus.Active),
           1, null, now,
         );
         const entryId = tx.appendEntry(claimOwnerId, "shift-claim");
@@ -2687,7 +2735,6 @@ export const DurableShifts = {
         member ?? current.member,
         owner,
         sessionId,
-        ShiftClaimStatus.Active,
         shiftClaimText(ShiftClaimStatus.Active),
         current.attempt + 1,
         resumedFrom,
@@ -2823,7 +2870,6 @@ export const DurableShifts = {
         current.member,
         current.owner,
         current.sessionId,
-        ShiftClaimStatus.Released,
         shiftClaimText(ShiftClaimStatus.Released),
         current.attempt,
         current.resumedFrom,

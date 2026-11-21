@@ -741,6 +741,137 @@ public class TaskResumeTests
     }
 
     /// <summary>
+    /// A fan-out started from inside a commit callback commits on its own flow: `Task.Run` and
+    /// `ThreadPool.QueueUserWorkItem` children both run once the outer commit has released.
+    /// </summary>
+    /// <remarks>
+    /// The scope is an `AsyncLocal`, so both children inherit it, and the original guard refused
+    /// them as re-entries they were not. The guard now keys on the commit that holds the gate, so
+    /// an inherited scope whose commit has finished is a fan-out and queues normally. Both store
+    /// tiers are exercised because the guard lives in the store, not the provider.
+    /// <para>
+    /// The children are started inside the callback but reach their own commit only after the
+    /// outer commit returns. A child that committed while the callback still held the gate would
+    /// wait for a release the callback cannot give while it awaits the child — a deadlock — and is
+    /// still refused; that is the case a fan-out must not be built on.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task FanOutStartedInsideACommit_CommitsAfterTheOuterCommitReleases()
+    {
+        foreach (var persistent in new[] { false, true })
+        {
+            var directory = persistent
+                ? Path.Combine(Path.GetTempPath(), $"durable-fanout-{Guid.NewGuid():N}")
+                : null;
+            var store = CreateStore(directory);
+            try
+            {
+                var released = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var children = new List<Task>();
+                var fromTaskRun = default(Task<ConversationRecord>);
+                var fromQueue = default(Task<ConversationRecord>);
+
+                await WithTimeout(store.CommitAsync(async _tx =>
+                {
+                    // Both children are started from inside the callback but commit only once the
+                    // outer commit has released: this is the fan-out shape that regressed.
+                    fromTaskRun = Task.Run(async () =>
+                    {
+                        await released.Task;
+                        return await store.CommitAsync(tx => Task.FromResult(tx.CreateConversation()));
+                    });
+                    ThreadPool.QueueUserWorkItem(async _ =>
+                    {
+                        await released.Task;
+                        fromQueue = store.CommitAsync(tx => Task.FromResult(tx.CreateConversation()));
+                        await fromQueue;
+                    });
+                    await Task.CompletedTask;
+                    return true;
+                }));
+
+                released.SetResult(true);
+                await WithTimeout(fromTaskRun!);
+                await WithTimeout(fromQueue!);
+
+                // The parent's transaction wrote no conversation; each child's did.
+                Assert.Equal(2, store.Conversations.Count);
+            }
+            finally
+            {
+                store.Dispose();
+                if (directory is not null)
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
+            }
+        }
+
+        static DurableStore CreateStore(string? directory)
+        {
+            if (directory is null)
+            {
+                return DurableStore.CreateEphemeral();
+            }
+
+            Directory.CreateDirectory(directory);
+            return DurableStore.Create(new DurableStoreOptions
+            {
+                Path = Path.Combine(directory, "store.jsonl"),
+                Format = DurableStoreFormat.Jsonl,
+            });
+        }
+    }
+
+    /// <summary>
+    /// A child that runs *after* its parent's commit releases, started from inside the callback,
+    /// also commits: the inherited scope must not outlive the commit it came from.
+    /// </summary>
+    [Fact]
+    public async Task ChildFlowStartedInsideACommit_ThatRunsAfterRelease_Commits()
+    {
+        using var store = DurableStore.CreateEphemeral();
+
+        Task<ConversationRecord>? deferred = null;
+        await WithTimeout(store.CommitAsync(async _tx =>
+        {
+            // Started inside the callback, but its body does not reach the gate until the
+            // continuation runs — after this commit has returned.
+            deferred = Task.Run(async () =>
+            {
+                await Task.Delay(150);
+                return await store.CommitAsync(tx => Task.FromResult(tx.CreateConversation()));
+            });
+            return true;
+        }));
+
+        await WithTimeout(deferred!);
+        Assert.Single(store.Conversations);
+    }
+
+    /// <summary>
+    /// The genuine re-entry is still refused: a commit awaited synchronously on the committing
+    /// flow inside the callback would deadlock, so it throws the named error.
+    /// </summary>
+    [Fact]
+    public async Task CommitAwaitedOnTheCommittingFlow_StillThrowsAndNamesTheOuterCommit()
+    {
+        using var store = DurableStore.CreateEphemeral();
+
+        var error = await WithTimeout(Assert.ThrowsAsync<DurableCommitReentryException>(() =>
+            store.CommitAsync(async tx =>
+            {
+                await store.CommitAsync(inner => Task.FromResult(inner));
+                return tx;
+            })));
+
+        Assert.Equal("DurableStore.CommitAsync", error.Operation);
+        Assert.Equal("DurableStore.CommitAsync", error.CommitOperation);
+        Assert.Empty(store.Conversations);
+    }
+
+    /// <summary>
     /// A rollback discards a memo written inside the transaction, and the *next* failed transaction
     /// does not bring it back.
     /// </summary>
@@ -896,6 +1027,13 @@ public class TaskResumeTests
     }
 
     private static Task<T> WithTimeout<T>(ValueTask<T> task) => WithTimeout(task.AsTask());
+
+    private static async Task WithTimeout(Task task)
+    {
+        var finished = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.True(ReferenceEquals(finished, task), "the operation did not complete within 10s");
+        await task;
+    }
 
     /// <summary>
     /// Writes a task record without scheduling it, with an arbitrary initial checkpoint.

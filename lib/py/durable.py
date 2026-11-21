@@ -101,6 +101,8 @@ __all__ = [
     "ShiftClaimResult",
     "ShiftClaimStatus",
     "ShiftHandoffPhase",
+    "shift_handoff_phase_from_wire",
+    "read_shift_claim_status_text",
     "StoreFileLock",
     "StoreSnapshot",
     "TaskCommit",
@@ -1861,15 +1863,16 @@ class DurableStore:
         )
         self._gate = asyncio.Lock()
         # The commit whose callback is running in the current context, if any. This is what
-        # makes the non-reentrant gate refuse a re-entry instead of hanging on it. It
-        # deliberately does not identify the gate's owner: a context variable is captured by
-        # each task that awaits inside the callback, so it cannot say whether a caller is the
-        # committing task itself or a different one. What it does answer reliably is "this
-        # context is inside a commit", and that is exactly the condition under which the gate
-        # would deadlock. A different task is outside this context, so it sees no scope and
-        # waits normally.
+        # makes the non-reentrant gate refuse a re-entry instead of hanging on it. A context
+        # variable is captured by each task that awaits inside the callback, so it cannot by
+        # itself say whether a caller is the committing task or one that inherited the scope.
+        # It is paired with ``_gate_holder``: the operation whose commit holds the gate right
+        # now. A caller whose scope is that same value is the committing task (or a continuation
+        # of it) and would deadlock, so the call is refused. A caller whose inherited scope came
+        # from a commit that has since released is a fan-out child and queues normally.
         self._commit_scope: ContextVar[str | None] = ContextVar(
             f"durable_commit_scope_{id(self)}", default=None)
+        self._gate_holder: str | None = None
         self._scheduler_gate = threading.Lock()
         self._scheduler_owner: object | None = None
         self._task_scheduler: Callable[[str, asyncio.Event | None], None] | None = None
@@ -2092,6 +2095,7 @@ class DurableStore:
         store._format = format
         store._gate = asyncio.Lock()
         store._commit_scope = ContextVar(f"durable_commit_scope_{id(store)}", default=None)
+        store._gate_holder: str | None = None
         store._scheduler_gate = threading.Lock()
         store._scheduler_owner = None
         store._task_scheduler = None
@@ -2107,9 +2111,13 @@ class DurableStore:
         A re-entry is not a slow call, it is a hang: the gate is not reentrant, so the inner
         call waits for the release the outer one is holding and cannot reach. Refusing it here
         turns that into an error a caller can catch.
+
+        The refusal is keyed on the commit that currently holds the gate, not merely on "this
+        context inherited a scope". A scope inherited from a commit that has since released is a
+        fan-out child and queues normally.
         """
         commit_operation = self._commit_scope.get()
-        if commit_operation is not None:
+        if commit_operation is not None and commit_operation == self._gate_holder:
             raise DurableCommitReentryException(operation, commit_operation)
 
         await self._gate.acquire()
@@ -2121,9 +2129,11 @@ class DurableStore:
         """
         await self._enter_gate(operation)
         token = self._commit_scope.set(operation)
+        self._gate_holder = operation
         try:
             yield
         finally:
+            self._gate_holder = None
             self._commit_scope.reset(token)
             self._gate.release()
 
@@ -2719,13 +2729,35 @@ class ShiftClaimStatus(str, Enum):
 
 
 class ShiftHandoffPhase(str, Enum):
-    """What a committed handoff means: work is starting, or work has stopped."""
+    """What a committed handoff means: work is starting, or work has stopped.
+
+    The canonical wire spelling is the lowercase one here, shared with the C# and Python
+    ports. An earlier C# build wrote ``Running``/``HandedOff``; :func:`shift_handoff_phase_from_wire`
+    still reads those, because reading a running shift as handed off would let a second
+    session claim it and duplicate the run.
+    """
 
     #: Committed before the turn runs. The owner may be mid-work, so only the same
     #: session -- the process that wrote it and restarted -- may resume from it.
     RUNNING = "running"
     #: Committed when the shift stops, before release. Any successor may resume from it.
     HANDED_OFF = "handedOff"
+
+
+def shift_handoff_phase_from_wire(value: Any) -> str:
+    """Reads a stored handoff phase.
+
+    ``running`` is the only spelling that means "in flight", matched case-insensitively so
+    the earlier build's ``Running`` is still in flight. Every other value -- including
+    ``HandedOff`` and an unrecognized one -- is the permissive ``handedOff``: refusing the
+    record would make a newer store unreadable, and a successor resuming a stopped shift is
+    safe even if it should have been held.
+    """
+    return (
+        ShiftHandoffPhase.RUNNING.value
+        if isinstance(value, str) and value.lower() == ShiftHandoffPhase.RUNNING.value
+        else ShiftHandoffPhase.HANDED_OFF.value
+    )
 
 
 class ShiftClaimOutcome(str, Enum):
@@ -2871,7 +2903,11 @@ def _read_shift_claim_status(claim: DurableShiftClaim) -> tuple[ShiftClaimStatus
     holds, so its absence means the record is incomplete, not that it is active; the typed
     ``status`` is never used as a fallback.
     """
-    text = claim.status_text
+    return read_shift_claim_status_text(claim.status_text)
+
+
+def read_shift_claim_status_text(text: str | None) -> tuple[ShiftClaimStatus, str | None]:
+    """Resolves a stored status text through this build's vocabulary."""
     if text is None or not text.strip():
         return ShiftClaimStatus.UNCERTAIN, None
     if text == ShiftClaimStatus.ACTIVE.value:
@@ -2915,7 +2951,17 @@ class DurableShifts:
         document = store.document(DurableShiftHandoff.DOCUMENT_KIND, DurableShiftHandoff.owner_id(key))
         if document is None or document.latest is None:
             return None
-        return _from_wire(DurableShiftHandoff, document.latest)
+        handoff = _from_wire(DurableShiftHandoff, document.latest)
+        if handoff is None:
+            return None
+        # Normalize the phase through the compatibility reader so an earlier build's
+        # ``Running``/``HandedOff`` is resolved exactly as C# and TypeScript resolve it.
+        normalized = shift_handoff_phase_from_wire(handoff.phase)
+        return (
+            handoff
+            if handoff.phase == normalized
+            else dataclasses.replace(handoff, phase=normalized)
+        )
 
     @staticmethod
     async def claim_async(
@@ -3017,7 +3063,7 @@ class DurableShifts:
                 # not evidence that it died, so it is refused rather than resuming over a
                 # running shift.
                 same_session = bool(current.session_id) and current.session_id == session_id
-                if handoff.phase == ShiftHandoffPhase.RUNNING.value and not same_session:
+                if shift_handoff_phase_from_wire(handoff.phase) == ShiftHandoffPhase.RUNNING.value and not same_session:
                     return ShiftClaimResult(
                         ShiftClaimOutcome.CONFLICT,
                         current,

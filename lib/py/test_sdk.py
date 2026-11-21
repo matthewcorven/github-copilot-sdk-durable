@@ -14,7 +14,7 @@ from collections.abc import Awaitable
 from durable import (
     AgentChoices, DurableHarness, DurableStore, DurableStoreOptions, ExtensionRegistry,
     DurableShiftClaim, DurableShiftHandoff, DurableShifts, ShiftClaimOutcome,
-    ShiftClaimStatus, ShiftHandoffPhase,
+    ShiftClaimStatus, ShiftHandoffPhase, shift_handoff_phase_from_wire, read_shift_claim_status_text,
     DurableSandboxPolicy, DurableSandboxFilesystem, DurableSandboxCredentials,
     DurableSandboxNetwork, DurableSandboxAuth, PermissionPolicy,
     DurableTask, TaskCommit, TaskStatus, Extension, ToolWrapper, DurableHarnessOptions,
@@ -2335,6 +2335,53 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
             await harness.close_async()
             store.close()
 
+    async def test_fan_out_started_inside_a_commit_commits_after_the_outer_commit_releases(self):
+        # The scope is a ContextVar, so a child task inherits it. A child whose parent commit has
+        # already released is a fan-out and must queue, not raise; the guard is keyed on the
+        # commit that currently holds the gate.
+        store = DurableStore.create_ephemeral()
+        try:
+            released = asyncio.Event()
+            children: list = []
+
+            async def body(tx):
+                async def child():
+                    await released.wait()
+
+                    async def commit(tx):
+                        return tx.create_conversation()
+
+                    return await store.commit_async(commit)
+
+                children.append(asyncio.create_task(child()))
+                children.append(asyncio.create_task(child()))
+                return tx
+
+            async def run():
+                await store.commit_async(body)
+                released.set()
+                await asyncio.gather(*children)
+
+            await asyncio.wait_for(run(), 10)
+            self.assertEqual(len(store.conversations), 2)
+        finally:
+            store.close()
+
+    async def test_commit_awaited_on_the_committing_flow_still_raises(self):
+        store = DurableStore.create_ephemeral()
+        try:
+            async def outer(tx):
+                await store.commit_async(lambda inner: inner)
+                return tx
+
+            with self.assertRaises(DurableCommitReentryException) as raised:
+                await asyncio.wait_for(store.commit_async(outer), 10)
+            self.assertEqual(raised.exception.operation, "DurableStore.commit_async")
+            self.assertEqual(raised.exception.commit_operation, "DurableStore.commit_async")
+            self.assertEqual(len(store.conversations), 0)
+        finally:
+            store.close()
+
     async def test_memo_async_outside_a_commit_still_reads_and_writes(self):
         store = DurableStore.create(DurableStoreOptions())
         definition = DurableTask.define_phases(
@@ -4380,6 +4427,127 @@ class ShiftClaimTests(unittest.IsolatedAsyncioTestCase):
         claim = await DurableShifts.claim_async(self.store, KEY, "run-a", T0, "po", "session-a")
         self.assertIs(claim.outcome, ShiftClaimOutcome.ACQUIRED)
         self.assertEqual(1, claim.claim.attempt)
+
+
+SHIFT_FIXTURE = Path(__file__).resolve().parents[1] / "ts" / "shift-fixture.cs"
+
+
+def run_shift_fixture(mode: str, path: Path) -> dict:
+    """Runs the canonical C# shift fixture and returns the JSON it prints last."""
+    output = subprocess.check_output(
+        ["dotnet", "run", "--file", str(SHIFT_FIXTURE), "--", mode, str(path)],
+        text=True, stderr=subprocess.DEVNULL)
+    return json.loads(output.strip().splitlines()[-1])
+
+
+class ShiftCrossPortTests(unittest.IsolatedAsyncioTestCase):
+    """The cross-port wire contract for shift records: the phase spelling and the status field.
+
+    These are the tests that would have caught the phase mismatch. Each port reads a record the
+    other wrote, because a port reopening its own bytes cannot see a spelling disagreement.
+    """
+
+    async def test_phase_reader_accepts_both_spellings(self):
+        self.assertEqual("running", shift_handoff_phase_from_wire("running"))
+        self.assertEqual("running", shift_handoff_phase_from_wire("Running"))
+        self.assertEqual("handedOff", shift_handoff_phase_from_wire("handedOff"))
+        self.assertEqual("handedOff", shift_handoff_phase_from_wire("HandedOff"))
+        self.assertEqual("handedOff", shift_handoff_phase_from_wire(None))
+        self.assertEqual("handedOff", shift_handoff_phase_from_wire("nonsense"))
+
+    def test_status_is_a_view_of_the_stored_text(self):
+        active, _ = read_shift_claim_status_text("active")
+        released, _ = read_shift_claim_status_text("released")
+        unknown, text = read_shift_claim_status_text("suspended")
+        missing, missing_text = read_shift_claim_status_text(None)
+        self.assertIs(active, ShiftClaimStatus.ACTIVE)
+        self.assertIs(released, ShiftClaimStatus.RELEASED)
+        self.assertIs(unknown, ShiftClaimStatus.UNCERTAIN)
+        self.assertEqual("suspended", text)
+        self.assertIs(missing, ShiftClaimStatus.UNCERTAIN)
+        self.assertIsNone(missing_text)
+
+    async def test_reads_a_csharp_written_running_handoff_and_refuses_a_different_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "store.jsonl"
+            run_shift_fixture("create", path)
+
+            store = DurableStore.create(DurableStoreOptions(path=str(path)))
+            try:
+                handoff = DurableShifts.read_handoff(store, KEY)
+                self.assertIsNotNone(handoff)
+                self.assertEqual("running", handoff.phase)
+
+                other = await DurableShifts.claim_async(store, KEY, "run-b", T1, "po", "session-b")
+                self.assertIs(other.outcome, ShiftClaimOutcome.CONFLICT,
+                              "a different session must not duplicate a running shift")
+                self.assertEqual(1, DurableShifts.read_claim(store, KEY).attempt)
+
+                # The same session still resumes: the fix must not trade away recovery.
+                same = await DurableShifts.claim_async(store, KEY, "run-a-2", T2, "po", "session-a")
+                self.assertIs(same.outcome, ShiftClaimOutcome.ACQUIRED)
+                self.assertEqual(2, same.claim.attempt)
+            finally:
+                store.close()
+
+    async def test_reads_the_previous_csharp_build_capitalised_running_handoff(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "store.jsonl"
+            run_shift_fixture("create-legacy", path)
+
+            store = DurableStore.create(DurableStoreOptions(path=str(path)))
+            try:
+                self.assertEqual("running", DurableShifts.read_handoff(store, KEY).phase)
+                other = await DurableShifts.claim_async(store, KEY, "run-b", T1, "po", "session-b")
+                self.assertIs(other.outcome, ShiftClaimOutcome.CONFLICT)
+            finally:
+                store.close()
+
+    async def test_csharp_reads_a_python_written_handoff(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "store.jsonl"
+            store = DurableStore.create(DurableStoreOptions(path=str(path)))
+            try:
+                await DurableShifts.claim_async(store, KEY, "run-a", T0, "po", "session-a")
+                await DurableShifts.write_handoff_async(
+                    store, KEY, "run-a", 1, T0, ShiftHandoffPhase.RUNNING.value,
+                    selected="issue-225", next="resume")
+            finally:
+                store.close()
+
+            seen = run_shift_fixture("inspect", path)
+            self.assertEqual("running", seen["handoffPhase"])
+            self.assertEqual(1, seen["handoffAttempt"])
+            self.assertEqual("active", seen["claimStatus"])
+            self.assertEqual("active", seen["claimStatusText"])
+
+    async def test_an_unknown_wire_status_fails_read_only(self):
+        # A newer build's `status` value reads as uncertain and both operations refuse; the
+        # record is reported, never rewritten.
+        store = DurableStore.create_ephemeral()
+        try:
+            owner_id = DurableShiftClaim.owner_id(KEY)
+            raw = {
+                "key": KEY, "member": "po", "owner": "run-a", "sessionId": "session-a",
+                "status": "suspended", "statusText": "suspended", "attempt": 1, "claimedAt": T0,
+            }
+
+            async def body(tx):
+                definition = DocumentDefinition(
+                    DurableShiftClaim.DOCUMENT_KIND, DocumentHistory.REWINDABLE, ForkPolicy.INITIAL)
+                tx.commit_document(definition, owner_id, raw, tx.append_entry(owner_id, "shift-claim"))
+
+            await store.commit_async(body)
+
+            stored = DurableShifts.read_claim(store, KEY)
+            self.assertEqual("suspended", stored.status_text)
+            claim = await DurableShifts.claim_async(store, KEY, "run-b", T1, "po", "session-b")
+            release = await DurableShifts.release_async(store, KEY, "run-a", T1)
+            self.assertIs(claim.outcome, ShiftClaimOutcome.READ_ONLY)
+            self.assertIs(release.outcome, ShiftClaimOutcome.READ_ONLY)
+            self.assertEqual("suspended", DurableShifts.read_claim(store, KEY).status_text)
+        finally:
+            store.close()
 
 
 if __name__ == "__main__":

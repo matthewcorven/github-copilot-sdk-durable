@@ -13,6 +13,7 @@ import {
   DurableJson, DurableCommitReentryException, TaskRuntime, Transaction,
   DurableShifts, DurableShiftClaim, DurableShiftHandoff, ShiftClaimStatus,
   ShiftHandoffPhase, ShiftClaimOutcome, ShiftClaimDefinition, ShiftHandoffDefinition,
+  shiftHandoffPhaseFromWire, readShiftClaimStatusText,
   type PhaseHandler, type SessionEvent, type SessionConfig,
 } from "./durable.js";
 import { CopilotClient, RuntimeConnection } from "@github/copilot-sdk";
@@ -2734,6 +2735,53 @@ test("a child task scheduled from inside a commit commits on its own flow", asyn
   }
 });
 
+test("fan-out started inside a commit commits after the outer commit releases", async () => {
+  // The scope is an AsyncLocalStorage store, so a child task inherits it. A child whose parent
+  // commit has already released is a fan-out and must queue, not throw; the guard is keyed on the
+  // commit that currently holds the gate.
+  const store = DurableStore.createEphemeral();
+  try {
+    let release!: () => void;
+    const released = new Promise<void>(resolve => { release = resolve; });
+    const children: Array<Promise<unknown>> = [];
+
+    await store.commitAsync(async _tx => {
+      for (let i = 0; i < 2; i += 1) {
+        children.push((async () => {
+          await released;
+          return store.commitAsync(tx => tx.createConversation());
+        })());
+      }
+      return undefined;
+    });
+
+    release();
+    await Promise.all(children);
+    assert.equal(store.conversations.length, 2);
+  } finally { store.dispose(); }
+});
+
+test("a commit awaited on the committing flow still throws the named re-entry error", async () => {
+  const store = DurableStore.createEphemeral();
+  try {
+    let raised: unknown = null;
+    await store.commitAsync(async tx => {
+      try {
+        await store.commitAsync(inner => inner);
+      } catch (error) {
+        raised = error;
+      }
+      return tx;
+    });
+
+    assert.ok(raised instanceof DurableCommitReentryException,
+      `expected DurableCommitReentryException, got ${String(raised)}`);
+    assert.equal(raised.operation, "DurableStore.commitAsync");
+    assert.equal(raised.commitOperation, "DurableStore.commitAsync");
+    assert.equal(store.conversations.length, 0);
+  } finally { store.dispose(); }
+});
+
 test("memoAsync outside a commit still reads and writes", async () => {
   const store = DurableStore.createEphemeral();
   const definition = DurableTask.definePhases<Record<string, string>, Record<string, string>>(
@@ -3363,4 +3411,98 @@ test("shift claim admits exactly one of a concurrent race and writes nothing on 
     assert.equal(fresh.outcome, ShiftClaimOutcome.Acquired);
     assert.equal(fresh.claim!.attempt, 1);
   } finally { store.dispose(); }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cross-port wire contract: phases, statuses and the C#-written store
+// ─────────────────────────────────────────────────────────────────────────────
+
+function shiftFixture(mode: string, file: string): Record<string, unknown> {
+  const output = execFileSync("dotnet", ["run", "--file",
+    fileURLToPath(new URL("./shift-fixture.cs", import.meta.url)), "--", mode, file],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  return JSON.parse(output.trim().split("\n").at(-1)!) as Record<string, unknown>;
+}
+
+test("shift handoff phase is read case-insensitively, so the previous C# spelling means running", () => {
+  // The canonical spelling is lowercase; the earlier C# build wrote `Running`/`HandedOff`. A
+  // running shift read as handed off is the duplicate-execution bug.
+  assert.equal(shiftHandoffPhaseFromWire("running"), ShiftHandoffPhase.Running);
+  assert.equal(shiftHandoffPhaseFromWire("Running"), ShiftHandoffPhase.Running);
+  assert.equal(shiftHandoffPhaseFromWire("handedOff"), ShiftHandoffPhase.HandedOff);
+  assert.equal(shiftHandoffPhaseFromWire("HandedOff"), ShiftHandoffPhase.HandedOff);
+  assert.equal(shiftHandoffPhaseFromWire(null), ShiftHandoffPhase.HandedOff);
+  assert.equal(shiftHandoffPhaseFromWire("nonsense"), ShiftHandoffPhase.HandedOff);
+});
+
+test("shift claim status is a computed view of statusText, never a stored default", () => {
+  const claim = (statusText: string | null) => new DurableShiftClaim(
+    shiftKey, "po", "run-a", "session-a", statusText, 1, null, shiftT0, null);
+
+  assert.equal(claim("active").status, ShiftClaimStatus.Active);
+  assert.equal(claim("released").status, ShiftClaimStatus.Released);
+  assert.equal(claim("suspended").status, ShiftClaimStatus.Uncertain);
+  assert.equal(claim(null).status, ShiftClaimStatus.Uncertain);
+  assert.equal(readShiftClaimStatusText("  "), ShiftClaimStatus.Uncertain);
+});
+
+test("TypeScript reads a C#-written running handoff and refuses a different session", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "durable-shift-cross-"));
+  const path = join(dir, "store.jsonl");
+  try {
+    shiftFixture("create", path);
+
+    const store = DurableStore.create(Object.assign(new DurableStoreOptions(), {
+      path, format: DurableStoreFormat.Jsonl }));
+    try {
+      const handoff = DurableShifts.readHandoff(store, shiftKey)!;
+      assert.equal(handoff.phase, ShiftHandoffPhase.Running, "a C#-written running handoff must read as running");
+
+      const other = await DurableShifts.claimAsync(store, shiftKey, "run-b", shiftT1, "po", "session-b");
+      assert.equal(other.outcome, ShiftClaimOutcome.Conflict,
+        "a different session must not duplicate a shift that is running");
+      assert.equal(DurableShifts.readClaim(store, shiftKey)!.attempt, 1);
+
+      // The same session still resumes: the fix must not trade away recovery.
+      const same = await DurableShifts.claimAsync(store, shiftKey, "run-a-2", shiftT2, "po", "session-a");
+      assert.equal(same.outcome, ShiftClaimOutcome.Acquired);
+      assert.equal(same.claim!.attempt, 2);
+    } finally { store.dispose(); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("TypeScript reads the previous C# build's capitalised Running handoff the same way", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "durable-shift-legacy-"));
+  const path = join(dir, "store.jsonl");
+  try {
+    shiftFixture("create-legacy", path);
+
+    const store = DurableStore.create(Object.assign(new DurableStoreOptions(), {
+      path, format: DurableStoreFormat.Jsonl }));
+    try {
+      assert.equal(DurableShifts.readHandoff(store, shiftKey)!.phase, ShiftHandoffPhase.Running);
+      const other = await DurableShifts.claimAsync(store, shiftKey, "run-b", shiftT1, "po", "session-b");
+      assert.equal(other.outcome, ShiftClaimOutcome.Conflict);
+    } finally { store.dispose(); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("C# reads a TypeScript-written handoff with its canonical phase and attempt", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "durable-shift-ts-write-"));
+  const path = join(dir, "store.jsonl");
+  try {
+    const store = DurableStore.create(Object.assign(new DurableStoreOptions(), {
+      path, format: DurableStoreFormat.Jsonl }));
+    await DurableShifts.claimAsync(store, shiftKey, "run-a", shiftT0, "po", "session-a");
+    await DurableShifts.writeHandoffAsync(
+      store, shiftKey, "run-a", 1, shiftT0, ShiftHandoffPhase.Running,
+      "issue-225", null, null, "resume");
+    store.dispose();
+
+    const seen = shiftFixture("inspect", path);
+    assert.equal(seen["handoffPhase"], "running");
+    assert.equal(seen["handoffAttempt"], 1);
+    assert.equal(seen["claimStatus"], "active");
+    assert.equal(seen["claimStatusText"], "active");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

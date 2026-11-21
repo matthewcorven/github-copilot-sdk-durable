@@ -767,7 +767,9 @@ rather than a second concurrency mechanism.
   and the owner id keeps the claim out of every conversation and out of every fork, so forking a
   conversation does not inherit a shift. The value carries `key`, `member`, `owner` (an opaque
   token the caller chooses), `sessionId`, `statusText`, `attempt`, `resumedFrom`, `claimedAt`,
-  and `releasedAt`.
+  and `releasedAt`. `statusText` is the only claim-state field on the wire: `status` is a
+  computed view of it, never persisted, so a value written by a newer build is read rather than
+  throwing.
 - **The handoff record.** A document of kind `durable.shift-handoff`, owner id
   `shift-handoff:{key}`, same history and fork policy. It carries `attempt`, `owner`, `phase`,
   `selected`, `achieved`, `remaining`, `next`, `blockers`, and `writtenAt`. The `attempt` is what
@@ -789,9 +791,12 @@ rather than a second concurrency mechanism.
   exists to prevent.
 - **An interrupted shift resumes from its own handoff.** The host commits a handoff with phase
   `running` *before* the turn, then a handoff with phase `handedOff` and a release afterwards.
-  The in-flight handoff is only resumable by the same session — the same process, restarted — so
-  a killed run recovers from a known stopping point instead of repeating its turn. A released
-  shift, or a `handedOff` handoff, is resumable by any owner.
+  `running`/`handedOff` is the canonical wire spelling in all three ports; a reader also accepts
+  the earlier C# build's `Running`/`HandedOff` case-insensitively, because a running shift read as
+  handed off would let a second session duplicate the run. The in-flight handoff is only resumable
+  by the same session — the same process, restarted — so a killed run recovers from a known
+  stopping point instead of repeating its turn. A released shift, or a `handedOff` handoff, is
+  resumable by any owner.
 - **Uncertain state fails read-only.** `statusText` is the field the store holds, and it is
   resolved through this build's vocabulary. A value this build does not know — including a missing
   one, or a claim whose text says another implementation wrote it — reads as `Uncertain` and both
