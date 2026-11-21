@@ -68,6 +68,7 @@ In-depth technical reports, design notes, and audits are available in [`docs/`](
 - [**Sandbox Capability Matrix**](docs/SANDBOX_MATRIX.md): What the durable sandbox policy can express and what each host's backend enforces.
 - [**Sandbox CI**](docs/SANDBOX_CI.md): The advisory sandbox job's platform matrix, what each CI level proves, and the degrade-don't-fail rule.
 - [**Real-world Matrix**](docs/REAL_WORLD_MATRIX.md): Durable against first-party reference applications, band by band, every cell a measurement with a link to its evidence file.
+- [**Architect Configuration Design**](docs/ARCHITECT_CONFIG_DESIGN.md): Design only — versioned declarative member configuration, its lifecycle state machine, trust boundaries, and persistence, layered over `AgentDefinition` and `ScheduleStore`.
 - [**Architect Configuration Product Brief**](docs/PRODUCT_BRIEF_ARCHITECT_CONFIG.md): Product planning for architect-configured members, lifecycle and workflows — goal, scope, current-versus-missing inventory, verified delivery graph and ETA honesty. Proposal, not delivered capability.
 
 ---
