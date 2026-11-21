@@ -234,7 +234,7 @@
           "command": "dotnet test tests/Durable.Tests/Durable.Tests.csproj --filter \"FullyQualifiedName~Durable.Tests.RuntimeHostCliTests.Schedule_ResumedSleepDoesNotDoubleRunTheSameInstant\""
         },
         {
-          "id": "tools/core-engineers-canvas/model.test.mjs::offline-snapshot",
+          "id": "tools/core-engineers-canvas/model.test.mjs::snapshot shows unknown issue data separately from zero accepted MVP criteria",
           "kind": "unit",
           "command": "npm --prefix tools/core-engineers-canvas run test:unit"
         },

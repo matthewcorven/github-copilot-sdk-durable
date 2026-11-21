@@ -5,8 +5,9 @@ import path from 'node:path';
 import os from 'node:os';
 import { request } from 'node:http';
 import { digest,percent,sourceFile,criterionSource,parseTeam,referenceProgram,buildSnapshot } from './model.mjs';
-import { createDashboardServer,validateScope } from './server.mjs';
+import { candidateProbe,createDashboardServer,syncCriterionMap,validateScope } from './server.mjs';
 import { buildEvidenceFixture } from './evidence.fixture.mjs';
+import { MAP_SCHEMA,mappingCoverage,mappingFor } from './evidence.mjs';
 
 const scope=JSON.parse(await fs.readFile(new URL('./scope.json',import.meta.url),'utf8'));
 async function fixture(t){const dir=await fs.mkdtemp(path.join(os.tmpdir(),'core-engineers-test-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));return dir;}
@@ -65,3 +66,33 @@ test('snapshot shows unknown issue data separately from zero accepted MVP criter
 test('dependency labels use authoritative reference shapes without exposing nested bodies',async t=>{const root=await fixture(t);await put(root,'.squad/team.md','');const queue={blocked:[{number:9,title:'blocked',unresolved_dependencies:[{reference:'8',resolved:{number:8,body:'private fixture'},missing:false}],unresolved_blockers:[{reference:'7',missing:true}]}]};const data=await buildSnapshot({root,scope,meta:{generatedAt:new Date().toISOString()},issues:null,queue});assert.equal(data.queue.blocked[0].reason,'#8, #7 (missing)');assert.equal(data.queue.blocked[0].unresolved_dependencies,undefined);});
 
 test('loopback dashboard serves UI and rejects cross-origin/invalid-host writes',async t=>{const server=createDashboardServer();await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));const base=`http://127.0.0.1:${server.address().port}`;const page=await fetch(base);assert.equal(page.status,200);assert.match(await page.text(),/Core Engineers/);assert.match(page.headers.get('content-security-policy'),/default-src 'self'/);assert.equal((await fetch(`${base}/api/refresh`,{method:'POST'})).status,403);assert.equal((await fetch(`${base}/api/refresh`,{method:'POST',headers:{'X-Core-Engineers-Refresh':'1',Origin:'https://untrusted.invalid'}})).status,403);const hostileHostStatus=await new Promise((resolve,reject)=>{const req=request(base,{headers:{Host:'untrusted.invalid'}},res=>{res.resume();resolve(res.statusCode);});req.on('error',reject);req.end();});assert.equal(hostileHostStatus,403);assert.equal((await fetch(`${base}/api/source?path=.mcp.json`)).status,403);assert.equal((await fetch(`${base}/unknown`)).status,404);});
+
+test('committed binary evidence is probed as its exact bytes, not a UTF-8 re-serialization',async()=>{
+  const repository=path.resolve(path.dirname(new URL(import.meta.url).pathname),'../..');
+  const png='real-world-scenarios/band-a-local-dev-tool/durable/wwwroot/favicon.png';
+  const committed=await fs.readFile(path.join(repository,png));
+  const probed=await (await candidateProbe({cwd:repository})).read(png);
+  assert.ok(Buffer.isBuffer(probed),'the committed reader must return bytes');
+  assert.equal(probed.length,committed.length);
+  assert.equal(digest(probed),digest(committed));
+  assert.deepEqual([...probed.subarray(0,8)],[0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a],'a committed PNG must keep its signature');
+});
+
+test('a missing required source keeps the old digest so the row reports stale, not complete',async t=>{
+  const root=await fixture(t),clone=await fixture(t);
+  const criterion=scope.slices.flatMap(slice=>slice.criteria).find(item=>item.id==='notifications');
+  for(const file of criterion.sourcePaths)await put(clone,file,'// fixture');
+  const first=await criterionSource(clone,criterion);
+  const mapped={id:'tools/core-engineers-canvas/model.test.mjs::does-not-exist',kind:'e2e',command:'npm test'};
+  await put(root,scope.criterionMap,{schema:MAP_SCHEMA,candidateSha:'a'.repeat(40),criteria:{[criterion.id]:{sourceDigest:first.sourceDigest,title:criterion.title,requiresE2E:true,tests:[mapped]}}});
+  await fs.rm(path.join(clone,criterion.sourcePaths[1]));
+  const missing=await criterionSource(clone,criterion);
+  assert.notEqual(missing.sourceDigest,first.sourceDigest,'a missing reference changes the current digest');
+  let written;await syncCriterionMap({root,clone,write:async(file,value)=>{written=value;}});
+  const synced=written.criteria[criterion.id];
+  assert.equal(synced.sourceDigest,first.sourceDigest,'the old digest must be kept, not replaced with the new one');
+  assert.equal(mappingFor({map:written,criterion,source:missing}).ok,false);
+  const coverage=mappingCoverage({scope,map:written,sources:new Map([[criterion.id,missing]])});
+  assert.equal(coverage.rows.find(row=>row.id===criterion.id).stale,true);
+  assert.equal(coverage.rows.find(row=>row.id===criterion.id).mapped,false);
+});

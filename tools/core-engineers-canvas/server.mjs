@@ -15,8 +15,10 @@ const cacheRoot=path.join(repositoryRoot,'.scratch/core-engineers-canvas');
 const cloneRoot=path.join(cacheRoot,'source');
 let refreshPromise;
 
-async function command(file,args,cwd=repositoryRoot) {
-  return (await execFile(file,args,{cwd,timeout:120000,maxBuffer:16*1024*1024,env:{...process.env,GIT_TERMINAL_PROMPT:'0',GH_PAGER:'cat',GIT_PAGER:'cat'}})).stdout;
+// Binary mode is required for evidence: execFile decodes stdout as UTF-8 by default, so a PNG or a
+// non-ASCII JSON artifact would be re-serialized and hashed as different bytes than the committed ones.
+async function command(file,args,{cwd=repositoryRoot,binary=false}={}) {
+  return (await execFile(file,args,{cwd,encoding:binary?'buffer':'utf8',timeout:120000,maxBuffer:16*1024*1024,env:{...process.env,GIT_TERMINAL_PROMPT:'0',GH_PAGER:'cat',GIT_PAGER:'cat'}})).stdout;
 }
 async function readJson(file) { try{return JSON.parse(await fs.readFile(file,'utf8'));}catch(error){if(error.code==='ENOENT')return null;throw error;} }
 async function writeJson(file,value) {
@@ -47,17 +49,17 @@ export function trackCandidateInput(value) {
 // A criterion's source and its evidence artifacts are separate identities. The source must come
 // from the exact committed candidate tree; the artifacts must come from committed content, never
 // from the working tree that happens to hold the current checkout.
-export async function candidateProbe() {
-  const candidateSha=(await command('git',['rev-parse','--verify','HEAD'])).trim();
-  const headSha=(await command('git',['rev-parse','--verify','HEAD'])).trim();
-  const ancestor=await command('git',['merge-base','--is-ancestor',candidateSha,headSha]).then(()=>true).catch(()=>false);
+export async function candidateProbe({cwd=repositoryRoot}={}) {
+  const candidateSha=(await command('git',['rev-parse','--verify','HEAD'],{cwd})).trim();
+  const headSha=(await command('git',['rev-parse','--verify','HEAD'],{cwd})).trim();
+  const ancestor=await command('git',['merge-base','--is-ancestor',candidateSha,headSha],{cwd}).then(()=>true).catch(()=>false);
   trackCandidateInput(`candidate\n${candidateSha}`);
   const read=async file=>{
     const prefix=`committed:${candidateSha}:${file}`;
     try {
-      const content=await command('git',['show',`${candidateSha}:${file}`]);
+      const content=await command('git',['show',`${candidateSha}:${file}`],{cwd,binary:true});
       trackCandidateInput(prefix);
-      return Buffer.from(content);
+      return content;
     } catch(error) {
       trackCandidateInput(prefix);
       if(error.code===128||/exists on disk, but not in|does not exist|bad object|invalid object|unknown revision|pathspec/i.test(String(error.stderr??error.message)))return null;
@@ -170,19 +172,21 @@ export function createDashboardServer() {
 // Scaffolds the criterion-to-test map for a new candidate commit. It never invents a test: a
 // criterion it cannot source keeps its previous entry (now stale) and an unmapped criterion gets
 // an explicit gap that the Tester must replace with a real mapping or confirm as a gap.
-export async function syncCriterionMap({write=async()=>{}}={}) {
+export async function syncCriterionMap({write=async()=>{},root=repositoryRoot,clone=cloneRoot}={}) {
   const scope=validateScope(JSON.parse(await fs.readFile(path.join(here,'scope.json'))));
-  const exists=await fs.access(path.join(repositoryRoot,scope.criterionMap)).then(()=>true).catch(()=>false);
+  const exists=await fs.access(path.join(root,scope.criterionMap)).then(()=>true).catch(()=>false);
   let previous=null;
-  if(exists){try{previous=JSON.parse(await fs.readFile(path.join(repositoryRoot,scope.criterionMap),'utf8'));}catch{previous=null;}}
+  if(exists){try{previous=JSON.parse(await fs.readFile(path.join(root,scope.criterionMap),'utf8'));}catch{previous=null;}}
   const previousEntries=previous?.schema===MAP_SCHEMA?previous.criteria:{};
   const criteria={};
   for(const slice of scope.slices)for(const criterion of slice.criteria){
-    const source=await criterionSource(cloneRoot,criterion);
+    const source=await criterionSource(clone,criterion);
     const old=previousEntries[criterion.id];
     if(source.present.length!==criterion.sourcePaths.length){
+      // Keep the previous digest: writing the new one would make an entry with missing sources
+      // compare equal to the current source and report as current instead of stale.
       criteria[criterion.id]=old
-        ?{...old,sourceDigest:source.sourceDigest,note:`Unmapped: a required source reference is missing as of ${source.sourceDigest}; previous entry retained but stale.`}
+        ?{...old,note:`Unmapped: a required source reference is missing as of ${source.sourceDigest}; previous entry retained and is stale.`}
         :{sourceDigest:source.sourceDigest,title:criterion.title,requiresE2E:Boolean(criterion.requiresE2E),gap:'Unmapped: a required source reference is missing.',tests:[]};
       continue;
     }

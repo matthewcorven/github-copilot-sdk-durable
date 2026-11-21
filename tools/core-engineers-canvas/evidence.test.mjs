@@ -72,7 +72,7 @@ test('a normalized result must name the pinned candidate and its mode', async t 
   assert.ok(manifest.schema === EVIDENCE_SCHEMA);
 });
 
-test('a tampered screenshot is rejected and a CLI E2E test needs a terminal capture', async t => {
+test('a tampered screenshot is rejected', async t => {
   const fixture = await buildEvidenceFixture(t, { recordFor: 'durable-recovery', mapFor: 'durable-recovery' });
   const { map, manifest, record } = await recordForFixture(fixture);
   const criterion = fixture.criterion;
@@ -82,6 +82,16 @@ test('a tampered screenshot is rejected and a CLI E2E test needs a terminal capt
   const acceptance = await acceptedCriterion({ criterion, source, record, manifest, map, probe: fixture.probe, now: Date.parse(FIXTURE_NOW) });
   assert.equal(acceptance.complete, false);
   assert.match(acceptance.reason, /does not match its recorded SHA256/);
+});
+
+test('a CLI E2E test needs a terminal capture, not only an application screenshot', async t => {
+  const fixture = await buildEvidenceFixture(t, { recordFor: 'durable-recovery', mapFor: 'durable-recovery' });
+  const { map, manifest, record } = await recordForFixture(fixture);
+  map.criteria['durable-recovery'].tests[0].kind = 'cli';
+  record.evidence.find(item => item.kind === 'screenshot').capture = 'application';
+  const acceptance = await acceptedCriterion({ criterion: fixture.criterion, source: fixture.source, record, manifest, map, probe: fixture.probe, now: Date.parse(FIXTURE_NOW) });
+  assert.equal(acceptance.complete, false);
+  assert.match(acceptance.reason, /requires a captured terminal screenshot/);
 });
 
 test('a record whose map states a gap is not accepted even when artifacts match', async t => {
