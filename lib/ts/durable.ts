@@ -1341,7 +1341,13 @@ export class InMemoryStoreProvider implements IDurableStoreProvider {
                 snapshot.tasks.push(task);
                 break;
               }
-              default: throw new Error(`Unknown JSONL record type '${record.type}'.`);
+              default:
+                // An unknown record type is not an error. Another implementation of this store may
+                // write record types this one does not model, and the C# runtime already writes
+                // kinds this reader ignores. Refusing to open the file would make every newer
+                // store unreadable here, and compacting it would delete the other writer's data.
+                // Skipping the record keeps the file readable and leaves it intact.
+                break;
             }
             offset = newline < 0 ? bytes.length : end + 1;
           }

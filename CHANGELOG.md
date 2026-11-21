@@ -14,6 +14,27 @@ See [`docs/RELEASING.md`](docs/RELEASING.md) for the release procedure.
 
 ### Added
 
+- **Shift claims and durable handoffs: `DurableShifts` and `shift`.** A scheduled member shift
+  can now claim repository-wide ownership atomically, record where it stopped, and resume after
+  a killed process without repeating the turn. `Transaction.TryCreateDocument` and
+  `IDurableStoreProvider.TryCreateDocument` are the create-if-absent primitive this needed:
+  `Transaction.Doc` answers an absent document with its initial value, so a read-then-write claim
+  would let two claimants both believe they were first. `DurableShifts.ClaimAsync` refuses a
+  different owner while the held attempt has no committed handoff (age is never evidence a
+  process died), admits a successor from a released claim or a `handedOff` handoff, and resumes an
+  interrupted run only for the same session from its in-flight handoff. `WriteHandoffAsync` and
+  `ReleaseAsync` refuse to let a shift go without a handoff for the held attempt. A `statusText`
+  this build cannot read — an unknown value, a missing one, a handoff disagreeing with the claim —
+  reads as `Uncertain` and fails `ReadOnly` in both directions; the record is never rewritten. The
+  runtime host gains `shift`, which claims, commits an in-flight handoff before the turn, runs
+  once, commits the completed handoff and releases, and exits non-zero without running when the
+  shift is held or the state is uncertain. Two starter-facing changes: `RunTurnAsync` now runs
+  the prompt it is given rather than always `--input` (its only other caller already passes that
+  value), and the TypeScript JSONL reader skips unknown record types instead of refusing the file,
+  so a store written by a newer C# build still opens. No store envelope change: both new documents
+  are ordinary records of an existing type, `v` stays `1`, and an existing store still reads.
+  (#225)
+
 - **External events: a task that waits for something outside the store.**
   `TaskCommit.WaitingForEvent(checkpoint, "external:<name>")` parks a task on a name nothing in
   the store produces: the run ends with the task `Waiting`, holding no invocation and no timer,

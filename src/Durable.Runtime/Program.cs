@@ -69,6 +69,15 @@ internal static class Program
         new("remove", false, "Remove the agent's schedule instead of registering one."),
         new("now", true, "Treat this instant as the current time. For tests and for catch-up."),
         new("passes", true, "Run at most this many scheduler passes, then exit. Defaults to one."),
+        new("shift-key", true, "The state key the shift claim is written under."),
+        new("owner", true, "This run's owner token for the shift claim. Alias: --session, then DURABLE_RUN_ID."),
+        new("session", true, "This run's session id, used as the owner token when --owner is absent."),
+        new("member", true, "The member the shift belongs to. Defaults to the agent name."),
+        new("handoff-next", true, "The next action recorded in the shift handoff."),
+        new("handoff-remaining", true, "What is still owed, recorded in the shift handoff."),
+        new("handoff-achieved", true, "What this shift completed, recorded in the shift handoff."),
+        new("handoff-selected", true, "What this shift worked on, recorded in the shift handoff."),
+        new("handoff-blockers", true, "Blockers a successor must know about, recorded in the shift handoff."),
     ];
 
     private static async Task<int> Main(string[] args)
@@ -86,8 +95,9 @@ internal static class Program
                 "run" => await RunAsync(args),
                 "serve" => await ServeAsync(args),
                 "schedule" => await ScheduleAsync(args),
+                "shift" => await ShiftAsync(args),
                 _ => throw new UsageException(
-                    $"unknown command '{args[0]}'. Commands are run, serve, and schedule."),
+                    $"unknown command '{args[0]}'. Commands are run, serve, schedule, and shift."),
             };
         }
         catch (UsageException ex)
@@ -148,6 +158,257 @@ internal static class Program
             _ => ExitCodes.AgentFailed,
         };
     }
+
+    /// <summary>
+    /// Runs one member shift under a durable claim, resuming it from its committed handoff.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A shift is a schedule occurrence plus ownership. The ownership is the claim record the
+    /// library writes; the resume point is the handoff. The ordering is what makes an interrupted
+    /// run recoverable without executing twice:
+    /// </para>
+    /// <list type="number">
+    /// <item>Claim. A shift another owner holds with no committed handoff is refused — the work
+    /// may be in flight. A shift held by this same session, or released, or held with a handoff
+    /// whose attempt matches, is resumable.</item>
+    /// <item>Commit the handoff before any work. That is what makes this run recoverable: if the
+    /// process dies mid-turn, the next run of the same session finds a handoff and resumes
+    /// instead of treating its own in-flight work as someone else's.</item>
+    /// <item>Run one occurrence.</item>
+    /// <item>Commit the completed handoff and release. A turn that fails still commits a handoff,
+    /// so a successor is told what happened rather than guessing.</item>
+    /// </list>
+    /// <para>
+    /// An uncertain claim record is refused read-only in both directions: it is never overwritten
+    /// by a claim, and it is never released. The only honest response to a record this build
+    /// cannot interpret is to report it.
+    /// </para>
+    /// </remarks>
+    private static async Task<int> ShiftAsync(string[] args)
+    {
+        try
+        {
+            return await ShiftCoreAsync(args);
+        }
+        catch (UsageException ex)
+        {
+            // The generic handler would answer this with exit 2 *and* the whole help text, which
+            // buries the one missing option in 40 lines. The shift has its own short contract.
+            Console.Error.WriteLine($"error: {ex.Message}");
+            return ExitCodes.UsageError;
+        }
+    }
+
+    private static async Task<int> ShiftCoreAsync(string[] args)
+    {
+        var options = ParseHostOptions(args, requireInput: false);
+
+        if (string.IsNullOrWhiteSpace(options.ShiftKey))
+        {
+            throw new UsageException("shift requires --shift-key <key>, e.g. --shift-key sessions/po-shift.");
+        }
+
+        if (options.Remove || options.Every is not null)
+        {
+            throw new UsageException("shift does not register or remove a schedule; use schedule for that.");
+        }
+
+        var owner = ShiftOwner(options);
+        var key = options.ShiftKey!;
+        var member = options.Member ?? options.Agent;
+
+        using var store = OpenStore(options);
+        ClaimOwnership(store, options.StorePath);
+        ReportStore(store, options.StorePath);
+
+        var registry = BuildRegistry();
+        var definition = await LoadDefinitionAsync(store, registry, options);
+
+        var (containment, reason) = ContainmentClassifier.Classify(definition, options.PermissionHandler is not null);
+        ReportContainment(definition.Name, containment, reason);
+
+        if (containment == Containment.None && !options.AllowUncontained)
+        {
+            Console.Error.WriteLine(
+                $"error: refusing to run a shift for agent '{definition.Name}': containment is None ({reason}). "
+                + "Pass --allow-uncontained to start anyway.");
+            return ExitCodes.AgentFailed;
+        }
+
+        var clock = ClockFor(options);
+        var now = clock();
+
+        var claim = await DurableShifts.ClaimAsync(store, key, owner, now, member, options.Session);
+        if (claim.Outcome is not ShiftClaimOutcome.Acquired)
+        {
+            return RefuseShift(
+                definition.Name, key, claim,
+                claim.Outcome is ShiftClaimOutcome.Conflict ? "conflict" : "readOnly",
+                ExitCodes.AgentFailed);
+        }
+
+        // The handoff that was read back before this run, when this run is resuming.
+        var resumedFrom = claim.Claim is { } held && held.Attempt > 1
+            ? DurableShifts.ReadHandoff(store, key)
+            : null;
+
+        var prompt = options.Input ?? DefaultScheduleInput(definition.Name);
+
+        // Committed before the turn. Without it, a crash mid-turn leaves a claim this run's own
+        // session cannot distinguish from another live owner's in-flight work.
+        var started = await DurableShifts.WriteHandoffAsync(
+            store, key, owner, claim.Claim!.Attempt, clock(),
+            phase: ShiftHandoffPhase.Running,
+            selected: options.HandoffSelected ?? options.Input ?? resumedFrom?.Selected ?? definition.Name,
+            achieved: options.HandoffAchieved ?? resumedFrom?.Achieved,
+            remaining: options.HandoffRemaining ?? resumedFrom?.Remaining,
+            next: options.HandoffNext.Count > 0
+                ? string.Join(" ", options.HandoffNext)
+                : resumedFrom?.Next ?? prompt,
+            blockers: options.HandoffBlockers ?? resumedFrom?.Blockers);
+
+        if (!started)
+        {
+            var lost = await DurableShifts.ClaimAsync(store, key, owner, clock(), member, options.Session);
+            return RefuseShift(
+                definition.Name, key,
+                new ShiftClaimResult(ShiftClaimOutcome.Conflict, lost.Claim,
+                    "the claim changed between acquiring it and committing the handoff. Not running work."),
+                "conflict",
+                ExitCodes.AgentFailed);
+        }
+
+        // The handoff written before the turn is this run's own record, so a completed handoff
+        // falls back to it rather than losing what the start of the shift declared.
+        var inFlight = DurableShifts.ReadHandoff(store, key);
+
+        RunResult? occurrence = null;
+        string? error = null;
+        try
+        {
+            await using var harness = await DurableHarness.OpenAsync(store, registry, HarnessOptions(options));
+            occurrence = await RunTurnAsync(harness, store, definition, options, containment, reason, prompt);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or DurableRecoveryRequiredException)
+        {
+            error = ex.Message;
+        }
+
+        var achieved = options.HandoffAchieved ?? inFlight?.Achieved;
+        var remaining = options.HandoffRemaining ?? inFlight?.Remaining;
+        var next = options.HandoffNext.Count > 0
+            ? string.Join(" ", options.HandoffNext)
+            : inFlight?.Next;
+        var blockers = options.HandoffBlockers ?? inFlight?.Blockers;
+
+        if (occurrence is not null)
+        {
+            var line = $"occurrence: {occurrence.Outcome}"
+                + (occurrence.Error is null ? string.Empty : $": {occurrence.Error}");
+            achieved = achieved is null ? line : $"{achieved} | {line}";
+        }
+        else
+        {
+            var line = $"occurrence: agentFailed: {error}";
+            blockers = blockers is null ? line : $"{blockers} | {line}";
+        }
+
+        // Committed and released even when the turn failed: a successor must be told what
+        // happened, and a claim left held with a stale handoff is worse than a released one.
+        var completed = await DurableShifts.WriteHandoffAsync(
+            store, key, owner, claim.Claim.Attempt, clock(),
+            phase: ShiftHandoffPhase.HandedOff,
+            selected: options.HandoffSelected ?? inFlight?.Selected ?? resumedFrom?.Selected ?? definition.Name,
+            achieved: achieved,
+            remaining: remaining,
+            next: next,
+            blockers: blockers);
+
+        var handoff = DurableShifts.ReadHandoff(store, key);
+        ShiftClaimResult release;
+        if (completed)
+        {
+            release = await DurableShifts.ReleaseAsync(store, key, owner, clock());
+        }
+        else
+        {
+            release = new ShiftClaimResult(ShiftClaimOutcome.ReadOnly, DurableShifts.ReadClaim(store, key),
+                "the completed handoff could not be committed, so the shift was not released.");
+        }
+
+        if (release.Outcome is not ShiftClaimOutcome.Acquired)
+        {
+            return RefuseShift(definition.Name, key, release, "readOnly", ExitCodes.AgentFailed, handoff, occurrence);
+        }
+
+        var outcome = occurrence is null ? "agentFailed" : occurrence.Outcome;
+        var result = new ShiftResult
+        {
+            Agent = definition.Name,
+            Key = key,
+            Outcome = "ran",
+            Message = release.Message,
+            Claim = release.Claim is null ? null : ShiftClaimStateResult.From(release.Claim),
+            Handoff = handoff is null ? null : ShiftHandoffResult.From(handoff),
+            ResumedFrom = resumedFrom is null ? null : ShiftHandoffResult.From(resumedFrom),
+            Occurrences = occurrence is null ? [] : [occurrence],
+        };
+
+        Console.Out.WriteLine(result.ToJson());
+        return outcome switch
+        {
+            "succeeded" => ExitCodes.Succeeded,
+            "turnUnsuccessful" => ExitCodes.TurnUnsuccessful,
+            _ => ExitCodes.AgentFailed,
+        };
+    }
+
+    /// <summary>
+    /// Prints a shift refusal and returns its exit code. A refusal mutates nothing: the claim,
+    /// the handoff and the conversation are all left exactly as they were found.
+    /// </summary>
+    private static int RefuseShift(
+        string agent,
+        string key,
+        ShiftClaimResult refusal,
+        string outcome,
+        int exitCode,
+        DurableShiftHandoff? handoff = null,
+        RunResult? occurrence = null)
+    {
+        Console.Error.WriteLine($"shift: {outcome}: {refusal.Message}");
+
+        var result = new ShiftResult
+        {
+            Agent = agent,
+            Key = key,
+            Outcome = outcome,
+            Message = refusal.Message,
+            Claim = refusal.Claim is null ? null : ShiftClaimStateResult.From(refusal.Claim),
+            Handoff = handoff is null ? null : ShiftHandoffResult.From(handoff),
+            ResumedFrom = null,
+            Occurrences = occurrence is null ? [] : [occurrence],
+        };
+
+        Console.Out.WriteLine(result.ToJson());
+        return exitCode;
+    }
+
+    /// <summary>
+    /// The owner token a shift run claims under: <c>--owner</c>, then <c>--session</c>, then
+    /// <c>DURABLE_RUN_ID</c>, then a generated per-process token.
+    /// </summary>
+    /// <remarks>
+    /// A generated token is what makes a repeated claim from the same process impossible to
+    /// confuse with a resumption. It is deliberately not the process id: a recycled pid would
+    /// make a different run look like the same owner.
+    /// </remarks>
+    private static string ShiftOwner(HostOptions options) =>
+        options.Owner
+        ?? options.Session
+        ?? (Environment.GetEnvironmentVariable("DURABLE_RUN_ID") is { Length: > 0 } runId ? runId : null)
+        ?? $"run-{Guid.NewGuid():N}";
 
     /// <summary>
     /// Registers, removes, or drives a durable schedule for an agent.
@@ -360,7 +621,7 @@ internal static class Program
         var conversation = await OpenConversationAsync(harness, store, definition, options);
 
         var result = await ExecuteTurnAsync(
-            store, conversation, definition, options, containment, reason, options.Input!);
+            store, conversation, definition, options, containment, reason, input);
 
         if (result.Answer is not null)
         {
@@ -938,7 +1199,16 @@ internal static class Program
             MissedRun: MissedRunPolicies.Parse(parsed.Last("missed-run")),
             Remove: parsed.Has("remove"),
             Now: ParseNow(parsed.Last("now")),
-            Passes: ParsePasses(parsed.Last("passes")));
+            Passes: ParsePasses(parsed.Last("passes")),
+            ShiftKey: parsed.Last("shift-key"),
+            Owner: parsed.Last("owner"),
+            Session: parsed.Last("session"),
+            Member: parsed.Last("member"),
+            HandoffSelected: parsed.Last("handoff-selected"),
+            HandoffAchieved: parsed.Last("handoff-achieved"),
+            HandoffRemaining: parsed.Last("handoff-remaining"),
+            HandoffNext: parsed.All("handoff-next").ToList(),
+            HandoffBlockers: parsed.Last("handoff-blockers"));
     }
 
     /// <summary>
@@ -1318,6 +1588,8 @@ internal static class Program
           serve     Serve an agent: one turn per request, events streamed ahead of the result.
                     Requires exactly one of --http or --rpc.
           schedule  Run an agent on a schedule. Delivered by #97.
+          shift     Claim a shift, resume it from its committed handoff, run once, and hand off.
+                    A claim another owner holds with no handoff, or an uncertain claim, is refused.
 
         Options:
           --agent <name>              The agent definition to run. Required.
@@ -1346,16 +1618,29 @@ internal static class Program
           --now <instant>             Treat this ISO 8601 instant as the current time.
           --passes <n>                Run at most this many scheduler passes, then exit.
                                       Defaults to one. Pass 0 to register without running.
+          --shift-key <key>           The state key the shift claim is written under. Required by shift.
+          --owner <token>             This run's owner token. Defaults to --session, then
+                                      DURABLE_RUN_ID, then a generated one.
+          --session <id>              This run's session id, used as the owner token when --owner is
+                                      absent, and to detect an interrupted run of this same session.
+          --member <name>             The member the shift belongs to. Defaults to the agent name.
+          --handoff-next <text>       The next action recorded in the handoff. Repeatable; joined.
+          --handoff-remaining <text>  What is still owed, recorded in the handoff.
+          --handoff-achieved <text>   What this shift completed, recorded in the handoff.
+          --handoff-selected <text>   What this shift worked on, recorded in the handoff.
+          --handoff-blockers <text>   Blockers a successor must know about, recorded in the handoff.
           --help                      Show this help.
 
         Exit codes:
           0  the turn succeeded
-          1  the agent could not run, or the turn failed
+          1  the agent could not run, or the turn failed, or the shift was refused read-only
           2  the command line was not understood
           3  the turn was admitted and checkpointed but produced no assistant message
           4  the command is not implemented in this build
 
-        Standard output carries the run result JSON, or the schedule result JSON for schedule.
+        Standard output carries the run result JSON, or the schedule result JSON for schedule, or
+        the shift result JSON for shift. A shift that another live owner holds, or whose stored
+        state is uncertain, exits 1 and mutates nothing.
         Diagnostics, including the effective model the runtime reported, go to standard error.
         """;
 
@@ -1378,7 +1663,16 @@ internal static class Program
         MissedRunPolicy MissedRun,
         bool Remove,
         DateTimeOffset? Now,
-        int? Passes);
+        int? Passes,
+        string? ShiftKey,
+        string? Owner,
+        string? Session,
+        string? Member,
+        string? HandoffSelected,
+        string? HandoffAchieved,
+        string? HandoffRemaining,
+        IReadOnlyList<string> HandoffNext,
+        string? HandoffBlockers);
 
     /// <summary>
     /// One turn, as the transport that ran it needs to see it: the serialized result, the answer

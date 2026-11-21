@@ -944,6 +944,20 @@ public interface IDurableStoreProvider : IDisposable
     /// <summary>Records a committed version of a document.</summary>
     void RecordDocumentVersion(DocumentState state, string entryId, JsonElement value);
 
+    /// <summary>
+    /// Reads a document's state, creating it only when it has never been written. This is the
+    /// create-if-absent primitive: <see cref="EnsureDocument(string, string, ForkPolicy)"/>
+    /// answers a document that exists-but-is-empty exactly like an absent one, so a caller that
+    /// needs "exactly one creator wins" cannot use it.
+    /// </summary>
+    /// <param name="kind">The document kind.</param>
+    /// <param name="ownerId">The owner the document belongs to.</param>
+    /// <param name="fork">The fork policy to record if the document is created.</param>
+    /// <param name="initial">The initial value to record if the document is created.</param>
+    /// <param name="state">The document's state when it exists, or was created by this call.</param>
+    /// <returns>Whether this call created the document.</returns>
+    bool TryCreateDocument(string kind, string ownerId, ForkPolicy fork, JsonElement? initial, out DocumentState state);
+
     /// <summary>Copies a document into another owner, honouring its fork policy.</summary>
     void CopyDocument(DocumentState source, string toOwner, string? forkEntryId);
 
@@ -1168,6 +1182,35 @@ public class InMemoryStoreProvider : IDurableStoreProvider
     {
         _undo?.Append(state.Versions);
         state.Versions.Add(new DocumentVersion(entryId, value.Clone(), NextSequence()));
+    }
+
+    /// <summary>Reads a document's state, creating it only when it has never been written.</summary>
+    /// <remarks>
+    /// "Never been written" means the store holds no state record for the key at all. A document
+    /// whose state record exists but has no committed version — which is what
+    /// <see cref="EnsureDocument(string, string, ForkPolicy, JsonElement?)"/> leaves behind when a
+    /// transaction rolls back after touching it — counts as existing here, because the next
+    /// claimant would otherwise treat a rolled-back placeholder as an absent document and win a
+    /// claim that never committed.
+    /// </remarks>
+    public bool TryCreateDocument(
+        string kind,
+        string ownerId,
+        ForkPolicy fork,
+        JsonElement? initial,
+        out DocumentState state)
+    {
+        var key = DocumentKey(kind, ownerId);
+        if (_documents.TryGetValue(key, out var existing))
+        {
+            state = existing;
+            return false;
+        }
+
+        state = new DocumentState(kind, ownerId, fork, initial?.Clone());
+        _documents[key] = state;
+        _undo?.Remove(_documents, key);
+        return true;
     }
 
     /// <summary>Copies a document into another owner, honouring its fork policy.</summary>
@@ -2780,6 +2823,35 @@ public sealed class Transaction
             definition.Fork,
             DurableJson.ToElement(definition.Initial()));
 
+    /// <summary>
+    /// Creates a document only when the store holds no state for it. The caller commits the
+    /// first version with <see cref="CommitDocument{T}"/> and the entry it created.
+    /// </summary>
+    /// <returns><c>true</c> when this transaction created the document.</returns>
+    /// <remarks>
+    /// <para>
+    /// This is the create-if-absent primitive the claim record is built on. It exists because
+    /// <see cref="Doc{T}"/> cannot express it: <see cref="Doc{T}"/> answers an absent document
+    /// with the definition's initial value, so two transactions that both read-then-write would
+    /// both believe they hold the claim. Here the read and the write are one step, inside the
+    /// transaction the store's commit gate serializes, so exactly one caller in a process sees
+    /// <c>true</c>.
+    /// </para>
+    /// <para>
+    /// It is deliberately not a "compare and swap". Creating and replacing are different
+    /// operations with different losers: a create reports "someone else was first" and a
+    /// replace reports "what you read is stale". Folding them together would make the refusal
+    /// message ambiguous, and the refusal message is the conflict path.
+    /// </para>
+    /// </remarks>
+    public bool TryCreateDocument<T>(DocumentDefinition<T> definition, string ownerId) =>
+        _provider.TryCreateDocument(
+            definition.Kind,
+            ownerId,
+            definition.Fork,
+            DurableJson.ToElement(definition.Initial()),
+            out _);
+
     /// <summary>Creates a task and returns its record.</summary>
     public DurableTaskRecord CreateTask(
         DurableTaskDefinition definition,
@@ -3742,6 +3814,597 @@ public sealed record DurableSchedule
 
     /// <summary>The interval as a duration.</summary>
     public TimeSpan Interval => TimeSpan.FromMilliseconds(EveryMilliseconds);
+}
+
+/// <summary>What a shift claim currently is, as the store records it.</summary>
+/// <remarks>
+/// The value is persisted as text rather than as this enum, and an unrecognized value is read
+/// back as <see cref="Uncertain"/>. That is deliberate: a store written by a newer build may hold
+/// a state this build has never heard of, and the honest answer to "what is this claim?" is then
+/// "I do not know" — which must fail the caller read-only rather than let it act on a guess.
+/// </remarks>
+[JsonConverter(typeof(JsonStringEnumConverter<ShiftClaimStatus>))]
+public enum ShiftClaimStatus
+{
+    /// <summary>Some owner holds the shift.</summary>
+    Active,
+
+    /// <summary>The owner released the shift after committing a handoff.</summary>
+    Released,
+
+    /// <summary>
+    /// The recorded state is not one this build understands, or the claim record is incomplete.
+    /// A caller must not mutate on this: reconcile it by hand.
+    /// </summary>
+    Uncertain,
+}
+
+/// <summary>
+/// The durable record of one shift's ownership: who holds it, which attempt it is, and how it
+/// got there.
+/// </summary>
+/// <remarks>
+/// <para>
+/// A shift claim is a document rather than a lock. A lock that lived for the duration of a shift
+/// would be a lock that outlives the process holding it, which is the stale-lock problem the
+/// store file lock already solves by dying with the process. This record is instead the durable
+/// fact of who was last granted the shift, checked at each transition, so a host that dies simply
+/// stops transitioning and the next host reads the last committed attempt.
+/// </para>
+/// <para>
+/// <see cref="Owner"/> is an opaque token the caller chooses — a host instance id, a session id,
+/// or a name. It is compared for equality and never interpreted, because the store has no way to
+/// know which process a token belongs to.
+/// </para>
+/// </remarks>
+public sealed class DurableShiftClaim
+{
+    /// <summary>The document kind a shift claim is stored under.</summary>
+    public const string DocumentKind = "durable.shift-claim";
+
+    /// <summary>The prefix of the owner id a shift claim is stored under.</summary>
+    public const string OwnerPrefix = "shift:";
+
+    /// <summary>The owner id a claim for this shift key is stored under.</summary>
+    public static string OwnerId(string key) => $"{OwnerPrefix}{key}";
+
+    /// <summary>The shift key, e.g. <c>sessions/po-shift</c>.</summary>
+    public required string Key { get; init; }
+
+    /// <summary>The member whose shift this is, for listings.</summary>
+    public string? Member { get; init; }
+
+    /// <summary>The token of the owner the shift was granted to.</summary>
+    public required string Owner { get; init; }
+
+    /// <summary>The owner's session, when it has one.</summary>
+    public string? SessionId { get; init; }
+
+    /// <summary>The claim state, as this build reads it.</summary>
+    public ShiftClaimStatus Status { get; init; } = ShiftClaimStatus.Active;
+
+    /// <summary>
+    /// The status exactly as the store holds it. Preserved so an unrecognized value survives a
+    /// read and is reported rather than being rewritten into a value this build understands.
+    /// </summary>
+    public string? StatusText { get; init; }
+
+    /// <summary>The acquisition counter. Every new grant increments it.</summary>
+    public long Attempt { get; init; }
+
+    /// <summary>The attempt this grant resumed from, or <c>null</c> for a fresh shift.</summary>
+    public long? ResumedFrom { get; init; }
+
+    /// <summary>When the grant was committed, in UTC.</summary>
+    public DateTimeOffset ClaimedAt { get; init; }
+
+    /// <summary>When the owner released the shift, in UTC, or <c>null</c> while it is held.</summary>
+    public DateTimeOffset? ReleasedAt { get; init; }
+
+    /// <summary>How many times this shift has been granted. Equal to <see cref="Attempt"/>.</summary>
+    public long Grants => Attempt;
+}
+
+/// <summary>What a committed handoff means: work is starting, or work has stopped.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<ShiftHandoffPhase>))]
+public enum ShiftHandoffPhase
+{
+    /// <summary>
+    /// Committed before the turn runs. The owner may be mid-work, so only the same session —
+    /// the process that wrote it and restarted — may resume from it.
+    /// </summary>
+    Running,
+
+    /// <summary>
+    /// Committed when the shift stops, before release. Any successor may resume from it.
+    /// </summary>
+    HandedOff,
+}
+
+/// <summary>
+/// The durable handoff a shift owner commits before it releases the shift.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The handoff is what makes an interrupted shift recoverable. A claim alone records who may run;
+/// the handoff records what was running and what is owed. A successor therefore has two different
+/// situations to tell apart: a shift held by an owner with no handoff (work may be in flight — do
+/// not take it) and a shift held by an owner with a committed handoff (work stopped at a known
+/// point — resume from it).
+/// </para>
+/// <para>
+/// Writing the handoff is not a separate bookkeeping step the caller may skip. The release refuses
+/// to commit without a handoff for the attempt being released, so a store can never describe a
+/// shift that was let go with nothing recorded.
+/// </para>
+/// </remarks>
+public sealed class DurableShiftHandoff
+{
+    /// <summary>The document kind a shift handoff is stored under.</summary>
+    public const string DocumentKind = "durable.shift-handoff";
+
+    /// <summary>The prefix of the owner id a shift handoff is stored under.</summary>
+    public const string OwnerPrefix = "shift-handoff:";
+
+    /// <summary>The owner id a handoff for this shift key is stored under.</summary>
+    public static string OwnerId(string key) => $"{OwnerPrefix}{key}";
+
+    /// <summary>The shift key the handoff covers.</summary>
+    public required string Key { get; init; }
+
+    /// <summary>The claim attempt the handoff was written for.</summary>
+    public required long Attempt { get; init; }
+
+    /// <summary>The owner token that wrote the handoff.</summary>
+    public required string Owner { get; init; }
+
+    /// <summary>
+    /// Whether the handoff records work starting or work stopping. A <see cref="ShiftHandoffPhase.Running"/>
+    /// handoff is the recovery point of an interrupted run; a <see cref="ShiftHandoffPhase.HandedOff"/>
+    /// one is the stopping point of a finished shift.
+    /// </summary>
+    public ShiftHandoffPhase Phase { get; init; } = ShiftHandoffPhase.HandedOff;
+
+    /// <summary>What this shift worked on.</summary>
+    public string? Selected { get; init; }
+
+    /// <summary>What it completed.</summary>
+    public string? Achieved { get; init; }
+
+    /// <summary>What is still owed.</summary>
+    public string? Remaining { get; init; }
+
+    /// <summary>The next action a successor should take first.</summary>
+    public string? Next { get; init; }
+
+    /// <summary>Blockers a successor must know about.</summary>
+    public string? Blockers { get; init; }
+
+    /// <summary>When the handoff was committed, in UTC.</summary>
+    public required DateTimeOffset WrittenAt { get; init; }
+}
+
+/// <summary>What a claim request did.</summary>
+/// <remarks>
+/// <see cref="Acquired"/> is the only outcome that permits running work. <see cref="Conflict"/>
+/// means a different owner holds the shift with no committed handoff, so the work may be in
+/// flight. <see cref="ReadOnly"/> means the store's record cannot be understood or is internally
+/// inconsistent: the caller must report and stop, not retry into a mutation.
+/// </remarks>
+[JsonConverter(typeof(JsonStringEnumConverter<ShiftClaimOutcome>))]
+public enum ShiftClaimOutcome
+{
+    /// <summary>This caller now holds the shift.</summary>
+    Acquired,
+
+    /// <summary>Another owner holds the shift and no handoff makes it resumable.</summary>
+    Conflict,
+
+    /// <summary>The state cannot be trusted. Read-only: report and stop.</summary>
+    ReadOnly,
+}
+
+/// <summary>The result of a claim or release attempt.</summary>
+/// <param name="Outcome">What happened.</param>
+/// <param name="Claim">The claim as the store now holds it, or as it was found.</param>
+/// <param name="Message">A human-readable reason, always present for a refusal.</param>
+public sealed record ShiftClaimResult(ShiftClaimOutcome Outcome, DurableShiftClaim? Claim, string Message);
+
+/// <summary>
+/// The shared shift-claim and handoff operations, built on ordinary documents.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Nothing here is a new persistence primitive. A claim is a document of kind
+/// <see cref="DurableShiftClaim.DocumentKind"/> owned by <c>shift:{key}</c>; a handoff is a
+/// document of kind <see cref="DurableShiftHandoff.DocumentKind"/> owned by
+/// <c>shift-handoff:{key}</c>. Both are <see cref="ForkPolicy.Initial"/>, because forking a
+/// conversation is not inheriting a shift.
+/// </para>
+/// <para>
+/// The one primitive this needed and the layer did not have is
+/// <see cref="Transaction.TryCreateDocument{T}"/>. Read-then-write through
+/// <see cref="Transaction.Doc{T}"/> cannot express "create only if absent": an absent document
+/// reads back as its initial value, so both claimants would believe they were first.
+/// </para>
+/// </remarks>
+public static class DurableShifts
+{
+    /// <summary>The definition a claim is stored under.</summary>
+    public static readonly DocumentDefinition<DurableShiftClaim> ClaimDefinition =
+        new(DurableShiftClaim.DocumentKind, DocumentHistory.Rewindable, ForkPolicy.Initial);
+
+    /// <summary>The definition a handoff is stored under.</summary>
+    public static readonly DocumentDefinition<DurableShiftHandoff> HandoffDefinition =
+        new(DurableShiftHandoff.DocumentKind, DocumentHistory.Rewindable, ForkPolicy.Initial);
+
+    /// <summary>
+    /// Claims a shift for <paramref name="owner"/> if nobody else holds it, or resumes it when the
+    /// holder committed a handoff.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A held shift is only taken over when the store holds a handoff for the held attempt. That
+    /// is the whole duplicate-safety rule: an owner with no handoff may be mid-turn, so a second
+    /// claimant is refused and told who holds it; an owner with a handoff has recorded where it
+    /// stopped, so the successor resumes rather than repeating work. Age plays no part — a claim
+    /// is never taken because a clock says it is old.
+    /// </para>
+    /// <para>
+    /// The read, the decision, and the write are one transaction under the store's commit gate, so
+    /// two claimants in one process cannot both win. Two processes are already separated by the
+    /// store file's exclusive lock: the second never opens the file.
+    /// </para>
+    /// </remarks>
+    public static Task<ShiftClaimResult> ClaimAsync(
+        DurableStore store,
+        string key,
+        string owner,
+        DateTimeOffset now,
+        string? member = null,
+        string? sessionId = null)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+
+        return store.CommitAsync(transaction =>
+        {
+            var claimOwnerId = DurableShiftClaim.OwnerId(key);
+            var existing = store.Document(DurableShiftClaim.DocumentKind, claimOwnerId);
+            var current = existing?.Latest is { } latest
+                ? latest.Deserialize<DurableShiftClaim>(DurableJson.Options)
+                : null;
+
+            var definition = ClaimDefinition;
+
+            // No record at all: this is the create-if-absent path. It is the only path where the
+            // document itself has to appear, and it has to happen atomically with the decision.
+            if (current is null)
+            {
+                var created = new DurableShiftClaim
+                {
+                    Key = key,
+                    Member = member,
+                    Owner = owner,
+                    SessionId = sessionId,
+                    Status = ShiftClaimStatus.Active,
+                    StatusText = Text(ShiftClaimStatus.Active),
+                    Attempt = 1,
+                    ClaimedAt = now,
+                };
+
+                var entryId = transaction.AppendEntry(claimOwnerId, "shift-claim");
+                if (!transaction.TryCreateDocument(definition, claimOwnerId))
+                {
+                    return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                        ShiftClaimOutcome.ReadOnly,
+                        null,
+                        $"the store holds a claim for '{key}' that this transaction could not read back; "
+                        + "treating it as uncertain rather than claiming over it."));
+                }
+
+                transaction.CommitDocument(definition, claimOwnerId, created, entryId);
+                return System.Threading.Tasks.Task.FromResult(
+                    new ShiftClaimResult(ShiftClaimOutcome.Acquired, created, $"acquired attempt 1 for '{owner}'."));
+            }
+
+            var read = Read(current);
+            if (read.Status is ShiftClaimStatus.Uncertain)
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.ReadOnly,
+                    current,
+                    $"the claim for '{key}' records state '{current.StatusText ?? "(none)"}', which this build "
+                    + "cannot interpret. Read-only: reconcile it before claiming."));
+            }
+
+            if (read.Status is ShiftClaimStatus.Active && string.Equals(current.Owner, owner, StringComparison.Ordinal))
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.Acquired,
+                    current,
+                    $"'{owner}' already holds attempt {current.Attempt} of '{key}'."));
+            }
+
+            if (read.Status is ShiftClaimStatus.Active)
+            {
+                var handoff = ReadHandoff(store, key);
+                if (handoff is null)
+                {
+                    return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                        ShiftClaimOutcome.Conflict,
+                        current,
+                        $"'{key}' is held by '{current.Owner}' (attempt {current.Attempt}) with no committed "
+                        + "handoff, so the work may be in flight. Not taking it over."));
+                }
+
+                if (handoff.Attempt != current.Attempt)
+                {
+                    return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                        ShiftClaimOutcome.ReadOnly,
+                        current,
+                        $"the claim for '{key}' is attempt {current.Attempt} but the newest handoff is for attempt "
+                        + $"{handoff.Attempt}. The records disagree; reconcile them rather than resuming."));
+                }
+
+                // An in-flight handoff is only resumable by the session that wrote it. The same
+                // session means the same process, restarted: its work stopped at a known point.
+                // A different session could be racing a live owner, and age is not evidence that
+                // it died, so it is refused rather than resuming over a running shift.
+                var sameSession =
+                    !string.IsNullOrEmpty(current.SessionId)
+                    && string.Equals(current.SessionId, sessionId, StringComparison.Ordinal);
+
+                if (handoff.Phase is ShiftHandoffPhase.Running && !sameSession)
+                {
+                    return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                        ShiftClaimOutcome.Conflict,
+                        current,
+                        $"'{key}' is held by '{current.Owner}' (attempt {current.Attempt}, session "
+                        + $"'{current.SessionId ?? "(none)"}') with an in-flight handoff. Only that session resumes it; "
+                        + "a different session must not duplicate the run."));
+                }
+            }
+
+            // Either the previous owner released it, or it is held with a matching handoff. Both
+            // are safe to take: the first is a finished shift, the second an interrupted one whose
+            // stopping point is written down.
+            var resumedFrom = current.Attempt;
+            var next = new DurableShiftClaim
+            {
+                Key = key,
+                Member = member ?? current.Member,
+                Owner = owner,
+                SessionId = sessionId,
+                Status = ShiftClaimStatus.Active,
+                StatusText = Text(ShiftClaimStatus.Active),
+                Attempt = current.Attempt + 1,
+                ResumedFrom = resumedFrom,
+                ClaimedAt = now,
+            };
+
+            var nextEntryId = transaction.AppendEntry(claimOwnerId, "shift-claim");
+            transaction.CommitDocument(definition, claimOwnerId, next, nextEntryId);
+
+            var reason = read.Status is ShiftClaimStatus.Released
+                ? $"acquired attempt {next.Attempt} of '{key}' after '{current.Owner}' released it."
+                : $"resumed attempt {next.Attempt} of '{key}' from committed handoff {resumedFrom}.";
+            return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(ShiftClaimOutcome.Acquired, next, reason));
+        });
+    }
+
+    /// <summary>Reads a shift claim, or <c>null</c> when the store holds none.</summary>
+    public static DurableShiftClaim? ReadClaim(DurableStore store, string key)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        var document = store.Document(DurableShiftClaim.DocumentKind, DurableShiftClaim.OwnerId(key));
+        return document?.Latest is { } latest
+            ? latest.Deserialize<DurableShiftClaim>(DurableJson.Options)
+            : null;
+    }
+
+    /// <summary>Reads the newest committed handoff, or <c>null</c> when there is none.</summary>
+    public static DurableShiftHandoff? ReadHandoff(DurableStore store, string key)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        var document = store.Document(DurableShiftHandoff.DocumentKind, DurableShiftHandoff.OwnerId(key));
+        return document?.Latest is { } latest
+            ? latest.Deserialize<DurableShiftHandoff>(DurableJson.Options)
+            : null;
+    }
+
+    /// <summary>Commits a handoff for the attempt the owner currently holds.</summary>
+    /// <returns><c>false</c> when the owner does not hold the attempt being described.</returns>
+    /// <remarks>
+    /// The handoff is refused rather than silently written when the claim it describes is not the
+    /// caller's. A handoff that named someone else's attempt would let a successor resume another
+    /// owner's in-flight work, which is the duplicate execution this record exists to prevent.
+    /// </remarks>
+    public static Task<bool> WriteHandoffAsync(
+        DurableStore store,
+        string key,
+        string owner,
+        long attempt,
+        DateTimeOffset now,
+        ShiftHandoffPhase phase = ShiftHandoffPhase.HandedOff,
+        string? selected = null,
+        string? achieved = null,
+        string? remaining = null,
+        string? next = null,
+        string? blockers = null)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+
+        return store.CommitAsync(transaction =>
+        {
+            var claim = ReadClaim(store, key);
+            if (claim is null
+                || claim.Attempt != attempt
+                || !string.Equals(claim.Owner, owner, StringComparison.Ordinal)
+                || Read(claim).Status is not ShiftClaimStatus.Active)
+            {
+                return System.Threading.Tasks.Task.FromResult(false);
+            }
+
+            var handoff = new DurableShiftHandoff
+            {
+                Key = key,
+                Attempt = attempt,
+                Owner = owner,
+                Phase = phase,
+                Selected = selected,
+                Achieved = achieved,
+                Remaining = remaining,
+                Next = next,
+                Blockers = blockers,
+                WrittenAt = now,
+            };
+
+            var handoffOwnerId = DurableShiftHandoff.OwnerId(key);
+            var handoffEntryId = transaction.AppendEntry(handoffOwnerId, "shift-handoff");
+            transaction.CommitDocument(HandoffDefinition, handoffOwnerId, handoff, handoffEntryId);
+            return System.Threading.Tasks.Task.FromResult(true);
+        });
+    }
+
+    /// <summary>
+    /// Releases a held shift, refusing unless the caller owns the held attempt and a handoff for
+    /// that attempt is already committed.
+    /// </summary>
+    /// <returns>
+    /// <see cref="ShiftClaimOutcome.Acquired"/> on success (the caller no longer holds it),
+    /// <see cref="ShiftClaimOutcome.Conflict"/> for a refusal the caller can fix, and
+    /// <see cref="ShiftClaimOutcome.ReadOnly"/> when the records do not agree.
+    /// </returns>
+    /// <remarks>
+    /// Releasing is idempotent for the owner that released: releasing again reports success with
+    /// the released record. That keeps a retried shutdown harmless without letting the retry
+    /// rewrite history.
+    /// </remarks>
+    public static Task<ShiftClaimResult> ReleaseAsync(
+        DurableStore store,
+        string key,
+        string owner,
+        DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+
+        return store.CommitAsync(transaction =>
+        {
+            var current = ReadClaim(store, key);
+            if (current is null)
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.Conflict,
+                    null,
+                    $"the store holds no claim for '{key}', so there is nothing to release."));
+            }
+
+            var status = Read(current);
+            if (status.Status is ShiftClaimStatus.Uncertain)
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.ReadOnly,
+                    current,
+                    $"the claim for '{key}' records state '{current.StatusText ?? "(none)"}', which this build "
+                    + "cannot interpret. Read-only: not releasing."));
+            }
+
+            if (!string.Equals(current.Owner, owner, StringComparison.Ordinal))
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.Conflict,
+                    current,
+                    $"'{key}' is held by '{current.Owner}', not by '{owner}'. Only the holding owner releases."));
+            }
+
+            if (status.Status is ShiftClaimStatus.Released)
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.Acquired,
+                    current,
+                    $"'{key}' was already released by '{owner}' at {current.ReleasedAt:O}."));
+            }
+
+            var handoff = ReadHandoff(store, key);
+            if (handoff is null)
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.Conflict,
+                    current,
+                    $"'{owner}' holds '{key}' but no handoff is committed. Write the handoff before releasing."));
+            }
+
+            if (handoff.Attempt != current.Attempt)
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.ReadOnly,
+                    current,
+                    $"the claim for '{key}' is attempt {current.Attempt} but the newest handoff is for attempt "
+                    + $"{handoff.Attempt}. The records disagree; read-only, not releasing."));
+            }
+
+            var released = new DurableShiftClaim
+            {
+                Key = current.Key,
+                Member = current.Member,
+                Owner = current.Owner,
+                SessionId = current.SessionId,
+                Status = ShiftClaimStatus.Released,
+                StatusText = Text(ShiftClaimStatus.Released),
+                Attempt = current.Attempt,
+                ResumedFrom = current.ResumedFrom,
+                ClaimedAt = current.ClaimedAt,
+                ReleasedAt = now,
+            };
+
+            var releaseOwnerId = DurableShiftClaim.OwnerId(key);
+            var releaseEntryId = transaction.AppendEntry(releaseOwnerId, "shift-claim");
+            transaction.CommitDocument(ClaimDefinition, releaseOwnerId, released, releaseEntryId);
+            return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                ShiftClaimOutcome.Acquired,
+                released,
+                $"released attempt {released.Attempt} of '{key}' with handoff {handoff.Attempt}."));
+        });
+    }
+
+    /// <summary>
+    /// Reads a stored claim's status, resolving the text through this build's vocabulary.
+    /// A value this build does not recognize — including a missing one — is
+    /// <see cref="ShiftClaimStatus.Uncertain"/>, which is the only safe reading of "unknown".
+    /// </summary>
+    private static (ShiftClaimStatus Status, string? Text) Read(DurableShiftClaim claim)
+    {
+        if (string.IsNullOrWhiteSpace(claim.StatusText))
+        {
+            // A record with no text is a record this build cannot verify: the text is the field
+            // the store actually holds, so its absence means the record is incomplete, not that
+            // it is active. There is no earlier format to be compatible with, so nothing is
+            // guessed from the typed property.
+            return (ShiftClaimStatus.Uncertain, null);
+        }
+
+        if (Enum.TryParse<ShiftClaimStatus>(claim.StatusText, ignoreCase: true, out var parsed)
+            && parsed is ShiftClaimStatus.Active or ShiftClaimStatus.Released)
+        {
+            return (parsed, claim.StatusText);
+        }
+
+        return (ShiftClaimStatus.Uncertain, claim.StatusText);
+    }
+
+    /// <summary>The stored spelling of a claim status.</summary>
+    public static string Text(ShiftClaimStatus status) => status switch
+    {
+        ShiftClaimStatus.Active => "active",
+        ShiftClaimStatus.Released => "released",
+        _ => "uncertain",
+    };
 }
 
 /// <summary>
@@ -5495,6 +6158,8 @@ internal sealed class DurableRuntime : IAsyncDisposable
         CheckpointDocument.Kind,
         AgentDefinitionDocument.Kind,
         DurableSchedule.DocumentKind,
+        DurableShiftClaim.DocumentKind,
+        DurableShiftHandoff.DocumentKind,
     ];
 
     private HashSet<string>? _internalDocumentKinds;
