@@ -13,6 +13,8 @@ from collections.abc import Awaitable
 
 from durable import (
     AgentChoices, DurableHarness, DurableStore, DurableStoreOptions, ExtensionRegistry,
+    DurableShiftClaim, DurableShiftHandoff, DurableShifts, ShiftClaimOutcome,
+    ShiftClaimStatus, ShiftHandoffPhase,
     DurableSandboxPolicy, DurableSandboxFilesystem, DurableSandboxCredentials,
     DurableSandboxNetwork, DurableSandboxAuth, PermissionPolicy,
     DurableTask, TaskCommit, TaskStatus, Extension, ToolWrapper, DurableHarnessOptions,
@@ -4109,6 +4111,275 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await client.close_async()
             store.close()
+
+
+
+KEY = "sessions/po-shift"
+T0 = "2026-11-21T00:00:00Z"
+T1 = "2026-11-21T00:01:00Z"
+T2 = "2026-11-21T00:02:00Z"
+
+
+class ShiftClaimTests(unittest.IsolatedAsyncioTestCase):
+    """The durable shift claim and handoff: create-if-absent claiming, conflict reporting,
+    resumption from a committed handoff, and fail-closed behaviour on a state this build
+    cannot read."""
+
+    async def asyncSetUp(self) -> None:
+        self.store = DurableStore.create_ephemeral()
+
+    async def asyncTearDown(self) -> None:
+        self.store.close()
+
+    async def test_claim_creates_the_record_with_the_owner_token_and_attempt_one(self):
+        result = await DurableShifts.claim_async(self.store, KEY, "run-a", T0, "po", "session-a")
+        self.assertIs(result.outcome, ShiftClaimOutcome.ACQUIRED)
+        self.assertIsNotNone(result.claim)
+        self.assertEqual("run-a", result.claim.owner)
+        self.assertEqual(1, result.claim.attempt)
+        self.assertIsNone(result.claim.resumed_from)
+        self.assertEqual(ShiftClaimStatus.ACTIVE.value, result.claim.status)
+
+        # The store, not just the return value, holds it: a second reader sees the claim.
+        stored = DurableShifts.read_claim(self.store, KEY)
+        self.assertIsNotNone(stored)
+        self.assertEqual("run-a", stored.owner)
+        self.assertEqual(1, stored.attempt)
+
+    async def test_claim_refuses_a_different_owner_while_live_and_names_the_holder(self):
+        first = await DurableShifts.claim_async(self.store, KEY, "run-a", T0, "po", "session-a")
+        self.assertIs(first.outcome, ShiftClaimOutcome.ACQUIRED)
+
+        second = await DurableShifts.claim_async(self.store, KEY, "run-b", T1, "po", "session-b")
+
+        # The conflict path is the whole point: the loser is told who holds it and the store
+        # is not touched, so no duplicate run is admitted.
+        self.assertIs(second.outcome, ShiftClaimOutcome.CONFLICT)
+        self.assertEqual("run-a", second.claim.owner)
+        self.assertIn("run-a", second.message)
+
+        stored = DurableShifts.read_claim(self.store, KEY)
+        self.assertEqual("run-a", stored.owner)
+        self.assertEqual(1, stored.attempt)
+
+    async def test_claim_is_idempotent_for_the_owner_that_already_holds_it(self):
+        await DurableShifts.claim_async(self.store, KEY, "run-a", T0, "po", "session-a")
+        again = await DurableShifts.claim_async(self.store, KEY, "run-a", T1, "po", "session-a")
+        self.assertIs(again.outcome, ShiftClaimOutcome.ACQUIRED)
+        self.assertEqual(1, again.claim.attempt)
+
+    async def test_claim_does_not_take_over_an_interrupted_shift_from_another_session(self):
+        await DurableShifts.claim_async(self.store, KEY, "run-a", T0, "po", "session-a")
+
+        # The in-flight handoff is written before the turn. Another session cannot treat that
+        # as permission to run, because the owner may still be alive and mid-turn.
+        wrote = await DurableShifts.write_handoff_async(
+            self.store, KEY, "run-a", 1, T0, ShiftHandoffPhase.RUNNING.value, selected="issue-225")
+        self.assertTrue(wrote)
+
+        other = await DurableShifts.claim_async(self.store, KEY, "run-b", T1, "po", "session-b")
+
+        self.assertIs(other.outcome, ShiftClaimOutcome.CONFLICT)
+        self.assertIn("in-flight", other.message)
+        self.assertEqual(1, DurableShifts.read_claim(self.store, KEY).attempt)
+
+    async def test_claim_resumes_an_interrupted_shift_for_the_same_session(self):
+        await DurableShifts.claim_async(self.store, KEY, "run-a", T0, "po", "session-a")
+        await DurableShifts.write_handoff_async(
+            self.store, KEY, "run-a", 1, T0, ShiftHandoffPhase.RUNNING.value,
+            selected="issue-225", next="write the test")
+
+        # The same session comes back after the process died. Its own in-flight handoff is
+        # its resume point: the work stopped at a known place, so resuming is not
+        # duplicating it.
+        resumed = await DurableShifts.claim_async(self.store, KEY, "run-a-restarted", T2, "po", "session-a")
+
+        self.assertIs(resumed.outcome, ShiftClaimOutcome.ACQUIRED)
+        self.assertEqual(2, resumed.claim.attempt)
+        self.assertEqual(1, resumed.claim.resumed_from)
+
+        handoff = DurableShifts.read_handoff(self.store, KEY)
+        self.assertEqual(1, handoff.attempt)
+        self.assertEqual("issue-225", handoff.selected)
+        self.assertEqual("write the test", handoff.next)
+
+    async def test_release_refuses_without_a_committed_handoff(self):
+        await DurableShifts.claim_async(self.store, KEY, "run-a", T0, "po", "session-a")
+
+        release = await DurableShifts.release_async(self.store, KEY, "run-a", T1)
+
+        self.assertIs(release.outcome, ShiftClaimOutcome.CONFLICT)
+        self.assertIn("handoff", release.message)
+        self.assertEqual(ShiftClaimStatus.ACTIVE.value, DurableShifts.read_claim(self.store, KEY).status)
+
+    async def test_release_refuses_when_someone_else_owns_the_shift(self):
+        await DurableShifts.claim_async(self.store, KEY, "run-a", T0, "po", "session-a")
+        await DurableShifts.write_handoff_async(self.store, KEY, "run-a", 1, T0)
+
+        release = await DurableShifts.release_async(self.store, KEY, "run-b", T1)
+
+        self.assertIs(release.outcome, ShiftClaimOutcome.CONFLICT)
+        self.assertIn("run-a", release.message)
+        self.assertEqual(ShiftClaimStatus.ACTIVE.value, DurableShifts.read_claim(self.store, KEY).status)
+
+    async def test_release_persists_the_handoff_before_the_released_claim(self):
+        await DurableShifts.claim_async(self.store, KEY, "run-a", T0, "po", "session-a")
+        await DurableShifts.write_handoff_async(
+            self.store, KEY, "run-a", 1, T0, ShiftHandoffPhase.HANDED_OFF.value,
+            selected="issue-225", achieved="claim", remaining="tests", next="run them")
+
+        release = await DurableShifts.release_async(self.store, KEY, "run-a", T1)
+
+        self.assertIs(release.outcome, ShiftClaimOutcome.ACQUIRED)
+        released = DurableShifts.read_claim(self.store, KEY)
+        self.assertEqual(ShiftClaimStatus.RELEASED.value, released.status)
+        self.assertEqual(T1, released.released_at)
+
+        # The handoff is durable and still readable after the release, which is what makes
+        # the released claim resumable rather than merely free.
+        self.assertEqual("run them", DurableShifts.read_handoff(self.store, KEY).next)
+
+        successor = await DurableShifts.claim_async(self.store, KEY, "run-b", T2, "po", "session-b")
+        self.assertIs(successor.outcome, ShiftClaimOutcome.ACQUIRED)
+        self.assertEqual(2, successor.claim.attempt)
+        self.assertEqual("run-b", successor.claim.owner)
+
+    async def test_release_is_idempotent_for_the_owner_that_already_released(self):
+        await DurableShifts.claim_async(self.store, KEY, "run-a", T0, "po", "session-a")
+        await DurableShifts.write_handoff_async(self.store, KEY, "run-a", 1, T0)
+        await DurableShifts.release_async(self.store, KEY, "run-a", T1)
+
+        again = await DurableShifts.release_async(self.store, KEY, "run-a", T2)
+
+        self.assertIs(again.outcome, ShiftClaimOutcome.ACQUIRED)
+        self.assertEqual(T1, again.claim.released_at)
+
+    async def test_claim_and_release_fail_read_only_on_an_unreadable_status(self):
+        for status_text in ("suspended", ""):
+            with self.subTest(status_text=status_text):
+                store = DurableStore.create_ephemeral()
+                try:
+                    await store.commit_async(self._write_claim_literal(store, status_text))
+                    claim = await DurableShifts.claim_async(store, KEY, "run-b", T1, "po", "session-b")
+                    release = await DurableShifts.release_async(store, KEY, "run-b", T1)
+
+                    self.assertIs(claim.outcome, ShiftClaimOutcome.READ_ONLY)
+                    self.assertIs(release.outcome, ShiftClaimOutcome.READ_ONLY)
+                    # The unrecognized text survives: the record is reported, never rewritten.
+                    self.assertEqual(status_text, DurableShifts.read_claim(store, KEY).status_text)
+                finally:
+                    store.close()
+
+    @staticmethod
+    def _write_claim_literal(store, status_text):
+        async def body(tx):
+            owner_id = DurableShiftClaim.owner_id(KEY)
+            draft = tx.doc(DurableShifts.ClaimDefinition, owner_id)
+            draft.value = DurableShiftClaim(
+                key=KEY, member="po", owner="run-a", session_id="session-a",
+                status=ShiftClaimStatus.ACTIVE.value, status_text=status_text, attempt=1, claimed_at=T0)
+            draft.save(tx.append_entry(owner_id, "shift-claim"))
+        return body
+
+    async def test_claim_fails_read_only_when_claim_and_handoff_disagree(self):
+        await DurableShifts.claim_async(self.store, KEY, "run-a", T0, "po", "session-a")
+
+        # A handoff for attempt 7 against a claim at attempt 1 is not a resumable record; it
+        # is a store someone edited, and the safe reading is "do not know".
+        async def body(tx):
+            owner_id = DurableShiftHandoff.owner_id(KEY)
+            draft = tx.doc(DurableShifts.HandoffDefinition, owner_id)
+            draft.value = DurableShiftHandoff(
+                key=KEY, attempt=7, owner="run-a", phase=ShiftHandoffPhase.HANDED_OFF.value, written_at=T0)
+            draft.save(tx.append_entry(owner_id, "shift-handoff"))
+
+        await self.store.commit_async(body)
+
+        claim = await DurableShifts.claim_async(self.store, KEY, "run-b", T1, "po", "session-b")
+
+        self.assertIs(claim.outcome, ShiftClaimOutcome.READ_ONLY)
+        self.assertIn("disagree", claim.message)
+        self.assertEqual(1, DurableShifts.read_claim(self.store, KEY).attempt)
+
+    async def test_handoff_is_refused_when_it_was_not_written_by_the_holder(self):
+        await DurableShifts.claim_async(self.store, KEY, "run-a", T0, "po", "session-a")
+        wrote = await DurableShifts.write_handoff_async(self.store, KEY, "run-b", 1, T0)
+        self.assertFalse(wrote)
+        self.assertIsNone(DurableShifts.read_handoff(self.store, KEY))
+
+    async def test_claim_survives_a_reopen_and_adds_no_wire_format_change(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / "store.jsonl")
+            first = DurableStore.create(DurableStoreOptions(path=path))
+
+            async def seed(tx):
+                doc = tx.doc(DocumentDefinition("test.existing", DocumentHistory.REWINDABLE, ForkPolicy.AS_OF), "existing-owner")
+                doc.value = "before"
+                doc.save(tx.append_entry("existing-owner", "note"))
+
+            # A pre-existing document the feature never touches.
+            await first.commit_async(seed)
+            await DurableShifts.claim_async(first, KEY, "run-a", T0, "po", "session-a")
+            await DurableShifts.write_handoff_async(
+                first, KEY, "run-a", 1, T0, ShiftHandoffPhase.HANDED_OFF.value,
+                selected="issue-225", remaining="restart evidence")
+            first.close()
+
+            # Every line is still the same envelope version, and the shift records are
+            # ordinary document records inside it: a new kind, not a new record type.
+            for line in Path(path).read_text(encoding="utf-8").splitlines():
+                if not line:
+                    continue
+                record = json.loads(line)
+                self.assertEqual(1, record["v"])
+                self.assertIn("type", record)
+                self.assertIn("payload", record)
+
+            # A second process is a second store over the same file. It reads the claim and
+            # the handoff back, which is what makes recovery from a killed process possible.
+            reopened = DurableStore.create(DurableStoreOptions(path=path))
+            try:
+                self.assertEqual("run-a", DurableShifts.read_claim(reopened, KEY).owner)
+                self.assertEqual("restart evidence", DurableShifts.read_handoff(reopened, KEY).remaining)
+                self.assertEqual("before", reopened.document("test.existing", "existing-owner").latest)
+
+                resumed = await DurableShifts.claim_async(reopened, KEY, "run-b", T1, "po", "session-b")
+                self.assertIs(resumed.outcome, ShiftClaimOutcome.ACQUIRED)
+                self.assertEqual(1, resumed.claim.resumed_from)
+            finally:
+                reopened.close()
+
+    async def test_claim_admits_exactly_one_of_a_concurrent_race(self):
+        results = await asyncio.gather(*(
+            DurableShifts.claim_async(self.store, KEY, f"run-{i}", T0, "po", f"session-{i}")
+            for i in range(8)))
+        self.assertEqual(1, sum(1 for result in results if result.outcome is ShiftClaimOutcome.ACQUIRED))
+        self.assertTrue(all(result.outcome is ShiftClaimOutcome.CONFLICT
+                            for result in results if result.outcome is not ShiftClaimOutcome.ACQUIRED))
+        self.assertEqual(1, DurableShifts.read_claim(self.store, KEY).attempt)
+
+    async def test_claim_writes_nothing_when_the_transaction_rolls_back(self):
+        owner_id = DurableShiftClaim.owner_id(KEY)
+
+        async def body(tx):
+            tx.commit_document(
+                DurableShifts.ClaimDefinition, owner_id,
+                DurableShiftClaim(key=KEY, owner="run-a", status=ShiftClaimStatus.ACTIVE.value,
+                                  status_text="active", attempt=1, claimed_at=T0),
+                tx.append_entry(owner_id, "shift-claim"))
+            raise RuntimeError("simulated crash mid-claim")
+
+        with self.assertRaises(RuntimeError):
+            await self.store.commit_async(body)
+
+        # Rollback must leave nothing behind: no document, no entry, no version. Otherwise
+        # the next claimant would read a placeholder it never committed as a claim.
+        self.assertIsNone(self.store.document(DurableShiftClaim.DOCUMENT_KIND, owner_id))
+        self.assertEqual([], list(self.store.entries(owner_id)))
+
+        claim = await DurableShifts.claim_async(self.store, KEY, "run-a", T0, "po", "session-a")
+        self.assertIs(claim.outcome, ShiftClaimOutcome.ACQUIRED)
+        self.assertEqual(1, claim.claim.attempt)
 
 
 if __name__ == "__main__":
