@@ -4,9 +4,13 @@ name: Squad Heartbeat (Ralph)
 # update the active .github/workflows copy while preserving repo-specific steps.
 
 on:
-  # React to completed work or new squad work
+  # React to completed squad work. `labeled` is deliberately NOT here: squad-triage.yml
+  # owns the base `squad` label and squad-issue-assign.yml owns every `squad:*` label, so
+  # a labeling event already has an owner. Adding it here made one label edit start three
+  # workflows, and the heartbeat's pass is over ALL open `squad` issues, so it duplicated
+  # work the label workflows had just done.
   issues:
-    types: [closed, labeled]
+    types: [closed]
   # pull_request_target (not pull_request): GITHUB_TOKEN is forced read-only
   # for `pull_request` events triggered by a fork, so write steps below
   # (addLabels/createComment) 403 on fork PR closes.

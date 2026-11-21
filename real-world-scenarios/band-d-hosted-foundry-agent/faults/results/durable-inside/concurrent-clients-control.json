@@ -1,0 +1,74 @@
+{
+ "application": {
+  "observations": {
+   "clients_overlapped": "no (control: the second client ran after the first finished)",
+   "coverage_calls": "not applicable - D2's fault is on the store, not on a service call",
+   "first_client_exit": 0,
+   "refusal_text": "none recorded",
+   "second_client_exit": 0,
+   "synthesis_calls": "not applicable"
+  },
+  "outcome_detail": "The same two clients, run one after the other: nothing was refused, because nothing contended for the same thing at the same time. The overlap is what the fault row adds."
+ },
+ "environment": {
+  "foundry_deployment": "none - nothing was provisioned for this run",
+  "model": "none - the stand-in serves fixed answers; no model was called"
+ },
+ "fault": "concurrent-clients",
+ "harness": {
+  "command": "./faults/concurrent-clients.sh --variant durable-inside --fault-not-injected",
+  "commit": "56cf8282cf98d6acf37b64ff462d5f86f929fb05",
+  "docker": "client and server: client 29.9.2 / server 29.9.2; image band-d4-d2:56cf8282cf98 (sha256:408862e750557e19ecf6e43af82514d9b8ee70e9bc73fc2379769961127f7b36)",
+  "live_azure_calls": 0,
+  "network": "none - every call a fault makes is to 127.0.0.1",
+  "paths_normalised": {
+   "$FAULTS_SCRATCH": "the harness scratch root",
+   "<repo>": "the repository root"
+  },
+  "python": "3.15.2",
+  "what_runs_where": "the D2 hosted-agent image, built locally from real-world-scenarios/band-d-durable-inside/agent/ plus lib/py with D2's own Dockerfile. Each process is its own container over one named Docker volume standing in for the platform's per-session mount, so a container restart is a real stop and start."
+ },
+ "outcome": "control: both clients ran, and nothing overlapped",
+ "platform": {
+  "behaviours": [
+   {
+    "documented": "30 days, sliding on activity. The session persists the sandbox ($HOME, uploaded files), not the conversation: continuing a conversation needs previous_response_id or a conversation id.",
+    "id": "session-persistence",
+    "question": "How long does a hosted agent session persist?",
+    "source": "learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions; D1 evidence/session-resume/*.json (expires_at - created_at = 30 days, sliding)",
+    "spoken_to_by_this_fault": false,
+    "status": "documented, not exercised here"
+   },
+   {
+    "documented": "900 s (15 min) by default, configurable 120 s-14400 s per agent version. On timeout the platform deprovisions compute and saves the session state until the session is referenced again.",
+    "id": "idle-timeout",
+    "question": "What ends a session's idle lifetime, and what happens to its state?",
+    "source": "learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions; D1 evidence/platform-behaviour.md section 2 (default applied, eviction not waited out)",
+    "spoken_to_by_this_fault": false,
+    "status": "documented, not exercised here"
+   },
+   {
+    "documented": "Foreground responses stay tied to the client connection: the response is resolved cancelled, background=false, and the in-flight work is not preserved for a later lifetime.",
+    "id": "foreground-cancelled",
+    "question": "What happens to a foreground response when the driving client disappears mid-run?",
+    "source": "learn.microsoft.com/azure/foundry/agents/concepts/long-running-agent-resilience; D1 evidence/platform-behaviour.md section 3 (status cancelled, background false)",
+    "spoken_to_by_this_fault": false,
+    "status": "documented, not exercised here"
+   },
+   {
+    "documented": "No for foreground. Only stored background responses with resilient_background opted in are re-entered, and re-entry starts at the handler's beginning - not deterministic replay, no restored local variables or call stack.",
+    "id": "no-replay",
+    "question": "Does the platform replay the interrupted response?",
+    "source": "learn.microsoft.com/azure/foundry/agents/how-to/recover-long-running-work; D1 evidence/platform-behaviour.md section 4",
+    "spoken_to_by_this_fault": false,
+    "status": "documented, not exercised here"
+   }
+  ],
+  "live_foundry_called": false,
+  "session_survived": "not applicable - no platform session existed",
+  "what_the_platform_did": "not exercised in this run: two clients against one *platform* session is not something this harness can reach without a deployment. What it measures is two local processes against one durable store, which is the application's contention and not the platform's.",
+  "what_the_platform_is_not_represented_by": "The platform's own concurrency behaviour - whether Foundry serialises two requests on one agent_session_id - is not measured here and is not claimed. lib/fake_foundry.py serves requests concurrently and knows nothing about sessions."
+ },
+ "recordedAt": "2026-11-16T15:05:12.218920+00:00",
+ "variant": "durable-inside"
+}

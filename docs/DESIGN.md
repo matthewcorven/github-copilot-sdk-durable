@@ -788,6 +788,12 @@ tests restrict `PATH` so even a locally installed CLI cannot be used inadvertent
 signal-specific graceful-shutdown test runs only on POSIX, not as evidence of Windows signal
 handling. Each smoke job uploads its TRX results.
 
+The smoke jobs run nightly (and on pushes to `main`), not on every pull request: a platform
+difference is a property of the runner, not of the change under review, so gating a pull request
+on Windows buys no information about the diff while spending a runner-minute on every push. The
+required pull-request gate is the `build` job on `ubuntu-latest`, which compiles and runs the
+same host projects.
+
 The smoke jobs also run JSONL storage regressions because persistence is part of host portability.
 New records use LF on every platform. Replay accepts LF and existing CRLF records, retains the
 CR while calculating UTF-8 byte offsets, and discards unterminated tails before applying them.
@@ -1145,8 +1151,8 @@ new entry here: an entry added to silence a failure hides it on every later run.
 exists so that a genuinely unavoidable variation can be excluded with its reason printed, not
 so that a check can be quietened.
 
-**In CI.** `.github/workflows/build.yml` runs this mode on every push and pull request to
-`dev` and `main`, as a `Validate examples (deterministic)` step after the plain
+**In CI.** `.github/workflows/build.yml` runs this mode on every pull request to `dev` and
+`main` and on every push to `main`, as a `Validate examples (deterministic)` step after the plain
 `SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh` step. The plain step stays because it covers
 the live-gated examples this mode excludes; the deterministic step is separate rather than a
 matrix leg so that a non-deterministic example fails one named step beside the plain pass it

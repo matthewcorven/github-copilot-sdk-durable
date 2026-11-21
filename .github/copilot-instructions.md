@@ -1,5 +1,11 @@
 # Copilot instructions
 
+## Standing canvas accountability — all local tooling
+
+Every involved AI agent is accountable for keeping its owned sections of every canvas created or maintained by authorized local tooling accurate and current. Read `.squad/canvas-policy.md` and the current role charter from canonical TEAM_ROOT before work. Identify affected sections and authoritative sources; after material changes and before handoff/completion, update authorized sources, refresh/rebuild and verify provenance/freshness. Report blocked/stale sections with a factual reason, accountable owner and next action rather than claiming current/complete. Never fabricate metrics, broaden permissions or bypass review. Preserve support-role boundaries, especially Scribe's decision-only role.
+
+When dispatching a member, inline the full current charter and `.squad/canvas-policy.md` into the member's prompt context; a path-only reminder is not sufficient. Check this for new hires and after tooling upgrades. The runtime determines system/developer/user message roles; do not replace its system prompt or weaken safeguards to force an injection role.
+
 ## Issue backlog scans
 
 For backlog, triage, queue-status, and "what's next" work, the **`issue-work-queue` helper is authoritative**.

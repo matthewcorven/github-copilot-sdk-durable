@@ -1,18 +1,50 @@
 name: Build and pack
 
+# Usage policy: `build` on ubuntu-latest is the required gate and runs on every pull
+# request and every push to `main` or `dev`. The multi-platform jobs (`host-smoke`,
+# `sandbox-advisory`) are advisory and run only on the nightly schedule, because a platform
+# gap is a property of the runner and not of the change under review. See
+# docs/SANDBOX_CI.md and docs/DESIGN.md section 6.
 on:
   push:
+    # `dev` is kept: squash-merging a pull request creates a commit that was never built,
+    # and RELEASING.md requires a green run on `dev` before a tag. The platform jobs are
+    # skipped here too (see the job guard below), so a dev push costs one job, not six.
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
+    # Documentation, squad state and example-only changes cannot move the durable
+    # layer or the hosts, so they do not earn a full cross-language build.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.squad/**'
+      - '.github/ISSUE_TEMPLATE/**'
+  schedule:
+    # Nightly, so platform drift is caught within a day instead of waiting for the
+    # next pull request that happens to touch a sandbox or host path.
+    - cron: '17 4 * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Supersede an in-flight run for the same pull request. A push that is replaced by a
+# later push in the same branch never needs to finish: only the newest commit is a
+# candidate for merge. Scheduled and main-push runs are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # ---------------------------------------------------------------- advisory jobs
+  # The only multi-platform work in this workflow, and nightly-only: both jobs are skipped
+  # except on `schedule`. A platform gap is a property of the runner, so one run per runner
+  # per day carries the same information as one run per commit. To check a specific pull
+  # request against Windows or macOS, run the job locally on that platform.
   host-smoke:
     name: Host smoke (${{ matrix.os }})
+    if: github.event_name == 'schedule'
     strategy:
       fail-fast: false
       matrix:
@@ -44,8 +76,13 @@ jobs:
   # but a script that produces no report is a defect, and job-level continue-on-error would
   # rewrite even that to a green check. Splitting the two keeps the gap tolerated and the
   # defect visible. This job is not in any `needs:` chain and is not required.
+  #
+  # It runs on the nightly schedule rather than on pull requests: the report describes the
+  # runners, so one run per platform per day carries the same information as one run per
+  # commit, without spending a runner-minute on every push.
   sandbox-advisory:
     name: Sandbox advisory (${{ matrix.os }})
+    if: github.event_name == 'schedule'
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -82,14 +119,30 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+          # NuGet package cache. The repository has no packages.lock.json, so the
+          # project files are the dependency key: a package reference change is what
+          # actually invalidates the restore.
+          cache: true
+          cache-dependency-path: |
+            lib/*.csproj
+            src/**/*.csproj
+            tests/**/*.csproj
 
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: lib/py/pyproject.toml
 
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
+          # Two independent node_modules trees; one cache covers both by keying on
+          # each lockfile.
+          cache: 'npm'
+          cache-dependency-path: |
+            lib/ts/package-lock.json
+            examples/ts/package-lock.json
 
       - name: Install cross-language test dependencies
         run: |

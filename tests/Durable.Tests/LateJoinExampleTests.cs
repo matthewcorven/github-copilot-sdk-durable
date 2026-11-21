@@ -206,7 +206,7 @@ public class LateJoinExampleTests
                 """, StringComparison.Ordinal);
             Assert.NotEqual(source, heldSettlement);
             const string midJoinFailure = """
-                    if (scenario == "mid-join-error")
+                    if (scenario == "mid-join-error" && userAdded)
                     {
                         await EventAsync("session.error", new JsonObject { ["message"] = "mock original model failure", ["errorType"] = "model" });
                         // A successful snapshot would race the asynchronous admission settlement.
@@ -215,7 +215,7 @@ public class LateJoinExampleTests
         """;
             var racingSnapshot = runtimeSource.Replace(midJoinFailure.ReplaceLineEndings("\n"),
                 """
-                    if (scenario == "mid-join-error")
+                    if (scenario == "mid-join-error" && userAdded)
                         await EventAsync("session.error", new JsonObject { ["message"] = "mock original model failure", ["errorType"] = "model" });
         """.ReplaceLineEndings("\n"), StringComparison.Ordinal);
             Assert.NotEqual(runtimeSource, racingSnapshot);
@@ -234,11 +234,15 @@ public class LateJoinExampleTests
             Assert.DoesNotContain("live subscription installed", midJoinError.Output);
             var midJoinWire = (await File.ReadAllLinesAsync(Path.Combine(example, "wire-mid-join-error")))
                 .Select(line => JsonNode.Parse(line)!).ToArray();
-            var snapshotRequest = Assert.Single(midJoinWire, message =>
-                message["method"]?.GetValue<string>() == "session.getMessages");
+            var messageReads = midJoinWire.Where(message =>
+                message["method"]?.GetValue<string>() == "session.getMessages").ToArray();
+            Assert.Equal(2, messageReads.Length);
+            Assert.Contains(midJoinWire, message =>
+                message["result"] is not null &&
+                JsonNode.DeepEquals(message["id"], messageReads[0]["id"]));
             Assert.DoesNotContain(midJoinWire, message =>
                 message["result"] is not null &&
-                JsonNode.DeepEquals(message["id"], snapshotRequest["id"]));
+                JsonNode.DeepEquals(message["id"], messageReads[^1]["id"]));
 
             var noDelta = await RunExampleAsync(example, executable, "no-delta");
             AssertFailed(noDelta, "the late joiner received live deltas");
@@ -521,7 +525,7 @@ public class LateJoinExampleTests
                     File.AppendAllText("trace-" + scenario, $"getMessages:{reads}\n");
                     if (scenario == "stalled-read") continue;
                     if (scenario == "delayed-user" && reads >= 3) await AddUserAsync();
-                    if (scenario == "mid-join-error")
+                    if (scenario == "mid-join-error" && userAdded)
                     {
                         await EventAsync("session.error", new JsonObject { ["message"] = "mock original model failure", ["errorType"] = "model" });
                         // A successful snapshot would race the asynchronous admission settlement.

@@ -69,6 +69,7 @@ In-depth technical reports, design notes, and audits are available in [`docs/`](
 - [**Sandbox CI**](docs/SANDBOX_CI.md): The advisory sandbox job's platform matrix, what each CI level proves, and the degrade-don't-fail rule.
 - [**Real-world Matrix**](docs/REAL_WORLD_MATRIX.md): Durable against first-party reference applications, band by band, every cell a measurement with a link to its evidence file.
 - [**Architect Configuration Design**](docs/ARCHITECT_CONFIG_DESIGN.md): Design only — versioned declarative member configuration, its lifecycle state machine, trust boundaries, and persistence, layered over `AgentDefinition` and `ScheduleStore`.
+- [**Architect Configuration Product Brief**](docs/PRODUCT_BRIEF_ARCHITECT_CONFIG.md): Product planning for architect-configured members, lifecycle and workflows — goal, scope, current-versus-missing inventory, verified delivery graph and ETA honesty. Proposal, not delivered capability.
 
 ---
 
@@ -284,7 +285,9 @@ in `Enforced` mode, on a signed-in host where a real backend engaged.
 
 The `sandbox-advisory` CI job runs the three examples on `ubuntu-latest` (Bubblewrap),
 `macos-latest` (Seatbelt) and `windows-latest` (ProcessContainer) and prints the reported backend
-and platform per example. The reporting step is `continue-on-error: true`, so a platform gap
+and platform per example. It runs on a nightly schedule and on pushes to `main` rather than on
+every pull request, because the report describes the runners and not the diff. The reporting step
+is `continue-on-error: true`, so a platform gap
 degrades an assertion set rather than failing a pull request; the report-completeness assertion
 is not, so a script that produces no report turns the check red. See
 [`docs/SANDBOX_CI.md`](docs/SANDBOX_CI.md).
@@ -637,6 +640,22 @@ docs/
   COPILOT_SDK_NOTES.md    SDK quirks, tool shadowing rules, and pricing
   DESIGN.md               original architecture design specification
 ```
+
+---
+
+## Frequently Asked Questions (FAQ)
+
+### How does this compare to Microsoft's Durable Task Extension for Microsoft Agent Framework?
+
+Microsoft offers the [Durable Task extension for Microsoft Agent Framework](https://learn.microsoft.com/en-us/agent-framework/hosting/durable-extension) (`Microsoft.Agents.AI.DurableTask`). While both bring durable execution and fault tolerance to AI agents, they target different ecosystems and architectural trade-offs:
+
+- **Target Ecosystem:** Microsoft's extension targets Microsoft Agent Framework (`Microsoft.Agents.AI`). This library targets the **GitHub Copilot SDK** (`Copilot.Durable` driving the GitHub Copilot CLI).
+- **Infrastructure Footprint:** Microsoft's extension relies on the Durable Task Framework backed by a Durable Task Scheduler (DTS) service/emulator or Azure Functions host. `Copilot.Durable` is **self-contained and embedded**: agent state lives directly in your application store (a single JSONL file with cross-process locking, or an EF Core database) without requiring external orchestrator services, daemon containers, or cloud runtimes.
+- **State & Concurrency Semantics:** Microsoft's extension models long-running workflows as event-sourced orchestrations and entities (`RaiseEventAsync`). `Copilot.Durable` structures state around **versioned domain documents** (with first-writer-wins conflict policies), checkpointed state machines, and step-level memoization.
+
+Both approaches are benchmarked side-by-side under identical fault injections (process kills, duplicate deliveries, and store outages) in [**Band G of our Real-World Matrix**](docs/REAL_WORLD_MATRIX.md#band-g--long-running-operations).
+
+---
 
 ## Acknowledgements & Attribution
 
