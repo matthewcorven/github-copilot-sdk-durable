@@ -1341,7 +1341,13 @@ export class InMemoryStoreProvider implements IDurableStoreProvider {
                 snapshot.tasks.push(task);
                 break;
               }
-              default: throw new Error(`Unknown JSONL record type '${record.type}'.`);
+              default:
+                // An unknown record type is not an error. Another implementation of this store may
+                // write record types this one does not model, and the C# runtime already writes
+                // kinds this reader ignores. Refusing to open the file would make every newer
+                // store unreadable here, and compacting it would delete the other writer's data.
+                // Skipping the record keeps the file readable and leaves it intact.
+                break;
             }
             offset = newline < 0 ? bytes.length : end + 1;
           }
@@ -1523,6 +1529,13 @@ export class DurableStore {
    * outside this flow, so it sees no context and waits normally.
    */
   private commitScope: AsyncLocalStorage<string> | null = null;
+
+  /**
+   * The operation whose commit currently holds the gate, or `null` when the gate is free. Read by
+   * `withGate` to tell a live re-entry (or a child started while its parent still holds the gate)
+   * from a fan-out child whose parent has already released.
+   */
+  private gateHolder: string | null = null;
 
   private schedulerOwner: object | null = null;
   private taskScheduler: ((taskId: string, cancellationToken: AbortSignal) => void) | null = null;
@@ -2057,11 +2070,18 @@ export class DurableStore {
    * A re-entry is not a slow call, it is a hang: the gate is not reentrant, so the inner call
    * waits for the release the outer one is holding and cannot reach. Refusing it here turns that
    * into an error a caller can catch.
+   *
+   * The refusal is keyed on the commit that currently holds the gate, not merely on "this flow
+   * inherited a scope". A scope inherited from a commit that has since released is a fan-out —
+   * a child started inside a callback — and waiting for the gate is correct and completes. A
+   * child that starts while the callback still holds the gate is indistinguishable from a
+   * re-entry, and queuing on it would deadlock whenever the callback awaits the child, so it is
+   * refused as well.
    */
   private async withGate<T>(operation: string, body: () => Promise<T>): Promise<T> {
-    const commit = this.commitScope?.getStore();
-    if (commit !== undefined) {
-      throw new DurableCommitReentryException(operation, commit);
+    const inherited = this.commitScope?.getStore();
+    if (inherited !== undefined && inherited === this.gateHolder) {
+      throw new DurableCommitReentryException(operation, inherited);
     }
 
     const previous = this.gateTail;
@@ -2072,9 +2092,11 @@ export class DurableStore {
 
     await previous;
     this.commitScope ??= new AsyncLocalStorage<string>();
+    this.gateHolder = operation;
     try {
       return await this.commitScope.run(operation, body);
     } finally {
+      this.gateHolder = null;
       release();
     }
   }
@@ -2084,10 +2106,9 @@ export class DurableStore {
    *
    * The scope is an `AsyncLocalStorage` store, so it flows into continuations — including work
    * started from inside a commit's callback. A task created and scheduled by a callback (a
-   * fan-out) therefore inherits the parent's scope, and its own commit would be refused as a
-   * re-entry it is not: the child is a new run on its own flow, not a call nested inside the
-   * parent's commit. Every task run crosses this boundary, so a child always starts outside a
-   * scope.
+   * fan-out) therefore inherits the parent's scope; this boundary makes it start with no scope at
+   * all, so its own commit is never judged against a parent's lifetime. Every task run crosses
+   * this boundary.
    */
   async outsideCommitScope<T>(body: () => Promise<T>): Promise<T> {
     if (this.commitScope === null) {
@@ -2246,6 +2267,627 @@ export class DocumentDraft<T extends JsonValue> {
     this.transaction.commitDocument(this.definition, this.ownerId, this.value, entryId);
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shifts
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * What a shift claim currently is, as the store records it.
+ *
+ * The value is persisted as text rather than as this enum, and an unrecognized value is
+ * read back as `Uncertain`. That is deliberate: a store written by a newer build may hold
+ * a state this build has never heard of, and the honest answer to "what is this claim?" is
+ * then "I do not know" — which must fail the caller read-only rather than let it act on a
+ * guess.
+ */
+export const ShiftClaimStatus = {
+  /** Some owner holds the shift. */
+  Active: "active",
+  /** The owner released the shift after committing a handoff. */
+  Released: "released",
+  /**
+   * The recorded state is not one this build understands, or the claim record is
+   * incomplete. A caller must not mutate on this: reconcile it by hand.
+   */
+  Uncertain: "uncertain",
+} as const;
+
+export type ShiftClaimStatus = (typeof ShiftClaimStatus)[keyof typeof ShiftClaimStatus];
+
+/**
+ * The durable record of one shift's ownership: who holds it, which attempt it is, and how
+ * it got there.
+ *
+ * A shift claim is a document rather than a lock. A lock that lived for the duration of a
+ * shift would outlive the process holding it, which is the stale-lock problem the store
+ * file lock already solves by dying with the process. This record is instead the durable
+ * fact of who was last granted the shift, checked at each transition, so a host that dies
+ * simply stops transitioning and the next host reads the last committed attempt.
+ *
+ * `owner` is an opaque token the caller chooses — a host instance id, a session id, or a
+ * name. It is compared for equality and never interpreted, because the store has no way to
+ * know which process a token belongs to.
+ */
+export class DurableShiftClaim {
+  /** The document kind a shift claim is stored under. */
+  static readonly DocumentKind = "durable.shift-claim";
+
+  /** The prefix of the owner id a shift claim is stored under. */
+  static readonly OwnerPrefix = "shift:";
+
+  /** The owner id a claim for this shift key is stored under. */
+  static ownerId(key: string): string {
+    return `${DurableShiftClaim.OwnerPrefix}${key}`;
+  }
+
+  constructor(
+    /** The shift key, e.g. `sessions/po-shift`. */
+    readonly key: string,
+    /** The member whose shift this is, for listings. */
+    readonly member: string | null,
+    /** The token of the owner the shift was granted to. */
+    readonly owner: string,
+    /** The owner's session, when it has one. */
+    readonly sessionId: string | null,
+    /**
+     * The status exactly as the store holds it: the single authority for what the record says.
+     * Preserved so an unrecognized value survives a read and is reported rather than being
+     * rewritten into a value this build understands.
+     */
+    readonly statusText: string | null,
+    /** The acquisition counter. Every new grant increments it. */
+    readonly attempt: number,
+    /** The attempt this grant resumed from, or `null` for a fresh shift. */
+    readonly resumedFrom: number | null,
+    /** When the grant was committed, in UTC. */
+    readonly claimedAt: string,
+    /** When the owner released the shift, in UTC, or `null` while it is held. */
+    readonly releasedAt: string | null = null,
+  ) {}
+
+  /**
+   * The claim state, as this build reads it: a view of `statusText`, resolved through this
+   * build's vocabulary. An unknown or missing text reads as `Uncertain`, never as a default.
+   */
+  get status(): ShiftClaimStatus {
+    const text = this.statusText;
+    if (text === null || text.trim().length === 0) return ShiftClaimStatus.Uncertain;
+    if (text === ShiftClaimStatus.Active) return ShiftClaimStatus.Active;
+    if (text === ShiftClaimStatus.Released) return ShiftClaimStatus.Released;
+    return ShiftClaimStatus.Uncertain;
+  }
+
+  /** How many times this shift has been granted. Equal to `attempt`. */
+  get grants(): number {
+    return this.attempt;
+  }
+}
+
+/**
+ * What a committed handoff means: work is starting, or work has stopped.
+ *
+ * The canonical wire spelling is the lowercase one here, shared with the C# and Python ports.
+ * A record written by an earlier C# build holds `HandedOff`/`Running`, which `phaseFromWire`
+ * still reads: misreading a running shift as handed off would let a second session claim it and
+ * duplicate the run.
+ */
+export const ShiftHandoffPhase = {
+  /**
+   * Committed before the turn runs. The owner may be mid-work, so only the same session —
+   * the process that wrote it and restarted — may resume from it.
+   */
+  Running: "running",
+  /** Committed when the shift stops, before release. Any successor may resume from it. */
+  HandedOff: "handedOff",
+} as const;
+
+export type ShiftHandoffPhase = (typeof ShiftHandoffPhase)[keyof typeof ShiftHandoffPhase];
+
+/**
+ * The durable handoff a shift owner commits before it releases the shift.
+ *
+ * The handoff is what makes an interrupted shift recoverable. A claim alone records who may
+ * run; the handoff records what was running and what is owed. A successor therefore has two
+ * different situations to tell apart: a shift held by an owner with no handoff (work may be
+ * in flight — do not take it) and a shift held by an owner with a committed handoff (work
+ * stopped at a known point — resume from it).
+ *
+ * Writing the handoff is not a separate bookkeeping step the caller may skip. The release
+ * refuses to commit without a handoff for the attempt being released, so a store can never
+ * describe a shift that was let go with nothing recorded.
+ */
+export class DurableShiftHandoff {
+  /** The document kind a shift handoff is stored under. */
+  static readonly DocumentKind = "durable.shift-handoff";
+
+  /** The prefix of the owner id a shift handoff is stored under. */
+  static readonly OwnerPrefix = "shift-handoff:";
+
+  /** The owner id a handoff for this shift key is stored under. */
+  static ownerId(key: string): string {
+    return `${DurableShiftHandoff.OwnerPrefix}${key}`;
+  }
+
+  constructor(
+    /** The shift key the handoff covers. */
+    readonly key: string,
+    /** The claim attempt the handoff was written for. */
+    readonly attempt: number,
+    /** The owner token that wrote the handoff. */
+    readonly owner: string,
+    /** Whether the handoff records work starting or work stopping. */
+    readonly phase: ShiftHandoffPhase,
+    /** What this shift worked on. */
+    readonly selected: string | null,
+    /** What it completed. */
+    readonly achieved: string | null,
+    /** What is still owed. */
+    readonly remaining: string | null,
+    /** The next action a successor should take first. */
+    readonly next: string | null,
+    /** Blockers a successor must know about. */
+    readonly blockers: string | null,
+    /** When the handoff was committed, in UTC. */
+    readonly writtenAt: string,
+  ) {}
+}
+
+/** What a claim request did. */
+export const ShiftClaimOutcome = {
+  /** This caller now holds the shift. */
+  Acquired: "acquired",
+  /** Another owner holds the shift and no handoff makes it resumable. */
+  Conflict: "conflict",
+  /** The state cannot be trusted. Read-only: report and stop. */
+  ReadOnly: "readOnly",
+} as const;
+
+export type ShiftClaimOutcome = (typeof ShiftClaimOutcome)[keyof typeof ShiftClaimOutcome];
+
+/** The result of a claim or release attempt. */
+export class ShiftClaimResult {
+  constructor(
+    /** What happened. */
+    readonly outcome: ShiftClaimOutcome,
+    /** The claim as the store now holds it, or as it was found. */
+    readonly claim: DurableShiftClaim | null,
+    /** A human-readable reason, always present for a refusal. */
+    readonly message: string,
+  ) {}
+}
+
+/** The definition a claim is stored under. */
+export const ShiftClaimDefinition = new DocumentDefinition<JsonObject>(
+  DurableShiftClaim.DocumentKind,
+  DocumentHistory.Rewindable,
+  ForkPolicy.Initial,
+);
+
+/** The definition a handoff is stored under. */
+export const ShiftHandoffDefinition = new DocumentDefinition<JsonObject>(
+  DurableShiftHandoff.DocumentKind,
+  DocumentHistory.Rewindable,
+  ForkPolicy.Initial,
+);
+
+function shiftClaimFromWire(value: JsonValue | null): DurableShiftClaim | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const data = value;
+  return new DurableShiftClaim(
+    String(data["key"]),
+    typeof data["member"] === "string" ? data["member"] : null,
+    String(data["owner"]),
+    typeof data["sessionId"] === "string" ? data["sessionId"] : null,
+    typeof data["statusText"] === "string" ? data["statusText"] : null,
+    Number(data["attempt"]),
+    typeof data["resumedFrom"] === "number" ? data["resumedFrom"] : null,
+    String(data["claimedAt"] ?? ""),
+    typeof data["releasedAt"] === "string" ? data["releasedAt"] : null,
+  );
+}
+
+/**
+ * Reads a stored handoff phase. `running` is the only spelling that means "in flight"; every
+ * other value — including the earlier build's `HandedOff`/`Running` capitalization — is
+ * resolved case-insensitively so an existing store keeps its meaning. An unrecognized value is
+ * the permissive `handedOff`: refusing the record would make a newer store unreadable, and a
+ * successor resuming a stopped shift is safe even if it should have been held.
+ */
+export function shiftHandoffPhaseFromWire(value: JsonValue | null): ShiftHandoffPhase {
+  return typeof value === "string" && value.toLowerCase() === ShiftHandoffPhase.Running
+    ? ShiftHandoffPhase.Running
+    : ShiftHandoffPhase.HandedOff;
+}
+
+function shiftHandoffFromWire(value: JsonValue | null): DurableShiftHandoff | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const data = value;
+  return new DurableShiftHandoff(
+    String(data["key"]),
+    Number(data["attempt"]),
+    String(data["owner"]),
+    shiftHandoffPhaseFromWire(data["phase"] ?? null),
+    typeof data["selected"] === "string" ? data["selected"] : null,
+    typeof data["achieved"] === "string" ? data["achieved"] : null,
+    typeof data["remaining"] === "string" ? data["remaining"] : null,
+    typeof data["next"] === "string" ? data["next"] : null,
+    typeof data["blockers"] === "string" ? data["blockers"] : null,
+    String(data["writtenAt"] ?? ""),
+  );
+}
+
+function shiftClaimValue(claim: DurableShiftClaim): JsonObject {
+  return {
+    key: claim.key,
+    member: claim.member,
+    owner: claim.owner,
+    sessionId: claim.sessionId,
+    statusText: claim.statusText,
+    attempt: claim.attempt,
+    resumedFrom: claim.resumedFrom,
+    claimedAt: claim.claimedAt,
+    releasedAt: claim.releasedAt,
+  };
+}
+
+function shiftHandoffValue(handoff: DurableShiftHandoff): JsonObject {
+  return {
+    key: handoff.key,
+    attempt: handoff.attempt,
+    owner: handoff.owner,
+    phase: handoff.phase,
+    selected: handoff.selected,
+    achieved: handoff.achieved,
+    remaining: handoff.remaining,
+    next: handoff.next,
+    blockers: handoff.blockers,
+    writtenAt: handoff.writtenAt,
+  };
+}
+
+/** The stored spelling of a claim status. */
+export function shiftClaimText(status: ShiftClaimStatus): string {
+  return status;
+}
+
+/**
+ * Reads a stored status text through this build's vocabulary. A value this build does not
+ * recognize — including a missing one — is `Uncertain`.
+ */
+export function readShiftClaimStatusText(text: string | null): ShiftClaimStatus {
+  if (text === null || text.trim().length === 0) return ShiftClaimStatus.Uncertain;
+  return text === ShiftClaimStatus.Active || text === ShiftClaimStatus.Released
+    ? text
+    : ShiftClaimStatus.Uncertain;
+}
+
+/**
+ * Reads a stored claim's status, resolving the text through this build's vocabulary.
+ * A value this build does not recognize — including a missing one — is `Uncertain`, which
+ * is the only safe reading of "unknown".
+ */
+function readShiftClaimStatus(claim: DurableShiftClaim): { status: ShiftClaimStatus; text: string | null } {
+  const text = claim.statusText;
+  if (text === null || text.trim().length === 0) {
+    // A record with no text is a record this build cannot verify: the text is the field the
+    // store actually holds, so its absence means the record is incomplete, not that it is
+    // active. The typed status is never used as a fallback.
+    return { status: ShiftClaimStatus.Uncertain, text: null };
+  }
+
+  return { status: readShiftClaimStatusText(text), text };
+}
+
+/**
+ * The shared shift-claim and handoff operations, built on ordinary documents.
+ *
+ * Nothing here is a new persistence primitive. A claim is a document of kind
+ * `durable.shift-claim` owned by `shift:{key}`; a handoff is a document of kind
+ * `durable.shift-handoff` owned by `shift-handoff:{key}`. Both are `ForkPolicy.Initial`,
+ * because forking a conversation is not inheriting a shift.
+ *
+ * The one primitive this needed and the layer did not have in the ports is a
+ * create-if-absent document write. `Transaction.doc` answers an absent document with the
+ * definition's initial value, so a read-then-write claim would let every claimant believe
+ * it was first. The commit gate serializes transactions, so reading the document state
+ * inside the transaction and creating it there is the same one-step guarantee.
+ */
+export const DurableShifts = {
+  /** The definition a claim is stored under. */
+  ClaimDefinition: ShiftClaimDefinition,
+
+  /** The definition a handoff is stored under. */
+  HandoffDefinition: ShiftHandoffDefinition,
+
+  /** Reads a shift claim, or `null` when the store holds none. */
+  readClaim(store: DurableStore, key: string): DurableShiftClaim | null {
+    const document = store.document(DurableShiftClaim.DocumentKind, DurableShiftClaim.ownerId(key));
+    return document === null ? null : shiftClaimFromWire(document.latest);
+  },
+
+  /** Reads the newest committed handoff, or `null` when there is none. */
+  readHandoff(store: DurableStore, key: string): DurableShiftHandoff | null {
+    const document = store.document(DurableShiftHandoff.DocumentKind, DurableShiftHandoff.ownerId(key));
+    return document === null ? null : shiftHandoffFromWire(document.latest);
+  },
+
+  /**
+   * Claims a shift for `owner` if nobody else holds it, or resumes it when the holder
+   * committed a handoff.
+   *
+   * A held shift is only taken over when the store holds a handoff for the held attempt.
+   * That is the whole duplicate-safety rule: an owner with no handoff may be mid-turn, so a
+   * second claimant is refused and told who holds it; an owner with a handoff has recorded
+   * where it stopped, so the successor resumes rather than repeating work. Age plays no part
+   * — a claim is never taken because a clock says it is old.
+   *
+   * The read, the decision, and the write are one transaction under the store's commit
+   * gate, so two claimants in one process cannot both win. Two processes are already
+   * separated by the store file's exclusive lock: the second never opens the file.
+   */
+  async claimAsync(
+    store: DurableStore,
+    key: string,
+    owner: string,
+    now: string,
+    member: string | null = null,
+    sessionId: string | null = null,
+  ): Promise<ShiftClaimResult> {
+    if (!key || !key.trim()) throw new Error("A shift key is required.");
+    if (!owner || !owner.trim()) throw new Error("A shift owner is required.");
+
+    return store.commitAsync((tx) => {
+      const claimOwnerId = DurableShiftClaim.ownerId(key);
+      const existing = store.document(DurableShiftClaim.DocumentKind, claimOwnerId);
+      const documentExists = existing !== null;
+      const current = existing === null ? null : shiftClaimFromWire(existing.latest);
+
+      // No record at all: this is the create-if-absent path. It is the only path where the
+      // document itself has to appear, and it happens inside this transaction, so a rolled
+      // back claim leaves nothing behind.
+      if (!documentExists) {
+        const created = new DurableShiftClaim(
+          key, member, owner, sessionId, shiftClaimText(ShiftClaimStatus.Active),
+          1, null, now,
+        );
+        const entryId = tx.appendEntry(claimOwnerId, "shift-claim");
+        tx.commitDocument(ShiftClaimDefinition, claimOwnerId, shiftClaimValue(created), entryId);
+        return new ShiftClaimResult(ShiftClaimOutcome.Acquired, created, `acquired attempt 1 for '${owner}'.`);
+      }
+
+      if (current === null) {
+        return new ShiftClaimResult(
+          ShiftClaimOutcome.ReadOnly,
+          null,
+          `the store holds a claim for '${key}' that this transaction could not read back; `
+            + "treating it as uncertain rather than claiming over it.",
+        );
+      }
+
+      const read = readShiftClaimStatus(current);
+      if (read.status === ShiftClaimStatus.Uncertain) {
+        return new ShiftClaimResult(
+          ShiftClaimOutcome.ReadOnly,
+          current,
+          `the claim for '${key}' records state '${current.statusText ?? "(none)"}', which this build `
+            + "cannot interpret. Read-only: reconcile it before claiming.",
+        );
+      }
+
+      if (read.status === ShiftClaimStatus.Active && current.owner === owner) {
+        return new ShiftClaimResult(
+          ShiftClaimOutcome.Acquired,
+          current,
+          `'${owner}' already holds attempt ${current.attempt} of '${key}'.`,
+        );
+      }
+
+      if (read.status === ShiftClaimStatus.Active) {
+        const handoff = DurableShifts.readHandoff(store, key);
+        if (handoff === null) {
+          return new ShiftClaimResult(
+            ShiftClaimOutcome.Conflict,
+            current,
+            `'${key}' is held by '${current.owner}' (attempt ${current.attempt}) with no committed `
+              + "handoff, so the work may be in flight. Not taking it over.",
+          );
+        }
+
+        if (handoff.attempt !== current.attempt) {
+          return new ShiftClaimResult(
+            ShiftClaimOutcome.ReadOnly,
+            current,
+            `the claim for '${key}' is attempt ${current.attempt} but the newest handoff is for attempt `
+              + `${handoff.attempt}. The records disagree; reconcile them rather than resuming.`,
+          );
+        }
+
+        // An in-flight handoff is only resumable by the session that wrote it. The same
+        // session means the same process, restarted: its work stopped at a known point. A
+        // different session could be racing a live owner, and age is not evidence that it
+        // died, so it is refused rather than resuming over a running shift.
+        const sameSession =
+          current.sessionId !== null && current.sessionId.length > 0 && current.sessionId === sessionId;
+        if (handoff.phase === ShiftHandoffPhase.Running && !sameSession) {
+          return new ShiftClaimResult(
+            ShiftClaimOutcome.Conflict,
+            current,
+            `'${key}' is held by '${current.owner}' (attempt ${current.attempt}, session `
+              + `'${current.sessionId ?? "(none)"}') with an in-flight handoff. Only that session resumes it; `
+              + "a different session must not duplicate the run.",
+          );
+        }
+      }
+
+      // Either the previous owner released it, or it is held with a matching handoff. Both
+      // are safe to take: the first is a finished shift, the second an interrupted one whose
+      // stopping point is written down.
+      const resumedFrom = current.attempt;
+      const next = new DurableShiftClaim(
+        key,
+        member ?? current.member,
+        owner,
+        sessionId,
+        shiftClaimText(ShiftClaimStatus.Active),
+        current.attempt + 1,
+        resumedFrom,
+        now,
+      );
+
+      const nextEntryId = tx.appendEntry(claimOwnerId, "shift-claim");
+      tx.commitDocument(ShiftClaimDefinition, claimOwnerId, shiftClaimValue(next), nextEntryId);
+
+      const reason = read.status === ShiftClaimStatus.Released
+        ? `acquired attempt ${next.attempt} of '${key}' after '${current.owner}' released it.`
+        : `resumed attempt ${next.attempt} of '${key}' from committed handoff ${resumedFrom}.`;
+      return new ShiftClaimResult(ShiftClaimOutcome.Acquired, next, reason);
+    });
+  },
+
+  /**
+   * Commits a handoff for the attempt the owner currently holds.
+   *
+   * The handoff is refused rather than silently written when the claim it describes is not
+   * the caller's. A handoff that named someone else's attempt would let a successor resume
+   * another owner's in-flight work, which is the duplicate execution this record exists to
+   * prevent.
+   */
+  async writeHandoffAsync(
+    store: DurableStore,
+    key: string,
+    owner: string,
+    attempt: number,
+    now: string,
+    phase: ShiftHandoffPhase = ShiftHandoffPhase.HandedOff,
+    selected: string | null = null,
+    achieved: string | null = null,
+    remaining: string | null = null,
+    next: string | null = null,
+    blockers: string | null = null,
+  ): Promise<boolean> {
+    if (!key || !key.trim()) throw new Error("A shift key is required.");
+    if (!owner || !owner.trim()) throw new Error("A shift owner is required.");
+
+    return store.commitAsync((tx) => {
+      const claim = DurableShifts.readClaim(store, key);
+      if (
+        claim === null
+        || claim.attempt !== attempt
+        || claim.owner !== owner
+        || readShiftClaimStatus(claim).status !== ShiftClaimStatus.Active
+      ) {
+        return false;
+      }
+
+      const handoff = new DurableShiftHandoff(
+        key, attempt, owner, phase, selected, achieved, remaining, next, blockers, now,
+      );
+      const handoffOwnerId = DurableShiftHandoff.ownerId(key);
+      const handoffEntryId = tx.appendEntry(handoffOwnerId, "shift-handoff");
+      tx.commitDocument(ShiftHandoffDefinition, handoffOwnerId, shiftHandoffValue(handoff), handoffEntryId);
+      return true;
+    });
+  },
+
+  /**
+   * Releases a held shift, refusing unless the caller owns the held attempt and a handoff
+   * for that attempt is already committed.
+   *
+   * `Acquired` means success (the caller no longer holds it), `Conflict` a refusal the
+   * caller can fix, and `ReadOnly` when the records do not agree.
+   *
+   * Releasing is idempotent for the owner that released: releasing again reports success
+   * with the released record. That keeps a retried shutdown harmless without letting the
+   * retry rewrite history.
+   */
+  async releaseAsync(store: DurableStore, key: string, owner: string, now: string): Promise<ShiftClaimResult> {
+    if (!key || !key.trim()) throw new Error("A shift key is required.");
+    if (!owner || !owner.trim()) throw new Error("A shift owner is required.");
+
+    return store.commitAsync((tx) => {
+      const current = DurableShifts.readClaim(store, key);
+      if (current === null) {
+        return new ShiftClaimResult(
+          ShiftClaimOutcome.Conflict,
+          null,
+          `the store holds no claim for '${key}', so there is nothing to release.`,
+        );
+      }
+
+      const status = readShiftClaimStatus(current);
+      if (status.status === ShiftClaimStatus.Uncertain) {
+        return new ShiftClaimResult(
+          ShiftClaimOutcome.ReadOnly,
+          current,
+          `the claim for '${key}' records state '${current.statusText ?? "(none)"}', which this build `
+            + "cannot interpret. Read-only: not releasing.",
+        );
+      }
+
+      if (current.owner !== owner) {
+        return new ShiftClaimResult(
+          ShiftClaimOutcome.Conflict,
+          current,
+          `'${key}' is held by '${current.owner}', not by '${owner}'. Only the holding owner releases.`,
+        );
+      }
+
+      if (status.status === ShiftClaimStatus.Released) {
+        return new ShiftClaimResult(
+          ShiftClaimOutcome.Acquired,
+          current,
+          `'${key}' was already released by '${owner}' at ${current.releasedAt}.`,
+        );
+      }
+
+      const handoff = DurableShifts.readHandoff(store, key);
+      if (handoff === null) {
+        return new ShiftClaimResult(
+          ShiftClaimOutcome.Conflict,
+          current,
+          `'${owner}' holds '${key}' but no handoff is committed. Write the handoff before releasing.`,
+        );
+      }
+
+      if (handoff.attempt !== current.attempt) {
+        return new ShiftClaimResult(
+          ShiftClaimOutcome.ReadOnly,
+          current,
+          `the claim for '${key}' is attempt ${current.attempt} but the newest handoff is for attempt `
+            + `${handoff.attempt}. The records disagree; read-only, not releasing.`,
+        );
+      }
+
+      const released = new DurableShiftClaim(
+        current.key,
+        current.member,
+        current.owner,
+        current.sessionId,
+        shiftClaimText(ShiftClaimStatus.Released),
+        current.attempt,
+        current.resumedFrom,
+        current.claimedAt,
+        now,
+      );
+
+      const releaseOwnerId = DurableShiftClaim.ownerId(key);
+      const releaseEntryId = tx.appendEntry(releaseOwnerId, "shift-claim");
+      tx.commitDocument(ShiftClaimDefinition, releaseOwnerId, shiftClaimValue(released), releaseEntryId);
+      return new ShiftClaimResult(
+        ShiftClaimOutcome.Acquired,
+        released,
+        `released attempt ${released.attempt} of '${key}' with handoff ${handoff.attempt}.`,
+      );
+    });
+  },
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Extensions
@@ -3089,7 +3731,8 @@ const forkDocument = new DocumentDefinition<JsonObject>("durable.fork", Document
 const bindingDocument = new DocumentDefinition<JsonObject>("durable.session-binding", DocumentHistory.Rewindable, ForkPolicy.Initial);
 const admissionDocument = new DocumentDefinition<JsonObject>("durable.admission");
 const checkpointDocument = new DocumentDefinition<JsonObject>("durable.checkpoint");
-const internalKinds = new Set([agentDocument, forkDocument, bindingDocument, admissionDocument, checkpointDocument].map(d => d.kind));
+const internalKinds = new Set([agentDocument, forkDocument, bindingDocument, admissionDocument, checkpointDocument,
+  ShiftClaimDefinition, ShiftHandoffDefinition].map(d => d.kind));
 function wireChoices(choices: AgentChoices): JsonObject {
   const { hooks: _hooks, ...data } = choices;
   return JSON.parse(JSON.stringify(data));

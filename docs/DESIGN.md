@@ -754,7 +754,64 @@ resumes the sleep or applies the missed-run policy. Nothing about the cadence li
   time zones beyond UTC and local. Two hosts scheduling the same store is a coordination question
   the store's ownership rules answer, not this command.
 
-### 3.14 Dev Tunnels and host portability
+### 3.14a Shift claims and durable handoffs — `shift`
+
+`shift` is a schedule occurrence plus ownership. It claims a shift for one member, records where
+the shift stopped, runs one turn, and hands the shift off. Its records are ordinary documents, and
+its duplicate-safety rule is one comparison, so the whole feature is a thin layer over the store
+rather than a second concurrency mechanism.
+
+- **The claim record.** A document of kind `durable.shift-claim`, owner id `shift:{key}`,
+  `ForkPolicy.Initial`, listed in `InternalDocumentKinds` so it is bookkeeping rather than
+  transcript. The key is the caller's — `sessions/po-shift` in this repository's conventions —
+  and the owner id keeps the claim out of every conversation and out of every fork, so forking a
+  conversation does not inherit a shift. The value carries `key`, `member`, `owner` (an opaque
+  token the caller chooses), `sessionId`, `statusText`, `attempt`, `resumedFrom`, `claimedAt`,
+  and `releasedAt`. `statusText` is the only claim-state field on the wire: `status` is a
+  computed view of it, never persisted, so a value written by a newer build is read rather than
+  throwing.
+- **The handoff record.** A document of kind `durable.shift-handoff`, owner id
+  `shift-handoff:{key}`, same history and fork policy. It carries `attempt`, `owner`, `phase`,
+  `selected`, `achieved`, `remaining`, `next`, `blockers`, and `writtenAt`. The `attempt` is what
+  binds a handoff to the claim it describes: a handoff for attempt 7 against a claim at attempt 1
+  is not a resumable record, it is a store someone edited.
+- **Claiming is create-if-absent, not read-then-write.** `Transaction.Doc` answers an absent
+  document with the definition's initial value, so two claimants that read-then-write would both
+  believe they were first. `Transaction.TryCreateDocument` is the primitive that makes the read
+  and the write one step, and the whole claim runs inside one `CommitAsync` under the store's
+  commit gate. Two claimants in one process therefore produce exactly one winner; two processes
+  are already separated by the store file's exclusive lock.
+- **The claim is not a lock.** Holding a lock for the duration of a shift would reintroduce the
+  stale-lock problem the file lock solves by dying with the process. The claim is instead the
+  durable fact of who was last granted the shift, and `attempt` is a monotonic counter. A host
+  that dies simply stops advancing it.
+- **A live shift is never taken on age.** A different owner is refused while the held attempt has
+  no handoff, because the owner may be mid-turn. Age plays no part: a clock is not evidence that a
+  process died, and a claim taken on a timer is exactly the duplicate execution this record
+  exists to prevent.
+- **An interrupted shift resumes from its own handoff.** The host commits a handoff with phase
+  `running` *before* the turn, then a handoff with phase `handedOff` and a release afterwards.
+  `running`/`handedOff` is the canonical wire spelling in all three ports; a reader also accepts
+  the earlier C# build's `Running`/`HandedOff` case-insensitively, because a running shift read as
+  handed off would let a second session duplicate the run. The in-flight handoff is only resumable
+  by the same session — the same process, restarted — so a killed run recovers from a known
+  stopping point instead of repeating its turn. A released shift, or a `handedOff` handoff, is
+  resumable by any owner.
+- **Uncertain state fails read-only.** `statusText` is the field the store holds, and it is
+  resolved through this build's vocabulary. A value this build does not know — including a missing
+  one, or a claim whose text says another implementation wrote it — reads as `Uncertain` and both
+  the claim and the release refuse with `ReadOnly`. The record is never rewritten to a value this
+  build understands, so a newer store stays readable by the build that wrote it. The same rule
+  applies when the claim and the newest handoff disagree on the attempt.
+- **Handoff before release.** `ReleaseAsync` refuses unless a handoff for the held attempt is
+  already committed and the caller owns the claim, so the store can never describe a shift that
+  was let go with nothing recorded. Releasing twice by the same owner is idempotent: the second
+  call reports the released record without rewriting it.
+- **What this is not.** No process liveness check, no heartbeat, no lease expiry, and no
+  cross-store claim. Those would each be a new mechanism; this section deliberately has none, and
+  says so rather than implying an owner can be proven dead.
+
+### 3.15 Dev Tunnels and host portability
 
 `serve --http --dev-tunnel` opts into exposure through the optional `devtunnel` executable on
 `PATH`. It runs exactly `devtunnel host --port <port>`, with the port read from the bound socket

@@ -14,6 +14,28 @@ See [`docs/RELEASING.md`](docs/RELEASING.md) for the release procedure.
 
 ### Added
 
+- **Shift claims and durable handoffs: `DurableShifts` and `shift`.** A scheduled member shift
+  can now claim repository-wide ownership atomically, record where it stopped, and resume after
+  a killed process without repeating the turn. `Transaction.TryCreateDocument` and
+  `IDurableStoreProvider.TryCreateDocument` are the create-if-absent primitive this needed:
+  `Transaction.Doc` answers an absent document with its initial value, so a read-then-write claim
+  would let two claimants both believe they were first. `DurableShifts.ClaimAsync` refuses a
+  different owner while the held attempt has no committed handoff (age is never evidence a
+  process died), admits a successor from a released claim or a `handedOff` handoff, and resumes an
+  interrupted run only for the same session from its in-flight handoff. `WriteHandoffAsync` and
+  `ReleaseAsync` refuse to let a shift go without a handoff for the held attempt. A `statusText`
+  this build cannot read — an unknown value, a missing one, a handoff disagreeing with the claim —
+  reads as `Uncertain` and fails `ReadOnly` in both directions; the record is never rewritten. The
+  runtime host gains `shift`, which claims, commits an in-flight handoff before the turn, runs
+  once, commits the completed handoff and releases, and exits non-zero without running when the
+  shift is held or the state is uncertain. Two starter-facing changes: `RunTurnAsync` now runs
+  the prompt it is given rather than always `--input` (its only other caller already passes that
+  value), and the TypeScript JSONL reader skips unknown record types instead of refusing the file,
+  so a store written by a newer C# build still opens. No store envelope change: both new documents
+  are ordinary records of an existing type, `v` stays `1`, and an existing store still reads.
+  The shift records' *field* spellings are part of the cross-language wire contract and are
+  described under "Migration notes" below. (#225)
+
 - **External events: a task that waits for something outside the store.**
   `TaskCommit.WaitingForEvent(checkpoint, "external:<name>")` parks a task on a name nothing in
   the store produces: the run ends with the task `Waiting`, holding no invocation and no timer,
@@ -41,6 +63,44 @@ See [`docs/RELEASING.md`](docs/RELEASING.md) for the release procedure.
   while a commit is in flight is outside the committing flow and waits normally, and
   `TaskRuntime.MemoAsync` from a phase handler outside a commit is unchanged.
   No store bytes change: the guard is in-memory runtime state. C#, TypeScript and Python. (#201)
+
+### Fixed
+
+- **Shift handoff phase spelling mismatched between C#, TypeScript and Python.** C# wrote the
+  enum's own names (`Running`/`HandedOff`) while both ports wrote `running`/`handedOff`. A
+  C#-written *running* handoff therefore read back in TypeScript as `handedOff` (and compared
+  `False` in Python), and a *different* session could claim a live shift — duplicate execution,
+  the exact failure the record exists to prevent. All three now share one canonical spelling,
+  `running` / `handedOff` (`ShiftHandoffPhaseConverter` in C#, `shiftHandoffPhaseFromWire` /
+  `shift_handoff_phase_from_wire` in the ports), and every reader also accepts the previous
+  build's capitalized names case-insensitively. (#225)
+- **`Uncertain` was unreachable in C#.** `DurableShiftClaim.Status` was a typed enum on the wire,
+  so a `status` value from a newer build threw `JsonException` before `DurableShifts` could return
+  `Uncertain`. `status` is now a computed, non-serialized view of `statusText` in all three ports,
+  so `statusText` is the single authority and an unknown status reaches the read-only path instead
+  of throwing. (#225)
+- **The commit re-entry guard rejected legitimate fan-out.** The guard keyed on an inherited
+  async-local alone, so a `Task.Run` / `ThreadPool.QueueUserWorkItem` (and `asyncio.create_task`)
+  child started from inside a commit callback was refused as a re-entry even after the outer
+  commit had released. It now keys on the commit that currently holds the gate, so an inherited
+  scope whose commit has finished is a fan-out and queues normally, while a genuine synchronous
+  nested commit on the committing flow still throws `DurableCommitReentryException`. (#225)
+- **`grants` was written to the store.** `DurableShiftClaim.Grants` is a computed view of
+  `Attempt`; it is now `[JsonIgnore]`, so a claim record no longer carries a `grants` field the
+  ports do not write. (#225)
+
+### Migration notes
+
+- **Shift record wire format (C# and the ports).** The previous C# build wrote a capitalized
+  handoff phase (`"Running"` / `"HandedOff"`) and a typed `status` field on the claim. The new
+  build writes the ports' lowercase phase (`"running"` / `"handedOff"`) and treats `statusText`
+  as the only claim-state field. **Backward compatible:** an existing store continues to read —
+  the capitalized phase is accepted on read (case-insensitively), and a `status` field is ignored
+  in favour of `statusText`, which every prior build also wrote. The redundant `grants` field is
+  no longer written but is ignored on read. The store envelope is unchanged: `v` stays `1`, the
+  document kinds are unchanged, and no record type is added. A cross-port reopen test
+  (`ShiftCrossPortTests` in Python, the `durable-shift-cross` tests in TypeScript) writes a store
+  with the canonical C# fixture and reads it in each port, and the reverse.
 
 ### Fixed
 

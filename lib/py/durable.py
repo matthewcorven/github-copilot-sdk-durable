@@ -70,6 +70,9 @@ __all__ = [
     "DurableSandboxPolicy",
     "DurableSandboxPolicyException",
     "DurableSandboxProxy",
+    "DurableShiftClaim",
+    "DurableShiftHandoff",
+    "DurableShifts",
     "DurableStore",
     "DurableStoreFormat",
     "DurableStoreOptions",
@@ -94,6 +97,12 @@ __all__ = [
     "ResolvedAgent",
     "SectionInput",
     "SessionBinding",
+    "ShiftClaimOutcome",
+    "ShiftClaimResult",
+    "ShiftClaimStatus",
+    "ShiftHandoffPhase",
+    "shift_handoff_phase_from_wire",
+    "read_shift_claim_status_text",
     "StoreFileLock",
     "StoreSnapshot",
     "TaskCommit",
@@ -1854,15 +1863,16 @@ class DurableStore:
         )
         self._gate = asyncio.Lock()
         # The commit whose callback is running in the current context, if any. This is what
-        # makes the non-reentrant gate refuse a re-entry instead of hanging on it. It
-        # deliberately does not identify the gate's owner: a context variable is captured by
-        # each task that awaits inside the callback, so it cannot say whether a caller is the
-        # committing task itself or a different one. What it does answer reliably is "this
-        # context is inside a commit", and that is exactly the condition under which the gate
-        # would deadlock. A different task is outside this context, so it sees no scope and
-        # waits normally.
+        # makes the non-reentrant gate refuse a re-entry instead of hanging on it. A context
+        # variable is captured by each task that awaits inside the callback, so it cannot by
+        # itself say whether a caller is the committing task or one that inherited the scope.
+        # It is paired with ``_gate_holder``: the operation whose commit holds the gate right
+        # now. A caller whose scope is that same value is the committing task (or a continuation
+        # of it) and would deadlock, so the call is refused. A caller whose inherited scope came
+        # from a commit that has since released is a fan-out child and queues normally.
         self._commit_scope: ContextVar[str | None] = ContextVar(
             f"durable_commit_scope_{id(self)}", default=None)
+        self._gate_holder: str | None = None
         self._scheduler_gate = threading.Lock()
         self._scheduler_owner: object | None = None
         self._task_scheduler: Callable[[str, asyncio.Event | None], None] | None = None
@@ -2085,6 +2095,7 @@ class DurableStore:
         store._format = format
         store._gate = asyncio.Lock()
         store._commit_scope = ContextVar(f"durable_commit_scope_{id(store)}", default=None)
+        store._gate_holder: str | None = None
         store._scheduler_gate = threading.Lock()
         store._scheduler_owner = None
         store._task_scheduler = None
@@ -2100,9 +2111,13 @@ class DurableStore:
         A re-entry is not a slow call, it is a hang: the gate is not reentrant, so the inner
         call waits for the release the outer one is holding and cannot reach. Refusing it here
         turns that into an error a caller can catch.
+
+        The refusal is keyed on the commit that currently holds the gate, not merely on "this
+        context inherited a scope". A scope inherited from a commit that has since released is a
+        fan-out child and queues normally.
         """
         commit_operation = self._commit_scope.get()
-        if commit_operation is not None:
+        if commit_operation is not None and commit_operation == self._gate_holder:
             raise DurableCommitReentryException(operation, commit_operation)
 
         await self._gate.acquire()
@@ -2114,9 +2129,11 @@ class DurableStore:
         """
         await self._enter_gate(operation)
         token = self._commit_scope.set(operation)
+        self._gate_holder = operation
         try:
             yield
         finally:
+            self._gate_holder = None
             self._commit_scope.reset(token)
             self._gate.release()
 
@@ -2696,6 +2713,541 @@ def _field_types(cls: type[Any]) -> dict[str, Any]:
         return {field.name: field.type for field in dataclasses.fields(cls)}  # type: ignore[arg-type]
 
 
+class ShiftClaimStatus(str, Enum):
+    """What a shift claim currently is, as the store records it.
+
+    The value is persisted as text rather than as an enum, and an unrecognized value is
+    read back as ``UNCERTAIN``. That is deliberate: a store written by a newer build may
+    hold a state this build has never heard of, and the honest answer to "what is this
+    claim?" is then "I do not know" -- which must fail the caller read-only rather than
+    let it act on a guess.
+    """
+
+    ACTIVE = "active"
+    RELEASED = "released"
+    UNCERTAIN = "uncertain"
+
+
+class ShiftHandoffPhase(str, Enum):
+    """What a committed handoff means: work is starting, or work has stopped.
+
+    The canonical wire spelling is the lowercase one here, shared with the C# and Python
+    ports. An earlier C# build wrote ``Running``/``HandedOff``; :func:`shift_handoff_phase_from_wire`
+    still reads those, because reading a running shift as handed off would let a second
+    session claim it and duplicate the run.
+    """
+
+    #: Committed before the turn runs. The owner may be mid-work, so only the same
+    #: session -- the process that wrote it and restarted -- may resume from it.
+    RUNNING = "running"
+    #: Committed when the shift stops, before release. Any successor may resume from it.
+    HANDED_OFF = "handedOff"
+
+
+def shift_handoff_phase_from_wire(value: Any) -> str:
+    """Reads a stored handoff phase.
+
+    ``running`` is the only spelling that means "in flight", matched case-insensitively so
+    the earlier build's ``Running`` is still in flight. Every other value -- including
+    ``HandedOff`` and an unrecognized one -- is the permissive ``handedOff``: refusing the
+    record would make a newer store unreadable, and a successor resuming a stopped shift is
+    safe even if it should have been held.
+    """
+    return (
+        ShiftHandoffPhase.RUNNING.value
+        if isinstance(value, str) and value.lower() == ShiftHandoffPhase.RUNNING.value
+        else ShiftHandoffPhase.HANDED_OFF.value
+    )
+
+
+class ShiftClaimOutcome(str, Enum):
+    """What a claim request did."""
+
+    #: This caller now holds the shift.
+    ACQUIRED = "acquired"
+    #: Another owner holds the shift and no handoff makes it resumable.
+    CONFLICT = "conflict"
+    #: The state cannot be trusted. Read-only: report and stop.
+    READ_ONLY = "readOnly"
+
+
+@dataclass(frozen=True, slots=True)
+class DurableShiftClaim:
+    """The durable record of one shift's ownership: who holds it, which attempt it is, and
+    how it got there.
+
+    A shift claim is a document rather than a lock. A lock that lived for the duration of a
+    shift would outlive the process holding it, which is the stale-lock problem the store
+    file lock already solves by dying with the process. This record is instead the durable
+    fact of who was last granted the shift, checked at each transition, so a host that dies
+    simply stops transitioning and the next host reads the last committed attempt.
+
+    ``owner`` is an opaque token the caller chooses -- a host instance id, a session id, or
+    a name. It is compared for equality and never interpreted, because the store has no way
+    to know which process a token belongs to.
+    """
+
+    #: The document kind a shift claim is stored under.
+    DOCUMENT_KIND: ClassVar[str] = "durable.shift-claim"
+    #: The prefix of the owner id a shift claim is stored under.
+    OWNER_PREFIX: ClassVar[str] = "shift:"
+
+    #: The shift key, e.g. ``sessions/po-shift``.
+    key: str
+    #: The member whose shift this is, for listings.
+    member: str | None = None
+    #: The token of the owner the shift was granted to.
+    owner: str = ""
+    #: The owner's session, when it has one.
+    session_id: str | None = None
+    #: The claim state, as this build reads it.
+    status: str = ShiftClaimStatus.ACTIVE.value
+    #: The status exactly as the store holds it. Preserved so an unrecognized value
+    #: survives a read and is reported rather than being rewritten into a value this
+    #: build understands.
+    status_text: str | None = None
+    #: The acquisition counter. Every new grant increments it.
+    attempt: int = 0
+    #: The attempt this grant resumed from, or ``None`` for a fresh shift.
+    resumed_from: int | None = None
+    #: When the grant was committed, in UTC.
+    claimed_at: str | None = None
+    #: When the owner released the shift, in UTC, or ``None`` while it is held.
+    released_at: str | None = None
+
+    @staticmethod
+    def owner_id(key: str) -> str:
+        """The owner id a claim for this shift key is stored under."""
+        return f"{DurableShiftClaim.OWNER_PREFIX}{key}"
+
+    @property
+    def grants(self) -> int:
+        """How many times this shift has been granted. Equal to :attr:`attempt`."""
+        return self.attempt
+
+
+@dataclass(frozen=True, slots=True)
+class DurableShiftHandoff:
+    """The durable handoff a shift owner commits before it releases the shift.
+
+    The handoff is what makes an interrupted shift recoverable. A claim alone records who
+    may run; the handoff records what was running and what is owed. A successor therefore
+    has two different situations to tell apart: a shift held by an owner with no handoff
+    (work may be in flight -- do not take it) and a shift held by an owner with a committed
+    handoff (work stopped at a known point -- resume from it).
+
+    Writing the handoff is not a separate bookkeeping step the caller may skip. The release
+    refuses to commit without a handoff for the attempt being released, so a store can never
+    describe a shift that was let go with nothing recorded.
+    """
+
+    #: The document kind a shift handoff is stored under.
+    DOCUMENT_KIND: ClassVar[str] = "durable.shift-handoff"
+    #: The prefix of the owner id a shift handoff is stored under.
+    OWNER_PREFIX: ClassVar[str] = "shift-handoff:"
+
+    #: The shift key the handoff covers.
+    key: str
+    #: The claim attempt the handoff was written for.
+    attempt: int
+    #: The owner token that wrote the handoff.
+    owner: str
+    #: Whether the handoff records work starting or work stopping.
+    phase: str = ShiftHandoffPhase.HANDED_OFF.value
+    #: What this shift worked on.
+    selected: str | None = None
+    #: What it completed.
+    achieved: str | None = None
+    #: What is still owed.
+    remaining: str | None = None
+    #: The next action a successor should take first.
+    next: str | None = None
+    #: Blockers a successor must know about.
+    blockers: str | None = None
+    #: When the handoff was committed, in UTC.
+    written_at: str | None = None
+
+    @staticmethod
+    def owner_id(key: str) -> str:
+        """The owner id a handoff for this shift key is stored under."""
+        return f"{DurableShiftHandoff.OWNER_PREFIX}{key}"
+
+
+@dataclass(frozen=True, slots=True)
+class ShiftClaimResult:
+    """The result of a claim or release attempt."""
+
+    #: What happened.
+    outcome: ShiftClaimOutcome
+    #: The claim as the store now holds it, or as it was found.
+    claim: DurableShiftClaim | None
+    #: A human-readable reason, always present for a refusal.
+    message: str
+
+
+SHIFT_CLAIM_DOCUMENT: Final[DocumentDefinition[DurableShiftClaim]] = DocumentDefinition(
+    DurableShiftClaim.DOCUMENT_KIND, DocumentHistory.REWINDABLE, ForkPolicy.INITIAL,
+    None, DurableShiftClaim,
+)
+SHIFT_HANDOFF_DOCUMENT: Final[DocumentDefinition[DurableShiftHandoff]] = DocumentDefinition(
+    DurableShiftHandoff.DOCUMENT_KIND, DocumentHistory.REWINDABLE, ForkPolicy.INITIAL,
+    None, DurableShiftHandoff,
+)
+
+
+def _read_shift_claim_status(claim: DurableShiftClaim) -> tuple[ShiftClaimStatus, str | None]:
+    """Reads a stored claim's status through this build's vocabulary.
+
+    A value this build does not recognize -- including a missing one -- is ``UNCERTAIN``,
+    which is the only safe reading of "unknown". The text is the field the store actually
+    holds, so its absence means the record is incomplete, not that it is active; the typed
+    ``status`` is never used as a fallback.
+    """
+    return read_shift_claim_status_text(claim.status_text)
+
+
+def read_shift_claim_status_text(text: str | None) -> tuple[ShiftClaimStatus, str | None]:
+    """Resolves a stored status text through this build's vocabulary."""
+    if text is None or not text.strip():
+        return ShiftClaimStatus.UNCERTAIN, None
+    if text == ShiftClaimStatus.ACTIVE.value:
+        return ShiftClaimStatus.ACTIVE, text
+    if text == ShiftClaimStatus.RELEASED.value:
+        return ShiftClaimStatus.RELEASED, text
+    return ShiftClaimStatus.UNCERTAIN, text
+
+
+class DurableShifts:
+    """The shared shift-claim and handoff operations, built on ordinary documents.
+
+    Nothing here is a new persistence primitive. A claim is a document of kind
+    ``durable.shift-claim`` owned by ``shift:{key}``; a handoff is a document of kind
+    ``durable.shift-handoff`` owned by ``shift-handoff:{key}``. Both are
+    ``ForkPolicy.INITIAL``, because forking a conversation is not inheriting a shift.
+
+    The one primitive this needed and the layer did not have in the ports is a
+    create-if-absent document write. ``Transaction.doc`` answers an absent document with
+    the definition's initial value, so a read-then-write claim would let every claimant
+    believe it was first. The commit gate serializes transactions, so reading the document
+    state inside the transaction and creating it there is the same one-step guarantee.
+    """
+
+    #: The definition a claim is stored under.
+    ClaimDefinition: ClassVar[DocumentDefinition[DurableShiftClaim]] = SHIFT_CLAIM_DOCUMENT
+    #: The definition a handoff is stored under.
+    HandoffDefinition: ClassVar[DocumentDefinition[DurableShiftHandoff]] = SHIFT_HANDOFF_DOCUMENT
+
+    @staticmethod
+    def read_claim(store: DurableStore, key: str) -> DurableShiftClaim | None:
+        """Reads a shift claim, or ``None`` when the store holds none."""
+        document = store.document(DurableShiftClaim.DOCUMENT_KIND, DurableShiftClaim.owner_id(key))
+        if document is None or document.latest is None:
+            return None
+        return _from_wire(DurableShiftClaim, document.latest)
+
+    @staticmethod
+    def read_handoff(store: DurableStore, key: str) -> DurableShiftHandoff | None:
+        """Reads the newest committed handoff, or ``None`` when there is none."""
+        document = store.document(DurableShiftHandoff.DOCUMENT_KIND, DurableShiftHandoff.owner_id(key))
+        if document is None or document.latest is None:
+            return None
+        handoff = _from_wire(DurableShiftHandoff, document.latest)
+        if handoff is None:
+            return None
+        # Normalize the phase through the compatibility reader so an earlier build's
+        # ``Running``/``HandedOff`` is resolved exactly as C# and TypeScript resolve it.
+        normalized = shift_handoff_phase_from_wire(handoff.phase)
+        return (
+            handoff
+            if handoff.phase == normalized
+            else dataclasses.replace(handoff, phase=normalized)
+        )
+
+    @staticmethod
+    async def claim_async(
+        store: DurableStore,
+        key: str,
+        owner: str,
+        now: str,
+        member: str | None = None,
+        session_id: str | None = None,
+    ) -> ShiftClaimResult:
+        """Claims a shift for ``owner`` if nobody else holds it, or resumes it when the
+        holder committed a handoff.
+
+        A held shift is only taken over when the store holds a handoff for the held
+        attempt. That is the whole duplicate-safety rule: an owner with no handoff may be
+        mid-turn, so a second claimant is refused and told who holds it; an owner with a
+        handoff has recorded where it stopped, so the successor resumes rather than
+        repeating work. Age plays no part -- a claim is never taken because a clock says it
+        is old.
+
+        The read, the decision, and the write are one transaction under the store's commit
+        gate, so two claimants in one process cannot both win. Two processes are already
+        separated by the store file's exclusive lock: the second never opens the file.
+        """
+        if not key or not key.strip():
+            raise ValueError("A shift key is required.")
+        if not owner or not owner.strip():
+            raise ValueError("A shift owner is required.")
+        claim_owner_id = DurableShiftClaim.owner_id(key)
+
+        async def body(tx: Transaction) -> ShiftClaimResult:
+            existing = store.document(DurableShiftClaim.DOCUMENT_KIND, claim_owner_id)
+            current = None if existing is None or existing.latest is None else _from_wire(DurableShiftClaim, existing.latest)
+
+            # No record at all: this is the create-if-absent path. It is the only path
+            # where the document itself has to appear, and it happens inside this
+            # transaction, so a rolled back claim leaves nothing behind.
+            if existing is None:
+                created = DurableShiftClaim(
+                    key=key,
+                    member=member,
+                    owner=owner,
+                    session_id=session_id,
+                    status=ShiftClaimStatus.ACTIVE.value,
+                    status_text=ShiftClaimStatus.ACTIVE.value,
+                    attempt=1,
+                    claimed_at=now,
+                )
+                entry_id = tx.append_entry(claim_owner_id, "shift-claim")
+                tx.commit_document(SHIFT_CLAIM_DOCUMENT, claim_owner_id, created, entry_id)
+                return ShiftClaimResult(ShiftClaimOutcome.ACQUIRED, created, f"acquired attempt 1 for '{owner}'.")
+
+            if current is None:
+                return ShiftClaimResult(
+                    ShiftClaimOutcome.READ_ONLY,
+                    None,
+                    f"the store holds a claim for '{key}' that this transaction could not read back; "
+                    "treating it as uncertain rather than claiming over it.",
+                )
+
+            status, _text = _read_shift_claim_status(current)
+            if status is ShiftClaimStatus.UNCERTAIN:
+                return ShiftClaimResult(
+                    ShiftClaimOutcome.READ_ONLY,
+                    current,
+                    f"the claim for '{key}' records state '{current.status_text or '(none)'}', which this "
+                    "build cannot interpret. Read-only: reconcile it before claiming.",
+                )
+
+            if status is ShiftClaimStatus.ACTIVE and current.owner == owner:
+                return ShiftClaimResult(
+                    ShiftClaimOutcome.ACQUIRED,
+                    current,
+                    f"'{owner}' already holds attempt {current.attempt} of '{key}'.",
+                )
+
+            if status is ShiftClaimStatus.ACTIVE:
+                handoff = DurableShifts.read_handoff(store, key)
+                if handoff is None:
+                    return ShiftClaimResult(
+                        ShiftClaimOutcome.CONFLICT,
+                        current,
+                        f"'{key}' is held by '{current.owner}' (attempt {current.attempt}) with no "
+                        "committed handoff, so the work may be in flight. Not taking it over.",
+                    )
+
+                if handoff.attempt != current.attempt:
+                    return ShiftClaimResult(
+                        ShiftClaimOutcome.READ_ONLY,
+                        current,
+                        f"the claim for '{key}' is attempt {current.attempt} but the newest handoff is "
+                        f"for attempt {handoff.attempt}. The records disagree; reconcile them rather "
+                        "than resuming.",
+                    )
+
+                # An in-flight handoff is only resumable by the session that wrote it. The
+                # same session means the same process, restarted: its work stopped at a
+                # known point. A different session could be racing a live owner, and age is
+                # not evidence that it died, so it is refused rather than resuming over a
+                # running shift.
+                same_session = bool(current.session_id) and current.session_id == session_id
+                if shift_handoff_phase_from_wire(handoff.phase) == ShiftHandoffPhase.RUNNING.value and not same_session:
+                    return ShiftClaimResult(
+                        ShiftClaimOutcome.CONFLICT,
+                        current,
+                        f"'{key}' is held by '{current.owner}' (attempt {current.attempt}, session "
+                        f"'{current.session_id or '(none)'}') with an in-flight handoff. Only that "
+                        "session resumes it; a different session must not duplicate the run.",
+                    )
+
+            # Either the previous owner released it, or it is held with a matching handoff.
+            # Both are safe to take: the first is a finished shift, the second an interrupted
+            # one whose stopping point is written down.
+            resumed_from = current.attempt
+            nxt = DurableShiftClaim(
+                key=key,
+                member=member if member is not None else current.member,
+                owner=owner,
+                session_id=session_id,
+                status=ShiftClaimStatus.ACTIVE.value,
+                status_text=ShiftClaimStatus.ACTIVE.value,
+                attempt=current.attempt + 1,
+                resumed_from=resumed_from,
+                claimed_at=now,
+            )
+
+            next_entry_id = tx.append_entry(claim_owner_id, "shift-claim")
+            tx.commit_document(SHIFT_CLAIM_DOCUMENT, claim_owner_id, nxt, next_entry_id)
+
+            reason = (
+                f"acquired attempt {nxt.attempt} of '{key}' after '{current.owner}' released it."
+                if status is ShiftClaimStatus.RELEASED
+                else f"resumed attempt {nxt.attempt} of '{key}' from committed handoff {resumed_from}."
+            )
+            return ShiftClaimResult(ShiftClaimOutcome.ACQUIRED, nxt, reason)
+
+        return await store.commit_async(body)
+
+    @staticmethod
+    async def write_handoff_async(
+        store: DurableStore,
+        key: str,
+        owner: str,
+        attempt: int,
+        now: str,
+        phase: str = ShiftHandoffPhase.HANDED_OFF.value,
+        selected: str | None = None,
+        achieved: str | None = None,
+        remaining: str | None = None,
+        next: str | None = None,
+        blockers: str | None = None,
+    ) -> bool:
+        """Commits a handoff for the attempt the owner currently holds.
+
+        Returns ``False`` when the owner does not hold the attempt being described. The
+        handoff is refused rather than silently written when the claim it describes is not
+        the caller's: a handoff that named someone else's attempt would let a successor
+        resume another owner's in-flight work, which is the duplicate execution this record
+        exists to prevent.
+        """
+        if not key or not key.strip():
+            raise ValueError("A shift key is required.")
+        if not owner or not owner.strip():
+            raise ValueError("A shift owner is required.")
+        handoff_owner_id = DurableShiftHandoff.owner_id(key)
+
+        async def body(tx: Transaction) -> bool:
+            claim = DurableShifts.read_claim(store, key)
+            if (
+                claim is None
+                or claim.attempt != attempt
+                or claim.owner != owner
+                or _read_shift_claim_status(claim)[0] is not ShiftClaimStatus.ACTIVE
+            ):
+                return False
+
+            handoff = DurableShiftHandoff(
+                key=key,
+                attempt=attempt,
+                owner=owner,
+                phase=phase,
+                selected=selected,
+                achieved=achieved,
+                remaining=remaining,
+                next=next,
+                blockers=blockers,
+                written_at=now,
+            )
+            handoff_entry_id = tx.append_entry(handoff_owner_id, "shift-handoff")
+            tx.commit_document(SHIFT_HANDOFF_DOCUMENT, handoff_owner_id, handoff, handoff_entry_id)
+            return True
+
+        return await store.commit_async(body)
+
+    @staticmethod
+    async def release_async(store: DurableStore, key: str, owner: str, now: str) -> ShiftClaimResult:
+        """Releases a held shift, refusing unless the caller owns the held attempt and a
+        handoff for that attempt is already committed.
+
+        ``ACQUIRED`` means success (the caller no longer holds it), ``CONFLICT`` a refusal
+        the caller can fix, and ``READ_ONLY`` when the records do not agree.
+
+        Releasing is idempotent for the owner that released: releasing again reports
+        success with the released record. That keeps a retried shutdown harmless without
+        letting the retry rewrite history.
+        """
+        if not key or not key.strip():
+            raise ValueError("A shift key is required.")
+        if not owner or not owner.strip():
+            raise ValueError("A shift owner is required.")
+        release_owner_id = DurableShiftClaim.owner_id(key)
+
+        async def body(tx: Transaction) -> ShiftClaimResult:
+            current = DurableShifts.read_claim(store, key)
+            if current is None:
+                return ShiftClaimResult(
+                    ShiftClaimOutcome.CONFLICT,
+                    None,
+                    f"the store holds no claim for '{key}', so there is nothing to release.",
+                )
+
+            status, _text = _read_shift_claim_status(current)
+            if status is ShiftClaimStatus.UNCERTAIN:
+                return ShiftClaimResult(
+                    ShiftClaimOutcome.READ_ONLY,
+                    current,
+                    f"the claim for '{key}' records state '{current.status_text or '(none)'}', which this "
+                    "build cannot interpret. Read-only: not releasing.",
+                )
+
+            if current.owner != owner:
+                return ShiftClaimResult(
+                    ShiftClaimOutcome.CONFLICT,
+                    current,
+                    f"'{key}' is held by '{current.owner}', not by '{owner}'. Only the holding owner "
+                    "releases.",
+                )
+
+            if status is ShiftClaimStatus.RELEASED:
+                return ShiftClaimResult(
+                    ShiftClaimOutcome.ACQUIRED,
+                    current,
+                    f"'{key}' was already released by '{owner}' at {current.released_at}.",
+                )
+
+            handoff = DurableShifts.read_handoff(store, key)
+            if handoff is None:
+                return ShiftClaimResult(
+                    ShiftClaimOutcome.CONFLICT,
+                    current,
+                    f"'{owner}' holds '{key}' but no handoff is committed. Write the handoff before "
+                    "releasing.",
+                )
+
+            if handoff.attempt != current.attempt:
+                return ShiftClaimResult(
+                    ShiftClaimOutcome.READ_ONLY,
+                    current,
+                    f"the claim for '{key}' is attempt {current.attempt} but the newest handoff is for "
+                    f"attempt {handoff.attempt}. The records disagree; read-only, not releasing.",
+                )
+
+            released = DurableShiftClaim(
+                key=current.key,
+                member=current.member,
+                owner=current.owner,
+                session_id=current.session_id,
+                status=ShiftClaimStatus.RELEASED.value,
+                status_text=ShiftClaimStatus.RELEASED.value,
+                attempt=current.attempt,
+                resumed_from=current.resumed_from,
+                claimed_at=current.claimed_at,
+                released_at=now,
+            )
+
+            release_entry_id = tx.append_entry(release_owner_id, "shift-claim")
+            tx.commit_document(SHIFT_CLAIM_DOCUMENT, release_owner_id, released, release_entry_id)
+            return ShiftClaimResult(
+                ShiftClaimOutcome.ACQUIRED,
+                released,
+                f"released attempt {released.attempt} of '{key}' with handoff {handoff.attempt}.",
+            )
+
+        return await store.commit_async(body)
+
+
 # ---------------------------------------------------------------------------
 # Extensions
 # ---------------------------------------------------------------------------
@@ -3218,6 +3770,8 @@ INTERNAL_DOCUMENT_KINDS: Final[frozenset[str]] = frozenset(
         SESSION_BINDING_DOCUMENT.kind,
         ADMISSION_DOCUMENT.kind,
         CHECKPOINT_DOCUMENT.kind,
+        DurableShiftClaim.DOCUMENT_KIND,
+        DurableShiftHandoff.DOCUMENT_KIND,
     }
 )
 
