@@ -6,3 +6,11 @@ libs/
 # Any MAUI/Android head added here follows the other bands.
 bin/
 obj/
+
+# Gradle build output for the Kotlin facade. The wrapper (gradlew, gradle/wrapper) is
+# committed so the build is reproducible at the pinned version; the caches are not.
+bridge/build/
+bridge/.gradle/
+bridge/local.properties
+.gradle/
+.kotlin/

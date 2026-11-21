@@ -45,6 +45,15 @@ ls /Library/Java/JavaVirtualMachines 2>&1 || true
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/band-e-probe.XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 
+# The scaffold is built under $scratch, so a global.json beside the repository does not
+# reach it: the probe would silently build with whatever SDK is the machine default. Pin
+# the .NET 10 SDK here instead, where the temporary project can see it. The EXIT trap
+# removes it with the rest of the scratch directory.
+printf '{"sdk":{"version":"10.0.404","rollForward":"latestPatch"}}\n' > "$scratch/global.json"
+
+say "dotnet --version in the scratch directory"
+(cd "$scratch" && dotnet --version) 2>&1
+
 if dotnet new maui -n BandEProbe -o "$scratch/BandEProbe" >/dev/null 2>&1; then
   # The template emits Android, iOS and Mac Catalyst heads. This band is Android-only,
   # so the probe narrows the target to net10.0-android before building.

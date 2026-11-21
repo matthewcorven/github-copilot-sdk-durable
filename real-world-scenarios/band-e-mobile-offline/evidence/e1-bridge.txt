@@ -1,0 +1,91 @@
+Band E / issue #165 — Kotlin bridge compiled, bound, and exercised on device
+Captured 2026-11-17 (local machine). Commands were run on this machine; output is transcribed.
+
+=== toolchain (approved for this issue) ===
+Gradle        8.13          pinned by bridge/gradle/wrapper/gradle-wrapper.properties
+                            (distributionUrl=.../gradle-8.13-bin.zip)
+Kotlin        1.9.25        org.jetbrains.kotlin.android plugin (bridge/build.gradle.kts)
+AGP           8.13.0        com.android.library plugin
+JDK           17.0.21+9     /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+compileSdk    36, minSdk 33 (the AAR manifest declares 33)
+Note: Gradle 9.9.1 (Homebrew default) cannot apply AGP 8.13.0 at all —
+  "Plugin 'com.android.internal.library' relies on ... InternalProblems, a Gradle internal
+   API that was removed in Gradle 9.6.0"
+so the wrapper is pinned to 8.13 rather than using the system Gradle.
+
+=== the facade compiles ===
+$ cd bridge && ./gradlew :assembleRelease
+BUILD SUCCESSFUL
+build/outputs/aar/band-e-foundry-bridge-release.aar   19,687 B
+
+Contents of the produced AAR (unzip -l classes.jar):
+  dev/durable/bande/foundry/FoundryBridge.class
+  dev/durable/bande/foundry/FoundryBridge$Listener.class
+  dev/durable/bande/foundry/FoundryBridge$Companion.class
+  ... (coroutine state-machine classes)
+Count of com/microsoft classes repackaged into it: 0
+
+The Foundry binary is a `compileOnly` input: the facade is compiled against it but it is not
+folded into this AAR. Two reasons, both load-bearing:
+  - AGP refuses to build an .aar that contains a local .aar dependency:
+      "Direct local .aar file dependencies are not supported when building an AAR"
+  - DECISION-bridge.md §5 forbids redistributing the binary anyway.
+The app references the same verified file, so the classes exist once, at runtime, in the APK.
+
+=== compiling the facade found the real API ===
+The first draft was written from the guide's prose and was wrong in four ways. `javap` against
+the actual AAR corrected it, which is why the facade is written against verified signatures:
+  - create() is suspend and returns FoundryLocalManager, not a constructor
+  - the chat request type is com.microsoft.foundrylocal.api.ChatCompletionRequest
+    (there is also a Parcelable datamodels.chat.ChatCompletionRequest; it is not the one ChatClient takes)
+  - ChatMessage is (role, content) with ROLE_SYSTEM/ROLE_USER/ROLE_ASSISTANT constants
+  - Model.download(progress, contentIntent, timeoutMinutes) has named parameters and defaults
+  - FoundryLocalManager.isConnected is a Kotlin property, not a method
+
+=== binding the raw AAR fails, exactly as the decision record predicted ===
+Referencing the Foundry AAR as an ordinary AndroidLibrary produced:
+  error CS0260: Missing partial modifier on declaration of type 'Catalog'; another partial
+                declaration of this type exists
+  error CS0579: Duplicate 'Register' attribute
+for Catalog, FoundryLocalManager, FoundryModel, FoundryChatCompletionClient,
+FoundryAudioTranscriptionClient — the obfuscator-kept synthetic surface §3.2(a) describes.
+Resolution: <AndroidLibrary ... Bind="false" /> plus
+<AndroidGenerateJavaBindingAnnotations>false</AndroidGenerateJavaBindingAnnotations>.
+The Kotlin facade is the binding; no C# metadata is generated from the raw AAR.
+
+=== the app packages both ===
+$ dotnet build -f net10.0-android -c Release -t:SignAndroidPackage -p:EmbedAssembliesIntoApk=true
+Build succeeded. 0 Error(s)
+dex scan of dev.durable.band.e.mobile-Signed.apk:
+  Ldev/durable/bande/foundry/FoundryBridge$Listener
+  Ldev/durable/bande/foundry/FoundryBridge$Companion
+  Lcom/microsoft/foundrylocal/FoundryLocalManager
+
+=== the JNI boundary actually works, on device ===
+Installed and launched on band-e-api36-playstore-arm64 (Android 16, API 36, arm64-v8a).
+Tapping "Send turn" produced this on screen:
+
+  "failed [TransportUnavailable] retryable: companion app com.microsoft.foundrylocal.app
+   absent — com.microsoft.foundrylocal.app is not installed (API 36)
+   bridge loaded; start() failed [TransportUnavailable]:
+   FoundryLocalException: Failed to bind to service using explicit intent"
+
+Read that carefully, because it is the point of this capture. The managed code did not guess:
+  - the Kotlin `FoundryBridge` class loaded and `start()` ran (JNI call succeeded);
+  - it called `FoundryLocalManager.create(...)`, which threw `FoundryLocalException` because
+    there is no service app to bind to;
+  - that exception crossed the generated invoker into a managed `BridgeException` carrying a
+    classified `ChatFailureKind`.
+That is the whole cross-language path working. What it cannot do is produce an answer, because
+the service it binds to is not installed.
+
+=== the completion criterion is NOT met ===
+$ adb shell pm list packages | grep -c foundry
+0
+The IPC service app is distributed through Google Play. The emulator has Play
+(com.android.vending 45.3.21-31) but no signed-in account, so installing it needs a manual
+sign-in by the operator. No credentials were entered by any agent.
+
+=== scope statement ===
+Local/device facts only. No cloud resource provisioned, no paid call, no hosted Foundry service,
+no secret read or written.
