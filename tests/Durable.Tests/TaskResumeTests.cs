@@ -768,7 +768,6 @@ public class TaskResumeTests
             try
             {
                 var released = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-                var children = new List<Task>();
                 var fromTaskRun = default(Task<ConversationRecord>);
                 var fromQueue = default(Task<ConversationRecord>);
 
@@ -792,8 +791,11 @@ public class TaskResumeTests
                 }));
 
                 released.SetResult(true);
+                // The queued child's task is observed here rather than only asserted inside the
+                // pool callback: an unobserved fault there crashed the whole test host instead of
+                // failing this test. Every child is awaited before the store is disposed.
                 await WithTimeout(fromTaskRun!);
-                await WithTimeout(fromQueue!);
+                await WithTimeout(WaitForAsync(() => fromQueue));
 
                 // The parent's transaction wrote no conversation; each child's did.
                 Assert.Equal(2, store.Conversations.Count);
@@ -1027,6 +1029,28 @@ public class TaskResumeTests
     }
 
     private static Task<T> WithTimeout<T>(ValueTask<T> task) => WithTimeout(task.AsTask());
+
+    /// <summary>
+    /// Awaits a task another thread is still publishing. The pool callback that starts the child
+    /// assigns it after its first await, so a plain read can race with that assignment; this waits
+    /// a bounded time for the assignment instead of passing null to <see cref="Task.WhenAny"/>.
+    /// </summary>
+    private static async Task<T> WaitForAsync<T>(Func<Task<T>?> publish)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (publish() is { } task)
+            {
+                return await WithTimeout(task);
+            }
+
+            await Task.Delay(10);
+        }
+
+        Assert.Fail("the child task was not published within 10s");
+        throw new InvalidOperationException("unreachable");
+    }
 
     private static async Task WithTimeout(Task task)
     {
