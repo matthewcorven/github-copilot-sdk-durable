@@ -121,7 +121,9 @@ function renderSlices(data) {
     if (!list(slice.criteria).length) details.append(node('p', 'empty', 'No acceptance criteria recorded.'));
     for (const criterion of list(slice.criteria)) {
       const item = node('div', 'criterion');
+      const state = criterion.mapping?.required ? criterion.mapping.mapped ? 'E2E mapped' : criterion.mapping.gap ? 'Explicit gap' : 'Unmapped' : '';
       append(item, node('span', criterion.complete === true ? 'criterion-status accepted' : 'criterion-status', criterion.complete === true ? '✓ Accepted' : '○ Not accepted'), node('h4', '', text(criterion.title)), node('p', 'small muted', text(criterion.reason, 'No qualifying evidence reason recorded.')), sourceLinks(criterion.sourcePaths, 'Source'), sourceLinks(criterion.evidencePaths, 'Evidence'));
+      if (state) item.append(node('p', 'small muted', `Evidence harness: ${state}${criterion.coverage ? ` · coverage ${criterion.coverage.line}% line / ${criterion.coverage.branch}% branch` : ''}`));
       if (criterion.sourceDigest) item.append(node('p', 'digest small muted', `Source digest: ${text(criterion.sourceDigest)}`));
       details.append(item);
     }
@@ -211,7 +213,10 @@ function render(data) {
   const openDetails = new Set([...document.querySelectorAll('details[open]')].map((item) => item.dataset.key));
   allowedPaths = collectPaths(data);
   $('scope-note').textContent = `${text(data.meta.scopeNote, 'Product Owner approval is pending.')} Provisional criteria are not a claim of total product readiness.`;
-  $('mvp-note').textContent = text(data.mvp.note, 'Explicit criteria with qualifying evidence records; not total product readiness.');
+  const evidence = data.mvp.evidence ?? {};
+  const mapping = data.mvp.mapping ?? {};
+  const candidate = data.mvp.candidate;
+  $('mvp-note').textContent = `${text(data.mvp.note, 'Explicit criteria with qualifying evidence records; not total product readiness.')} Evidence: ${text(evidence.state, 'unknown')}${evidence.error ? ` — ${text(evidence.error)}` : ''}${candidate ? ` Candidate ${text(candidate.sha).slice(0, 12)} (${text(candidate.mode, 'mode unknown')}), captured ${date(candidate.generatedAt)}.` : ' No pinned candidate.'} Mapping: ${count(mapping.mapped)} of ${count(mapping.total)} E2E criteria mapped, ${count(mapping.gaps)} explicit gaps${mapping.stale ? `, ${count(mapping.stale)} stale` : ''}${mapping.unaccounted ? `, ${count(mapping.unaccounted)} unaccounted` : ''}.${mapping.complete === false ? ' Missing evidence cannot render as complete.' : ''}`;
   $('acceptance-count').replaceChildren(document.createTextNode(`${count(data.mvp.accepted)} / ${count(data.mvp.total)} `), node('span', '', 'accepted criteria'));
   $('overall-percent').textContent = percentage(data.mvp.percent);
   const ring = $('overall-progress');
@@ -225,7 +230,8 @@ function render(data) {
   renderSlices(data); renderQueue(data); renderTeam(data); renderSystems(data); renderProgram(data); renderRisksAndSchedules(data);
   const provenance = $('provenance');
   provenance.replaceChildren();
-  for (const [label, value] of [['Source SHA', text(data.meta.sourceSha)], ['Generated', date(data.meta.generatedAt)], ['Scope digest', text(data.meta.scopeDigest)], ['GitHub fetched', date(data.meta.githubFetchedAt)], ['Queue generated', date(data.meta.queueGeneratedAt)], ['Scope', 'Provisional · pending Product Owner approval']]) {
+  const committed = data.meta.evidence;
+  for (const [label, value] of [['Source SHA', text(data.meta.sourceSha)], ['Generated', date(data.meta.generatedAt)], ['Scope digest', text(data.meta.scopeDigest)], ['Evidence manifest', text(committed?.manifest ?? evidence.manifest)], ['Candidate SHA', text(candidate?.sha ?? 'not pinned')], ['Candidate time', candidate ? date(candidate.generatedAt) : 'not recorded'], ['Evidence mode', text(candidate?.mode ?? 'not recorded')], ['Evidence artifacts', committed ? `${committed.candidateIsHead ? 'from the committed candidate' : 'committed but the probe HEAD differs'}${committed.uncommitted?.length ? ` · uncommitted: ${committed.uncommitted.join(', ')}` : ''}` : 'not recorded'], ['GitHub fetched', date(data.meta.githubFetchedAt)], ['Queue generated', date(data.meta.queueGeneratedAt)], ['Scope', 'Provisional · pending Product Owner approval']]) {
     append(provenance, node('dt', '', label), node('dd', '', value));
   }
   for (const details of document.querySelectorAll('details')) details.open = openDetails.has(details.dataset.key);

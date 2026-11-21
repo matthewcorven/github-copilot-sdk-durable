@@ -5,7 +5,8 @@ import { createServer } from 'node:http';
 import { execFile as callbackExecFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
-import { buildSnapshot, digest, sourceFile } from './model.mjs';
+import { buildSnapshot, criterionSource, digest, percent, slug, sourceFile } from './model.mjs';
+import { EVIDENCE_SCHEMA, MAP_SCHEMA } from './evidence.mjs';
 
 const execFile=promisify(callbackExecFile);
 const here=path.dirname(fileURLToPath(import.meta.url));
@@ -14,8 +15,10 @@ const cacheRoot=path.join(repositoryRoot,'.scratch/core-engineers-canvas');
 const cloneRoot=path.join(cacheRoot,'source');
 let refreshPromise;
 
-async function command(file,args,cwd=repositoryRoot) {
-  return (await execFile(file,args,{cwd,timeout:120000,maxBuffer:16*1024*1024,env:{...process.env,GIT_TERMINAL_PROMPT:'0',GH_PAGER:'cat',GIT_PAGER:'cat'}})).stdout;
+// Binary mode is required for evidence: execFile decodes stdout as UTF-8 by default, so a PNG or a
+// non-ASCII JSON artifact would be re-serialized and hashed as different bytes than the committed ones.
+async function command(file,args,{cwd=repositoryRoot,binary=false}={}) {
+  return (await execFile(file,args,{cwd,encoding:binary?'buffer':'utf8',timeout:120000,maxBuffer:16*1024*1024,env:{...process.env,GIT_TERMINAL_PROMPT:'0',GH_PAGER:'cat',GIT_PAGER:'cat'}})).stdout;
 }
 async function readJson(file) { try{return JSON.parse(await fs.readFile(file,'utf8'));}catch(error){if(error.code==='ENOENT')return null;throw error;} }
 async function writeJson(file,value) {
@@ -32,7 +35,38 @@ export function validateScope(scope) {
     sliceIds.add(slice.id);
     for(const item of slice.criteria){if(!item.id||ids.has(item.id)||!Array.isArray(item.sourcePaths)||!item.sourcePaths.length||item.sourcePaths.some(p=>typeof p!=='string'||path.isAbsolute(p)||p.split(/[\\/]/).includes('..')))throw new Error('Invalid or duplicate criterion');ids.add(item.id);}
   }
+  for(const value of [scope.evidenceManifest,scope.criterionMap]){if(value!==undefined&&(typeof value!=='string'||path.isAbsolute(value)||value.split(/[\\/]/).includes('..')))throw new Error('Evidence manifest and criterion map must be repository-relative paths');}
+  if(scope.evidenceMaxAgeSeconds!==undefined&&(!Number.isSafeInteger(scope.evidenceMaxAgeSeconds)||scope.evidenceMaxAgeSeconds<1))throw new Error('Invalid evidence freshness limit');
   return scope;
+}
+
+const candidateInputs=new Set();
+export function trackCandidateInput(value) {
+  if(!value)return;
+  candidateInputs.add(value);
+}
+
+// A criterion's source and its evidence artifacts are separate identities. The source must come
+// from the exact committed candidate tree; the artifacts must come from committed content, never
+// from the working tree that happens to hold the current checkout.
+export async function candidateProbe({cwd=repositoryRoot}={}) {
+  const candidateSha=(await command('git',['rev-parse','--verify','HEAD'],{cwd})).trim();
+  const headSha=(await command('git',['rev-parse','--verify','HEAD'],{cwd})).trim();
+  const ancestor=await command('git',['merge-base','--is-ancestor',candidateSha,headSha],{cwd}).then(()=>true).catch(()=>false);
+  trackCandidateInput(`candidate\n${candidateSha}`);
+  const read=async file=>{
+    const prefix=`committed:${candidateSha}:${file}`;
+    try {
+      const content=await command('git',['show',`${candidateSha}:${file}`],{cwd,binary:true});
+      trackCandidateInput(prefix);
+      return content;
+    } catch(error) {
+      trackCandidateInput(prefix);
+      if(error.code===128||/exists on disk, but not in|does not exist|bad object|invalid object|unknown revision|pathspec/i.test(String(error.stderr??error.message)))return null;
+      throw error;
+    }
+  };
+  return { candidate:{sha:candidateSha}, ancestor, read };
 }
 
 export async function refreshCache({offline=false}={}) {
@@ -53,6 +87,11 @@ export async function refreshCache({offline=false}={}) {
     if((await command('git',['-C',cloneRoot,'status','--porcelain'])).trim())throw new Error('Read-cache clone has been modified; refusing untrusted snapshot');
     const scopeBytes=await fs.readFile(path.join(here,'scope.json'));
     const scope=validateScope(JSON.parse(scopeBytes));
+    const probe=await candidateProbe();
+    // Evidence artifacts must be committed: a file only in the working tree cannot be pinned to
+    // the candidate, so its hash would prove nothing about what the candidate contains.
+    const dirty=await command('git',['status','--porcelain']).then(text=>text.trim()).catch(()=>'');
+    const uncommitted=dirty.split('\n').filter(Boolean).filter(line=>[scope.evidenceManifest,scope.criterionMap].some(file=>line.includes(file)));
     let issues=await readJson(path.join(cacheRoot,'issues.json'));
     let queue=await readJson(path.join(cacheRoot,'queue.json'));
     let githubError=null,queueError=null;
@@ -61,8 +100,8 @@ export async function refreshCache({offline=false}={}) {
       try{queue=JSON.parse(await command('python3',[helper,'--repo',scope.repository,'--limit','1000','--format','json','--mode','status']));await writeJson(path.join(cacheRoot,'queue.json'),queue);}catch(error){queueError=`Authoritative queue refresh failed (${error.code??'invalid response'}). Any displayed queue is a dated cache, not current admission.`;}
       try{const items=JSON.parse(await command('gh',['issue','list','--repo',scope.repository,'--state','all','--limit','1000','--json','number,title,state,labels,url,createdAt,updatedAt,body']));issues={fetchedAt:new Date().toISOString(),incomplete:items.length>=1000,items};await writeJson(path.join(cacheRoot,'issues.json'),issues);}catch(error){githubError=`GitHub issue refresh failed (${error.code??'invalid response'}); retained issue cache may be stale.`;}
     }else{githubError='Offline refresh: GitHub and authoritative queue were not fetched.';queueError='Offline refresh: no fresh admission decision.';}
-    const meta={generatedAt:new Date().toISOString(),sourceSha,branch:(await command('git',['branch','--show-current'])).trim()||'detached',sourceDirty:Boolean((await command('git',['status','--porcelain'])).trim()),clonePath:cloneRoot,scopeDigest:digest(scopeBytes),scopeOrigin:'tools/core-engineers-canvas/scope.json (working configuration; separately hashed)',githubFetchedAt:issues?.fetchedAt??null,queueGeneratedAt:queue?.generated_at??null,latestRefreshError:githubError,queueError};
-    const snapshot=await buildSnapshot({root:cloneRoot,scope,meta,issues,queue});
+    const meta={generatedAt:new Date().toISOString(),sourceSha,branch:(await command('git',['branch','--show-current'])).trim()||'detached',sourceDirty:Boolean((await command('git',['status','--porcelain'])).trim()),clonePath:cloneRoot,scopeDigest:digest(scopeBytes),scopeOrigin:'tools/core-engineers-canvas/scope.json (working configuration; separately hashed)',evidence:{manifest:scope.evidenceManifest,criterionMap:scope.criterionMap,candidateSha:probe.candidate.sha,candidateIsHead:probe.ancestor,uncommitted},githubFetchedAt:issues?.fetchedAt??null,queueGeneratedAt:queue?.generated_at??null,latestRefreshError:githubError,queueError};
+    const snapshot=await buildSnapshot({root:cloneRoot,scope,meta,issues,queue,evidenceRoot:cloneRoot,probe,now:Date.parse(meta.generatedAt)});
     await writeJson(path.join(cacheRoot,'snapshot.json'),snapshot);
     return snapshot;
     } finally {
@@ -84,7 +123,8 @@ export async function currentSnapshot() {
   const sourceAge=value=>value?Math.max(0,Math.floor((Date.now()-Date.parse(value))/1000)):null;
   const githubAgeSeconds=sourceAge(snapshot.meta.githubFetchedAt),queueAgeSeconds=sourceAge(snapshot.meta.queueGeneratedAt);
   const remoteStale=[githubAgeSeconds,queueAgeSeconds].some(age=>age===null||!Number.isFinite(age)||age>snapshot.meta.maxAgeSeconds);
-  snapshot.freshness={ageSeconds,githubAgeSeconds,queueAgeSeconds,sourceChanged,scopeChanged,stale:ageSeconds>snapshot.meta.maxAgeSeconds||sourceChanged||scopeChanged||remoteStale||Boolean(snapshot.meta.latestRefreshError)||Boolean(snapshot.meta.queueError)};
+  const evidenceStale=snapshot.mvp?.evidence?.state==='stale';
+  snapshot.freshness={ageSeconds,githubAgeSeconds,queueAgeSeconds,sourceChanged,scopeChanged,evidenceStale,stale:ageSeconds>snapshot.meta.maxAgeSeconds||sourceChanged||scopeChanged||remoteStale||evidenceStale||Boolean(snapshot.meta.latestRefreshError)||Boolean(snapshot.meta.queueError)};
   return snapshot;
 }
 
@@ -129,10 +169,43 @@ export function createDashboardServer() {
   });
 }
 
+// Scaffolds the criterion-to-test map for a new candidate commit. It never invents a test: a
+// criterion it cannot source keeps its previous entry (now stale) and an unmapped criterion gets
+// an explicit gap that the Tester must replace with a real mapping or confirm as a gap.
+export async function syncCriterionMap({write=async()=>{},root=repositoryRoot,clone=cloneRoot}={}) {
+  const scope=validateScope(JSON.parse(await fs.readFile(path.join(here,'scope.json'))));
+  const exists=await fs.access(path.join(root,scope.criterionMap)).then(()=>true).catch(()=>false);
+  let previous=null;
+  if(exists){try{previous=JSON.parse(await fs.readFile(path.join(root,scope.criterionMap),'utf8'));}catch{previous=null;}}
+  const previousEntries=previous?.schema===MAP_SCHEMA?previous.criteria:{};
+  const criteria={};
+  for(const slice of scope.slices)for(const criterion of slice.criteria){
+    const source=await criterionSource(clone,criterion);
+    const old=previousEntries[criterion.id];
+    if(source.present.length!==criterion.sourcePaths.length){
+      // Keep the previous digest: writing the new one would make an entry with missing sources
+      // compare equal to the current source and report as current instead of stale.
+      criteria[criterion.id]=old
+        ?{...old,note:`Unmapped: a required source reference is missing as of ${source.sourceDigest}; previous entry retained and is stale.`}
+        :{sourceDigest:source.sourceDigest,title:criterion.title,requiresE2E:Boolean(criterion.requiresE2E),gap:'Unmapped: a required source reference is missing.',tests:[]};
+      continue;
+    }
+    if(old){criteria[criterion.id]={...old,sourceDigest:source.sourceDigest,title:criterion.title,requiresE2E:Boolean(criterion.requiresE2E)};continue;}
+    criteria[criterion.id]={sourceDigest:source.sourceDigest,title:criterion.title,requiresE2E:Boolean(criterion.requiresE2E),gap:`Unmapped: no test has been recorded for "${criterion.title}" yet.`,tests:[]};
+  }
+  const map={schema:MAP_SCHEMA,candidateSha:(await command('git',['rev-parse','--verify','HEAD'])).trim(),updatedAt:new Date().toISOString(),criteria};
+  await write(scope.criterionMap,map);
+  return {path:scope.criterionMap,mapped:Object.values(criteria).filter(entry=>entry.tests?.length).length,gaps:Object.values(criteria).filter(entry=>!entry.tests?.length).length};
+}
+
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
-  if(process.argv.includes('--refresh')||process.argv.includes('--offline')){
+  if(process.argv.includes('--sync-map')){
+    const result=await syncCriterionMap({write:async(file,value)=>{const target=path.join(repositoryRoot,file);await fs.mkdir(path.dirname(target),{recursive:true});await fs.writeFile(target,JSON.stringify(value,null,2)+'\n');}});
+    process.stdout.write(JSON.stringify(result,null,2)+'\n');
+    process.exit(0);
+  }else if(process.argv.includes('--refresh')||process.argv.includes('--offline')){
     const snapshot=await refreshCache({offline:process.argv.includes('--offline')});
-    process.stdout.write(JSON.stringify({generatedAt:snapshot.meta.generatedAt,sourceSha:snapshot.meta.sourceSha,mvp:snapshot.mvp.percent,criteria:snapshot.mvp.total,program:snapshot.program.percent,githubError:snapshot.meta.latestRefreshError,queueError:snapshot.meta.queueError},null,2)+'\n');
+    process.stdout.write(JSON.stringify({generatedAt:snapshot.meta.generatedAt,sourceSha:snapshot.meta.sourceSha,mvp:snapshot.mvp.percent,criteria:snapshot.mvp.total,candidate:snapshot.mvp.candidate,evidence:snapshot.mvp.evidence,mapping:{total:snapshot.mvp.mapping.total,mapped:snapshot.mvp.mapping.mapped,gaps:snapshot.mvp.mapping.gaps,stale:snapshot.mvp.mapping.stale,unaccounted:snapshot.mvp.mapping.unaccounted,complete:snapshot.mvp.mapping.complete},program:snapshot.program.percent,githubError:snapshot.meta.latestRefreshError,queueError:snapshot.meta.queueError},null,2)+'\n');
   }else{
     const server=createDashboardServer();
     server.listen(0,'127.0.0.1',()=>process.stdout.write(`Core Engineers: http://127.0.0.1:${server.address().port}/\n`));

@@ -35,7 +35,7 @@ public sealed class RuntimeHostCliTests
 
         Assert.Equal(0, exitCode);
 
-        foreach (var command in new[] { "run", "serve", "schedule" })
+        foreach (var command in new[] { "run", "serve", "schedule", "shift" })
         {
             Assert.Contains(command, stdout, StringComparison.Ordinal);
         }
@@ -61,6 +61,15 @@ public sealed class RuntimeHostCliTests
             "--remove",
             "--now",
             "--passes",
+            "--shift-key",
+            "--owner",
+            "--session",
+            "--member",
+            "--handoff-next",
+            "--handoff-remaining",
+            "--handoff-achieved",
+            "--handoff-selected",
+            "--handoff-blockers",
             "--help",
         })
         {
@@ -914,7 +923,7 @@ public sealed class RuntimeHostCliTests
 
         Assert.Equal(2, exitCode);
         Assert.Contains("deploy", stderr, StringComparison.Ordinal);
-        Assert.Contains("run, serve, and schedule", stderr, StringComparison.Ordinal);
+        Assert.Contains("run, serve, schedule, and shift", stderr, StringComparison.Ordinal);
     }
 
     private static async Task<(int ExitCode, string Stdout, string Stderr)> RunHostAsync(
