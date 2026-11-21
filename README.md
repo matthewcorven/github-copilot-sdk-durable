@@ -62,6 +62,7 @@ In-depth technical reports, design notes, and audits are available in [`docs/`](
 
 - [**Comparative Architecture Analysis**](docs/COMPARATIVE_ANALYSIS.md): Comprehensive matrices comparing every storage and runtime subsystem of this project against Pi Durable.
 - [**Why this Layer is Necessary (Durability Analysis)**](docs/DURABILITY_ANALYSIS.md): Detailed breakdown of what the Copilot SDK provides natively, what it lacks, and what this library proves.
+- [**Temporal × Microsoft Agent Framework Comparison**](docs/TEMPORAL_MAF_COMPARISON.md): Three-way matrices — [Temporal's MAF plugin](https://github.com/temporalio/ai-integrations/tree/main/dotnet/microsoft-agent-framework), this library, and the Copilot SDK alone — covering durability, agent surface, operations, and when each is the right reach.
 - [**Example Suite Fidelity Audit**](docs/EXAMPLES_AUDIT.md): Strict code audit of examples `00` through `33`, verifying that each runs against real engine components rather than shortcuts.
 - [**Copilot SDK Notes & Gotchas**](docs/COPILOT_SDK_NOTES.md): SDK behaviors, tool authoring pitfalls (silent tool shadowing, serialization limits, async deadlocks), and model billing pricing tables.
 - [**Architecture Design Document**](docs/DESIGN.md): The foundational specification and concept mapping between Pi Durable and the GitHub Copilot SDK (.NET).
@@ -636,6 +637,8 @@ docs/
   RELEASING.md            release strategy: release unit, cadence, branch roles, tag procedure
   COMPARATIVE_ANALYSIS.md architecture comparison vs Pi Durable
   DURABILITY_ANALYSIS.md  what Copilot SDK provides vs what was added
+  TEMPORAL_MAF_COMPARISON.md  three-way matrices: Temporal MAF plugin, this library, SDK alone
+  assessments/            read-only assessments and the four spike results derived from that comparison
   EXAMPLES_AUDIT.md       rigorous fidelity audit of examples 00 through 33
   COPILOT_SDK_NOTES.md    SDK quirks, tool shadowing rules, and pricing
   DESIGN.md               original architecture design specification
@@ -654,6 +657,17 @@ Microsoft offers the [Durable Task extension for Microsoft Agent Framework](http
 - **State & Concurrency Semantics:** Microsoft's extension models long-running workflows as event-sourced orchestrations and entities (`RaiseEventAsync`). `Copilot.Durable` structures state around **versioned domain documents** (with first-writer-wins conflict policies), checkpointed state machines, and step-level memoization.
 
 Both approaches are benchmarked side-by-side under identical fault injections (process kills, duplicate deliveries, and store outages) in [**Band G of our Real-World Matrix**](docs/REAL_WORLD_MATRIX.md#band-g--long-running-operations).
+
+### How does this compare to Temporal's Microsoft Agent Framework plugin?
+
+[Temporal's `dotnet/microsoft-agent-framework` plugin](https://github.com/temporalio/ai-integrations/tree/main/dotnet/microsoft-agent-framework) solves a different half of the problem: it moves the **agent loop** into a Temporal Workflow, so every model call, MCP call and opted-in tool becomes a Temporal Activity with the engine's retry, timeout, heartbeat and replay semantics. `Copilot.Durable` leaves the loop to the Copilot runtime and makes the **application state** durable — documents, checkpoints, memos, permissions, forks.
+
+The trade is visible in one line each:
+
+- **Temporal gains** authored provider-error classification, tested replay compatibility, tamper-resistant approvals, and a workflow engine with no payload or determinism surprises you have not already accepted. **It costs** a Temporal Service, deterministic Workflow code (in-Workflow tools re-run on replay; context providers cannot await), and a 2 MiB per-call payload cap.
+- **`Copilot.Durable` gains** versioned domain documents with fork policies and point-in-time reads, ordinary async handlers with no determinism requirement, one portable store (JSONL or EF Core, no server), and identical semantics in C#, TypeScript and Python. **It costs** the engine — you own recovery, and the layer has no retry policy of its own.
+
+Both are honest about their gaps: Temporal's plugin is pre-release and promises replay only within a major; this layer is `v0.4.0` with a measured split-store limitation. The full three-way matrices, including the Copilot SDK on its own, are in [**Temporal × MAF Comparison**](docs/TEMPORAL_MAF_COMPARISON.md).
 
 ---
 
