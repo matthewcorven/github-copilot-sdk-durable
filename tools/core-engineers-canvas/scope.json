@@ -5,6 +5,8 @@
   "repository": "matthewcorven/github-copilot-sdk-durable",
   "maxAgeSeconds": 3600,
   "evidenceManifest": "docs/core-engineers-evidence.json",
+  "criterionMap": "docs/core-engineers-criterion-map.json",
+  "evidenceMaxAgeSeconds": 604800,
   "slices": [
     {"id":"durability","title":"Durable foundation","owner":"Core Engineer","priority":"P1","criteria":[
       {"id":"durable-recovery","title":"Committed checkpoints survive process death with tested recovery","sourcePaths":["lib/Durable.cs","tests/Durable.Tests/RuntimeHostCliTests.cs"],"requiresE2E":true},

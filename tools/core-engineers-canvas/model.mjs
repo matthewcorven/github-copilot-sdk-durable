@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import crypto from 'node:crypto';
+import { sha256 as digest, acceptedCriterion, candidateFromManifest, candidateStaleness, mappingCoverage } from './evidence.mjs';
 
-export const digest = value => crypto.createHash('sha256').update(value).digest('hex');
+export { digest };
 export const percent = (done, total) => total ? Math.round(done * 1000 / total) / 10 : null;
 export const slug = value => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
@@ -27,42 +27,6 @@ export async function criterionSource(root, criterion) {
     if (content !== null) present.push(relative);
   }
   return { sourceDigest: digest(JSON.stringify(parts)), present };
-}
-
-export async function acceptedCriterion(root, criterion, source, record) {
-  const fail = reason => ({ complete: false, reason, evidencePaths: [] });
-  if (!record) return fail('No qualifying acceptance record in this committed source snapshot. Source presence is not acceptance.');
-  if (record.status !== 'accepted' || record.sourceDigest !== source.sourceDigest) return fail('Acceptance is unaccepted or its source digest is stale.');
-  if (source.present.length !== criterion.sourcePaths.length) return fail('A required source reference is missing.');
-  if (typeof record.authoredBy !== 'string' || !record.authoredBy.trim() || typeof record.reviewedBy !== 'string' || !record.reviewedBy.trim() || record.authoredBy.trim().toLowerCase() === record.reviewedBy.trim().toLowerCase()) return fail('Independent recorded author/reviewer identities are required.');
-  if (!Array.isArray(record.evidence) || record.evidence.length === 0) return fail('Missing evidence references.');
-  const kinds = new Map();
-  const evidencePaths = [];
-  for (const item of record.evidence) {
-    let content;
-    try { content = await sourceFile(root, item.path); } catch { return fail('Unsafe or unreadable evidence reference.'); }
-    if (!content || item.sha256 !== digest(content)) return fail('Evidence is missing or does not match its recorded SHA256.');
-    kinds.set(item.kind, content);
-    evidencePaths.push(item.path);
-  }
-  if (!kinds.has('test-report') || !kinds.has('review')) return fail('A normalized test report and independent review are required.');
-  let report, review;
-  try { report = JSON.parse(kinds.get('test-report')); review = JSON.parse(kinds.get('review')); } catch { return fail('Normalized result/review JSON is invalid.'); }
-  const counts = report.tests;
-  if (report.criterionId !== criterion.id || report.sourceDigest !== source.sourceDigest || report.outcome !== 'passed' || !counts || !Number.isSafeInteger(counts.discovered) || counts.discovered < 1 || counts.executed !== counts.discovered || counts.passed !== counts.executed || counts.failed !== 0 || counts.skipped !== 0) return fail('Result must identify this source/criterion and all discovered tests must pass without skips.');
-  if (review.criterionId !== criterion.id || review.sourceDigest !== source.sourceDigest || review.reviewer !== record.reviewedBy || review.decision !== 'accepted') return fail('Independent review does not match this criterion/source.');
-  if (criterion.requiresE2E) {
-    if (!Array.isArray(report.e2eTestIds) || report.e2eTestIds.length === 0 || new Set(report.e2eTestIds).size !== report.e2eTestIds.length) return fail('E2E discovery IDs are required.');
-    for (const id of report.e2eTestIds) {
-      const screenshot = record.evidence.find(item => item.kind === 'screenshot' && item.testId === id);
-      if (!screenshot) return fail('A screenshot is required for every discovered E2E test.');
-      const png = await sourceFile(root, screenshot.path);
-      if (!png || png.length < 24 || !png.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) return fail('E2E screenshot must be an actual PNG artifact.');
-    }
-    const coverage = report.coverage;
-    if (!coverage || !Number.isFinite(coverage.line) || !Number.isFinite(coverage.branch) || coverage.line < 0 || coverage.line > 100 || coverage.branch < 0 || coverage.branch > 100 || !kinds.has('coverage')) return fail('Measured line/branch coverage and a hashed coverage artifact are required.');
-  }
-  return { complete: true, reason: 'Qualifying source-linked acceptance record and artifacts found. Recorded review is not a deployment authorization.', evidencePaths };
 }
 
 export function parseTeam(markdown, duties) {
@@ -93,19 +57,42 @@ export function referenceProgram(scope, issues, incomplete = false) {
   return { title: 'Reference scenario program (not MVP acceptance)', percent: total && !incomplete ? percent(closed,total) : null, closed, total, incomplete, slices, note: 'Closed leaf issues / cached labelled leaf issues. Epics excluded; overall deduplicated. Not effort-weighted, accepted quality, code coverage, or deployment readiness. Unlabelled/missing work can be absent; this is not the product MVP denominator.' };
 }
 
-export async function buildSnapshot({root,scope,meta,issues,queue}) {
-  let records = {};
+export async function buildSnapshot({root,scope,meta,issues,queue,evidenceRoot=null,probe=null,now=Date.now()}) {
+  // Criterion source is read from the pinned candidate tree (`root`). Evidence artifacts and the
+  // manifest are read from the committed snapshot (`evidenceRoot`), so an artifact can never be
+  // credited because it happens to sit in an uncommitted working tree.
+  const artifactRoot = evidenceRoot ?? root;
+  const manifestRead = path => sourceFile(artifactRoot, path);
+  let manifest = null;
   let evidenceError = null;
   try {
-    const raw = await sourceFile(root,scope.evidenceManifest);
-    if (raw) { const parsed = JSON.parse(raw); if (parsed.schema !== 'core-engineers-evidence/v1' || !parsed.criteria || typeof parsed.criteria !== 'object' || Array.isArray(parsed.criteria)) throw new Error('Invalid evidence manifest schema'); records = parsed.criteria; }
-  } catch { evidenceError = 'Evidence manifest unavailable or invalid; no criteria credited.'; }
+    const raw = await sourceFile(artifactRoot, scope.evidenceManifest);
+    if (raw) manifest = JSON.parse(raw);
+    else evidenceError = `No evidence manifest at ${scope.evidenceManifest} in the committed snapshot; no criterion is credited.`;
+  } catch { evidenceError = 'Evidence manifest unavailable or invalid; no criterion is credited.'; }
+  const pinned = candidateFromManifest(manifest);
+  if (!pinned.ok && !evidenceError) evidenceError = pinned.reason;
+  let map = null;
+  let mapError = null;
+  try {
+    const raw = await sourceFile(artifactRoot, scope.criterionMap);
+    if (raw) map = JSON.parse(raw);
+    else mapError = `No criterion-to-test map at ${scope.criterionMap} in the committed snapshot.`;
+  } catch { mapError = 'Criterion-to-test map unavailable or invalid.'; }
+  const sources = new Map();
+  for (const slice of scope.slices) for (const criterion of slice.criteria) sources.set(criterion.id, await criterionSource(root, criterion));
+  const mapping = mappingCoverage({ scope, map, sources });
+  const probeFor = probe ?? { candidate: { sha: meta.sourceSha }, ancestor: true, read: manifestRead };
+  const identity = pinned.ok ? candidateStaleness({ manifestCandidate: pinned.candidate, probe: probeFor }) : { ok: false, reason: pinned.reason };
   const slices = [];
   for (const slice of scope.slices) {
     const criteria = [];
     for (const criterion of slice.criteria) {
-      const source = await criterionSource(root,criterion);
-      const acceptance = await acceptedCriterion(root,criterion,source,records[criterion.id]);
+      const source = sources.get(criterion.id);
+      const record = pinned.ok ? pinned.records[criterion.id] : undefined;
+      const acceptance = pinned.ok && identity.ok
+        ? await acceptedCriterion({ criterion, source, record, manifest, map, probe: probeFor, now, evidenceMaxAgeSeconds: scope.evidenceMaxAgeSeconds ?? undefined })
+        : { complete: false, reason: identity.reason, evidencePaths: [], coverage: null, mapping: null, evidenceState: 'missing' };
       criteria.push({...criterion,...source,...acceptance});
     }
     const total = criteria.length, accepted = criteria.filter(c=>c.complete).length;
@@ -118,6 +105,8 @@ export async function buildSnapshot({root,scope,meta,issues,queue}) {
   const total=slices.reduce((sum,s)=>sum+s.total,0),accepted=slices.reduce((sum,s)=>sum+s.accepted,0);
   const sourceTotal=new Set(slices.flatMap(s=>s.criteria.flatMap(c=>c.sourcePaths))).size;
   const sourcePresent=new Set(slices.flatMap(s=>s.criteria.flatMap(c=>c.present))).size;
+  const scopeIds=new Set(scope.slices.flatMap(s=>s.criteria.map(c=>c.id)));
+  const contested=pinned.ok?Object.keys(pinned.records).filter(id=>!scopeIds.has(id)):[];
   const markdown=await sourceFile(root,'.squad/team.md');
   const allIssues=issues?.items ?? null;
   const issueByNumber=new Map((allIssues??[]).map(i=>[i.number,i]));
@@ -125,7 +114,10 @@ export async function buildSnapshot({root,scope,meta,issues,queue}) {
   const ageSeconds=Math.max(0,Math.floor((Date.now()-Date.parse(meta.generatedAt))/1000));
   return {
     meta:{...meta,scopeStatus:scope.status,scopeNote:scope.note,maxAgeSeconds:scope.maxAgeSeconds},
-    mvp:{percent:percent(accepted,total),accepted,total,sourcePresent,sourceTotal,sourcePercent:percent(sourcePresent,sourceTotal),label:'Evidence-linked acceptance',note:evidenceError??'Equal-weight explicit criteria with qualifying source-linked reports and recorded independent review. No acceptance record means no credited completion, not proof that no implementation exists. Not a line/branch coverage metric.',slices},
+    mvp:{percent:percent(accepted,total),accepted,total,sourcePresent,sourceTotal,sourcePercent:percent(sourcePresent,sourceTotal),label:'Evidence-linked acceptance',note:evidenceError??'Equal-weight explicit criteria with qualifying source-linked reports and recorded independent review. No acceptance record means no credited completion, not proof that no implementation exists. Not a line/branch coverage metric.',slices,
+      candidate: pinned.ok ? { ...pinned.candidate, ancestor: identity.ok } : null,
+      evidence:{ state: evidenceError ? 'unavailable' : (identity.ok ? (accepted > 0 ? 'current' : 'empty') : 'stale'), error: evidenceError ?? (identity.ok ? null : identity.reason), contested: contested.length, manifest: scope.evidenceManifest },
+      mapping:{ ...mapping, error: mapError, map: scope.criterionMap, rows: mapping.rows.map(row => ({ ...row, title: scope.slices.flatMap(slice => slice.criteria).find(criterion => criterion.id === row.id)?.title ?? row.id })) }},
     team:parseTeam(markdown?.toString()??'',scope.duties),systems:scope.systems,
     queue:{available:(queue?.available??[]).map(hydrate),blocked:(queue?.blocked??[]).map(item=>({...hydrate(item),reason:[...(item.unresolved_dependencies??[]),...(item.unresolved_blockers??[])].map(ref=>typeof ref==='object'?`#${ref.resolved?.number??ref.reference??ref.number??'unknown'}${ref.missing?' (missing)':''}`:`#${ref}`).join(', ')||'See dependency section'})),nextAvailable:queue?.next_available?.number??null,error:meta.queueError??null},
     program:referenceProgram(scope,allIssues,issues?.incomplete??true),

@@ -1,0 +1,333 @@
+{
+  "schema": "core-engineers-criterion-map/v1",
+  "candidateSha": "255805f7f7b28342e8632ec57647635ac101f2c2",
+  "updatedAt": "2026-11-21T00:21:34.320-05:00",
+  "criteria": {
+    "durable-recovery": {
+      "sourceDigest": "d934718302e0d862ce3cf7ebfef6c37dd038eb249fb1340e53e02f9371731a92",
+      "title": "Committed checkpoints survive process death with tested recovery",
+      "requiresE2E": true,
+      "tests": [
+        {
+          "id": "Durable.Tests.DurableStoreTests.Recovery_ReopenedStoreResumesFromSavedCheckpointWithMemoIdempotency",
+          "kind": "integration",
+          "command": "dotnet test tests/Durable.Tests/Durable.Tests.csproj --filter \"FullyQualifiedName~Durable.Tests.DurableStoreTests.Recovery_ReopenedStoreResumesFromSavedCheckpointWithMemoIdempotency\""
+        },
+        {
+          "id": "Durable.Tests.RuntimeHostCliTests.Run_LeavesTheStoreUsableSoTheSecondRunObservesTheFirstRunsState",
+          "kind": "cli",
+          "command": "dotnet test tests/Durable.Tests/Durable.Tests.csproj --filter \"FullyQualifiedName~Durable.Tests.RuntimeHostCliTests.Run_LeavesTheStoreUsableSoTheSecondRunObservesTheFirstRunsState\""
+        },
+        {
+          "id": "examples/12-recovery",
+          "kind": "cli",
+          "command": "scripts/validate.sh 12-recovery"
+        }
+      ]
+    },
+    "isolation": {
+      "sourceDigest": "cb7e91fcfdffb5aaee9c14f24cf80f5d3643fb831c68f43440d9a4ff3c26e2e9",
+      "title": "Concurrent clients, forks and store failures preserve documented guarantees",
+      "requiresE2E": true,
+      "tests": [
+        {
+          "id": "Durable.Tests.ForkTests.Fork_IsolatesDocumentsFromTheParent",
+          "kind": "integration",
+          "command": "dotnet test tests/Durable.Tests/Durable.Tests.csproj --filter \"FullyQualifiedName~Durable.Tests.ForkTests.Fork_IsolatesDocumentsFromTheParent\""
+        },
+        {
+          "id": "Durable.Tests.ForkTests.Fork_TranscriptIsUnchangedAfterReopen",
+          "kind": "integration",
+          "command": "dotnet test tests/Durable.Tests/Durable.Tests.csproj --filter \"FullyQualifiedName~Durable.Tests.ForkTests.Fork_TranscriptIsUnchangedAfterReopen\""
+        },
+        {
+          "id": "examples/02-forks",
+          "kind": "cli",
+          "command": "scripts/validate.sh 02-forks"
+        }
+      ]
+    },
+    "ports": {
+      "sourceDigest": "3f1ec3bf1faf8afeee66fb00f0eb41234e51cb03ce9caac417b496d1a31605b5",
+      "title": "C#/TypeScript/Python contracts and existing stores remain compatible",
+      "requiresE2E": true,
+      "tests": [
+        {
+          "id": "lib/ts/parity.test.ts::recovery",
+          "kind": "parity",
+          "command": "npm run test:parity:ts"
+        },
+        {
+          "id": "tests/parity/test_facts.py::test_recovery_twice_executes_memoized_step_once_after_actual_process_crashes",
+          "kind": "parity",
+          "command": "python3 -m unittest discover -s tests/parity -t tests/parity -p \"test_*.py\""
+        },
+        {
+          "id": "lib/ts/durable.test.ts",
+          "kind": "parity",
+          "command": "npm --prefix lib/ts test"
+        },
+        {
+          "id": "lib/py/test_sdk.py",
+          "kind": "parity",
+          "command": "python3 lib/py/test_sdk.py"
+        },
+        {
+          "id": "scripts/validate.sh --deterministic",
+          "kind": "cli",
+          "command": "scripts/validate.sh --deterministic"
+        }
+      ]
+    },
+    "configure-members": {
+      "sourceDigest": "1e89bcd53d6db54475fcfef173fe866ebf089ca3bdb91b09efa9225b8308e4f3",
+      "title": "Client architect can configure and activate service agents",
+      "requiresE2E": true,
+      "tests": [
+        {
+          "id": "Durable.Tests.RuntimeHostCliTests.Run_UnknownAgentExitsNonZeroNamingTheAgentAndListingWhatIsAvailable",
+          "kind": "cli",
+          "command": "dotnet test tests/Durable.Tests/Durable.Tests.csproj --filter \"FullyQualifiedName~Durable.Tests.RuntimeHostCliTests.Run_UnknownAgentExitsNonZeroNamingTheAgentAndListingWhatIsAvailable\""
+        },
+        {
+          "id": "Durable.Tests.RuntimeHostCliTests.Run_RefusesAnAgentNameThatDoesNotMatchThePattern",
+          "kind": "cli",
+          "command": "dotnet test tests/Durable.Tests/Durable.Tests.csproj --filter \"FullyQualifiedName~Durable.Tests.RuntimeHostCliTests.Run_RefusesAnAgentNameThatDoesNotMatchThePattern\""
+        },
+        {
+          "id": "examples/06-configuration",
+          "kind": "cli",
+          "command": "scripts/validate.sh 06-configuration"
+        }
+      ]
+    },
+    "pause-resume": {
+      "sourceDigest": "9579a133352fdfa39f92e42cc565cde33783d6c74bc9b30c155d4291f19d2b4d",
+      "title": "Pause/resume drains or preserves in-flight ownership without loss",
+      "requiresE2E": true,
+      "tests": [
+        {
+          "id": "Durable.Tests.TaskResumeTests.ResumeAsync_RunsTheInterruptedTaskBeforeItReturns",
+          "kind": "integration",
+          "command": "dotnet test tests/Durable.Tests/Durable.Tests.csproj --filter \"FullyQualifiedName~Durable.Tests.TaskResumeTests.ResumeAsync_RunsTheInterruptedTaskBeforeItReturns\""
+        },
+        {
+          "id": "Durable.Tests.FacadeContractTests.Resume_RecoversTheBoundSessionItsChoicesAndItsTurnRecord",
+          "kind": "integration",
+          "command": "dotnet test tests/Durable.Tests/Durable.Tests.csproj --filter \"FullyQualifiedName~Durable.Tests.FacadeContractTests.Resume_RecoversTheBoundSessionItsChoicesAndItsTurnRecord\""
+        },
+        {
+          "id": "examples/11-tasks",
+          "kind": "cli",
+          "command": "scripts/validate.sh 11-tasks"
+        }
+      ]
+    },
+    "handoff": {
+      "sourceDigest": "4e9b01e13ff19968b2bbaa8319062cef929a203799b4806b8b7e9c1912f42e2e",
+      "title": "Replacement and interrupted shifts resume through audited durable handoffs",
+      "requiresE2E": true,
+      "tests": [
+        {
+          "id": "Durable.Tests.TaskResumeTests.ResumeAsync_RunsTheInterruptedTaskBeforeItReturns",
+          "kind": "integration",
+          "command": "dotnet test tests/Durable.Tests/Durable.Tests.csproj --filter \"FullyQualifiedName~Durable.Tests.TaskResumeTests.ResumeAsync_RunsTheInterruptedTaskBeforeItReturns\""
+        },
+        {
+          "id": "Durable.Tests.FacadeDurabilityTests.Turn_LeavesACheckpointAndASessionBinding",
+          "kind": "integration",
+          "command": "dotnet test tests/Durable.Tests/Durable.Tests.csproj --filter \"FullyQualifiedName~Durable.Tests.FacadeDurabilityTests.Turn_LeavesACheckpointAndASessionBinding\""
+        },
+        {
+          "id": "examples/12-recovery",
+          "kind": "cli",
+          "command": "scripts/validate.sh 12-recovery"
+        }
+      ]
+    },
+    "workflow-config": {
+      "sourceDigest": "38436c8d40e92dc94f9c9f11157578bedb641d7891b922f751f4ca88c5d4732e",
+      "title": "Versioned configuration defines bounded workflows and ownership",
+      "requiresE2E": true,
+      "tests": [
+        {
+          "id": "Durable.Tests.RuntimeHostCliTests.Run_RefusesAnUnknownExtensionNamingTheAgentAndTheExtension",
+          "kind": "cli",
+          "command": "dotnet test tests/Durable.Tests/Durable.Tests.csproj --filter \"FullyQualifiedName~Durable.Tests.RuntimeHostCliTests.Run_RefusesAnUnknownExtensionNamingTheAgentAndTheExtension\""
+        },
+        {
+          "id": "Durable.Tests.RuntimeHostCliTests.Run_RefusesAStoredDefinitionThatNamesAnExtensionTheHostNoLongerHas",
+          "kind": "cli",
+          "command": "dotnet test tests/Durable.Tests/Durable.Tests.csproj --filter \"FullyQualifiedName~Durable.Tests.RuntimeHostCliTests.Run_RefusesAStoredDefinitionThatNamesAnExtensionTheHostNoLongerHas\""
+        },
+        {
+          "id": "examples/09-registry-reload",
+          "kind": "cli",
+          "command": "scripts/validate.sh 09-registry-reload"
+        }
+      ]
+    },
+    "linked-tools": {
+      "sourceDigest": "86ab8cf80e6ee3df0a04b76efa82320b12949fb7ef304010a117f133a842a39c",
+      "title": "Optional linked skills/MCPs/tools require explicit permission and fail safely",
+      "requiresE2E": true,
+      "tests": [
+        {
+          "id": "Durable.Tests.PermissionPolicyTests.Handler_RejectsAnUngrantedToolAndApprovesAGrantedOne",
+          "kind": "unit",
+          "command": "dotnet test tests/Durable.Tests/Durable.Tests.csproj --filter \"FullyQualifiedName~Durable.Tests.PermissionPolicyTests.Handler_RejectsAnUngrantedToolAndApprovesAGrantedOne\""
+        },
+        {
+          "id": "Durable.Tests.RuntimeHostCliTests.Run_RefusesAMalformedPermissionGrant",
+          "kind": "cli",
+          "command": "dotnet test tests/Durable.Tests/Durable.Tests.csproj --filter \"FullyQualifiedName~Durable.Tests.RuntimeHostCliTests.Run_RefusesAMalformedPermissionGrant\""
+        },
+        {
+          "id": "examples/31-permissions",
+          "kind": "cli",
+          "command": "scripts/validate.sh 31-permissions"
+        }
+      ]
+    },
+    "prompt-hooks": {
+      "sourceDigest": "a2502bc75f46895614d07fa545c2f2d3632843b85d9b48ddc3e533a6089e8164",
+      "title": "System-prompt arrangement and hooks have tested precedence and trust boundaries",
+      "requiresE2E": true,
+      "tests": [
+        {
+          "id": "Durable.Tests.FacadeContractTests.HookComposition_ComposesTheDurableSectionsWithTheApplicationsHooks",
+          "kind": "integration",
+          "command": "dotnet test tests/Durable.Tests/Durable.Tests.csproj --filter \"FullyQualifiedName~Durable.Tests.FacadeContractTests.HookComposition_ComposesTheDurableSectionsWithTheApplicationsHooks\""
+        },
+        {
+          "id": "examples/14-system-prompt",
+          "kind": "cli",
+          "command": "scripts/validate.sh 14-system-prompt"
+        }
+      ]
+    },
+    "shift-order": {
+      "sourceDigest": "177d03573d98fc0c6bed3e1ef1500029edc133d4b01b26ffd4956dbe79a85977",
+      "title": "Service shifts resume priority or select eligible work by priority then age",
+      "requiresE2E": true,
+      "tests": [
+        {
+          "id": "Durable.Tests.RuntimeHostCliTests.Schedule_RunOnceRunsTheOldestMissedInstantAndKeepsTheBacklog",
+          "kind": "cli",
+          "command": "dotnet test tests/Durable.Tests/Durable.Tests.csproj --filter \"FullyQualifiedName~Durable.Tests.RuntimeHostCliTests.Schedule_RunOnceRunsTheOldestMissedInstantAndKeepsTheBacklog\""
+        },
+        {
+          "id": "Durable.Tests.RuntimeHostCliTests.Schedule_RunOnceDrainsTheBacklogOneOccurrencePerPass",
+          "kind": "cli",
+          "command": "dotnet test tests/Durable.Tests/Durable.Tests.csproj --filter \"FullyQualifiedName~Durable.Tests.RuntimeHostCliTests.Schedule_RunOnceDrainsTheBacklogOneOccurrencePerPass\""
+        }
+      ]
+    },
+    "notifications": {
+      "sourceDigest": "0d52354e6e1e16522e3712f09cc77593370af5130889d167baceba4007eeadcf",
+      "title": "Daily snapshot publication, offline gaps and overlap are observable",
+      "requiresE2E": true,
+      "tests": [
+        {
+          "id": "Durable.Tests.RuntimeHostCliTests.Schedule_ResumedSleepDoesNotDoubleRunTheSameInstant",
+          "kind": "cli",
+          "command": "dotnet test tests/Durable.Tests/Durable.Tests.csproj --filter \"FullyQualifiedName~Durable.Tests.RuntimeHostCliTests.Schedule_ResumedSleepDoesNotDoubleRunTheSameInstant\""
+        },
+        {
+          "id": "tools/core-engineers-canvas/model.test.mjs::snapshot shows unknown issue data separately from zero accepted MVP criteria",
+          "kind": "unit",
+          "command": "npm --prefix tools/core-engineers-canvas run test:unit"
+        },
+        {
+          "id": "examples/30-reload-and-restart",
+          "kind": "cli",
+          "command": "scripts/validate.sh 30-reload-and-restart"
+        }
+      ]
+    },
+    "eta-risk": {
+      "sourceDigest": "4622584497927d38d9c825fa586a0ff367628a21486e4ab81256ccd7cb0efad3",
+      "title": "Product goals, ETA assumptions, dependencies and support runway are reviewable",
+      "requiresE2E": false,
+      "gap": "Unmapped: no executable test; PO/Architect approval is a recorded decision, not a test.",
+      "tests": []
+    },
+    "local-environment": {
+      "sourceDigest": "2524c40712f2e5ac1cf8ddadfaf021cc81df0ed3b07defcf153fd91390c40442",
+      "title": "Aspire/emulators/disposable dependencies reproduce the service locally",
+      "requiresE2E": true,
+      "tests": [
+        {
+          "id": "examples/37-ef-core-store",
+          "kind": "cli",
+          "command": "scripts/validate.sh 37-ef-core-store"
+        },
+        {
+          "id": "examples/36-durable-client-builder",
+          "kind": "cli",
+          "command": "scripts/validate.sh 36-durable-client-builder"
+        },
+        {
+          "id": "scripts/validate.sh --deterministic",
+          "kind": "cli",
+          "command": "scripts/validate.sh --deterministic"
+        }
+      ]
+    },
+    "e2e-evidence": {
+      "sourceDigest": "7f13ad10c4b70a8d1b8732c14798645b798214deb437a03693b3ce4ce309cb29",
+      "title": "Every acceptance path has local tests, coverage and per-E2E screenshots",
+      "requiresE2E": true,
+      "tests": [
+        {
+          "id": "tools/core-engineers-canvas/evidence.test.mjs",
+          "kind": "unit",
+          "command": "npm --prefix tools/core-engineers-canvas run test:unit"
+        },
+        {
+          "id": "tools/core-engineers-canvas/browser.spec.mjs",
+          "kind": "e2e",
+          "command": "npm --prefix tools/core-engineers-canvas run test:e2e"
+        }
+      ]
+    },
+    "deployment-gate": {
+      "sourceDigest": "aed3121b9bc9e6e7463203666ceaa19b461dd6c57ab742d89a1fc7d008101342",
+      "title": "Deployment fails closed without reviewed candidate-specific human approval",
+      "requiresE2E": true,
+      "gap": "Unmapped: no executable deployment-gate test exists yet; docs/RELEASING.md and the scenario deploy.sh are documentation/scripts, and source presence is not acceptance.",
+      "tests": []
+    },
+    "scope-plan": {
+      "sourceDigest": "620114d8480d6855c05092188927e6d3fbb32fd13b2a7a0dc3d5e6cc6484d569",
+      "title": "PO/Architect approve MVP scope, dependency-complete breakdown and estimates",
+      "requiresE2E": false,
+      "gap": "Unmapped: no executable test; PO/Architect approval is a recorded decision, not a test.",
+      "tests": []
+    },
+    "worked-use-case": {
+      "sourceDigest": "e8c763a8dbd7d9ee94dc79212d878fe9dbda6a82d9f1c2c785dbdde6b1f45c35",
+      "title": "Team hiring/pausing and workflow customization are a real service walkthrough",
+      "requiresE2E": true,
+      "tests": [
+        {
+          "id": "examples/00-conversation",
+          "kind": "cli",
+          "command": "scripts/validate.sh 00-conversation"
+        },
+        {
+          "id": "examples/05-harness",
+          "kind": "cli",
+          "command": "scripts/validate.sh 05-harness"
+        }
+      ]
+    },
+    "support": {
+      "sourceDigest": "d8bee08eaa11ad2467ee12114928d0d8ff9fb83fdc642337e04b0b6802f17b3b",
+      "title": "Configuration migration, troubleshooting, rollback and support ownership documented",
+      "requiresE2E": false,
+      "gap": "Unmapped: no executable test; migration/rollback/support ownership is documentation plus a recorded review.",
+      "tests": []
+    }
+  }
+}
