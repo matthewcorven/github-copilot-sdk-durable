@@ -255,8 +255,10 @@ Reproduced in two places, both runnable:
 - `evidence/blocked-input.cs` — a standalone file-based app that calls the pre-fix API from inside a
   commit with a four-second watchdog. It exits 7, i.e. the await did not return. `evidence.sh` stage 8
   runs it and asserts the exit code, so the claim is checked on every evidence run.
-- `tests/Durable.Tests/TaskResumeTests.cs` — `MemoAsyncInsideCommit_DoesNotReturn_BecauseTheGateIsNotReentrant`
-  keeps the trap as a test, and the two tests beside it assert the replacement's behaviour.
+- `tests/Durable.Tests/TaskResumeTests.cs` — `MemoAsyncInsideCommit_ThrowsAndNamesTransactionMemo_InsteadOfHanging`
+  keeps the trap as a test with a watchdog, and the tests beside it assert the replacement's behaviour.
+  (The earlier fixture here asserted the *hang*; #201's follow-up replaced it with the guard, which
+  refuses the call instead of waiting on it.)
 
 Filed as [#201](https://github.com/matthewcorven/github-copilot-sdk-durable/issues/201) with a minimal
 reproduction, and fixed on this branch (commit "fix(durable): write a memo inside a transaction instead

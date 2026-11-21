@@ -5,7 +5,7 @@
   "scripts": {
     "refresh": "node server.mjs --refresh",
     "start": "node server.mjs",
-    "test:unit": "node --experimental-test-coverage --test-coverage-exclude=**/*.test.mjs --test model.test.mjs canvas-policy.test.mjs",
+    "test:unit": "node --experimental-test-coverage --test-coverage-exclude=**/*.test.mjs --test-coverage-exclude=**/*.fixture.mjs --test model.test.mjs evidence.test.mjs canvas-policy.test.mjs",
     "test:e2e": "playwright test"
   },
   "devDependencies": {

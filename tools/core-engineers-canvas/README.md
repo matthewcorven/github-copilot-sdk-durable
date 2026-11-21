@@ -44,7 +44,7 @@ The server prints its actual ephemeral loopback URL. Open that URL in the Browse
 
 ```sh
 node tools/core-engineers-canvas/server.mjs --offline
-node --experimental-test-coverage '--test-coverage-exclude=**/*.test.mjs' --test tools/core-engineers-canvas/model.test.mjs
+node --experimental-test-coverage '--test-coverage-exclude=**/*.test.mjs' --test-coverage-exclude=**/*.fixture.mjs --test tools/core-engineers-canvas/model.test.mjs tools/core-engineers-canvas/evidence.test.mjs
 ```
 
 For reproducible Chromium browser checks (development dependencies only):
@@ -89,11 +89,12 @@ Every specialist and support identity has a `Core Engineers canvas` section in i
 
 ## Recording qualifying evidence
 
-There is intentionally **no fabricated accepted-evidence file** in the repository. Tester may publish `docs/core-engineers-evidence.json` only from actual results and independent review:
+There is intentionally **no fabricated accepted-evidence file** in the repository. Tester may publish `docs/core-engineers-evidence.json` only from actual results and independent review. The manifest pins the candidate; every criterion is judged against that pin:
 
 ```json
 {
   "schema": "core-engineers-evidence/v1",
+  "candidate": {"sha": "the full 40-character commit SHA the evidence was captured against", "generatedAt": "ISO-8601 capture time", "mode": "local"},
   "criteria": {
     "scope-plan": {
       "status": "accepted",
@@ -109,9 +110,36 @@ There is intentionally **no fabricated accepted-evidence file** in the repositor
 }
 ```
 
-The normalized result JSON must identify `criterionId`, matching `sourceDigest`, `outcome: "passed"`, and integer `tests` counts: positive `discovered`, `executed === discovered`, `passed === executed`, `failed: 0`, `skipped: 0`. Review JSON identifies the same criterion/digest, `reviewer` matching `reviewedBy`, and `decision: "accepted"`. Author and reviewer must differ.
+`candidate.mode` is `local` (this machine), `ci` (a real runner) or `mock` (simulated). **`mock` never credits acceptance.**
 
-E2E criteria additionally require unique nonempty `e2eTestIds`, a hashed actual PNG artifact with `kind: "screenshot"` and matching `testId` for **each** E2E ID, measured `coverage.line`/`coverage.branch` (0–100) in the normalized report, and a hashed `kind: "coverage"` artifact. Link raw runner/coverage/trace artifacts alongside the normalized result. All artifacts must be present in the committed read-cache source and match their SHA256. Changed criterion source content invalidates its prior digest. Failed attempts and screenshots remain retained; they do not qualify for passing acceptance.
+The normalized result JSON must identify `criterionId`, matching `sourceDigest`, `candidateSha` equal to the manifest pin, `completedAt`, `mode` matching the manifest, `outcome: "passed"`, and integer `tests` counts: positive `discovered`, `executed === discovered`, `passed === executed`, `failed: 0`, `skipped: 0`. Review JSON identifies the same criterion/digest, `candidateSha`, `reviewer` matching `reviewedBy`, and `decision: "accepted"`. Author and reviewer must differ.
+
+E2E criteria additionally require unique nonempty `e2eTestIds`, a hashed actual PNG artifact with `kind: "screenshot"` and matching `testId` for **each** E2E ID, measured `coverage.line`/`coverage.branch` (0–100) in the normalized report, and a hashed `kind: "coverage"` artifact whose `linePercent`/`branchPercent` match the report within 0.05. A CLI E2E test's screenshot needs `"capture": "terminal"`. Link raw runner/coverage/trace artifacts alongside the normalized result. All artifacts must be present in the committed snapshot and match their SHA256; the artifact is read from `git show <candidate>:<path>`, so a file that exists only in the working tree has no pin and cannot be credited. Changed criterion source content invalidates its prior digest. Failed attempts and screenshots remain retained; they do not qualify for passing acceptance.
+
+### Stale evidence
+
+A record is stale, and cannot credit acceptance, when any of these hold:
+
+- the manifest candidate SHA differs from the candidate the harness probed, or the candidate is not a committed ancestor of the read-cache HEAD;
+- the normalized result's `candidateSha` differs from the manifest pin, has no `completedAt`, is dated in the future, or its `mode` disagrees with the manifest;
+- the result is older than `scope.evidenceMaxAgeSeconds` (default seven days);
+- the criterion source digest changed after the map or evidence was written.
+
+Stale evidence is flagged in `mvp.evidence.state === "stale"`, named in `mvp.evidence.error`, and marks the whole snapshot stale. It never renders as accepted.
+
+### Criterion-to-test mapping
+
+`docs/core-engineers-criterion-map.json` (`core-engineers-criterion-map/v1`) is the auditable answer to "which test proves this criterion?". Each entry records the criterion's `sourceDigest`, its `title`, `requiresE2E`, and either mapped `tests` (`id`, `kind` of `unit|integration|parity|e2e|cli`, and the exact `command`) or an explicit `gap` string. A `requiresE2E` criterion is mapped only when at least one E2E/CLI test is recorded; a gap is displayed and never accepted. An entry whose digest no longer matches, or a criterion with neither tests nor a gap, is **unaccounted** and cannot render as complete.
+
+Refresh the digest after a criterion source change:
+
+```sh
+node tools/core-engineers-canvas/server.mjs --sync-map
+```
+
+`--sync-map` preserves existing test mappings and only updates the candidate SHA, timestamps and digests; a criterion with no previous entry is written with an explicit `Unmapped:` gap that Tester must replace with a real mapping or confirm as a gap. It never invents a test.
+
+The snapshot reports `mvp.mapping` (`total`, `mapped`, `gaps`, `stale`, `unaccounted`, `complete`, and per-criterion rows) and `mvp.evidence` (`state`, `error`, `contested` records for out-of-scope ids, manifest path). A missing manifest, missing map, stale pin or an unaccounted criterion forces `complete: false` and zero credited acceptance.
 
 This validates source/artifact consistency and **recorded** acceptance, not the reviewer's identity cryptographically, the truth of a hand-authored test report, or human deployment authorization. Independent review must establish authenticity. Do not write a normalized passing result unless the underlying real local tests actually passed. Screenshots do not substitute for assertions, and this format is not permission to expose secrets or commit sensitive evidence.
 

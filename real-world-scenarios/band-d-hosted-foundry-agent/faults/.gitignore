@@ -1,0 +1,3 @@
+# A fault run leaves nothing behind; these are the shapes a crash before the trap would.
+runs/
+*.log

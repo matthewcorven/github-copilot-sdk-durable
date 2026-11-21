@@ -385,10 +385,20 @@ public sealed class TaskRuntime
 
     /// <summary>Reads an idempotency memo, or writes one when <paramref name="value"/> is supplied.</summary>
     /// <remarks>
+    /// <para>
     /// Call this from a phase handler, not from inside a
     /// <see cref="CommitAsync(Func{Transaction, Task{TaskCommit}})"/> callback: it takes the store's
-    /// commit gate, which the commit already holds, so it does not return. Use
-    /// <see cref="Transaction.Memo"/> inside a transaction.
+    /// commit gate, and the commit running the callback already holds it, so the call cannot make
+    /// progress. Rather than wait for a release that the commit cannot give, it throws
+    /// <see cref="DurableCommitReentryException"/> — an error a caller can catch, log and fix,
+    /// instead of a run that stops.
+    /// </para>
+    /// <para>
+    /// Inside a transaction, use <see cref="Transaction.Memo"/>. It writes the memo into the task's
+    /// memo map before the transaction commits, so the memo is saved with the checkpoint that
+    /// surrounds it and discarded if that commit rolls back — one commit for the effect and its
+    /// record, rather than two.
+    /// </para>
     /// </remarks>
     public Task<JsonElement?> MemoAsync(string key, JsonElement? value = null) =>
         _store.MemoAsync(Task.Id, key, value);
@@ -752,6 +762,54 @@ public sealed class DurableSandboxPolicyException : InvalidOperationException
     public DurableSandboxPolicy Policy { get; }
 }
 
+/// <summary>
+/// Thrown when an operation that takes the store's commit gate is called from inside a commit
+/// on that same store.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The gate is held for the whole of a commit's callback and is not reentrant, so a call that
+/// re-entered it would wait for a release only the enclosing commit can perform — and the
+/// enclosing commit is awaiting the call. That is a hang with no stack trace and no time limit,
+/// which is the worst failure mode an idempotency API can have. The gate therefore refuses the
+/// re-entry instead of queueing it.
+/// </para>
+/// <para>
+/// The guard is scoped to the async flow: a <em>different</em> task or thread calling the same
+/// method while the commit is in progress waits normally, because it is outside the context the
+/// commit set. Only re-entry from inside the committing callback throws.
+/// </para>
+/// <para>
+/// The catchable path is also the fix. Inside a transaction, write the memo through
+/// <see cref="Transaction.Memo"/> — it lands in the task's memo map before the transaction
+/// commits, so it is saved with the checkpoint and rolled back with it.
+/// </para>
+/// </remarks>
+public sealed class DurableCommitReentryException : InvalidOperationException
+{
+    /// <summary>Creates the exception.</summary>
+    /// <param name="operation">The operation that tried to re-enter the commit gate.</param>
+    /// <param name="commitOperation">The commit whose callback is running.</param>
+    public DurableCommitReentryException(string operation, string commitOperation)
+        : base(
+            $"{operation} was called from inside {commitOperation}'s callback, on the same store. "
+            + "That commit holds the store's commit gate for the whole callback and the gate is not "
+            + "reentrant, so the inner call would wait for a release that only the outer commit can "
+            + "give -- it would not return. Use Transaction.Memo inside the transaction: it writes "
+            + "the memo in the same commit as the checkpoint, so nothing is written twice and the "
+            + "memo is never lost between two commits.")
+    {
+        Operation = operation;
+        CommitOperation = commitOperation;
+    }
+
+    /// <summary>The operation that re-entered the gate.</summary>
+    public string Operation { get; }
+
+    /// <summary>The commit whose callback was running.</summary>
+    public string CommitOperation { get; }
+}
+
 /// <summary>The on-disk format of a durable store.</summary>
 public enum DurableStoreFormat
 {
@@ -885,6 +943,20 @@ public interface IDurableStoreProvider : IDisposable
 
     /// <summary>Records a committed version of a document.</summary>
     void RecordDocumentVersion(DocumentState state, string entryId, JsonElement value);
+
+    /// <summary>
+    /// Reads a document's state, creating it only when it has never been written. This is the
+    /// create-if-absent primitive: <see cref="EnsureDocument(string, string, ForkPolicy)"/>
+    /// answers a document that exists-but-is-empty exactly like an absent one, so a caller that
+    /// needs "exactly one creator wins" cannot use it.
+    /// </summary>
+    /// <param name="kind">The document kind.</param>
+    /// <param name="ownerId">The owner the document belongs to.</param>
+    /// <param name="fork">The fork policy to record if the document is created.</param>
+    /// <param name="initial">The initial value to record if the document is created.</param>
+    /// <param name="state">The document's state when it exists, or was created by this call.</param>
+    /// <returns>Whether this call created the document.</returns>
+    bool TryCreateDocument(string kind, string ownerId, ForkPolicy fork, JsonElement? initial, out DocumentState state);
 
     /// <summary>Copies a document into another owner, honouring its fork policy.</summary>
     void CopyDocument(DocumentState source, string toOwner, string? forkEntryId);
@@ -1110,6 +1182,35 @@ public class InMemoryStoreProvider : IDurableStoreProvider
     {
         _undo?.Append(state.Versions);
         state.Versions.Add(new DocumentVersion(entryId, value.Clone(), NextSequence()));
+    }
+
+    /// <summary>Reads a document's state, creating it only when it has never been written.</summary>
+    /// <remarks>
+    /// "Never been written" means the store holds no state record for the key at all. A document
+    /// whose state record exists but has no committed version — which is what
+    /// <see cref="EnsureDocument(string, string, ForkPolicy, JsonElement?)"/> leaves behind when a
+    /// transaction rolls back after touching it — counts as existing here, because the next
+    /// claimant would otherwise treat a rolled-back placeholder as an absent document and win a
+    /// claim that never committed.
+    /// </remarks>
+    public bool TryCreateDocument(
+        string kind,
+        string ownerId,
+        ForkPolicy fork,
+        JsonElement? initial,
+        out DocumentState state)
+    {
+        var key = DocumentKey(kind, ownerId);
+        if (_documents.TryGetValue(key, out var existing))
+        {
+            state = existing;
+            return false;
+        }
+
+        state = new DocumentState(kind, ownerId, fork, initial?.Clone());
+        _documents[key] = state;
+        _undo?.Remove(_documents, key);
+        return true;
     }
 
     /// <summary>Copies a document into another owner, honouring its fork policy.</summary>
@@ -1790,6 +1891,38 @@ public sealed class DurableStore : IDisposable
     private readonly DurableStoreFormat _format;
 
     /// <summary>
+    /// The commit scope in flight in the current async flow, if any.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is what makes the non-reentrant gate refuse a re-entry instead of hanging on it.
+    /// An async-local is captured by each flow that awaits inside the callback, so it cannot by
+    /// itself say whether a caller is the committing flow or a flow that inherited the scope.
+    /// It is paired with <see cref="_gateHolder"/>: the scope object of the commit that holds the
+    /// gate <em>right now</em>. A flow whose scope is that same object is the committing flow (or
+    /// a continuation of it) and would deadlock, so the call is refused. A flow that inherited a
+    /// scope from a commit that has since released is a child of finished work — a fan-out — and
+    /// is allowed to queue normally.
+    /// </para>
+    /// <para>
+    /// A child started inside a callback that commits <em>while</em> the callback still holds the
+    /// gate is indistinguishable from a re-entry on the committing flow: the async-local flows
+    /// into it and .NET has no way to tell the two apart. Waiting there would deadlock whenever
+    /// the callback awaits the child, so it is refused with the same named error. Work dispatched
+    /// by the runtime crosses <see cref="OutsideCommitScopeAsync"/> at the task boundary, and a
+    /// fan-out that must commit is scheduled to run after its parent's commit returns.
+    /// </para>
+    /// </remarks>
+    private readonly AsyncLocal<CommitScope?> _commitScope = new();
+
+    /// <summary>
+    /// The scope object of the commit that currently holds the gate, or <c>null</c> when the gate
+    /// is free. Written only by the gate holder, read by every caller of
+    /// <see cref="EnterGateAsync"/> to tell a live re-entry from a stale inherited scope.
+    /// </summary>
+    private volatile CommitScope? _gateHolder;
+
+    /// <summary>
     /// Registers a provider factory under a name, so a store can be opened over that
     /// provider with <see cref="DurableStoreOptions.ProviderName"/>. Registering the
     /// same name again replaces the factory.
@@ -2106,6 +2239,88 @@ public sealed class DurableStore : IDisposable
         _format = format;
     }
 
+    /// <summary>What the commit in flight in the current flow is, for the re-entry guard's message.</summary>
+    private sealed record CommitScope(string Operation);
+
+    /// <summary>
+    /// Takes the commit gate, refusing a call that would re-enter a commit this flow is already
+    /// inside.
+    /// </summary>
+    /// <param name="operation">The gate-taking operation, used to name it in the refusal.</param>
+    /// <exception cref="DurableCommitReentryException">
+    /// The current flow is inside a commit's callback on this store <em>and</em> that commit still
+    /// holds the gate, so waiting for it would never return.
+    /// </exception>
+    /// <remarks>
+    /// The refusal is keyed on the gate holder, not merely on "this flow inherited a scope". A
+    /// scope inherited from a commit that has since released — a child started from a callback —
+    /// is a fan-out, and waiting for the gate is correct and completes. See
+    /// <see cref="_commitScope"/> for why a child that commits before its parent releases is
+    /// still refused.
+    /// </remarks>
+    private async Task EnterGateAsync(string operation)
+    {
+        if (_commitScope.Value is { } commit && ReferenceEquals(commit, _gateHolder))
+        {
+            throw new DurableCommitReentryException(operation, commit.Operation);
+        }
+
+        await _gate.WaitAsync();
+    }
+
+    /// <summary>
+    /// Runs a gate-held operation, marking the flow as inside it so a re-entry from inside its
+    /// callback is refused rather than queued behind it.
+    /// </summary>
+    private async Task<T> InCommitAsync<T>(string operation, Func<Task<T>> body)
+    {
+        await EnterGateAsync(operation);
+        var scope = new CommitScope(operation);
+        var previous = _commitScope.Value;
+        _commitScope.Value = scope;
+        _gateHolder = scope;
+        try
+        {
+            return await body();
+        }
+        finally
+        {
+            _gateHolder = null;
+            _commitScope.Value = previous;
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Runs <paramref name="body"/> outside any commit scope, then restores the caller's scope.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The scope is an <see cref="AsyncLocal{T}"/>, so it flows into continuations — including work
+    /// started from inside a commit's callback. A task created and scheduled by a callback (a
+    /// fan-out) therefore inherits the parent's scope, and <see cref="EnterGateAsync"/> would see
+    /// that inheritance. The gate-holder check already permits such a child once the parent has
+    /// released; this boundary makes the child start with no scope at all, so its own commit is
+    /// never judged against a parent's lifetime.
+    /// </para>
+    /// <para>
+    /// Every task run crosses this boundary.
+    /// </para>
+    /// </remarks>
+    internal async Task<T> OutsideCommitScopeAsync<T>(Func<Task<T>> body)
+    {
+        var previous = _commitScope.Value;
+        _commitScope.Value = null;
+        try
+        {
+            return await body();
+        }
+        finally
+        {
+            _commitScope.Value = previous;
+        }
+    }
+
     /// <summary>The conversations known to this store.</summary>
     public IReadOnlyCollection<ConversationRecord> Conversations => _provider.Conversations;
 
@@ -2116,10 +2331,15 @@ public sealed class DurableStore : IDisposable
     public IReadOnlyCollection<DocumentState> Documents => _provider.Documents;
 
     /// <summary>Runs a transaction. Everything written inside is saved together, or discarded if it throws.</summary>
-    public async Task<T> CommitAsync<T>(Func<Transaction, Task<T>> body)
+    /// <remarks>
+    /// The callback runs inside the store's commit gate. An operation that takes the gate again
+    /// from inside it — <see cref="TaskRuntime.MemoAsync"/>, say — throws
+    /// <see cref="DurableCommitReentryException"/> instead of waiting for a release that cannot
+    /// happen; a caller inside this callback writes a memo through <see cref="Transaction.Memo"/>.
+    /// </remarks>
+    public Task<T> CommitAsync<T>(Func<Transaction, Task<T>> body)
     {
-        await _gate.WaitAsync();
-        try
+        return InCommitAsync("DurableStore.CommitAsync", async () =>
         {
             var transaction = new Transaction(this);
             _provider.BeginTransaction();
@@ -2138,11 +2358,7 @@ public sealed class DurableStore : IDisposable
 
             _provider.Commit();
             return result;
-        }
-        finally
-        {
-            _gate.Release();
-        }
+        });
     }
 
     /// <summary>Runs a transaction that produces no value.</summary>
@@ -2202,8 +2418,7 @@ public sealed class DurableStore : IDisposable
                 nameof(eventName));
         }
 
-        await _gate.WaitAsync();
-        try
+        return await InCommitAsync<IReadOnlyList<string>>("DurableStore.RaiseEventAsync", () =>
         {
             var waiting = _provider.Tasks
                 .Where(task => task.Status == TaskStatus.Waiting && task.WaitingOn.Contains(eventName))
@@ -2211,7 +2426,7 @@ public sealed class DurableStore : IDisposable
                 .ToList();
             if (waiting.Count == 0)
             {
-                return [];
+                return System.Threading.Tasks.Task.FromResult<IReadOnlyList<string>>([]);
             }
 
             var transaction = new Transaction(this);
@@ -2253,12 +2468,8 @@ public sealed class DurableStore : IDisposable
                 throw;
             }
 
-            return woken;
-        }
-        finally
-        {
-            _gate.Release();
-        }
+            return System.Threading.Tasks.Task.FromResult<IReadOnlyList<string>>(woken);
+        });
     }
 
     /// <summary>
@@ -2285,10 +2496,9 @@ public sealed class DurableStore : IDisposable
     /// the same transaction. Everything the callback writes is saved together with the
     /// checkpoint, or discarded if the callback throws.
     /// </summary>
-    internal async Task<TaskCommit> CommitTaskAsync(string taskId, Func<Transaction, Task<TaskCommit>> commit)
+    internal Task<TaskCommit> CommitTaskAsync(string taskId, Func<Transaction, Task<TaskCommit>> commit)
     {
-        await _gate.WaitAsync();
-        try
+        return InCommitAsync<TaskCommit>("TaskRuntime.CommitAsync", async () =>
         {
             var task = _provider.Task(taskId);
             if (task is null)
@@ -2346,30 +2556,25 @@ public sealed class DurableStore : IDisposable
             _provider.UpdateTask(task);
             _provider.Commit();
             return next;
-        }
-        finally
-        {
-            _gate.Release();
-        }
+        });
     }
 
-    internal async Task<TaskCommit> CommitTaskAsync(string taskId, Func<TaskCommit> commit)
+    internal Task<TaskCommit> CommitTaskAsync(string taskId, Func<TaskCommit> commit)
     {
-        await _gate.WaitAsync();
-        try
+        return InCommitAsync<TaskCommit>("TaskRuntime.CommitAsync", () =>
         {
             var task = _provider.Task(taskId);
             if (task is null)
             {
-                return TaskCommit.Failed("unknown task");
+                return System.Threading.Tasks.Task.FromResult(TaskCommit.Failed("unknown task"));
             }
 
             // A terminal task's outcome is final.
             if (task.Status == TaskStatus.Terminal)
             {
-                return task.Outcome is { } existing
+                return System.Threading.Tasks.Task.FromResult(task.Outcome is { } existing
                     ? TaskCommit.Completed(existing)
-                    : TaskCommit.Completed(DurableJson.ToElement(new TaskOutcome("completed")));
+                    : TaskCommit.Completed(DurableJson.ToElement(new TaskOutcome("completed"))));
             }
 
             var next = commit();
@@ -2399,18 +2604,20 @@ public sealed class DurableStore : IDisposable
 
             _provider.UpdateTask(task);
             _provider.Commit();
-            return next;
-        }
-        finally
-        {
-            _gate.Release();
-        }
+            return System.Threading.Tasks.Task.FromResult(next);
+        });
     }
 
     /// <summary>Reads or writes an idempotency memo.</summary>
+    /// <remarks>
+    /// This takes the store's commit gate. Called from inside a commit's callback — where the
+    /// gate is already held by a commit this flow is running — it throws
+    /// <see cref="DurableCommitReentryException"/> instead of waiting for a release that cannot
+    /// happen. <see cref="Transaction.Memo"/> is the form that writes a memo inside a transaction.
+    /// </remarks>
     internal async Task<JsonElement?> MemoAsync(string taskId, string key, JsonElement? value)
     {
-        await _gate.WaitAsync();
+        await EnterGateAsync("TaskRuntime.MemoAsync");
         try
         {
             var task = _provider.Task(taskId);
@@ -2556,7 +2763,7 @@ public sealed class DurableStore : IDisposable
     /// </remarks>
     public async Task RefreshAsync()
     {
-        await _gate.WaitAsync();
+        await EnterGateAsync("DurableStore.RefreshAsync");
         try
         {
             if (_provider.IsPersistent)
@@ -2642,6 +2849,35 @@ public sealed class Transaction
             definition.Fork,
             DurableJson.ToElement(definition.Initial()));
 
+    /// <summary>
+    /// Creates a document only when the store holds no state for it. The caller commits the
+    /// first version with <see cref="CommitDocument{T}"/> and the entry it created.
+    /// </summary>
+    /// <returns><c>true</c> when this transaction created the document.</returns>
+    /// <remarks>
+    /// <para>
+    /// This is the create-if-absent primitive the claim record is built on. It exists because
+    /// <see cref="Doc{T}"/> cannot express it: <see cref="Doc{T}"/> answers an absent document
+    /// with the definition's initial value, so two transactions that both read-then-write would
+    /// both believe they hold the claim. Here the read and the write are one step, inside the
+    /// transaction the store's commit gate serializes, so exactly one caller in a process sees
+    /// <c>true</c>.
+    /// </para>
+    /// <para>
+    /// It is deliberately not a "compare and swap". Creating and replacing are different
+    /// operations with different losers: a create reports "someone else was first" and a
+    /// replace reports "what you read is stale". Folding them together would make the refusal
+    /// message ambiguous, and the refusal message is the conflict path.
+    /// </para>
+    /// </remarks>
+    public bool TryCreateDocument<T>(DocumentDefinition<T> definition, string ownerId) =>
+        _provider.TryCreateDocument(
+            definition.Kind,
+            ownerId,
+            definition.Fork,
+            DurableJson.ToElement(definition.Initial()),
+            out _);
+
     /// <summary>Creates a task and returns its record.</summary>
     public DurableTaskRecord CreateTask(
         DurableTaskDefinition definition,
@@ -2675,9 +2911,9 @@ public sealed class Transaction
     /// <para>
     /// <see cref="TaskRuntime.MemoAsync"/> is the form to call from a phase handler, outside a
     /// transaction. It takes the store's commit gate, and so does the commit that is running the
-    /// handler, so calling it from inside a commit callback waits for a release that cannot happen:
-    /// the gate is not reentrant and the callback cannot return. That is not a deadlock a caller can
-    /// detect — it is a hang.
+    /// handler, so calling it from inside a commit callback cannot make progress: the gate is not
+    /// reentrant and the callback cannot return. It therefore throws
+    /// <see cref="DurableCommitReentryException"/> rather than waiting.
     /// </para>
     /// <para>
     /// This overload exists for the one shape the other cannot express: an external effect whose
@@ -3606,6 +3842,687 @@ public sealed record DurableSchedule
     public TimeSpan Interval => TimeSpan.FromMilliseconds(EveryMilliseconds);
 }
 
+/// <summary>What a shift claim currently is, as the store records it.</summary>
+/// <remarks>
+/// The value is persisted as text rather than as this enum, and an unrecognized value is read
+/// back as <see cref="Uncertain"/>. That is deliberate: a store written by a newer build may hold
+/// a state this build has never heard of, and the honest answer to "what is this claim?" is then
+/// "I do not know" — which must fail the caller read-only rather than let it act on a guess.
+/// </remarks>
+public enum ShiftClaimStatus
+{
+    /// <summary>Some owner holds the shift.</summary>
+    Active,
+
+    /// <summary>The owner released the shift after committing a handoff.</summary>
+    Released,
+
+    /// <summary>
+    /// The recorded state is not one this build understands, or the claim record is incomplete.
+    /// A caller must not mutate on this: reconcile it by hand.
+    /// </summary>
+    Uncertain,
+}
+
+/// <summary>
+/// The durable record of one shift's ownership: who holds it, which attempt it is, and how it
+/// got there.
+/// </summary>
+/// <remarks>
+/// <para>
+/// A shift claim is a document rather than a lock. A lock that lived for the duration of a shift
+/// would be a lock that outlives the process holding it, which is the stale-lock problem the
+/// store file lock already solves by dying with the process. This record is instead the durable
+/// fact of who was last granted the shift, checked at each transition, so a host that dies simply
+/// stops transitioning and the next host reads the last committed attempt.
+/// </para>
+/// <para>
+/// <see cref="Owner"/> is an opaque token the caller chooses — a host instance id, a session id,
+/// or a name. It is compared for equality and never interpreted, because the store has no way to
+/// know which process a token belongs to.
+/// </para>
+/// </remarks>
+public sealed class DurableShiftClaim
+{
+    /// <summary>The document kind a shift claim is stored under.</summary>
+    public const string DocumentKind = "durable.shift-claim";
+
+    /// <summary>The prefix of the owner id a shift claim is stored under.</summary>
+    public const string OwnerPrefix = "shift:";
+
+    /// <summary>The owner id a claim for this shift key is stored under.</summary>
+    public static string OwnerId(string key) => $"{OwnerPrefix}{key}";
+
+    /// <summary>The shift key, e.g. <c>sessions/po-shift</c>.</summary>
+    public required string Key { get; init; }
+
+    /// <summary>The member whose shift this is, for listings.</summary>
+    public string? Member { get; init; }
+
+    /// <summary>The token of the owner the shift was granted to.</summary>
+    public required string Owner { get; init; }
+
+    /// <summary>The owner's session, when it has one.</summary>
+    public string? SessionId { get; init; }
+
+    /// <summary>
+    /// The claim state exactly as the store holds it: the single authority for what the record
+    /// says. It is deliberately a string so a value written by a newer build survives this
+    /// build's reader instead of throwing, and is reported as <see cref="ShiftClaimStatus.Uncertain"/>.
+    /// </summary>
+    public string? StatusText { get; init; }
+
+    /// <summary>
+    /// The claim state, as this build reads it. A computed view of <see cref="StatusText"/>,
+    /// resolved through this build's vocabulary; it is never written and never used as a
+    /// fallback for missing text.
+    /// </summary>
+    [JsonIgnore]
+    public ShiftClaimStatus Status => DurableShifts.ReadStatus(StatusText).Status;
+
+    /// <summary>The acquisition counter. Every new grant increments it.</summary>
+    public long Attempt { get; init; }
+
+    /// <summary>The attempt this grant resumed from, or <c>null</c> for a fresh shift.</summary>
+    public long? ResumedFrom { get; init; }
+
+    /// <summary>When the grant was committed, in UTC.</summary>
+    public DateTimeOffset ClaimedAt { get; init; }
+
+    /// <summary>When the owner released the shift, in UTC, or <c>null</c> while it is held.</summary>
+    public DateTimeOffset? ReleasedAt { get; init; }
+
+    /// <summary>How many times this shift has been granted. Equal to <see cref="Attempt"/>.</summary>
+    /// <remarks>
+    /// A computed view, not a stored field: the ports do not write it, so writing it here would be
+    /// an undocumented wire asymmetry for a value no reader consults.
+    /// </remarks>
+    [JsonIgnore]
+    public long Grants => Attempt;
+}
+
+/// <summary>
+/// The claim-state vocabulary, in the spelling the store holds.
+/// </summary>
+/// <remarks>
+/// Persisting text rather than an enum is what lets a value written by a newer build read as
+/// <see cref="ShiftClaimStatus.Uncertain"/> instead of throwing. These spellings are the
+/// cross-language wire contract: TypeScript and Python write and read exactly them.
+/// </remarks>
+public static class ShiftClaimStatusWire
+{
+    /// <summary>The stored spelling of <see cref="ShiftClaimStatus.Active"/>.</summary>
+    public const string Active = "active";
+
+    /// <summary>The stored spelling of <see cref="ShiftClaimStatus.Released"/>.</summary>
+    public const string Released = "released";
+
+    /// <summary>The stored spelling of <see cref="ShiftClaimStatus.Uncertain"/>.</summary>
+    public const string Uncertain = "uncertain";
+}
+
+/// <summary>What a committed handoff means: work is starting, or work has stopped.</summary>
+/// <remarks>
+/// The canonical wire spelling is the lowercase one the ports write — <c>running</c> and
+/// <c>handedOff</c> — so C#, TypeScript and Python all write and read the same text. The
+/// previous C# build wrote the enum's own names, <c>Running</c> and <c>HandedOff</c>, and
+/// <see cref="ShiftHandoffPhaseConverter"/> still reads them: an existing store must keep
+/// working, and a phase misread as <c>handedOff</c> would let a second session claim a live
+/// shift and duplicate the run. Nothing writes the capitalized form any more.
+/// </remarks>
+[JsonConverter(typeof(ShiftHandoffPhaseConverter))]
+public enum ShiftHandoffPhase
+{
+    /// <summary>
+    /// Committed before the turn runs. The owner may be mid-work, so only the same session —
+    /// the process that wrote it and restarted — may resume from it. Stored as <c>running</c>.
+    /// </summary>
+    Running,
+
+    /// <summary>
+    /// Committed when the shift stops, before release. Any successor may resume from it.
+    /// Stored as <c>handedOff</c>.
+    /// </summary>
+    HandedOff,
+}
+
+/// <summary>
+/// Reads and writes <see cref="ShiftHandoffPhase"/> in the ports' lowercase spelling, and still
+/// reads the capitalized names the previous C# build wrote.
+/// </summary>
+/// <remarks>
+/// A read of an unrecognized phase is <see cref="ShiftHandoffPhase.HandedOff"/>, the permissive
+/// phase: refusing the whole record would make a store written by a newer build unreadable, and a
+/// successor that resumed from a stopped shift is safe even if it should have been held. The
+/// dangerous direction — reading a running shift as handed off — cannot come from an unknown
+/// spelling, only from the literal <c>running</c> this converter recognises in either case.
+/// </remarks>
+public sealed class ShiftHandoffPhaseConverter : JsonConverter<ShiftHandoffPhase>
+{
+    /// <summary>The stored spelling of <see cref="ShiftHandoffPhase.Running"/>.</summary>
+    public const string RunningText = "running";
+
+    /// <summary>The stored spelling of <see cref="ShiftHandoffPhase.HandedOff"/>.</summary>
+    public const string HandedOffText = "handedOff";
+
+    /// <inheritdoc />
+    public override ShiftHandoffPhase Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        var text = reader.TokenType == JsonTokenType.String ? reader.GetString() : null;
+        return FromText(text);
+    }
+
+    /// <inheritdoc />
+    public override void Write(Utf8JsonWriter writer, ShiftHandoffPhase value, JsonSerializerOptions options)
+    {
+        writer.WriteStringValue(ToText(value));
+    }
+
+    /// <summary>Resolves a stored phase text, accepting the previous build's capitalized names.</summary>
+    /// <param name="text">The stored text, possibly <c>null</c> for a missing field.</param>
+    /// <returns>
+    /// <see cref="ShiftHandoffPhase.Running"/> for <c>running</c>/<c>Running</c>;
+    /// <see cref="ShiftHandoffPhase.HandedOff"/> for everything else.
+    /// </returns>
+    public static ShiftHandoffPhase FromText(string? text) =>
+        string.Equals(text, RunningText, StringComparison.OrdinalIgnoreCase)
+            ? ShiftHandoffPhase.Running
+            : ShiftHandoffPhase.HandedOff;
+
+    /// <summary>The canonical stored spelling of a phase.</summary>
+    /// <param name="phase">The phase to write.</param>
+    /// <returns><c>running</c> or <c>handedOff</c>.</returns>
+    public static string ToText(ShiftHandoffPhase phase) =>
+        phase is ShiftHandoffPhase.Running ? RunningText : HandedOffText;
+}
+
+/// <summary>
+/// The durable handoff a shift owner commits before it releases the shift.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The handoff is what makes an interrupted shift recoverable. A claim alone records who may run;
+/// the handoff records what was running and what is owed. A successor therefore has two different
+/// situations to tell apart: a shift held by an owner with no handoff (work may be in flight — do
+/// not take it) and a shift held by an owner with a committed handoff (work stopped at a known
+/// point — resume from it).
+/// </para>
+/// <para>
+/// Writing the handoff is not a separate bookkeeping step the caller may skip. The release refuses
+/// to commit without a handoff for the attempt being released, so a store can never describe a
+/// shift that was let go with nothing recorded.
+/// </para>
+/// </remarks>
+public sealed class DurableShiftHandoff
+{
+    /// <summary>The document kind a shift handoff is stored under.</summary>
+    public const string DocumentKind = "durable.shift-handoff";
+
+    /// <summary>The prefix of the owner id a shift handoff is stored under.</summary>
+    public const string OwnerPrefix = "shift-handoff:";
+
+    /// <summary>The owner id a handoff for this shift key is stored under.</summary>
+    public static string OwnerId(string key) => $"{OwnerPrefix}{key}";
+
+    /// <summary>The shift key the handoff covers.</summary>
+    public required string Key { get; init; }
+
+    /// <summary>The claim attempt the handoff was written for.</summary>
+    public required long Attempt { get; init; }
+
+    /// <summary>The owner token that wrote the handoff.</summary>
+    public required string Owner { get; init; }
+
+    /// <summary>
+    /// Whether the handoff records work starting or work stopping. A <see cref="ShiftHandoffPhase.Running"/>
+    /// handoff is the recovery point of an interrupted run; a <see cref="ShiftHandoffPhase.HandedOff"/>
+    /// one is the stopping point of a finished shift.
+    /// </summary>
+    public ShiftHandoffPhase Phase { get; init; } = ShiftHandoffPhase.HandedOff;
+
+    /// <summary>What this shift worked on.</summary>
+    public string? Selected { get; init; }
+
+    /// <summary>What it completed.</summary>
+    public string? Achieved { get; init; }
+
+    /// <summary>What is still owed.</summary>
+    public string? Remaining { get; init; }
+
+    /// <summary>The next action a successor should take first.</summary>
+    public string? Next { get; init; }
+
+    /// <summary>Blockers a successor must know about.</summary>
+    public string? Blockers { get; init; }
+
+    /// <summary>When the handoff was committed, in UTC.</summary>
+    public required DateTimeOffset WrittenAt { get; init; }
+}
+
+/// <summary>What a claim request did.</summary>
+/// <remarks>
+/// <see cref="Acquired"/> is the only outcome that permits running work. <see cref="Conflict"/>
+/// means a different owner holds the shift with no committed handoff, so the work may be in
+/// flight. <see cref="ReadOnly"/> means the store's record cannot be understood or is internally
+/// inconsistent: the caller must report and stop, not retry into a mutation.
+/// </remarks>
+[JsonConverter(typeof(JsonStringEnumConverter<ShiftClaimOutcome>))]
+public enum ShiftClaimOutcome
+{
+    /// <summary>This caller now holds the shift.</summary>
+    Acquired,
+
+    /// <summary>Another owner holds the shift and no handoff makes it resumable.</summary>
+    Conflict,
+
+    /// <summary>The state cannot be trusted. Read-only: report and stop.</summary>
+    ReadOnly,
+}
+
+/// <summary>The result of a claim or release attempt.</summary>
+/// <param name="Outcome">What happened.</param>
+/// <param name="Claim">The claim as the store now holds it, or as it was found.</param>
+/// <param name="Message">A human-readable reason, always present for a refusal.</param>
+public sealed record ShiftClaimResult(ShiftClaimOutcome Outcome, DurableShiftClaim? Claim, string Message);
+
+/// <summary>
+/// The shared shift-claim and handoff operations, built on ordinary documents.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Nothing here is a new persistence primitive. A claim is a document of kind
+/// <see cref="DurableShiftClaim.DocumentKind"/> owned by <c>shift:{key}</c>; a handoff is a
+/// document of kind <see cref="DurableShiftHandoff.DocumentKind"/> owned by
+/// <c>shift-handoff:{key}</c>. Both are <see cref="ForkPolicy.Initial"/>, because forking a
+/// conversation is not inheriting a shift.
+/// </para>
+/// <para>
+/// The one primitive this needed and the layer did not have is
+/// <see cref="Transaction.TryCreateDocument{T}"/>. Read-then-write through
+/// <see cref="Transaction.Doc{T}"/> cannot express "create only if absent": an absent document
+/// reads back as its initial value, so both claimants would believe they were first.
+/// </para>
+/// </remarks>
+public static class DurableShifts
+{
+    /// <summary>The definition a claim is stored under.</summary>
+    public static readonly DocumentDefinition<DurableShiftClaim> ClaimDefinition =
+        new(DurableShiftClaim.DocumentKind, DocumentHistory.Rewindable, ForkPolicy.Initial);
+
+    /// <summary>The definition a handoff is stored under.</summary>
+    public static readonly DocumentDefinition<DurableShiftHandoff> HandoffDefinition =
+        new(DurableShiftHandoff.DocumentKind, DocumentHistory.Rewindable, ForkPolicy.Initial);
+
+    /// <summary>
+    /// Claims a shift for <paramref name="owner"/> if nobody else holds it, or resumes it when the
+    /// holder committed a handoff.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A held shift is only taken over when the store holds a handoff for the held attempt. That
+    /// is the whole duplicate-safety rule: an owner with no handoff may be mid-turn, so a second
+    /// claimant is refused and told who holds it; an owner with a handoff has recorded where it
+    /// stopped, so the successor resumes rather than repeating work. Age plays no part — a claim
+    /// is never taken because a clock says it is old.
+    /// </para>
+    /// <para>
+    /// The read, the decision, and the write are one transaction under the store's commit gate, so
+    /// two claimants in one process cannot both win. Two processes are already separated by the
+    /// store file's exclusive lock: the second never opens the file.
+    /// </para>
+    /// </remarks>
+    public static Task<ShiftClaimResult> ClaimAsync(
+        DurableStore store,
+        string key,
+        string owner,
+        DateTimeOffset now,
+        string? member = null,
+        string? sessionId = null)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+
+        return store.CommitAsync(transaction =>
+        {
+            var claimOwnerId = DurableShiftClaim.OwnerId(key);
+            var existing = store.Document(DurableShiftClaim.DocumentKind, claimOwnerId);
+            var current = existing?.Latest is { } latest
+                ? latest.Deserialize<DurableShiftClaim>(DurableJson.Options)
+                : null;
+
+            var definition = ClaimDefinition;
+
+            // No record at all: this is the create-if-absent path. It is the only path where the
+            // document itself has to appear, and it has to happen atomically with the decision.
+            if (current is null)
+            {
+                var created = new DurableShiftClaim
+                {
+                    Key = key,
+                    Member = member,
+                    Owner = owner,
+                    SessionId = sessionId,
+                    StatusText = Text(ShiftClaimStatus.Active),
+                    Attempt = 1,
+                    ClaimedAt = now,
+                };
+
+                var entryId = transaction.AppendEntry(claimOwnerId, "shift-claim");
+                if (!transaction.TryCreateDocument(definition, claimOwnerId))
+                {
+                    return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                        ShiftClaimOutcome.ReadOnly,
+                        null,
+                        $"the store holds a claim for '{key}' that this transaction could not read back; "
+                        + "treating it as uncertain rather than claiming over it."));
+                }
+
+                transaction.CommitDocument(definition, claimOwnerId, created, entryId);
+                return System.Threading.Tasks.Task.FromResult(
+                    new ShiftClaimResult(ShiftClaimOutcome.Acquired, created, $"acquired attempt 1 for '{owner}'."));
+            }
+
+            var read = current.Status;
+            if (read is ShiftClaimStatus.Uncertain)
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.ReadOnly,
+                    current,
+                    $"the claim for '{key}' records state '{current.StatusText ?? "(none)"}', which this build "
+                    + "cannot interpret. Read-only: reconcile it before claiming."));
+            }
+
+            if (read is ShiftClaimStatus.Active && string.Equals(current.Owner, owner, StringComparison.Ordinal))
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.Acquired,
+                    current,
+                    $"'{owner}' already holds attempt {current.Attempt} of '{key}'."));
+            }
+
+            if (read is ShiftClaimStatus.Active)
+            {
+                var handoff = ReadHandoff(store, key);
+                if (handoff is null)
+                {
+                    return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                        ShiftClaimOutcome.Conflict,
+                        current,
+                        $"'{key}' is held by '{current.Owner}' (attempt {current.Attempt}) with no committed "
+                        + "handoff, so the work may be in flight. Not taking it over."));
+                }
+
+                if (handoff.Attempt != current.Attempt)
+                {
+                    return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                        ShiftClaimOutcome.ReadOnly,
+                        current,
+                        $"the claim for '{key}' is attempt {current.Attempt} but the newest handoff is for attempt "
+                        + $"{handoff.Attempt}. The records disagree; reconcile them rather than resuming."));
+                }
+
+                // An in-flight handoff is only resumable by the session that wrote it. The same
+                // session means the same process, restarted: its work stopped at a known point.
+                // A different session could be racing a live owner, and age is not evidence that
+                // it died, so it is refused rather than resuming over a running shift.
+                var sameSession =
+                    !string.IsNullOrEmpty(current.SessionId)
+                    && string.Equals(current.SessionId, sessionId, StringComparison.Ordinal);
+
+                if (handoff.Phase is ShiftHandoffPhase.Running && !sameSession)
+                {
+                    return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                        ShiftClaimOutcome.Conflict,
+                        current,
+                        $"'{key}' is held by '{current.Owner}' (attempt {current.Attempt}, session "
+                        + $"'{current.SessionId ?? "(none)"}') with an in-flight handoff. Only that session resumes it; "
+                        + "a different session must not duplicate the run."));
+                }
+            }
+
+            // Either the previous owner released it, or it is held with a matching handoff. Both
+            // are safe to take: the first is a finished shift, the second an interrupted one whose
+            // stopping point is written down.
+            var resumedFrom = current.Attempt;
+            var next = new DurableShiftClaim
+            {
+                Key = key,
+                Member = member ?? current.Member,
+                Owner = owner,
+                SessionId = sessionId,
+                StatusText = Text(ShiftClaimStatus.Active),
+                Attempt = current.Attempt + 1,
+                ResumedFrom = resumedFrom,
+                ClaimedAt = now,
+            };
+
+            var nextEntryId = transaction.AppendEntry(claimOwnerId, "shift-claim");
+            transaction.CommitDocument(definition, claimOwnerId, next, nextEntryId);
+
+            var reason = read is ShiftClaimStatus.Released
+                ? $"acquired attempt {next.Attempt} of '{key}' after '{current.Owner}' released it."
+                : $"resumed attempt {next.Attempt} of '{key}' from committed handoff {resumedFrom}.";
+            return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(ShiftClaimOutcome.Acquired, next, reason));
+        });
+    }
+
+    /// <summary>Reads a shift claim, or <c>null</c> when the store holds none.</summary>
+    public static DurableShiftClaim? ReadClaim(DurableStore store, string key)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        var document = store.Document(DurableShiftClaim.DocumentKind, DurableShiftClaim.OwnerId(key));
+        return document?.Latest is { } latest
+            ? latest.Deserialize<DurableShiftClaim>(DurableJson.Options)
+            : null;
+    }
+
+    /// <summary>Reads the newest committed handoff, or <c>null</c> when there is none.</summary>
+    public static DurableShiftHandoff? ReadHandoff(DurableStore store, string key)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        var document = store.Document(DurableShiftHandoff.DocumentKind, DurableShiftHandoff.OwnerId(key));
+        return document?.Latest is { } latest
+            ? latest.Deserialize<DurableShiftHandoff>(DurableJson.Options)
+            : null;
+    }
+
+    /// <summary>Commits a handoff for the attempt the owner currently holds.</summary>
+    /// <returns><c>false</c> when the owner does not hold the attempt being described.</returns>
+    /// <remarks>
+    /// The handoff is refused rather than silently written when the claim it describes is not the
+    /// caller's. A handoff that named someone else's attempt would let a successor resume another
+    /// owner's in-flight work, which is the duplicate execution this record exists to prevent.
+    /// </remarks>
+    public static Task<bool> WriteHandoffAsync(
+        DurableStore store,
+        string key,
+        string owner,
+        long attempt,
+        DateTimeOffset now,
+        ShiftHandoffPhase phase = ShiftHandoffPhase.HandedOff,
+        string? selected = null,
+        string? achieved = null,
+        string? remaining = null,
+        string? next = null,
+        string? blockers = null)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+
+        return store.CommitAsync(transaction =>
+        {
+            var claim = ReadClaim(store, key);
+            if (claim is null
+                || claim.Attempt != attempt
+                || !string.Equals(claim.Owner, owner, StringComparison.Ordinal)
+                || claim.Status is not ShiftClaimStatus.Active)
+            {
+                return System.Threading.Tasks.Task.FromResult(false);
+            }
+
+            var handoff = new DurableShiftHandoff
+            {
+                Key = key,
+                Attempt = attempt,
+                Owner = owner,
+                Phase = phase,
+                Selected = selected,
+                Achieved = achieved,
+                Remaining = remaining,
+                Next = next,
+                Blockers = blockers,
+                WrittenAt = now,
+            };
+
+            var handoffOwnerId = DurableShiftHandoff.OwnerId(key);
+            var handoffEntryId = transaction.AppendEntry(handoffOwnerId, "shift-handoff");
+            transaction.CommitDocument(HandoffDefinition, handoffOwnerId, handoff, handoffEntryId);
+            return System.Threading.Tasks.Task.FromResult(true);
+        });
+    }
+
+    /// <summary>
+    /// Releases a held shift, refusing unless the caller owns the held attempt and a handoff for
+    /// that attempt is already committed.
+    /// </summary>
+    /// <returns>
+    /// <see cref="ShiftClaimOutcome.Acquired"/> on success (the caller no longer holds it),
+    /// <see cref="ShiftClaimOutcome.Conflict"/> for a refusal the caller can fix, and
+    /// <see cref="ShiftClaimOutcome.ReadOnly"/> when the records do not agree.
+    /// </returns>
+    /// <remarks>
+    /// Releasing is idempotent for the owner that released: releasing again reports success with
+    /// the released record. That keeps a retried shutdown harmless without letting the retry
+    /// rewrite history.
+    /// </remarks>
+    public static Task<ShiftClaimResult> ReleaseAsync(
+        DurableStore store,
+        string key,
+        string owner,
+        DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+
+        return store.CommitAsync(transaction =>
+        {
+            var current = ReadClaim(store, key);
+            if (current is null)
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.Conflict,
+                    null,
+                    $"the store holds no claim for '{key}', so there is nothing to release."));
+            }
+
+            var status = current.Status;
+            if (status is ShiftClaimStatus.Uncertain)
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.ReadOnly,
+                    current,
+                    $"the claim for '{key}' records state '{current.StatusText ?? "(none)"}', which this build "
+                    + "cannot interpret. Read-only: not releasing."));
+            }
+
+            if (!string.Equals(current.Owner, owner, StringComparison.Ordinal))
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.Conflict,
+                    current,
+                    $"'{key}' is held by '{current.Owner}', not by '{owner}'. Only the holding owner releases."));
+            }
+
+            if (status is ShiftClaimStatus.Released)
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.Acquired,
+                    current,
+                    $"'{key}' was already released by '{owner}' at {current.ReleasedAt:O}."));
+            }
+
+            var handoff = ReadHandoff(store, key);
+            if (handoff is null)
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.Conflict,
+                    current,
+                    $"'{owner}' holds '{key}' but no handoff is committed. Write the handoff before releasing."));
+            }
+
+            if (handoff.Attempt != current.Attempt)
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.ReadOnly,
+                    current,
+                    $"the claim for '{key}' is attempt {current.Attempt} but the newest handoff is for attempt "
+                    + $"{handoff.Attempt}. The records disagree; read-only, not releasing."));
+            }
+
+            var released = new DurableShiftClaim
+            {
+                Key = current.Key,
+                Member = current.Member,
+                Owner = current.Owner,
+                SessionId = current.SessionId,
+                StatusText = Text(ShiftClaimStatus.Released),
+                Attempt = current.Attempt,
+                ResumedFrom = current.ResumedFrom,
+                ClaimedAt = current.ClaimedAt,
+                ReleasedAt = now,
+            };
+
+            var releaseOwnerId = DurableShiftClaim.OwnerId(key);
+            var releaseEntryId = transaction.AppendEntry(releaseOwnerId, "shift-claim");
+            transaction.CommitDocument(ClaimDefinition, releaseOwnerId, released, releaseEntryId);
+            return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                ShiftClaimOutcome.Acquired,
+                released,
+                $"released attempt {released.Attempt} of '{key}' with handoff {handoff.Attempt}."));
+        });
+    }
+
+    /// <summary>
+    /// Reads a stored claim's status, resolving the text through this build's vocabulary.
+    /// A value this build does not recognize — including a missing one — is
+    /// <see cref="ShiftClaimStatus.Uncertain"/>, which is the only safe reading of "unknown".
+    /// </summary>
+    /// <param name="statusText">The status text exactly as the store holds it.</param>
+    /// <returns>The resolved status, and the text it was read from (or <c>null</c> when absent).</returns>
+    public static (ShiftClaimStatus Status, string? Text) ReadStatus(string? statusText)
+    {
+        if (string.IsNullOrWhiteSpace(statusText))
+        {
+            // A record with no text is a record this build cannot verify: the text is the field
+            // the store actually holds, so its absence means the record is incomplete, not that
+            // it is active. There is no earlier format to be compatible with, so nothing is
+            // guessed from the typed property.
+            return (ShiftClaimStatus.Uncertain, null);
+        }
+
+        if (Enum.TryParse<ShiftClaimStatus>(statusText, ignoreCase: true, out var parsed)
+            && parsed is ShiftClaimStatus.Active or ShiftClaimStatus.Released)
+        {
+            return (parsed, statusText);
+        }
+
+        return (ShiftClaimStatus.Uncertain, statusText);
+    }
+
+    /// <summary>The stored spelling of a claim status.</summary>
+    /// <param name="status">The status to spell.</param>
+    /// <returns><c>active</c>, <c>released</c> or <c>uncertain</c>.</returns>
+    public static string Text(ShiftClaimStatus status) => status switch
+    {
+        ShiftClaimStatus.Active => ShiftClaimStatusWire.Active,
+        ShiftClaimStatus.Released => ShiftClaimStatusWire.Released,
+        _ => ShiftClaimStatusWire.Uncertain,
+    };
+}
+
 /// <summary>
 /// The model a runtime reported for a session or for one turn of it.
 /// </summary>
@@ -3808,6 +4725,8 @@ public sealed class DurableConversation
     private readonly List<(Func<SandboxDecisionEvent, bool> Match, TaskCompletionSource<SandboxDecisionEvent> Completion)> _sandboxWaiters = [];
     private readonly DurableModelTracker _modelTracker = new();
     private readonly List<TaskCompletionSource<DurableModelReport>> _modelWaiters = [];
+    private readonly object _modelObservationGate = new();
+    private bool _hasObservedModelReport;
     private readonly object _checkpointGate = new();
     private readonly ConcurrentDictionary<string, (string? Name, JsonElement? Arguments)> _toolCalls = [];
 
@@ -3835,6 +4754,37 @@ public sealed class DurableConversation
         // A permanent subscription records every answer the session produces, so a
         // review loop can look at the passes it has already made.
         _subscription = session.On<SessionEvent>(Observe);
+
+        // Session creation can emit session.start before Attach has a chance to subscribe.
+        // Read the session's history to recover a model report lost in that window.
+        _ = RecoverMissedModelEventsAsync(session);
+    }
+
+    private async Task RecoverMissedModelEventsAsync(CopilotSession session)
+    {
+        try
+        {
+            var history = await session.GetEventsAsync().ConfigureAwait(false);
+            lock (_modelObservationGate)
+            {
+                if (_hasObservedModelReport)
+                {
+                    return;
+                }
+
+                foreach (var evt in history)
+                {
+                    if (evt is SessionStartEvent or SessionModelChangeEvent)
+                    {
+                        ObserveModel(evt);
+                    }
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Recovery is best-effort; a failed history read leaves the conversation unchanged.
+        }
     }
 
     /// <summary>
@@ -3867,13 +4817,24 @@ public sealed class DurableConversation
         // The model the runtime actually used rides the same subscription too. It is
         // recorded from the runtime's own reports, never from the requested model, so a
         // substitution is visible.
-        if (_modelTracker.Record(evt) is { } report)
+        lock (_modelObservationGate)
         {
+            ObserveModel(evt);
+        }
+    }
+
+    private void ObserveModel(SessionEvent evt)
+    {
+        if (_modelTracker.Record(evt) is not { } report)
+        {
+            return;
+        }
+
+        if (report.HasModel)
+        {
+            _hasObservedModelReport = true;
             _runtime.PublishModel(report);
-            if (report.HasModel)
-            {
-                ReleaseModelWaiters(report);
-            }
+            ReleaseModelWaiters(report);
         }
     }
 
@@ -5313,6 +6274,8 @@ internal sealed class DurableRuntime : IAsyncDisposable
         CheckpointDocument.Kind,
         AgentDefinitionDocument.Kind,
         DurableSchedule.DocumentKind,
+        DurableShiftClaim.DocumentKind,
+        DurableShiftHandoff.DocumentKind,
     ];
 
     private HashSet<string>? _internalDocumentKinds;
@@ -5432,7 +6395,7 @@ internal sealed class DurableRuntime : IAsyncDisposable
             return await completion.Task.WaitAsync(cancellationToken);
         }
 
-        var run = RunTaskCoreAsync(taskId, record, completion, cancellationToken);
+        var run = Store.OutsideCommitScopeAsync(() => RunTaskCoreAsync(taskId, record, completion, cancellationToken));
         // Recorded before the first await so disposal can drain a run that is mid-commit.
         _inFlight[taskId] = run;
         try

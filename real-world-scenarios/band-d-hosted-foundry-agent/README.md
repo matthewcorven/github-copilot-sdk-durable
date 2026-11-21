@@ -1,13 +1,14 @@
 # Band D (D1) — the Prior-Authorization hosted agent, running, and what the platform does
 
-> **Band D has three scenarios, and this is the baseline.** They are separate directories because they
-> prove different things about the same platform:
+> **Band D has three scenarios plus its fault sweep, and this is the baseline.** They are separate
+> directories because they prove different things about the same platform:
 >
 > | | Directory | What it is |
 > | --- | --- | --- |
 > | **D1** | *this one* | The accelerator deployed as Foundry hosted agents, run for real, and torn down. |
 > | **D2** | [`band-d-durable-inside/`](../band-d-durable-inside/README.md) | Durable *inside* the platform: the agent's working state is the library's, while Foundry keeps the transcript. |
 > | **D3** | [`band-d3-outside-orchestrator/`](../band-d3-outside-orchestrator/README.md) | Durable *outside*: a local orchestrator that treats Foundry agents as tools. |
+> | **D4** | [`faults/`](faults/README.md) | The six-fault sweep across all three, with **the platform's behaviour and the application's behaviour recorded separately** in every result. |
 >
 > The band's rows and its platform caveat are in
 > [`docs/REAL_WORLD_MATRIX.md`](../../docs/REAL_WORLD_MATRIX.md) § *Band D*.
@@ -16,6 +17,11 @@
 > session, the platform's history. Durable owns **what is true** — the working state, the decision, its
 > deadline, the process. [`BOUNDARY.md`](../band-d-durable-inside/BOUNDARY.md) states the split and which
 > side wins when they disagree.
+>
+> D4 is what tests that split under failure, and its own boundary is
+> [`evidence/attribution.md`](evidence/attribution.md): which observations belong to Foundry, which to
+> this code, and why none of the platform's four documented behaviours was reproduced without a
+> deployment.
 
 The baseline side of Band D: `microsoft/Prior-Authorization-Multi-Agent-Solution-Accelerator`
 (MIT) deployed as **Foundry hosted agents** on a real subscription, invoked for real, and
@@ -39,6 +45,27 @@ the accelerator's four-agent fan-out is not deployed — clinical and compliance
 absent from every run and every transcript says so. The honest one-line version: this
 issue proves *one* decision path through the platform, not the accelerator's whole
 application.
+
+**D4, the fault sweep, added 2026-11-16 — and what it does not prove either.** Six faults
+(`client-dies-mid-run`, `container-restart`, `duplicate-delivery`, `concurrent-clients`,
+`store-outage`, `agent-call-failure`) were run across this baseline and the two Durable
+positions: **36 results, every one exit 0**, recorded in
+[`faults/results/run-status.txt`](faults/results/run-status.txt) and rendered into
+[`faults/results/summary.txt`](faults/results/summary.txt). That is 14 exercised runs, 18
+controls, and 4 cells recorded `not exercised` because the variant cannot have the fault —
+not four gaps. **D4 provisioned nothing**: no Foundry deployment, no Azure resource, no model
+call. Every one of the 36 records `platform.live_foundry_called: false`, and all four platform
+behaviours stay **`documented, not exercised here`**, quoted from this directory's captures
+rather than reproduced. So a container that survives a local `docker stop`, or a store whose
+bytes survive a local outage, is **evidence about Docker and about this code — never evidence
+about Foundry**. One provenance limit belongs here too, because it is easy to over-read: all 36
+checked-in records contain `harness.commit = 56cf828`, but the sweep ran from a dirty worktree and that
+commit's timestamp is later than the run recorded beside it — so the field captures `HEAD`, not the
+harness code that executed, and the exact working-tree state cannot be verified from it. The counts and
+outcomes stand on each result's own observations; the harness revision behind them is **not** a verified
+execution provenance. [`faults/README.md`](faults/README.md) carries the full matrix and the limits
+of each row; [`evidence/attribution.md`](evidence/attribution.md) says what a run with a live
+deployment would have to show to move a platform row.
 
 ## What is here
 
@@ -178,6 +205,9 @@ transcript; recovering in-flight work is the builder's job.**
 | `evidence/local-compose-path.md` | The local path: what was run, three verbatim failures, and where it stops. |
 | `evidence/inventory.md` | What the deployment contained, captured before teardown. |
 | `evidence/teardown.md` | Teardown output, including the second (harmless) invocation and the `az resource list` verification. |
+| `faults/README.md` | D4's fault sweep: the six faults, the platform/application split, and the limits of each row. |
+| `faults/results/` | 36 checked-in results — one per fault per variant plus its control, or a recorded `not exercised` cell — with `run-status.txt` as the run record and `summary.txt` the matrix rendered from them. |
+| `evidence/attribution.md` | Why every platform row is `documented, not exercised here`, and what a future run with a deployment would have to show to change that. |
 
 ## Preview gates, honestly
 
