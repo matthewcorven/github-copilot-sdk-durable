@@ -811,6 +811,54 @@ rather than a second concurrency mechanism.
   cross-store claim. Those would each be a new mechanism; this section deliberately has none, and
   says so rather than implying an owner can be proven dead.
 
+### 3.14b Member lifecycle — `member`
+
+`member` is the lifecycle command for a configured member. It is deliberately separate from
+`shift`: a shift is one occurrence's ownership, while a member is a long-lived participant whose
+state survives every occurrence. The design's configuration document is the architect's
+declaration; this command is the lifecycle record that sits beside it.
+
+- **Two documents, no new primitive.** `durable.member-state` owns `member:{name}` and carries
+  the lifecycle state, the epoch, the transition that produced it, the instant, the reason, the
+  in-flight task ids, and — after a replacement — the successor's name and handoff owner.
+  `durable.member-handoff` owns `member-handoff:{name}` and carries the replacement's context.
+  Both are ordinary documents: `DocumentHistory.Rewindable`, `ForkPolicy.Initial`, registered in
+  `InternalDocumentKinds` so they never appear as transcript. The owner namespaces are disjoint
+  from every existing one.
+- **The transition table is stated once.** `DurableMembers.TransitionsFrom` is the state machine:
+  `benched -> active | paused | replaced`, `active -> paused | draining | replaced`,
+  `paused -> active | draining | replaced`, `draining -> active | benched | replaced`. Anything
+  else is refused with the valid alternatives named, not silently ignored. A replaced member is
+  terminal and refuses every transition.
+- **Every transition is an audited commit.** Each call runs one `CommitAsync`, appends an entry
+  owned by `member:{name}`, and records the new version anchored to that entry. The document's
+  own history is the audit trail; there is no separate log to drift from it. A refused transition
+  appends nothing, so the absence of a version is itself evidence that nothing changed.
+- **The epoch is the duplicate guard.** A transition reads the current epoch and writes epoch + 1
+  inside the same commit. A caller may pass the epoch it expects; a mismatch is refused and the
+  caller is told to re-read. Two callers in one process are serialized by the store's commit gate;
+  two processes are separated by the file lock. This is the same pattern as the shift claim's
+  attempt counter, applied to a long-lived record rather than an occurrence.
+- **Hire is create-if-absent.** `HireAsync` uses `Transaction.TryCreateDocument`, so a second hire
+  cannot overwrite the first member's history. Rehiring a name is refused; a replacement
+  introduces a new name instead.
+- **Pause and drain are different promises.** Pause stops admission and leaves the member's
+  in-flight list intact; resume restores the member to `active` without re-admitting anything
+  automatically. Drain also stops admission but is finished only by `complete-drain`, which
+  refuses while any listed task id is still non-terminal. A drain that cannot complete lands in
+  `paused` by an explicit transition, so the operator chooses it rather than the layer guessing.
+- **In-flight work is a list of task ids.** The member record names the tasks it admitted; each
+  task's own record remains the truth. `record-in-flight` re-reads the named tasks and drops the
+  ones that are already terminal, so the list does not outlive the work it describes.
+- **Replacement writes the handoff in the same commit.** The predecessor's `replaced` version,
+  the successor's `benched` version and the handoff document are one transaction. Either all
+  three land or none does, so a successor never exists without the context it was handed. The
+  predecessor's record names the successor and the handoff owner id.
+- **Existing stores stay readable.** The new document kinds are additive: a store written before
+  this feature has no member documents, and reading one returns null. No envelope version changes
+  and no existing document kind changes shape. A store written by a newer build whose state text
+  is unknown reads as `Uncertain` and is refused read-only rather than rewritten.
+
 ### 3.15 Dev Tunnels and host portability
 
 `serve --http --dev-tunnel` opts into exposure through the optional `devtunnel` executable on
