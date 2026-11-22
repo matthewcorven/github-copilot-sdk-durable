@@ -1,0 +1,21 @@
+$ ps -p 21917 -o pid=,stat=,command=
+21917 S    /Users/core/Library/Application Support/dotnet/runfile/orchestrator-243dd43f2047e69526215ec791e6e50aef0fe0218c51a741c9ac8cb3516c8d95/bin/debug/orchestrator
+
+$ kill -9 21917
+exit=0
+
+$ sleep 1; ps -p 21917 -o pid=,stat=,command=
+exit=1
+
+$ pgrep -f "runfile/orchestrator" | wc -l
+       0
+
+$ pgrep -f "runfile/orchestrator"
+exit=1
+
+$ ./count-calls.sh
+  d3-coverage-assessor            1 responses
+  d3-decision-letter              0 responses
+
+$ ./count-calls.sh --json > evidence/run/21-counts-at-kill.json
+exit=0

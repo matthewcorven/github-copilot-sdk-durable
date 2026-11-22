@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>BandFDurable</AssemblyName>
+    <RootNamespace>BandF.Durable</RootNamespace>
+    <NoWarn>GHCP001;CS1591;$(NoWarn)</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Using Include="System.Text.Json" />
+  </ItemGroup>
+
+  <!-- The durable layer is consumed as the project reference, never copied: this scenario
+       exists to show what lib/Durable.cs can express, so a private copy would defeat it. -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\lib\Copilot.Durable.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="fixtures\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

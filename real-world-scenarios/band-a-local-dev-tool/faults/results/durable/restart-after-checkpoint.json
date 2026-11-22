@@ -1,0 +1,16 @@
+{
+  "variant": "durable",
+  "fault": "restart-after-checkpoint",
+  "outcome": "resumed",
+  "phase": "committed at validating when the process was stopped (SIGTERM while waiting on the runtime; wait reported: died of signal 15 (SIGTERM is 15); no shutdown hook ran (exit 143))",
+  "detail": "The restart resumed 1 task(s) from the committed checkpoint (validating, 2 entries) and finished at done with 10 entries (task terminal, exit 0). The checkpoint was honoured — the finished part was not re-run from the start — but the pass that was cut off was sent again, so the transcript carries 4 repeated entr(y/ies) relative to the control. Replay of the interrupted turn is not eliminated by the checkpoint; only work before the checkpoint is.",
+  "evidence": "stop: SIGTERM while waiting on the runtime; wait reported: died of signal 15 (SIGTERM is 15); no shutdown hook ran (exit 143); store after the stop: complete; lock sidecar after the stop: present; resumed tasks: 1; resume exit: 0; restarts=1; session.send frames across both processes: 2; repeated entries after the restart: 4; before: validating/2 entries [phase; intent:Validate home enquiry]; after: done/10 entries [phase; intent:Validate home enquiry; intent:Validate home enquiry; phase; intent:Searching listings; tool:1 match(es); phase; phase; answer:The report is written an; report:The report is written an]",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "tools/ReplayRuntime",
+    "command": "./faults/restart-after-checkpoint.sh --variant durable",
+    "script": "restart-after-checkpoint.sh",
+    "commit": "4ab32e3371a4738eac5ac1c1c6ee7fd64d9b2cc8"
+  },
+  "recordedAt": "2026-11-05T17:18:51.570515+00:00"
+}

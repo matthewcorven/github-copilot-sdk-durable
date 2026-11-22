@@ -1,0 +1,30 @@
+{
+  "id": 29,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 2438000,
+  "currency": "CAD",
+  "address": {
+    "street": "18 Humber Trail",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6S 4C1",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 1,
+  "squareFootage": 2899,
+  "lotSizeSquareFootage": 5839,
+  "yearBuilt": 2009,
+  "parkingSpaces": 2,
+  "shortDescription": "Spacious 3-bedroom detached home on a quiet street in Old Mill with mature trees and a private backyard.",
+  "fullDescription": "Welcome to 18 Humber Trail in the vibrant Old Mill neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. Upstairs, 3 bright bedrooms include a primary retreat with ensuite and double closets. A private outdoor space — perfect for morning coffee or summer entertaining — completes the package. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Floor-to-ceiling windows with city views",
+    "Laneway parking for two vehicles",
+    "Steps to TTC subway and streetcar",
+    "Landscaped front and rear gardens",
+    "Modern eat-in kitchen with stainless steel appliances"
+  ],
+  "listedDate": "2026-04-18"
+}

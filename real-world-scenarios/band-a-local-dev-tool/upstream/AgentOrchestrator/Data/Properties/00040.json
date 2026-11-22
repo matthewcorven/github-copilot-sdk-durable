@@ -1,0 +1,31 @@
+{
+  "id": 40,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 2095000,
+  "currency": "CAD",
+  "address": {
+    "street": "145 Indian Road",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6R 2V5",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 3,
+  "squareFootage": 2358,
+  "lotSizeSquareFootage": 6219,
+  "yearBuilt": 1949,
+  "parkingSpaces": 1,
+  "shortDescription": "Character-filled 3-bedroom detached residence in High Park featuring original details and modern upgrades.",
+  "fullDescription": "Welcome to 145 Indian Road in the vibrant High Park neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen is a chef’s dream with quartz countertops, a large island, and high-end stainless-steel appliances. The sleeping quarters comprise 3 comfortable bedrooms, the largest enjoying a private ensuite bathroom. Smart-home features, updated plumbing, and a newer roof provide peace of mind for years to come. This coveted pocket puts you within walking distance of top schools, green spaces, and vibrant dining.",
+  "keyFeatures": [
+    "Underground parking spot included",
+    "Updated kitchen with quartz counters and soft-close cabinetry",
+    "Open-concept living and dining area",
+    "Private south-facing backyard with patio",
+    "Walk score over 90",
+    "Wraparound porch with heritage details"
+  ],
+  "listedDate": "2026-05-01"
+}

@@ -1,0 +1,14 @@
+{
+  "variant": "durable",
+  "fault": "kill-mid-turn-control",
+  "outcome": "control: completed",
+  "phase": "a clean run to completion, threshold 7 not used (the control)",
+  "detail": "Control: the same first run, with nothing killed (it exited 0). It finished the triage, so the second process found a finished task and started a new generation: it wrote 0 comment(s) with 0 duplicates and adopted the rest from the ledger. This is what the two runs produce unaided; the fault run's resume belongs to the kill and not to the two-run shape.",
+  "evidence": "kill point: 8 comment file(s) on disk (threshold 7); classification lines in the log=13; kill pid=none; first exit=0; first comments posted=13; first state=save; first task=id=t2 status=4 phase=save attempts=1 commented=13 memos=13 outcome=completed; second exit=0; second cold start=0 resumed=0; second comments posted=0; second duplicates=[] (0); second output dir=/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-156-work/.scratch/band-c-faults/durable/kill-mid-turn-control/outputs/second; committed triaged=[101,102,103,104,105,106,107,109,111,112,113,114,115]; second run says: run:        completed — 13 triaged, 13 commented, 2 in cooldown, 1 not ours, 1 not open",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "none (Band C has no model and no recorded runtime)",
+    "command": "./faults/kill-mid-turn.sh --variant durable --fault-not-injected"
+  },
+  "recordedAt": "2026-11-05T18:04:27.832880+00:00"
+}

@@ -1,0 +1,16 @@
+{
+  "variant": "durable",
+  "fault": "store-outage",
+  "outcome": "failed safely, with a split store",
+  "phase": "a model turn in flight, store removed mid-write",
+  "detail": "The store was moved aside mid-turn. The application did not stop writing: it created a new file at the same path, so the live path was recreated and now holds phase done with 9 entries, in 51 records, while the moved file still holds the committed prefix intact (28 records, 0 torn, phase validating, 2 entries, phase; intent:Validate home enquiry). Nothing was lost, but the state is now in two files: an operator reading the live path sees a different enquiry history from the one the process held a moment before the outage, and restoring the moved file would be a second store rather than a merge. The application fails safe in the sense that it reports no corruption and keeps writing; it does not fail loudly, and it does not tell anyone the old file was gone.",
+  "evidence": "before: validating/2 entries, 5380 bytes, 28 records [phase; intent:Validate home enquiry]; after the outage: live path present with 51 records, tail complete, lock absent, owner note absent; the live path was recreated and now holds phase done with 9 entries, in 51 records; moved file: 5380 bytes, phase validating, 2 entries, 28 records, 0 torn; copy of the moved file as the outage left it: phase validating, 2 entries, 2 task records; that copy after a resume of it: phase done, 10 entries, 6 task records; application exit status=0 (wait's value; 0 means it exited on its own, not that it succeeded), reached 'disposed.'=yes; resume exit=0; resume output: resumed 1 unfinished enquiry\nresumed tasks:  1\n  t11 finished: completed\ndisposed.; process output: enquiry f1a73808 settled at done\ntask t11 finished: completed\ndisposed.",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "tools/ReplayRuntime",
+    "command": "./faults/store-outage.sh --variant durable",
+    "script": "store-outage.sh",
+    "commit": "4ab32e3371a4738eac5ac1c1c6ee7fd64d9b2cc8"
+  },
+  "recordedAt": "2026-11-05T17:19:50.674185+00:00"
+}

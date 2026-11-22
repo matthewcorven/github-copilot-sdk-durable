@@ -1,0 +1,31 @@
+{
+  "id": 77,
+  "type": "Semi-Detached",
+  "status": "For Sale",
+  "price": 1809000,
+  "currency": "CAD",
+  "address": {
+    "street": "140 Wychwood Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6G 2X7",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 2,
+  "squareFootage": 2500,
+  "lotSizeSquareFootage": 3500,
+  "yearBuilt": 1954,
+  "parkingSpaces": 2,
+  "shortDescription": "Renovated 3-bedroom semi-detached in Wychwood with open-concept layout and finished lower level.",
+  "fullDescription": "Welcome to 140 Wychwood Avenue in the vibrant Wychwood neighbourhood. This charming semi-detached home seamlessly blends period character with modern comfort. The main living area showcases original architectural details alongside tasteful modern updates. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. All 3 bedrooms are generously sized, and the primary offers a spa-inspired four-piece ensuite. Smart-home features, updated plumbing, and a newer roof provide peace of mind for years to come. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Crown mouldings and wainscotting",
+    "Private south-facing backyard with patio",
+    "Walking distance to top-rated schools",
+    "Open kitchen with waterfall island and pot lights",
+    "Ensuite bathroom with heated floors",
+    "24-hour concierge and security"
+  ],
+  "listedDate": "2026-04-08"
+}

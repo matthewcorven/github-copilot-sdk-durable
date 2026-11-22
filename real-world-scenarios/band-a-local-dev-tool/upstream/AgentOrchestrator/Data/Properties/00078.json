@@ -1,0 +1,31 @@
+{
+  "id": 78,
+  "type": "Duplex",
+  "status": "For Sale",
+  "price": 2684000,
+  "currency": "CAD",
+  "address": {
+    "street": "88 Hillcrest Drive",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6G 2E4",
+    "country": "Canada"
+  },
+  "bedrooms": 5,
+  "bathrooms": 2,
+  "squareFootage": 3489,
+  "lotSizeSquareFootage": 4238,
+  "yearBuilt": 1927,
+  "parkingSpaces": 1,
+  "shortDescription": "Income-generating duplex in Humewood-Cedarvale with 5 bedrooms across two self-contained units.",
+  "fullDescription": "Welcome to 88 Hillcrest Drive in the vibrant Humewood-Cedarvale neighbourhood. This income-producing duplex features two self-contained units, each with its own entrance and utilities. The main living area boasts an open-concept design with pot lights and a cosy gas fireplace. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. All 5 bedrooms are generously sized, and the primary offers a spa-inspired four-piece ensuite. A private outdoor space — perfect for morning coffee or summer entertaining — completes the package. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Walking distance to top-rated schools",
+    "Fenced yard ideal for children and pets",
+    "Built-in bookshelves in den",
+    "Modern eat-in kitchen with stainless steel appliances",
+    "Laneway parking for two vehicles",
+    "Surrounded by cafes, galleries, and boutiques"
+  ],
+  "listedDate": "2026-03-05"
+}

@@ -1,0 +1,31 @@
+{
+  "id": 76,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 460000,
+  "currency": "CAD",
+  "address": {
+    "street": "1 St. Clair Avenue West, Unit 1204",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4V 1K6",
+    "country": "Canada"
+  },
+  "bedrooms": 1,
+  "bathrooms": 1,
+  "squareFootage": 747,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 1983,
+  "parkingSpaces": 1,
+  "shortDescription": "Modern 1-bedroom suite in Deer Park with premium finishes and full building amenities.",
+  "fullDescription": "Welcome to 1 St. Clair Avenue West, Unit 1204 in the vibrant Deer Park neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area showcases original architectural details alongside tasteful modern updates. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. The 1 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. The finished lower level adds valuable living space with a recreation room, extra bathroom, and storage. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Surrounded by cafes, galleries, and boutiques",
+    "Large balcony overlooking parkland",
+    "Cosy living room with gas fireplace",
+    "Energy-efficient windows and furnace",
+    "Two-car attached garage",
+    "24-hour concierge and security"
+  ],
+  "listedDate": "2026-03-05"
+}

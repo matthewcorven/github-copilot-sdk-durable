@@ -1,0 +1,31 @@
+{
+  "id": 67,
+  "type": "Apartment",
+  "status": "For Sale",
+  "price": 1073000,
+  "currency": "CAD",
+  "address": {
+    "street": "1000 Sheppard Avenue West, Unit 402",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M3H 2T6",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 2,
+  "squareFootage": 1119,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 1998,
+  "parkingSpaces": 0,
+  "shortDescription": "Contemporary 3-bedroom apartment in Downsview with designer finishes and vibrant neighbourhood.",
+  "fullDescription": "Welcome to 1000 Sheppard Avenue West, Unit 402 in the vibrant Downsview neighbourhood. This contemporary apartment features a thoughtfully designed layout that maximises natural light. The main living area features gleaming hardwood floors and an abundance of natural light from oversized windows. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. Upstairs, 3 bright bedrooms include a primary retreat with ensuite and double closets. The finished lower level adds valuable living space with a recreation room, extra bathroom, and storage. This coveted pocket puts you within walking distance of top schools, green spaces, and vibrant dining.",
+  "keyFeatures": [
+    "24-hour concierge and security",
+    "Renovated galley kitchen with breakfast bar",
+    "Private driveway with detached garage",
+    "Pot lights and designer fixtures throughout",
+    "Close to waterfront trails and cycling paths",
+    "Integrated single-car garage"
+  ],
+  "listedDate": "2026-05-01"
+}

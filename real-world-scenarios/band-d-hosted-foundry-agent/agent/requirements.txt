@@ -1,0 +1,37 @@
+# Band D (D1) — the accelerator's agents/coverage/requirements.txt with TWO
+# dependency-range corrections. Everything else is verbatim (see PATCHES.md).
+#
+# Microsoft Agent Framework — refreshed Hosted Agents preview (April 2026+)
+# See: https://learn.microsoft.com/azure/foundry/agents/how-to/migrate-hosted-agent-preview
+#
+# Package split (refreshed preview):
+#   agent-framework-core        — Agent / @tool / MCPStreamableHTTPTool / SkillsProvider
+#   agent-framework-foundry     — FoundryChatClient (was: agent_framework.azure.AzureAIAgentClient)
+#   agent-framework-foundry-hosting — ResponsesHostServer (replaces azure-ai-agentserver-agentframework)
+#
+# The old `azure-ai-agentserver-agentframework` adapter has been retired and
+# MUST NOT be reintroduced — it targets the initial preview backend that is
+# being deprecated on 2026-05-22.
+agent-framework-core>=1.13.0,<2
+agent-framework-foundry>=1.10.4,<2
+# PATCH 1: >=1.0.0b261030. Earlier hosting builds declare `mcp<2`, and the core
+# they resolve against (1.24.0) imports `mcp.Client`, which mcp 1.x does not export.
+agent-framework-foundry-hosting>=1.0.0b261030,<2
+# Protocol library — pulled transitively by agent-framework-foundry-hosting,
+# pinned here for reproducibility.
+azure-ai-agentserver-core>=2.0.0,<3
+# Managed identity / DefaultAzureCredential
+azure-identity>=1.15.0,<2
+# MCP HTTP client — used by both NPI Registry and CMS Coverage MCP tools
+# (always wired in-container under the refreshed Hosted Agents preview;
+# Foundry-managed MCPTool entries are no longer used).
+httpx>=0.27.0,<1
+# MCP runtime — required by `MCPStreamableHTTPTool` from agent-framework-core.
+# PATCH 2: >=2.2.0,<3. agent-framework-core declares `mcp>=2.2.0,<3` and imports
+# `mcp.Client`; the accelerator's `mcp>=1.24.0,<2` pin is what produced
+# "Failed to create MCP session: cannot import name 'Client' from 'mcp'".
+mcp>=2.2.0,<3
+# Environment variable loading
+python-dotenv>=1.0.0,<2
+# Azure Monitor OpenTelemetry (optional — remove if not using App Insights)
+azure-monitor-opentelemetry>=1.6.0,<2

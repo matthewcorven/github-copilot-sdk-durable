@@ -1,0 +1,45 @@
+{
+  "variant": "baseline",
+  "fault": "cooldown-desync",
+  "outcome": "doubled",
+  "phase": "run 2 stopped between posting its comments and committing its state; run 3, 61m after run 2, over the same state",
+  "detail": "Run 2 posted 13 comment(s) and its state write did not happen (no memory/pr-triage ref was moved, so the branch was left where run 1 put it), so run 3 — 61 minutes after run 2, at 2026-11-05T14:31:00Z — read the state run 1 wrote (prior run:  2026-11-05T12:00:00Z triaged 13 PR(s)), decided the previous run was old enough to triage again, and posted the same comments a second time: 13 of run 3's 13 written comment(s) were byte-for-byte what was already on disk (101,102,103,104,105,106,107,109,111,112,113,114,115), so those PRs hold two copies. Nothing in the state records that the first posting happened: the baseline has no record of a comment at all, and the run gate it does have is driven by a timestamp the failed run never wrote.",
+  "evidence": "run1 exit=0 last phase=save run state posted=13 state=done (the state snapshot only exists once Phase 8 has committed); run2 exit=0 last phase=save run state posted=13 state after=done (the state snapshot only exists once Phase 8 has committed); run3 at 2026-11-05T14:31:00Z exit=0 cold start=0 run gate=0 resumed=0 posted=13 adopted=0; state after run3=done (the state snapshot only exists once Phase 8 has committed); run3 read: loaded memory/pr-triage:pr-triage-latest prior run:  2026-11-05T12:00:00Z triaged 13 PR(s); duplicates written by run3=[101,102,103,104,105,106,107,109,111,112,113,114,115] (13); run3 says: triaged 13 PR(s): #101 auto_merge, #102 auto_merge, #103 auto_merge, #104 batch_review, #105 fast_track, #106 defer, #107 batch_review, #109 close, #111 auto_merge, #112 auto_merge, #113 defer, #114 batch_review, #115 batch_review; guard-disabled arm: posted=0 duplicates= []",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "none (Band C has no model and no recorded runtime)",
+    "command": "./faults/cooldown-desync.sh --variant baseline"
+  },
+  "recordedAt": "2026-11-05T18:04:18.977222+00:00",
+  "observations": {
+    "run2_comments_posted": 13,
+    "run3_comments_posted": 13,
+    "run3_comments_adopted": 0,
+    "run3_comments_duplicated": 13,
+    "prs_with_two_comments": 13,
+    "prs_doubled": [
+      101,
+      102,
+      103,
+      104,
+      105,
+      106,
+      107,
+      109,
+      111,
+      112,
+      113,
+      114,
+      115
+    ],
+    "run3_cold_start": false,
+    "run3_run_gate": false,
+    "run3_resumed": false,
+    "ledger_entries_before_run3": 0,
+    "run4_comments_posted": 0,
+    "run4_comments_adopted": 0,
+    "run4_comments_duplicated": 0,
+    "guard_disabled_posted": 0,
+    "guard_disabled_duplicated": 0
+  }
+}

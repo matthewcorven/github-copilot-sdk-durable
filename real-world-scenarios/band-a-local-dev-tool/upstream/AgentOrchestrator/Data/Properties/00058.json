@@ -1,0 +1,31 @@
+{
+  "id": 58,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 803000,
+  "currency": "CAD",
+  "address": {
+    "street": "2475 Bloor Street West, Unit 207",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6S 1P7",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 2,
+  "squareFootage": 1058,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 1981,
+  "parkingSpaces": 1,
+  "shortDescription": "Spacious 2-bedroom condo in Bloor West Village with open layout, balcony, and underground parking.",
+  "fullDescription": "Welcome to 2475 Bloor Street West, Unit 207 in the vibrant Bloor West Village neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. The sleeping quarters comprise 2 comfortable bedrooms, the largest enjoying a private ensuite bathroom. The deep lot provides ample space for gardening, play, or future expansion. This coveted pocket puts you within walking distance of top schools, green spaces, and vibrant dining.",
+  "keyFeatures": [
+    "Smart home wiring throughout",
+    "Minutes to parks, shops, and restaurants",
+    "Pot lights and designer fixtures throughout",
+    "Laneway parking for two vehicles",
+    "Large balcony overlooking parkland",
+    "Two-car attached garage"
+  ],
+  "listedDate": "2026-04-08"
+}

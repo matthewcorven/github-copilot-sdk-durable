@@ -1,0 +1,31 @@
+{
+  "id": 42,
+  "type": "Apartment",
+  "status": "For Sale",
+  "price": 559000,
+  "currency": "CAD",
+  "address": {
+    "street": "560 Dundas Street East, Unit 415",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M5A 0E8",
+    "country": "Canada"
+  },
+  "bedrooms": 1,
+  "bathrooms": 1,
+  "squareFootage": 699,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2015,
+  "parkingSpaces": 1,
+  "shortDescription": "Contemporary 1-bedroom apartment in Regent Park with designer finishes and vibrant neighbourhood.",
+  "fullDescription": "Welcome to 560 Dundas Street East, Unit 415 in the vibrant Regent Park neighbourhood. This contemporary apartment features a thoughtfully designed layout that maximises natural light. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen is a chef’s dream with quartz countertops, a large island, and high-end stainless-steel appliances. The sleeping quarters comprise 1 comfortable bedrooms, the largest enjoying a private ensuite bathroom. Smart-home features, updated plumbing, and a newer roof provide peace of mind for years to come. The location is unbeatable: steps to TTC transit, acclaimed restaurants, and everyday shopping.",
+  "keyFeatures": [
+    "Two-car attached garage",
+    "Juliet balcony off primary bedroom",
+    "Energy-efficient windows and furnace",
+    "Pot lights and designer fixtures throughout",
+    "Minutes to parks, shops, and restaurants",
+    "24-hour concierge and security"
+  ],
+  "listedDate": "2026-04-05"
+}

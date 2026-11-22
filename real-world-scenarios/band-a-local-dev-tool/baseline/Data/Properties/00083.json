@@ -1,0 +1,31 @@
+{
+  "id": 83,
+  "type": "Townhouse",
+  "status": "For Sale",
+  "price": 1278000,
+  "currency": "CAD",
+  "address": {
+    "street": "995 Danforth Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4J 1M1",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 3,
+  "squareFootage": 1577,
+  "lotSizeSquareFootage": 1859,
+  "yearBuilt": 2004,
+  "parkingSpaces": 1,
+  "shortDescription": "Stylish 2-bedroom freehold townhouse in Pape Village with three levels of living space.",
+  "fullDescription": "Welcome to 995 Danforth Avenue in the vibrant Pape Village neighbourhood. This stylish multi-level townhouse provides the space of a house with the convenience of condo living. The main living area showcases original architectural details alongside tasteful modern updates. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. Upstairs, 2 bright bedrooms include a primary retreat with ensuite and double closets. The finished lower level adds valuable living space with a recreation room, extra bathroom, and storage. This coveted pocket puts you within walking distance of top schools, green spaces, and vibrant dining.",
+  "keyFeatures": [
+    "Steps to TTC subway and streetcar",
+    "Cosy living room with gas fireplace",
+    "Built-in bookshelves in den",
+    "Private driveway with detached garage",
+    "Updated kitchen with quartz counters and soft-close cabinetry",
+    "Fenced yard ideal for children and pets"
+  ],
+  "listedDate": "2026-03-25"
+}

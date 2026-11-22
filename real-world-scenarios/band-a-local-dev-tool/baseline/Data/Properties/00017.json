@@ -1,0 +1,31 @@
+{
+  "id": 17,
+  "type": "Apartment",
+  "status": "For Sale",
+  "price": 542000,
+  "currency": "CAD",
+  "address": {
+    "street": "88 Queen Street East, Unit 310",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M5C 1S6",
+    "country": "Canada"
+  },
+  "bedrooms": 1,
+  "bathrooms": 1,
+  "squareFootage": 625,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 1978,
+  "parkingSpaces": 0,
+  "shortDescription": "Contemporary 1-bedroom apartment in Moss Park with designer finishes and vibrant neighbourhood.",
+  "fullDescription": "Welcome to 88 Queen Street East, Unit 310 in the vibrant Moss Park neighbourhood. This contemporary apartment features a thoughtfully designed layout that maximises natural light. The main living area features gleaming hardwood floors and an abundance of natural light from oversized windows. The kitchen is a chef’s dream with quartz countertops, a large island, and high-end stainless-steel appliances. Upstairs, 1 bright bedrooms include a primary retreat with ensuite and double closets. The deep lot provides ample space for gardening, play, or future expansion. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Building gym and party room",
+    "Juliet balcony off primary bedroom",
+    "Renovated galley kitchen with breakfast bar",
+    "Private driveway with detached garage",
+    "Hardwood floors throughout main level",
+    "Steps to TTC subway and streetcar"
+  ],
+  "listedDate": "2026-04-10"
+}

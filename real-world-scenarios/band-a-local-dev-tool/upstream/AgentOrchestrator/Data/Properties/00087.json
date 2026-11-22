@@ -1,0 +1,31 @@
+{
+  "id": 87,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 502000,
+  "currency": "CAD",
+  "address": {
+    "street": "20 Sheppard Avenue East, Unit 610",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M2N 0G3",
+    "country": "Canada"
+  },
+  "bedrooms": 1,
+  "bathrooms": 1,
+  "squareFootage": 677,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2006,
+  "parkingSpaces": 1,
+  "shortDescription": "Modern 1-bedroom suite in North York Centre with premium finishes and full building amenities.",
+  "fullDescription": "Welcome to 20 Sheppard Avenue East, Unit 610 in the vibrant North York Centre neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area opens onto a spacious combined living and dining area flooded with afternoon sun. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. All 1 bedrooms are generously sized, and the primary offers a spa-inspired four-piece ensuite. A private outdoor space — perfect for morning coffee or summer entertaining — completes the package. The location is unbeatable: steps to TTC transit, acclaimed restaurants, and everyday shopping.",
+  "keyFeatures": [
+    "Updated kitchen with quartz counters and soft-close cabinetry",
+    "Smart home wiring throughout",
+    "Integrated single-car garage",
+    "Landscaped front and rear gardens",
+    "Hardwood floors throughout main level",
+    "Modern eat-in kitchen with stainless steel appliances"
+  ],
+  "listedDate": "2026-03-15"
+}

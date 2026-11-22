@@ -1,0 +1,31 @@
+{
+  "id": 41,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 2552000,
+  "currency": "CAD",
+  "address": {
+    "street": "72 Winchester Street",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4X 1B2",
+    "country": "Canada"
+  },
+  "bedrooms": 4,
+  "bathrooms": 2,
+  "squareFootage": 3249,
+  "lotSizeSquareFootage": 6923,
+  "yearBuilt": 2002,
+  "parkingSpaces": 2,
+  "shortDescription": "Spacious 4-bedroom detached home on a quiet street in Cabbagetown with mature trees and a private backyard.",
+  "fullDescription": "Welcome to 72 Winchester Street in the vibrant Cabbagetown neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area boasts an open-concept design with pot lights and a cosy gas fireplace. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. The 4 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. Building amenities include a fitness centre, rooftop terrace, party room, and 24-hour concierge. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Private driveway with detached garage",
+    "Fenced yard ideal for children and pets",
+    "Close to waterfront trails and cycling paths",
+    "Renovated galley kitchen with breakfast bar",
+    "Finished basement with recreation room",
+    "Built-in bookshelves in den"
+  ],
+  "listedDate": "2026-04-01"
+}

@@ -1,0 +1,26 @@
+{
+  "variant": "durable",
+  "fault": "late-approval",
+  "outcome": "terminal state held",
+  "phase": "the gate's recorded 3s deadline passed in a process that did not set it",
+  "detail": "The run was created with a 3-second window and its gate recorded deadline 2026-11-05T20:13:46.87268+00:00. A process started after that deadline re-entered the run: the gate woke at once and recorded 'timed-out', and the workflow concluded on it — task terminal, outcome failed, 'the plan was not approved (timed-out): no decision before the gate's deadline'. The late approval was then refused — 'refused: the workflow is Terminal, so this decision is late' — and the decision document is still absent. The terminal state was not overwritten, and the refusal names the terminal record rather than the document rule, which is the different guard a late approval meets.",
+  "evidence": "run at the gate: waiting, 3 call(s), gate deadline 2026-11-05T20:13:46.87268+00:00\nresume after the deadline (exit 0): task terminal, gate verdict 'timed-out', 3 call(s)\nworkflow concluded: failed — the plan was not approved (timed-out): no decision before the gate's deadline\nlate approval (exit 4): 'refused: the workflow is Terminal, so this decision is late'; decision '(absent)'; task terminal",
+  "measurements": {
+    "gate_window_seconds": 3,
+    "model_calls_at_gate": 3,
+    "model_calls_after_deadline": 3,
+    "gate_verdict_after_deadline": "timed-out",
+    "late_approval_note": "refused: the workflow is Terminal, so this decision is late",
+    "decision_after_late": "(absent)",
+    "run_after_late": "terminal",
+    "outcome_after_late": "failed"
+  },
+  "harness": {
+    "dotnet": "10.0.402",
+    "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
+    "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
+    "commit": "d9d475d2136d8d8fe86a05b12d8737c06b697c5e",
+    "command": "./faults/late-approval.sh --variant durable"
+  },
+  "recordedAt": "2026-11-05T20:13:48.803845+00:00"
+}

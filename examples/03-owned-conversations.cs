@@ -39,6 +39,10 @@ var AgentRegistry = new DocumentDefinition<Dictionary<string, Dictionary<string,
 
 var main = await harness.CreateConversationAsync();
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await main.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 var setup = await main.CommitAsync(async tx =>
 {
     // `background: true` means the task is side work: waiting for the main

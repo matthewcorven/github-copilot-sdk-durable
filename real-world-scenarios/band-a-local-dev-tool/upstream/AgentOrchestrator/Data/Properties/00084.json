@@ -1,0 +1,31 @@
+{
+  "id": 84,
+  "type": "Semi-Detached",
+  "status": "For Sale",
+  "price": 1957000,
+  "currency": "CAD",
+  "address": {
+    "street": "20 Monarch Park Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4J 4R2",
+    "country": "Canada"
+  },
+  "bedrooms": 5,
+  "bathrooms": 3,
+  "squareFootage": 2324,
+  "lotSizeSquareFootage": 3500,
+  "yearBuilt": 1913,
+  "parkingSpaces": 2,
+  "shortDescription": "Renovated 5-bedroom semi-detached in East Danforth with open-concept layout and finished lower level.",
+  "fullDescription": "Welcome to 20 Monarch Park Avenue in the vibrant East Danforth neighbourhood. This charming semi-detached home seamlessly blends period character with modern comfort. The main living area opens onto a spacious combined living and dining area flooded with afternoon sun. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. Upstairs, 5 bright bedrooms include a primary retreat with ensuite and double closets. Building amenities include a fitness centre, rooftop terrace, party room, and 24-hour concierge. The location is unbeatable: steps to TTC transit, acclaimed restaurants, and everyday shopping.",
+  "keyFeatures": [
+    "Hardwood floors throughout main level",
+    "Steps to TTC subway and streetcar",
+    "In-suite laundry with full-size washer and dryer",
+    "Chef’s kitchen with granite countertops and premium appliances",
+    "Integrated single-car garage",
+    "Fenced yard ideal for children and pets"
+  ],
+  "listedDate": "2026-04-18"
+}

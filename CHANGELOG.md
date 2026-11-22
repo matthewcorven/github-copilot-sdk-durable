@@ -12,7 +12,189 @@ See [`docs/RELEASING.md`](docs/RELEASING.md) for the release procedure.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Shift claims and durable handoffs: `DurableShifts` and `shift`.** A scheduled member shift
+  can now claim repository-wide ownership atomically, record where it stopped, and resume after
+  a killed process without repeating the turn. `Transaction.TryCreateDocument` and
+  `IDurableStoreProvider.TryCreateDocument` are the create-if-absent primitive this needed:
+  `Transaction.Doc` answers an absent document with its initial value, so a read-then-write claim
+  would let two claimants both believe they were first. `DurableShifts.ClaimAsync` refuses a
+  different owner while the held attempt has no committed handoff (age is never evidence a
+  process died), admits a successor from a released claim or a `handedOff` handoff, and resumes an
+  interrupted run only for the same session from its in-flight handoff. `WriteHandoffAsync` and
+  `ReleaseAsync` refuse to let a shift go without a handoff for the held attempt. A `statusText`
+  this build cannot read — an unknown value, a missing one, a handoff disagreeing with the claim —
+  reads as `Uncertain` and fails `ReadOnly` in both directions; the record is never rewritten. The
+  runtime host gains `shift`, which claims, commits an in-flight handoff before the turn, runs
+  once, commits the completed handoff and releases, and exits non-zero without running when the
+  shift is held or the state is uncertain. Two starter-facing changes: `RunTurnAsync` now runs
+  the prompt it is given rather than always `--input` (its only other caller already passes that
+  value), and the TypeScript JSONL reader skips unknown record types instead of refusing the file,
+  so a store written by a newer C# build still opens. No store envelope change: both new documents
+  are ordinary records of an existing type, `v` stays `1`, and an existing store still reads.
+  The shift records' *field* spellings are part of the cross-language wire contract and are
+  described under "Migration notes" below. (#225)
+
+- **External events: a task that waits for something outside the store.**
+  `TaskCommit.WaitingForEvent(checkpoint, "external:<name>")` parks a task on a name nothing in
+  the store produces: the run ends with the task `Waiting`, holding no invocation and no timer,
+  and `DurableStore.RaiseEventAsync(name, payload)` is what makes it runnable again. The event's
+  payload is delivered as the task's memo `DurableStore.ExternalEventMemoKey`, and the task's
+  `WaitingOn` list drops the name, in one transaction; a second delivery wakes nobody and never
+  overwrites the first answer. `TaskCommit.IsExternalEvent(name)` and
+  `TaskCommit.ExternalEventPrefix` keep the event namespace and the child-task namespace apart
+  in one stored list, so a store written before this change reads back unchanged. Ported to
+  TypeScript (`TaskCommit.waitingForEvent` / `isExternalEvent` / `EXTERNAL_EVENT_PREFIX` /
+  `EXTERNAL_EVENT_MEMO_KEY`, `DurableStore.raiseEventAsync`) and Python
+  (`TaskCommit.waiting_for_event` / `is_external_event`, `DurableStore.raise_event_async`).
+  (#160)
+- **A parked task is reported as `pending`, not `failed`.** A run that ended because the task
+  parked on an external event settles with `TaskOutcome("pending")`; `failed` is reserved for a
+  run that had nowhere to continue. Every port agrees. (#160)
+
+- **A re-entrant memo call fails instead of hanging: `DurableCommitReentryException`**
+  (`DurableCommitReentryException` in all three ports). The store's commit gate is not
+  reentrant, so `TaskRuntime.MemoAsync` called from inside a `CommitAsync` / `commitAsync` /
+  `commit_async` callback used to wait for a release only the enclosing commit could give — a
+  silent infinite hang with no stack trace. An async-local commit scope now makes the gate
+  refuse that re-entry with a catchable exception that names the operation, the commit and the fix
+  (`Transaction.Memo` / `transaction.memo`). A *different* task or thread calling the same method
+  while a commit is in flight is outside the committing flow and waits normally, and
+  `TaskRuntime.MemoAsync` from a phase handler outside a commit is unchanged.
+  No store bytes change: the guard is in-memory runtime state. C#, TypeScript and Python. (#201)
+
+### Fixed
+
+- **Shift handoff phase spelling mismatched between C#, TypeScript and Python.** C# wrote the
+  enum's own names (`Running`/`HandedOff`) while both ports wrote `running`/`handedOff`. A
+  C#-written *running* handoff therefore read back in TypeScript as `handedOff` (and compared
+  `False` in Python), and a *different* session could claim a live shift — duplicate execution,
+  the exact failure the record exists to prevent. All three now share one canonical spelling,
+  `running` / `handedOff` (`ShiftHandoffPhaseConverter` in C#, `shiftHandoffPhaseFromWire` /
+  `shift_handoff_phase_from_wire` in the ports), and every reader also accepts the previous
+  build's capitalized names case-insensitively. (#225)
+- **`Uncertain` was unreachable in C#.** `DurableShiftClaim.Status` was a typed enum on the wire,
+  so a `status` value from a newer build threw `JsonException` before `DurableShifts` could return
+  `Uncertain`. `status` is now a computed, non-serialized view of `statusText` in all three ports,
+  so `statusText` is the single authority and an unknown status reaches the read-only path instead
+  of throwing. (#225)
+- **The commit re-entry guard rejected legitimate fan-out.** The guard keyed on an inherited
+  async-local alone, so a `Task.Run` / `ThreadPool.QueueUserWorkItem` (and `asyncio.create_task`)
+  child started from inside a commit callback was refused as a re-entry even after the outer
+  commit had released. It now keys on the commit that currently holds the gate, so an inherited
+  scope whose commit has finished is a fan-out and queues normally, while a genuine synchronous
+  nested commit on the committing flow still throws `DurableCommitReentryException`. (#225)
+- **`grants` was written to the store.** `DurableShiftClaim.Grants` is a computed view of
+  `Attempt`; it is now `[JsonIgnore]`, so a claim record no longer carries a `grants` field the
+  ports do not write. (#225)
+
+### Migration notes
+
+- **Shift record wire format (C# and the ports).** The previous C# build wrote a capitalized
+  handoff phase (`"Running"` / `"HandedOff"`) and a typed `status` field on the claim. The new
+  build writes the ports' lowercase phase (`"running"` / `"handedOff"`) and treats `statusText`
+  as the only claim-state field. **Backward compatible:** an existing store continues to read —
+  the capitalized phase is accepted on read (case-insensitively), and a `status` field is ignored
+  in favour of `statusText`, which every prior build also wrote. The redundant `grants` field is
+  no longer written but is ignored on read. The store envelope is unchanged: `v` stays `1`, the
+  document kinds are unchanged, and no record type is added. A cross-port reopen test
+  (`ShiftCrossPortTests` in Python, the `durable-shift-cross` tests in TypeScript) writes a store
+  with the canonical C# fixture and reads it in each port, and the reverse.
+
+### Fixed
+
+- **The non-transaction task commit dropped `WaitingOn`.** `TaskCommit.Waiting` through
+  `TaskRuntime.CommitAsync(Func<TaskCommit>)` wrote the checkpoint and the status but not the
+  names the task was waiting on, so a committing-to-wait path recorded a task that looked
+  running and could never be resumed by the name it parked on. The transaction overload already
+  wrote the list; both arms do now, in C#, TypeScript and Python. (#160)
+- **A settled task completion was reused for the next run.** The runner cached one completion
+  per task id, so a task that parked and was later woken handed its waiter the outcome of the
+  run that had ended before the event arrived. Each run now gets its own completion, and it is
+  dropped when the run settles. (#160)
+
+- **Durable sandbox policy.** `DurableSandboxPolicy` is a stored, per-conversation sandbox
+  grant: `SandboxMcpServers`, `SandboxLspServers`, `Auth` (`Gh`, `Git`), `Credentials`
+  (`EnvVars`), `Filesystem` (`ReadwritePaths`, `ReadonlyPaths`, `DeniedPaths`,
+  `ClearPolicyOnExit`), `Network` (`Proxy`), plus `Enabled`, `AddCurrentWorkingDirectory`,
+  `AllowBypass`, `AllowDevToolAccess`, `TrustWorkingDirectory`, and `KeychainAccess`. It
+  rides on `AgentChoices.Sandbox`; `null` means no sandbox, so every existing conversation
+  behaves exactly as before. `ResolvedAgent.Sandbox` is the resolved form. (#16)
+- **`DurableHarness.BuildSandboxConfig(policy, workingDirectory)`.** A public static mapper
+  from the durable policy to the SDK's `GitHub.Copilot.Rpc.SandboxConfig` wire type.
+  `SessionConfig` has no sandbox property, so the config is carried on
+  `SessionConfigBase.SandboxConfig`; `BuildSessionConfig` wires it in alongside
+  `TrustWorkingDirectory` and `EnableFileHooks`. (#16)
+- **`{workspace}` token expansion.** Paths written as `{workspace}/…`
+  (`DurableSandboxPolicy.WorkspaceToken`) are expanded against the conversation's
+  `WorkingDirectory` when the session is built, not when the policy is stored. A fork into a
+  different working directory resolves the same stored grant against its own directory. The
+  token never reaches the wire type. (#16)
+- **`SandboxDecisions` and `WaitForSandboxDecisionAsync`.** A conversation exposes the
+  `sandbox.decision` events its existing `Attach` subscription already receives, so a caller
+  can assert on what the runtime reported without a second subscription. (#16)
+- **`DurableHarnessOptions.TolerateHostHookFailures`** (opt-in, default `false`). The runtime
+  runs hooks inside the session's sandbox, and `EnableFileHooks` only controls
+  *repository-origin* hooks — user-level hooks in `~/.copilot/hooks/` still run and are
+  denied by a policy that does not grant them. With this option on, a session error that is
+  attributed to a hook and carries a sandbox denial signature (`sandbox`,
+  `Operation not permitted`, or `code 126`) becomes the turn's answer instead of an
+  `InvalidOperationException`. The default preserves existing behaviour, and the match is
+  narrow enough that a genuine tool failure still throws. (#16)
+- **`examples/33-sandbox-sdk-filesystem.cs`** — a real filesystem policy with a writable, a
+  read-only, and a denied directory; a permitted write that lands and a denied write that
+  does not; assertions on the `SandboxDecisionEvent` surface. (#16)
+- **`docs/SANDBOX_MATRIX.md`** — sandbox capability × platform/backend, what is enforced
+  versus advisory, what `SandboxFilesystemPolicyDetails` does and does not report, and the
+  host-hook limitation above. (#16)
+- **`Transaction.Memo(taskId, key, value)`** — read or write an idempotency memo as part of a
+  transaction, so an external effect's memo commits with the checkpoint that surrounds it. The
+  other entry point, `TaskRuntime.MemoAsync`, takes the store's commit gate; a phase handler that
+  calls it from inside `CommitAsync` waits for a release the commit itself is holding, which is a
+  hang rather than an exception. Both paths and both ports say which one to use. C#, TypeScript and
+  Python. (#201)
+
+### Fixed
+
+- **A rollback discarded a write and the next failed transaction put it back.**
+  `InMemoryStoreProvider.UpdateTask` keeps a baseline of each task's last known state so the
+  following transaction can arm its own undo with it, and it moved that baseline forward to the
+  state the failing transaction wrote. `UndoLog.Restore` only restored the *record*, so the
+  baseline stayed ahead of it and the next `UpdateTask` armed itself with the post-failed-write
+  state: a memo (or checkpoint) that a rollback had discarded reappeared one transaction later, and
+  with a JSONL store it reached disk. `UndoLog.Restore` now takes the baseline map and puts the
+  snapshot back into it, so both halves are restored together. The TypeScript port already did this;
+  C# and Python did not. (#201)
+- `TaskRuntime.MemoAsync` documentation now states that it must not be called from inside a commit
+  callback — it takes the commit gate the commit already holds, so it does not return — and points
+  at `Transaction.Memo` for that case. (#201)
+
+### Fixed
+
+- **A checkpoint whose `phase` is not a string hangs the host instead of failing the task.**
+  `RunTaskCoreAsync` read the phase with `JsonElement.GetString()`, which throws on a number, and the
+  read sat *before* the `try` that turns a handler failure into `TaskCommit.Failed`. The exception
+  escaped the run, nothing observed the faulted task, and every waiter for it blocked forever while
+  the store kept it `Running`. The phase is now type-checked and an unreadable one commits a failed
+  task naming the kind it found; a fault that still escapes the core loop settles the completion
+  source before re-throwing, so a waiter gets a failed outcome rather than a hang. TypeScript and
+  Python silently fell back to `"run"` for the same input, which would run a phase the checkpoint did
+  not name; both now report the same failure. (#193)
+
+### Changed
+
+- **`ResumeAsync` now re-enters tasks left `Waiting`, and recovers their recorded wait.** Two
+  caller-visible changes, both on the same operation. A task left `Waiting` on its children is
+  now included in the resume, so a caller that counted outcomes sees more of them — the
+  pre-fix behaviour was `Expected: 2, Actual: 1` for a parent and its child. And a task
+  re-entered while `Waiting` now finishes the children its checkpoint names before running its
+  next phase, where it previously ran that phase against children that had not started. Both
+  matter to any host whose workflow suspends on child work across a process boundary; the
+  type-level surface and the store wire format are unchanged, so an existing store reads as
+  before. Changed in C#, TypeScript, and Python together. (#203)
+- `DurableHarnessOptions.EnableFileHooks` documentation now states that it controls
+  repository-origin hooks only and that user-level hooks still run inside the sandbox. (#16)
 
 ## [0.4.0] - 2026-10-28
 

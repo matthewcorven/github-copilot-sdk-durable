@@ -1,0 +1,30 @@
+{
+  "id": 45,
+  "type": "Semi-Detached",
+  "status": "For Sale",
+  "price": 1935000,
+  "currency": "CAD",
+  "address": {
+    "street": "18 Spruce Street",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M5A 2H6",
+    "country": "Canada"
+  },
+  "bedrooms": 4,
+  "bathrooms": 2,
+  "squareFootage": 2500,
+  "lotSizeSquareFootage": 3500,
+  "yearBuilt": 1907,
+  "parkingSpaces": 1,
+  "shortDescription": "Stylish 4-bedroom semi-detached in Cabbagetown South blending Victorian charm with contemporary living.",
+  "fullDescription": "Welcome to 18 Spruce Street in the vibrant Cabbagetown South neighbourhood. This charming semi-detached home seamlessly blends period character with modern comfort. The main living area showcases original architectural details alongside tasteful modern updates. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. All 4 bedrooms are generously sized, and the primary offers a spa-inspired four-piece ensuite. Building amenities include a fitness centre, rooftop terrace, party room, and 24-hour concierge. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Fenced yard ideal for children and pets",
+    "Walking distance to top-rated schools",
+    "Pet-friendly building",
+    "Renovated galley kitchen with breakfast bar",
+    "Exposed brick accent wall"
+  ],
+  "listedDate": "2026-04-15"
+}

@@ -33,6 +33,10 @@ var root = await harness.RootAsync(new AgentChoices
     Streaming = true,
 });
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await root.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 // Print only what each delta adds to the text printed so far.
 var printed = 0;
 using var subscription = root.Session.On<SessionEvent>(evt =>

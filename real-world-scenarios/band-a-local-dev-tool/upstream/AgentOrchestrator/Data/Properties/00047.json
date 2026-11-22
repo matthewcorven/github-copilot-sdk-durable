@@ -1,0 +1,31 @@
+{
+  "id": 47,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 2394000,
+  "currency": "CAD",
+  "address": {
+    "street": "22 Airdrie Road",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4G 1L8",
+    "country": "Canada"
+  },
+  "bedrooms": 4,
+  "bathrooms": 2,
+  "squareFootage": 2586,
+  "lotSizeSquareFootage": 5756,
+  "yearBuilt": 1974,
+  "parkingSpaces": 1,
+  "shortDescription": "Bright and airy 4-bedroom detached home in the heart of Leaside, move-in ready with generous lot.",
+  "fullDescription": "Welcome to 22 Airdrie Road in the vibrant Leaside neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. The 4 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. The deep lot provides ample space for gardening, play, or future expansion. This coveted pocket puts you within walking distance of top schools, green spaces, and vibrant dining.",
+  "keyFeatures": [
+    "Rooftop terrace with skyline views",
+    "Underground parking spot included",
+    "Updated kitchen with quartz counters and soft-close cabinetry",
+    "In-suite laundry with full-size washer and dryer",
+    "Minutes to parks, shops, and restaurants",
+    "Spacious kitchen with marble backsplash and gas range"
+  ],
+  "listedDate": "2026-03-01"
+}

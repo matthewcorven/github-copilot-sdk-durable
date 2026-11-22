@@ -1,0 +1,30 @@
+{
+  "id": 46,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 1828000,
+  "currency": "CAD",
+  "address": {
+    "street": "88 Kilbarry Road",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M5P 1K3",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 2,
+  "squareFootage": 2178,
+  "lotSizeSquareFootage": 5637,
+  "yearBuilt": 1995,
+  "parkingSpaces": 1,
+  "shortDescription": "Elegant 3-bedroom detached family home in Forest Hill with a wraparound porch and updated interior.",
+  "fullDescription": "Welcome to 88 Kilbarry Road in the vibrant Forest Hill neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area features gleaming hardwood floors and an abundance of natural light from oversized windows. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. All 3 bedrooms are generously sized, and the primary offers a spa-inspired four-piece ensuite. Smart-home features, updated plumbing, and a newer roof provide peace of mind for years to come. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "24-hour concierge and security",
+    "Two-car attached garage",
+    "Walk score over 90",
+    "Pot lights and designer fixtures throughout",
+    "Chef’s kitchen with granite countertops and premium appliances"
+  ],
+  "listedDate": "2026-03-10"
+}

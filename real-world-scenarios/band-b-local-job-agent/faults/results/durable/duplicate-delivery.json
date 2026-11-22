@@ -1,0 +1,16 @@
+{
+  "variant": "durable",
+  "fault": "duplicate-delivery",
+  "outcome": "doubled",
+  "phase": "one iteration, one delivery re-delivered by the gate",
+  "detail": "One delivery, forwarded twice by the gate (1 re-delivery of session.send). The second copy got a turn of its own: 8 tool call(s) crossed the gate after the re-delivery, out of 8 in the whole run. One iteration finished, exit 3, plan 'in-progress 2 14', verifier 'fail: FAIL  section-01.md: first line is not an H1: The queue keeps five jobs.'. The side effect of a second delivery is therefore a second set of tool calls over the same files, not an error the loop reports. This is a measured count of frames, not an assumption about the variant: the same words would be chosen for either variant.",
+  "evidence": "frames at the gate: 1 session.send, 8 assistant.message, 8 tool.execution_start; frames re-delivered by the gate: 1; tool calls after the re-delivery: 8; product digest 963a1e8bd9cf7a7b; store 'present 60 0 iteration-complete/1'; last line \"iteration cap reached: 1 iterations and the plan is not complete.\"",
+  "harness": {
+    "dotnet": "dotnet",
+    "model": "gpt-5.1-codex-mini",
+    "command": "./faults/duplicate-delivery.sh --variant durable",
+    "script": "duplicate-delivery.sh",
+    "commit": "32770e70b5818b93d8745acfd83286cffb48c072"
+  },
+  "recordedAt": "2026-11-06T03:42:02.675481+00:00"
+}

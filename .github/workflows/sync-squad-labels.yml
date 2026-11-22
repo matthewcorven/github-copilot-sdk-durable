@@ -153,6 +153,13 @@ jobs:
             ];
 
             function slugify(t) { return t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''); }
+            // GitHub rejects a label description over 100 characters. Roster roles can be long
+            // (for example a member whose role is a sentence), so clamp before sending.
+            const MAX_LABEL_DESCRIPTION = 100;
+            function clampDescription(text) {
+              if (text.length <= MAX_LABEL_DESCRIPTION) return text;
+              return text.slice(0, MAX_LABEL_DESCRIPTION - 1).trimEnd() + '\u2026';
+            }
             function assertUniqueMemberSlugs(teamMembers) {
               const memberBySlug = new Map();
               for (const member of teamMembers) {
@@ -175,7 +182,7 @@ jobs:
               labels.push({
                 name: `squad:${slug}`,
                 color: getAgentColor(slug),
-                description: `Assigned to ${member.name} (${member.role})`
+                description: clampDescription(`Assigned to ${member.name} (${member.role})`)
               });
             }
 

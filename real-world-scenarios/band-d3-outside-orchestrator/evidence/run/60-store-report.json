@@ -1,0 +1,53 @@
+{
+ "task": {
+  "id": "t1",
+  "name": "band-d3.prior-auth",
+  "status": 4,
+  "restarts": 1,
+  "phase": "letter"
+ },
+ "memos": {
+  "step/coverage/1188409be0bb45d0/d3-coverage-assessor@1:48d2a3c62ecbb105": {
+   "step": "coverage",
+   "agentIdentity": "d3-coverage-assessor@1:48d2a3c62ecbb105",
+   "outputChars": 1512
+  },
+  "step/gate/7c00cc1bfe007fbb/human@n/a:79a5478768d24474": {
+   "step": "gate",
+   "agentIdentity": "human",
+   "outputChars": 131
+  },
+  "step/letter/d62205728a0ff381/d3-decision-letter@1:a4b8a883cd0e648f": {
+   "step": "letter",
+   "agentIdentity": "d3-decision-letter@1:a4b8a883cd0e648f",
+   "outputChars": 256
+  }
+ },
+ "result": {
+  "requestId": "20261105T201433Z",
+  "recommendation": "pend_for_review \u2014 provider specialty is not supplied, so specialty-procedure appropriateness cannot be confirmed even though diagnosis and clinical summary support medical necessity.",
+  "decision": "pend_for_review by Dr. A. Reviewer, utilization management",
+  "determination": "PENDED",
+  "letter": "DETERMINATION: PENDED\nBASIS: Provider specialty is not in the request, so specialty-procedure appropriateness cannot be confirmed.\nOUTSTANDING: Obtain the ordering provider specialty before a determination.\nREVIEWER: Dr. A. Reviewer, utilization management",
+  "steps": [
+   {
+    "step": "coverage",
+    "memoKey": "step/coverage/1188409be0bb45d0/d3-coverage-assessor@1:48d2a3c62ecbb105",
+    "agentIdentity": "d3-coverage-assessor@1:48d2a3c62ecbb105",
+    "output": "1. Provider Specialty-Procedure Appropriateness  \n- Status: INSUFFICIENT  \n- Confidence: 96  \n- Evidence: The request includes only \u201cProvider NPI: 1720180003\u201d and does not state the ordering provider\u2019s specialty. Without specialty information, it cannot be determined whether the ordering provider is appropriate for CPT 31628 (bronchoscopy with transbronchial lung biopsy).  \n- Missing: Ordering provider specialty/type (e.g., pulmonology, thoracic surgery, interventional pulmonary).\n\n2. Diagnosis-Policy Alignment  \n- Status: MET  \n- Confidence: 91  \n- Evidence:  \n  - Procedure requested: \u201cCPT 31628 \u2014 bronchoscopy, diagnostic, with transbronchial lung biopsy.\u201d  \n  - Diagnoses submitted: \u201cR91.1, J18.9, R05.9.\u201d  \n  - Clinical summary supports need for tissue diagnosis of a suspicious lung lesion:  \n    - \u201c1.8 cm spiculated right lower lobe pulmonary nodule, up from 1.2 cm three months ago\u201d  \n    - \u201cPET/CT shows FDG avidity (SUVmax 4.2)\u201d  \n    - \u201c40 pack-year smoking history\u201d  \n    - \u201cCompleted 14 days of amoxicillin-clavulanate with no resolution\u201d  \n    - \u201cRecommending CT-guided transbronchial biopsy for tissue diagnosis.\u201d  \n  - These findings are consistent with medical necessity for diagnostic bronchoscopic biopsy to evaluate an enlarging, PET-avid pulmonary nodule despite antibiotic treatment.\n\nRECOMMENDATION: pend_for_review \u2014 provider specialty is not supplied, so specialty-procedure appropriateness cannot be confirmed even though diagnosis and clinical summary support medical necessity."
+   },
+   {
+    "step": "gate",
+    "memoKey": "step/gate/7c00cc1bfe007fbb/human@n/a:79a5478768d24474",
+    "agentIdentity": "human",
+    "output": "pend_for_review|Dr. A. Reviewer, utilization management|Provider specialty is not in the request; obtain it before a determination."
+   },
+   {
+    "step": "letter",
+    "memoKey": "step/letter/d62205728a0ff381/d3-decision-letter@1:a4b8a883cd0e648f",
+    "agentIdentity": "d3-decision-letter@1:a4b8a883cd0e648f",
+    "output": "DETERMINATION: PENDED\nBASIS: Provider specialty is not in the request, so specialty-procedure appropriateness cannot be confirmed.\nOUTSTANDING: Obtain the ordering provider specialty before a determination.\nREVIEWER: Dr. A. Reviewer, utilization management"
+   }
+  ]
+ }
+}

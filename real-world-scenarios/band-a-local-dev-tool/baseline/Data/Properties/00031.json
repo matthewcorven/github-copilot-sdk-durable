@@ -1,0 +1,30 @@
+{
+  "id": 31,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 748000,
+  "currency": "CAD",
+  "address": {
+    "street": "88 Corporate Drive, Unit 1205",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M1H 3G6",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 2,
+  "squareFootage": 942,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 1991,
+  "parkingSpaces": 1,
+  "shortDescription": "Modern 2-bedroom suite in Scarborough Town Centre with premium finishes and full building amenities.",
+  "fullDescription": "Welcome to 88 Corporate Drive, Unit 1205 in the vibrant Scarborough Town Centre neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area boasts an open-concept design with pot lights and a cosy gas fireplace. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. Upstairs, 2 bright bedrooms include a primary retreat with ensuite and double closets. Smart-home features, updated plumbing, and a newer roof provide peace of mind for years to come. The location is unbeatable: steps to TTC transit, acclaimed restaurants, and everyday shopping.",
+  "keyFeatures": [
+    "Spacious kitchen with marble backsplash and gas range",
+    "Steps to TTC subway and streetcar",
+    "Finished basement with recreation room",
+    "Hardwood floors throughout main level",
+    "Private driveway with detached garage"
+  ],
+  "listedDate": "2026-04-24"
+}

@@ -1,0 +1,31 @@
+{
+  "id": 59,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 2151000,
+  "currency": "CAD",
+  "address": {
+    "street": "20 South Kingsway",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6S 3T2",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 3,
+  "squareFootage": 3142,
+  "lotSizeSquareFootage": 3049,
+  "yearBuilt": 1911,
+  "parkingSpaces": 1,
+  "shortDescription": "Bright and airy 3-bedroom detached home in the heart of Swansea, move-in ready with generous lot.",
+  "fullDescription": "Welcome to 20 South Kingsway in the vibrant Swansea neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area features gleaming hardwood floors and an abundance of natural light from oversized windows. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. All 3 bedrooms are generously sized, and the primary offers a spa-inspired four-piece ensuite. Building amenities include a fitness centre, rooftop terrace, party room, and 24-hour concierge. This coveted pocket puts you within walking distance of top schools, green spaces, and vibrant dining.",
+  "keyFeatures": [
+    "Renovated galley kitchen with breakfast bar",
+    "Wraparound porch with heritage details",
+    "Pot lights and designer fixtures throughout",
+    "Surrounded by cafes, galleries, and boutiques",
+    "In-suite laundry with full-size washer and dryer",
+    "Underground parking spot included"
+  ],
+  "listedDate": "2026-04-08"
+}

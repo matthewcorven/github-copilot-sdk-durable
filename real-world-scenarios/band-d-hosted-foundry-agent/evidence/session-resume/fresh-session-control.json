@@ -1,0 +1,47 @@
+{
+ "id": "caresp_0bdf7f8cb0abbf4c00ENDJ6fLPIcnLSVGkQBDc4TfEGHrND97O",
+ "object": "response",
+ "output": [
+  {
+   "type": "message",
+   "id": "msg_0bdf7f8cb0abbf4c001oQhlWPLEAsjVmIKLRa6ARSc21LEVb17",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "output_text",
+     "text": "{\"agent_name\":\"Coverage Assessment Agent\",\"checks_performed\":[{\"rule\":\"Prior assessment availability in current conversation\",\"result\":\"not_found\",\"detail\":\"No earlier assessment for NPI 1720180003 and CPT 31628 exists in this conversation.\"}],\"provider_verification\":null,\"coverage_policies\":[],\"criteria_assessment\":[],\"coverage_criteria_met\":[],\"coverage_criteria_not_met\":[],\"policy_references\":[],\"coverage_limitations\":[],\"documentation_gaps\":[],\"tool_results\":[],\"error\":\"NO PRIOR CONTEXT\"}",
+     "annotations": [],
+     "logprobs": []
+    }
+   ],
+   "status": "completed",
+   "response_id": "caresp_0bdf7f8cb0abbf4c00ENDJ6fLPIcnLSVGkQBDc4TfEGHrND97O",
+   "agent_reference": null
+  }
+ ],
+ "created_at": 1793883257,
+ "parallel_tool_calls": false,
+ "status": "completed",
+ "completed_at": 1793883261,
+ "usage": {
+  "input_tokens": 6263,
+  "input_tokens_details": {
+   "cached_tokens": 0,
+   "cache_write_tokens": 0
+  },
+  "output_tokens": 115,
+  "output_tokens_details": {
+   "reasoning_tokens": 0
+  },
+  "total_tokens": 6378
+ },
+ "response_id": "caresp_0bdf7f8cb0abbf4c00ENDJ6fLPIcnLSVGkQBDc4TfEGHrND97O",
+ "agent_reference": {
+  "type": "agent_reference",
+  "name": "coverage-assessment-agent",
+  "version": "2"
+ },
+ "model": "",
+ "agent_session_id": "fe7c28e3ff1cb71d39a20780e99776f829254d7e5678d713c72c7eecbf557fe",
+ "background": false
+}

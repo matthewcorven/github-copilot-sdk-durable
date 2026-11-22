@@ -48,6 +48,10 @@ var root = await harness.RootAsync(new AgentChoices
     WorkingDirectory = repo,
 });
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await root.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 // A subagent deselects AGENTS.md and gets its own instructions.
 var subagent = await harness.CreateConversationAsync(new AgentChoices
 {

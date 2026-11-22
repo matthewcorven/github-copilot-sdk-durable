@@ -1,0 +1,39 @@
+run dir:   /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/.scratch/band-d3
+dotnet:    /opt/homebrew/bin/dotnet (10.0.402)
+project:   https://aif-gkr52qggxgbu6.services.ai.azure.com/api/projects/priorauth
+resuming:  the store run.sh left
+
+run dir:    /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/.scratch/band-d3
+store:      /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/.scratch/band-d3/store/orchestrator.jsonl
+mode:       resume the store's run
+memo key:   identity (name+input+agent identity)
+------------------------------------------------------------------------------
+task:       resuming durable task t1 (restarts before this process: 0)
+phase:      gate
+memos:      1 on record
+  step/coverage/1188409be0bb45d0/d3-coverage-assessor@1:48d2a3c62ecbb105
+    → coverage: 1. Provider Specialty-Procedure Appropriateness  
+- Status: INSUFFICIENT  
+- Confidence: 96  
+- …
+memos:      1 on record — a phase that re-enters looks these up before it calls anything
+------------------------------------------------------------------------------
+[gate] WAITING for a human decision at /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/.scratch/band-d3/gate/decision.json
+[gate] process id 23640 — this is the process to kill
+[gate] decision: pend_for_review by Dr. A. Reviewer, utilization management
+[gate] settled; memo step/gate/7c00cc1bfe007fbb/human@n/a:79a5478768d24474 written
+[letter] resolving the agent the platform is running now
+[letter] identity d3-decision-letter@1:a4b8a883cd0e648f
+[letter] memo miss step/letter/d62205728a0ff381/d3-decision-letter@1:a4b8a883cd0e648f — calling the agent
+[letter] settled; memo step/letter/d62205728a0ff381/d3-decision-letter@1:a4b8a883cd0e648f written
+------------------------------------------------------------------------------
+run complete.
+  recommendation : pend_for_review — provider specialty is not supplied, so specialty-procedure appropriateness cannot be confirmed even though diagnosis and clinical summary support medical necessity.
+  decision       : pend_for_review by Dr. A. Reviewer, utilization management
+  determination  : PENDED
+  step coverage  ← d3-coverage-assessor@1:48d2a3c62ecbb105  key step/coverage/1188409be0bb45d0/d3-coverage-assessor@1:48d2a3c62ecbb105
+  step gate      ← human  key step/gate/7c00cc1bfe007fbb/human@n/a:79a5478768d24474
+  step letter    ← d3-decision-letter@1:a4b8a883cd0e648f  key step/letter/d62205728a0ff381/d3-decision-letter@1:a4b8a883cd0e648f
+
+run dir: /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/.scratch/band-d3
+kept: /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/.scratch/band-d3

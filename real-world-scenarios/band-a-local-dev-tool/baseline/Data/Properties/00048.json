@@ -1,0 +1,31 @@
+{
+  "id": 48,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 1553000,
+  "currency": "CAD",
+  "address": {
+    "street": "135 Chatsworth Drive",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4R 1R7",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 2,
+  "squareFootage": 1429,
+  "lotSizeSquareFootage": 4903,
+  "yearBuilt": 1985,
+  "parkingSpaces": 2,
+  "shortDescription": "Character-filled 2-bedroom detached residence in Lawrence Park featuring original details and modern upgrades.",
+  "fullDescription": "Welcome to 135 Chatsworth Drive in the vibrant Lawrence Park neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. Upstairs, 2 bright bedrooms include a primary retreat with ensuite and double closets. Additional highlights include in-suite laundry, ample storage, and energy-efficient mechanicals. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Cosy living room with gas fireplace",
+    "Walk score over 90",
+    "Two-car attached garage",
+    "Wraparound porch with heritage details",
+    "Open kitchen with waterfall island and pot lights",
+    "Surrounded by cafes, galleries, and boutiques"
+  ],
+  "listedDate": "2026-04-28"
+}

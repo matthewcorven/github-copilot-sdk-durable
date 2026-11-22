@@ -5,7 +5,7 @@
 // A task is a small state machine. Its state, the checkpoint, is saved after every step, so
 // after a crash the next open continues from the last saved step. The usual pattern: save
 // what you are about to do, do it, then save the result. A crash between doing and saving
-// reruns that step, so the step must be safe to repeat; here the fake payment service
+// reruns that step, so the step must be safe to repeat; here the local payment service
 // ignores a repeated key.
 //
 // Mirrors the Pi Durable example `11-tasks.ts`.
@@ -20,7 +20,7 @@ using Durable;
 var store = new DurableStore();
 var registry = new ExtensionRegistry();
 
-// A fake payment service: it ignores a repeated key, so a rerun after a crash
+// A local payment service: it ignores a repeated key, so a rerun after a crash
 // does not charge twice.
 var payments = new Dictionary<string, int>();
 
@@ -63,6 +63,10 @@ registry.Install(new Extension("payments", tasks: [Payment]));
 
 await using var harness = await DurableHarness.OpenAsync(store, registry);
 var root = await harness.RootAsync();
+
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await root.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
 
 // Every task names its owner. This one belongs to the conversation; a task can
 // also own child tasks and wait for them (23-child-tasks.cs).

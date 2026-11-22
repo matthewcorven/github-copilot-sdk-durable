@@ -1,0 +1,28 @@
+{
+  "variant": "durable",
+  "fault": "restart-after-checkpoint",
+  "outcome": "resumed by refund_agent",
+  "holder": "refund_agent",
+  "holderAtFault": "refund_agent",
+  "holderAtEnd": "return_agent",
+  "phase": "settle",
+  "detail": "The process was stopped with SIGTERM at the commit where refund_agent held turn 1 and had produced nothing. The restarted process read that checkpoint, took control as resumed by refund_agent, and its first committed action was refund_agent produced turn 1 at e68. the specialist tool results went from {\"Return initiated successfully for order 1234. You will receive return instructions via email.\": 1} at the stop to {\"Order 1234 is currently being processed and will ship in 2 business days.\": 1, \"Refund processed successfully for order 1234.\": 1, \"Return initiated successfully for order 1234. You will receive return instructions via email.\": 2} after the restart; verify held every claim, so nothing the checkpoint recorded was written twice. Control after the restart was refund_agent, and the run finished in 1 process(es).",
+  "evidence": "stopped cleanly (pid 35899, SIGTERM, confirmed gone) at turn 1 delegated to refund_agent and nothing produced; frozen state: holder refund_agent, fingerprint seq:48/wire:4/tasks:1, tool results {\"Return initiated successfully for order 1234. You will receive return instructions via email.\": 1}; first action after the restart: refund_agent produced turn 1 at e68; the specialist tool results went from {\"Return initiated successfully for order 1234. You will receive return instructions via email.\": 1} at the stop to {\"Order 1234 is currently being processed and will ship in 2 business days.\": 1, \"Refund processed successfully for order 1234.\": 1, \"Return initiated successfully for order 1234. You will receive return instructions via email.\": 2} after the restart; verify held every claim, so nothing the checkpoint recorded was written twice; recovery needed 1 process(es); port-reported resume: (none); holders across the run: return_agent -> refund_agent -> order_agent -> return_agent",
+  "harness": {
+    "dotnet": "10.0.402",
+    "endpoint": "https://openrouter.ai/api/v1",
+    "model": "harness default (scripted routing)",
+    "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/restart-after-checkpoint.sh --variant durable",
+    "commit": "272baac6735e2d6d15f869a1e4b7fb74d72369fd",
+    "apiKeyFrom": "OPENROUTER_API_KEY",
+    "portKeyFrom": null,
+    "portKeySubstituted": null
+  },
+  "recordedAt": "2026-11-05T22:24:23.125571+00:00",
+  "observations": {
+    "processes": 1,
+    "holderAtStop": "refund_agent",
+    "actedFirst": "refund_agent",
+    "portReportedResume": ""
+  }
+}

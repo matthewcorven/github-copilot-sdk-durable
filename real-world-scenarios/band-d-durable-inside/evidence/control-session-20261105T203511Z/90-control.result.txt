@@ -1,0 +1,14 @@
+```json
+{
+  "phase": null,
+  "approval": null,
+  "approvalTask": null,
+  "storePath": "/home/session/durable/working-state.jsonl"
+}
+```
+
+The store is empty. Store path: `/home/session/durable/working-state.jsonl`.
+
+Store report summary:
+- documents: 0
+- tasks: 0

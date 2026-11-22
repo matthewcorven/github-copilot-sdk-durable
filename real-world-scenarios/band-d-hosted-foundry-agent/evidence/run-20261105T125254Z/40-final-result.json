@@ -1,0 +1,14 @@
+{
+ "review_id": "run-20261105T125254Z",
+ "review_recommendation": "pend_for_review",
+ "human_action": "accept",
+ "reviewer": "Band D evidence run",
+ "final_recommendation": "pend_for_review",
+ "criteria_summary": "2 of 2 criteria MET",
+ "audit_trail": "{\"gates_evaluated\":[\"gate_1_provider\",\"gate_2_codes\"],\"gate_results\":{\"gate_1_provider\":\"PASS\",\"gate_2_codes\":\"FAIL\",\"gate_3_necessity\":\"NOT_EVALUATED_DUE_TO_MISSING_CLINICAL_AND_COMPLIANCE_INPUTS\"},\"confidence_components\":{\"criteria_weight\":0.4,\"criteria_score\":0.895,\"extraction_weight\":0.3,\"extraction_score\":0.0,\"compliance_weight\":0.2,\"compliance_score\":0.0,\"policy_weight\":0.1,\"policy_score\":0.75,\"missing_agent_penalties\":[\"-0.20 compliance agent absent\",\"-0.20 clinical reviewer agent absent\"]},\"agents_consulted\":[\"coverage\"],\"agents_absent\":[\"compliance\",\"clinical\"],\"note\":\"This recommendation is based on coverage-only specialist input and should not be interpreted as a full multi-agent verdict.\"}",
+ "provenance": {
+  "coverage": "hosted agent, Responses API",
+  "synthesis": "hosted agent, Responses API",
+  "decision": "applied by invoke.sh using backend/app/routers/decision.py rules"
+ }
+}

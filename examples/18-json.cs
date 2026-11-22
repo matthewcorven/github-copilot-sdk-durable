@@ -30,6 +30,10 @@ await using var harness = await DurableHarness.OpenAsync(store, registry);
 // the built-in read tools and nothing else.
 var root = await harness.RootAsync(new AgentChoices { Extensions = ["coding"], Permissions = ["read"] });
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await root.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 // Attach before submitting, so the stream covers the whole run.
 var lines = new List<string>();
 var print = (object? value) =>

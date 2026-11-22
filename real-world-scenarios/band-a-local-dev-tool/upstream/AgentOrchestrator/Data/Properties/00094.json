@@ -1,0 +1,31 @@
+{
+  "id": 94,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 2400000,
+  "currency": "CAD",
+  "address": {
+    "street": "15 Wineva Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4E 2T1",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 3,
+  "squareFootage": 3375,
+  "lotSizeSquareFootage": 4348,
+  "yearBuilt": 1903,
+  "parkingSpaces": 1,
+  "shortDescription": "Bright and airy 2-bedroom detached home in the heart of The Beaches, move-in ready with generous lot.",
+  "fullDescription": "Welcome to 15 Wineva Avenue in the vibrant The Beaches neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area showcases original architectural details alongside tasteful modern updates. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. Upstairs, 2 bright bedrooms include a primary retreat with ensuite and double closets. A private outdoor space — perfect for morning coffee or summer entertaining — completes the package. The location is unbeatable: steps to TTC transit, acclaimed restaurants, and everyday shopping.",
+  "keyFeatures": [
+    "Private south-facing backyard with patio",
+    "Integrated single-car garage",
+    "Updated kitchen with quartz counters and soft-close cabinetry",
+    "Ensuite bathroom with heated floors",
+    "Surrounded by cafes, galleries, and boutiques",
+    "Laneway parking for two vehicles"
+  ],
+  "listedDate": "2026-05-03"
+}

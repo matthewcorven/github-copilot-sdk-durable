@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "language": "python",
+  "range": [0, 10],
+  "workingDirectory": "repository root",
+  "setupCommands": [
+    ["python3", "-m", "venv", "examples/py/.venv"],
+    ["examples/py/.venv/bin/python", "-m", "pip", "install", "-e", "examples/py"]
+  ],
+  "interpreter": "Use the activated examples/py/.venv environment, or replace python3 in each command with examples/py/.venv/bin/python.",
+  "runtime": "Native Copilot SDK, or DURABLE_RUNTIME_PATH pointing to the real ReplayRuntime executable.",
+  "store": "in-memory; no per-user or on-disk default path",
+  "validation": {
+    "status": "verified",
+    "sdk": "1.0.28",
+    "sharedApiCommits": ["5b083e6", "4682509", "8b939ca", "92e8d76", "9004144"],
+    "protocolCommit": "49f6769eba6770a1d42e503dd5b34f2b28eff779",
+    "targetedTests": "9 of 9 passed on four consecutive runs after the real ReplayRuntime frame-writer fix (36 test executions), including actual source mutations and missing-tool-call rejection",
+    "replay": "00,01,03,04,05,06,09 passed through the actual SDK and ReplayRuntime; synthesised sessions, not recorded native transcripts; reported model replay-model",
+    "native": "02,07,08,10 passed all original assertions against the native runtime; reported model gpt-6-luna; actual 08 model answer CONTEXT",
+    "scriptedToolReplay": "Additional 10 fixture proves real SDK tool handlers and durable document assertions, not LIVE model answers or recorded native transcripts.",
+    "pending": null,
+    "stdoutCandidates": ["00", "01", "03", "04"]
+  },
+  "examples": [
+    { "id": "00", "source": "00-conversation.cs", "path": "00-conversation.py", "file": "00-conversation.py", "original": "../00-conversation.cs", "status": "ported", "sandboxMode": "not-applicable", "live": false, "liveReason": null, "deterministic": true, "deterministicExclusionReason": null, "command": ["python3", "examples/py/00-conversation.py"], "assertionParity": "all original facts verified with real SDK/replay" },
+    { "id": "01", "source": "01-documents.cs", "path": "01-documents.py", "file": "01-documents.py", "original": "../01-documents.cs", "status": "ported", "sandboxMode": "not-applicable", "live": false, "liveReason": null, "deterministic": true, "deterministicExclusionReason": null, "command": ["python3", "examples/py/01-documents.py"], "assertionParity": "all original facts verified with real SDK/replay" },
+    { "id": "02", "source": "02-forks.cs", "path": "02-forks.py", "file": "02-forks.py", "original": "../02-forks.cs", "status": "ported", "sandboxMode": "not-applicable", "live": false, "liveReason": "needs sessions.fork, which the runtime does not answer", "deterministic": false, "deterministicExclusionReason": "needs sessions.fork, which the runtime does not answer", "command": ["python3", "examples/py/02-forks.py"], "assertionParity": "all original facts verified with native SDK" },
+    { "id": "03", "source": "03-owned-conversations.cs", "path": "03-owned-conversations.py", "file": "03-owned-conversations.py", "original": "../03-owned-conversations.cs", "status": "ported", "sandboxMode": "not-applicable", "live": false, "liveReason": null, "deterministic": true, "deterministicExclusionReason": null, "command": ["python3", "examples/py/03-owned-conversations.py"], "assertionParity": "all original facts verified with real SDK/replay" },
+    { "id": "04", "source": "04-watches.cs", "path": "04-watches.py", "file": "04-watches.py", "original": "../04-watches.cs", "status": "ported", "sandboxMode": "not-applicable", "live": false, "liveReason": null, "deterministic": true, "deterministicExclusionReason": null, "command": ["python3", "examples/py/04-watches.py"], "assertionParity": "all original facts verified with real SDK/replay" },
+    { "id": "05", "source": "05-harness.cs", "path": "05-harness.py", "file": "05-harness.py", "original": "../05-harness.cs", "status": "ported", "sandboxMode": "not-applicable", "live": false, "liveReason": null, "deterministic": true, "deterministicExclusionReason": null, "command": ["python3", "examples/py/05-harness.py"], "assertionParity": "all original facts verified with real SDK/replay" },
+    { "id": "06", "source": "06-configuration.cs", "path": "06-configuration.py", "file": "06-configuration.py", "original": "../06-configuration.cs", "status": "ported", "sandboxMode": "not-applicable", "live": false, "liveReason": null, "deterministic": true, "deterministicExclusionReason": null, "command": ["python3", "examples/py/06-configuration.py"], "assertionParity": "all original facts verified with real SDK/replay" },
+    { "id": "07", "source": "07-harness-conversations.cs", "path": "07-harness-conversations.py", "file": "07-harness-conversations.py", "original": "../07-harness-conversations.cs", "status": "ported", "sandboxMode": "not-applicable", "live": true, "liveReason": "sets a reasoning effort, so the harness queries models.list for a model the fixture does not record", "deterministic": false, "deterministicExclusionReason": "sets a reasoning effort, so the harness queries models.list for a model the fixture does not record", "command": ["python3", "examples/py/07-harness-conversations.py"], "assertionParity": "all original facts verified with native SDK" },
+    { "id": "08", "source": "08-context.cs", "path": "08-context.py", "file": "08-context.py", "original": "../08-context.cs", "status": "ported", "sandboxMode": "not-applicable", "live": true, "liveReason": "needs sessions.fork, which the runtime does not answer", "deterministic": false, "deterministicExclusionReason": "needs sessions.fork, which the runtime does not answer", "command": ["python3", "examples/py/08-context.py"], "assertionParity": "all original facts verified with native SDK and actual model answer CONTEXT" },
+    { "id": "09", "source": "09-registry-reload.cs", "path": "09-registry-reload.py", "file": "09-registry-reload.py", "original": "../09-registry-reload.cs", "status": "ported", "sandboxMode": "not-applicable", "live": false, "liveReason": null, "deterministic": true, "deterministicExclusionReason": null, "command": ["python3", "examples/py/09-registry-reload.py"], "assertionParity": "all original facts verified with real SDK/replay" },
+    { "id": "10", "source": "10-extension-state.cs", "path": "10-extension-state.py", "file": "10-extension-state.py", "original": "../10-extension-state.cs", "status": "ported", "sandboxMode": "not-applicable", "live": true, "liveReason": "asserts a tool wrote into the document; the recording has no tool call", "deterministic": false, "deterministicExclusionReason": "asserts a tool wrote into the document; the recording has no tool call", "command": ["python3", "examples/py/10-extension-state.py"], "assertionParity": "all original facts verified with native model/tool execution and separately with scripted SDK tool-state replay" }
+  ]
+}

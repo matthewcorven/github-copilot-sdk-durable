@@ -1,0 +1,31 @@
+{
+  "id": 26,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 1778000,
+  "currency": "CAD",
+  "address": {
+    "street": "3515 Lake Shore Boulevard West",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M8W 1P1",
+    "country": "Canada"
+  },
+  "bedrooms": 4,
+  "bathrooms": 3,
+  "squareFootage": 1895,
+  "lotSizeSquareFootage": 3194,
+  "yearBuilt": 2021,
+  "parkingSpaces": 2,
+  "shortDescription": "Elegant 4-bedroom detached family home in Long Branch with a wraparound porch and updated interior.",
+  "fullDescription": "Welcome to 3515 Lake Shore Boulevard West in the vibrant Long Branch neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. All 4 bedrooms are generously sized, and the primary offers a spa-inspired four-piece ensuite. The deep lot provides ample space for gardening, play, or future expansion. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Updated kitchen with quartz counters and soft-close cabinetry",
+    "Hardwood floors throughout main level",
+    "Private south-facing backyard with patio",
+    "Smart home wiring throughout",
+    "Laneway parking for two vehicles",
+    "Steps to TTC subway and streetcar"
+  ],
+  "listedDate": "2026-04-18"
+}

@@ -1,0 +1,31 @@
+{
+  "id": 34,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 2244000,
+  "currency": "CAD",
+  "address": {
+    "street": "22 Guildwood Parkway",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M1E 1P4",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 1,
+  "squareFootage": 2342,
+  "lotSizeSquareFootage": 6192,
+  "yearBuilt": 2008,
+  "parkingSpaces": 1,
+  "shortDescription": "Bright and airy 3-bedroom detached home in the heart of Guildwood, move-in ready with generous lot.",
+  "fullDescription": "Welcome to 22 Guildwood Parkway in the vibrant Guildwood neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area opens onto a spacious combined living and dining area flooded with afternoon sun. The kitchen is a chef’s dream with quartz countertops, a large island, and high-end stainless-steel appliances. The sleeping quarters comprise 3 comfortable bedrooms, the largest enjoying a private ensuite bathroom. Building amenities include a fitness centre, rooftop terrace, party room, and 24-hour concierge. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Large balcony overlooking parkland",
+    "Updated kitchen with quartz counters and soft-close cabinetry",
+    "Underground parking spot included",
+    "Crown mouldings and wainscotting",
+    "Walking distance to top-rated schools",
+    "Wraparound porch with heritage details"
+  ],
+  "listedDate": "2026-03-10"
+}

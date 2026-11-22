@@ -1,0 +1,35 @@
+{
+  "protocolVersion": 3,
+  "runtimeVersion": "0.0.0-replay",
+  "models": [
+    {
+      "id": "replay-model",
+      "name": "Replay Model",
+      "vendor": "replay",
+      "capabilities": { "supports": { "toolCalls": true } }
+    }
+  ],
+  "sessions": [
+    {
+      "id": "session-example-10-scripted",
+      "model": "replay-model",
+      "turns": [
+        {
+          "messageId": "example-10-tool",
+          "content": "Scripted tool invocation, not a live model answer.",
+          "toolRequests": [
+            {
+              "name": "todo",
+              "toolCallId": "example-10-todo",
+              "arguments": { "item": "fix the build" }
+            }
+          ]
+        },
+        {
+          "messageId": "example-10-confirmation",
+          "content": "Scripted confirmation after the real tool handler completes."
+        }
+      ]
+    }
+  ]
+}

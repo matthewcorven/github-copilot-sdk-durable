@@ -1,0 +1,14 @@
+{
+  "variant": "baseline",
+  "fault": "store-outage-control",
+  "outcome": "completed",
+  "phase": "after Phase 7's outputs exist, before Phase 8 commits; repo.git left in place (the control)",
+  "detail": "Control: nothing was moved. The run finished at 'save run state' (exit 0) with the state at 'done (the state snapshot only exists once Phase 8 has committed)' and 13 comment(s) posted. This is what the outage run is compared against: the same run, the same store, the same length.",
+  "evidence": "outage=no; path recreated during the move=0; before: state=none 94208 bytes; moved: exists=no 0 bytes state=none history=n/a; live path exists=1 state=done (the state snapshot only exists once Phase 8 has committed); run exit=0 last phase=save run state posted=13; triage list found in the moved state=[]",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "none (Band C has no model and no recorded runtime)",
+    "command": "./faults/store-outage.sh --variant baseline --fault-not-injected"
+  },
+  "recordedAt": "2026-11-05T18:04:17.139100+00:00"
+}

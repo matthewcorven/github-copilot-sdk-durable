@@ -1,0 +1,4 @@
+{
+ "input": "Before anything else, read your durable working state for request PA-D2-0001 with the working_state tool and tell me, as JSON, exactly what it contains: phase, approval, approvalTask, and storePath. Then call store_report and tell me how many documents and tasks the store holds. Do not invent state: if the store is empty, say that it is empty and what the store path is.",
+ "stream": false
+}

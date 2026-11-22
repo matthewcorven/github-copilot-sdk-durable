@@ -1,0 +1,31 @@
+{
+  "id": 81,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 2277000,
+  "currency": "CAD",
+  "address": {
+    "street": "55 Donlands Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4J 3P1",
+    "country": "Canada"
+  },
+  "bedrooms": 4,
+  "bathrooms": 2,
+  "squareFootage": 3211,
+  "lotSizeSquareFootage": 4139,
+  "yearBuilt": 1924,
+  "parkingSpaces": 1,
+  "shortDescription": "Bright and airy 4-bedroom detached home in the heart of East York, move-in ready with generous lot.",
+  "fullDescription": "Welcome to 55 Donlands Avenue in the vibrant East York neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area boasts an open-concept design with pot lights and a cosy gas fireplace. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. Upstairs, 4 bright bedrooms include a primary retreat with ensuite and double closets. Building amenities include a fitness centre, rooftop terrace, party room, and 24-hour concierge. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Pot lights and designer fixtures throughout",
+    "Two-car attached garage",
+    "Renovated galley kitchen with breakfast bar",
+    "Wraparound porch with heritage details",
+    "Built-in bookshelves in den",
+    "Juliet balcony off primary bedroom"
+  ],
+  "listedDate": "2026-03-15"
+}

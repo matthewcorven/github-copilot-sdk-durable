@@ -1,0 +1,30 @@
+{
+  "id": 86,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 595000,
+  "currency": "CAD",
+  "address": {
+    "street": "1 Concorde Place, Unit 2003",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M3C 4G5",
+    "country": "Canada"
+  },
+  "bedrooms": 1,
+  "bathrooms": 1,
+  "squareFootage": 744,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2007,
+  "parkingSpaces": 1,
+  "shortDescription": "Bright 1-bedroom condo in Don Mills with floor-to-ceiling windows and stunning city views.",
+  "fullDescription": "Welcome to 1 Concorde Place, Unit 2003 in the vibrant Don Mills neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area boasts an open-concept design with pot lights and a cosy gas fireplace. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. All 1 bedrooms are generously sized, and the primary offers a spa-inspired four-piece ensuite. A private outdoor space — perfect for morning coffee or summer entertaining — completes the package. This coveted pocket puts you within walking distance of top schools, green spaces, and vibrant dining.",
+  "keyFeatures": [
+    "Large balcony overlooking parkland",
+    "Soaring nine-foot ceilings",
+    "Private driveway with detached garage",
+    "Chef’s kitchen with granite countertops and premium appliances",
+    "Steps to TTC subway and streetcar"
+  ],
+  "listedDate": "2026-03-25"
+}

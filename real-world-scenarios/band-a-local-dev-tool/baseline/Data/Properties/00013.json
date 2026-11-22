@@ -1,0 +1,31 @@
+{
+  "id": 13,
+  "type": "Semi-Detached",
+  "status": "For Sale",
+  "price": 1901000,
+  "currency": "CAD",
+  "address": {
+    "street": "18 Beatrice Street",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6J 2T3",
+    "country": "Canada"
+  },
+  "bedrooms": 5,
+  "bathrooms": 2,
+  "squareFootage": 2500,
+  "lotSizeSquareFootage": 3500,
+  "yearBuilt": 1998,
+  "parkingSpaces": 2,
+  "shortDescription": "Renovated 5-bedroom semi-detached in Trinity Bellwoods with open-concept layout and finished lower level.",
+  "fullDescription": "Welcome to 18 Beatrice Street in the vibrant Trinity Bellwoods neighbourhood. This charming semi-detached home seamlessly blends period character with modern comfort. The main living area opens onto a spacious combined living and dining area flooded with afternoon sun. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. The 5 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. Building amenities include a fitness centre, rooftop terrace, party room, and 24-hour concierge. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "24-hour concierge and security",
+    "Exposed brick accent wall",
+    "Private south-facing backyard with patio",
+    "Walk score over 90",
+    "Private driveway with detached garage",
+    "Modern eat-in kitchen with stainless steel appliances"
+  ],
+  "listedDate": "2026-03-01"
+}

@@ -1,0 +1,31 @@
+{
+  "id": 36,
+  "type": "Semi-Detached",
+  "status": "For Sale",
+  "price": 1748000,
+  "currency": "CAD",
+  "address": {
+    "street": "2900 Dundas Street West",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6P 1Z1",
+    "country": "Canada"
+  },
+  "bedrooms": 5,
+  "bathrooms": 2,
+  "squareFootage": 2309,
+  "lotSizeSquareFootage": 3500,
+  "yearBuilt": 1949,
+  "parkingSpaces": 2,
+  "shortDescription": "Renovated 5-bedroom semi-detached in The Junction with open-concept layout and finished lower level.",
+  "fullDescription": "Welcome to 2900 Dundas Street West in the vibrant The Junction neighbourhood. This charming semi-detached home seamlessly blends period character with modern comfort. The main living area features gleaming hardwood floors and an abundance of natural light from oversized windows. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. The sleeping quarters comprise 5 comfortable bedrooms, the largest enjoying a private ensuite bathroom. A private outdoor space — perfect for morning coffee or summer entertaining — completes the package. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Soaring nine-foot ceilings",
+    "Rooftop terrace with skyline views",
+    "Spacious kitchen with marble backsplash and gas range",
+    "Minutes to parks, shops, and restaurants",
+    "Underground parking spot included",
+    "Pet-friendly building"
+  ],
+  "listedDate": "2026-04-08"
+}

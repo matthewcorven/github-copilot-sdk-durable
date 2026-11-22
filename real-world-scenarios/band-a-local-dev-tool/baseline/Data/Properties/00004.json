@@ -1,0 +1,32 @@
+{
+  "id": 4,
+  "type": "Townhouse",
+  "status": "For Sale",
+  "price": 985000,
+  "currency": "CAD",
+  "address": {
+    "street": "25 Ordnance Street",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6K 1A1",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 2,
+  "squareFootage": 1520,
+  "lotSizeSquareFootage": 1100,
+  "yearBuilt": 2012,
+  "parkingSpaces": 1,
+  "shortDescription": "Modern three-storey townhouse in Liberty Village with rooftop terrace and integrated single-car garage.",
+  "fullDescription": "This contemporary three-storey townhouse delivers stylish, low-maintenance living in one of Toronto's most dynamic neighbourhoods. The ground floor features an integrated single-car garage plus a den that doubles as a home office. The second floor is an airy open-concept living, dining, and kitchen space with engineered hardwood floors, a sleek white kitchen with stainless appliances and breakfast bar, and a Juliet balcony overlooking the street. The top floor houses three bedrooms including a primary suite with walk-in closet, four-piece ensuite, and access to a private rooftop terrace with skyline views. Well-run condo corporation with low fees covering exterior maintenance and snow removal. Walk to King West restaurants, Exhibition Place, and the Liberty Village transit hub.",
+  "keyFeatures": [
+    "Three-storey layout with private rooftop terrace",
+    "Integrated single-car garage",
+    "Open-concept living with engineered hardwood",
+    "Primary suite with walk-in closet and ensuite",
+    "Den / home office on ground floor",
+    "Low condo fees — exterior maintenance included",
+    "Minutes to King West, Exhibition Place, and GO Transit"
+  ],
+  "listedDate": "2026-04-10"
+}

@@ -1,0 +1,32 @@
+{
+  "id": 3,
+  "type": "Semi-Detached",
+  "status": "For Sale",
+  "price": 1249000,
+  "currency": "CAD",
+  "address": {
+    "street": "134 Ossington Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6J 2Z5",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 2,
+  "squareFootage": 1780,
+  "lotSizeSquareFootage": 2100,
+  "yearBuilt": 1905,
+  "parkingSpaces": 1,
+  "shortDescription": "Charming Victorian semi-detached in trendy Ossington Village with original character details and a modern rear addition.",
+  "fullDescription": "This lovingly maintained Victorian semi sits on one of Toronto's most vibrant streets. The home seamlessly blends period charm — including original crown mouldings, stained glass transoms, and a decorative fireplace — with a stunning contemporary rear addition featuring a wall of glass opening onto the garden. The main floor flows from a formal living room through to a bright eat-in kitchen with butcher-block counters and matte-black fixtures. Three bedrooms on the upper level include a primary with skylight and updated four-piece bathroom. The unfinished basement offers excellent potential for additional living space. A rear laneway provides one parking spot. Surrounded by acclaimed restaurants, boutiques, galleries, and Trinity Bellwoods Park.",
+  "keyFeatures": [
+    "Original Victorian details: crown mouldings and stained glass",
+    "Modern rear addition with floor-to-ceiling glass",
+    "Eat-in kitchen with butcher-block counters",
+    "Three bedrooms with skylight in primary",
+    "Steps to Trinity Bellwoods Park",
+    "Thriving Ossington strip at your doorstep",
+    "Laneway parking for one vehicle"
+  ],
+  "listedDate": "2026-05-01"
+}

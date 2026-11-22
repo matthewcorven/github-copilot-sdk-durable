@@ -1,0 +1,31 @@
+{
+  "id": 32,
+  "type": "Bungalow",
+  "status": "For Sale",
+  "price": 1349000,
+  "currency": "CAD",
+  "address": {
+    "street": "14 Brimwood Boulevard",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M1V 1E5",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 2,
+  "squareFootage": 1162,
+  "lotSizeSquareFootage": 6141,
+  "yearBuilt": 1950,
+  "parkingSpaces": 1,
+  "shortDescription": "Charming 2-bedroom bungalow in Agincourt with a deep lot and detached garage.",
+  "fullDescription": "Welcome to 14 Brimwood Boulevard in the vibrant Agincourt neighbourhood. This inviting bungalow offers the ease of single-level living with a generous lot and private garden. The main living area showcases original architectural details alongside tasteful modern updates. The kitchen is a chef’s dream with quartz countertops, a large island, and high-end stainless-steel appliances. The 2 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. Building amenities include a fitness centre, rooftop terrace, party room, and 24-hour concierge. The location is unbeatable: steps to TTC transit, acclaimed restaurants, and everyday shopping.",
+  "keyFeatures": [
+    "Large balcony overlooking parkland",
+    "Spacious kitchen with marble backsplash and gas range",
+    "Walk score over 90",
+    "Open-concept living and dining area",
+    "Pet-friendly building",
+    "Smart home wiring throughout"
+  ],
+  "listedDate": "2026-04-08"
+}

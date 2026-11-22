@@ -1,0 +1,4 @@
+{
+ "input": "Prior authorization request.\n\nPatient: John Smith, DOB 1958-03-15, insurance MCR-123456789A\nProvider NPI: 1720180003\nDiagnosis (ICD-10): R91.1, J18.9, R05.9\nProcedure (CPT): 31628 \u2014 bronchoscopy, diagnostic, with transbronchial lung biopsy\n\nClinical summary: 68-year-old male with a 1.8 cm spiculated right lower lobe pulmonary nodule, up from 1.2 cm three months ago. PET/CT shows FDG avidity (SUVmax 4.2). 40 pack-year smoking history, quit 5 years ago. No prior malignancy. Completed 14 days of amoxicillin-clavulanate with no resolution. PFTs FEV1 78% predicted, DLCO 71% predicted; acceptable surgical candidate. Recommending CT-guided transbronchial biopsy for tissue diagnosis.\n\nCompliance and clinical-agent outputs are not part of this minimal deployment (see README); assess coverage on the request as submitted.",
+ "stream": false
+}

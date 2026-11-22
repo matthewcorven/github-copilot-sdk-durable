@@ -1,0 +1,31 @@
+{
+  "id": 62,
+  "type": "Semi-Detached",
+  "status": "For Sale",
+  "price": 1513000,
+  "currency": "CAD",
+  "address": {
+    "street": "55 Elm Grove Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6K 2J2",
+    "country": "Canada"
+  },
+  "bedrooms": 4,
+  "bathrooms": 1,
+  "squareFootage": 1534,
+  "lotSizeSquareFootage": 3500,
+  "yearBuilt": 1998,
+  "parkingSpaces": 2,
+  "shortDescription": "Renovated 4-bedroom semi-detached in Parkdale with open-concept layout and finished lower level.",
+  "fullDescription": "Welcome to 55 Elm Grove Avenue in the vibrant Parkdale neighbourhood. This charming semi-detached home seamlessly blends period character with modern comfort. The main living area opens onto a spacious combined living and dining area flooded with afternoon sun. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. All 4 bedrooms are generously sized, and the primary offers a spa-inspired four-piece ensuite. The finished lower level adds valuable living space with a recreation room, extra bathroom, and storage. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Underground parking spot included",
+    "Ensuite bathroom with heated floors",
+    "Private south-facing backyard with patio",
+    "Modern eat-in kitchen with stainless steel appliances",
+    "Surrounded by cafes, galleries, and boutiques",
+    "Pet-friendly building"
+  ],
+  "listedDate": "2026-04-10"
+}

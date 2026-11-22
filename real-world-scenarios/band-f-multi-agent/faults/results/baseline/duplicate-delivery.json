@@ -1,0 +1,28 @@
+{
+  "variant": "baseline",
+  "fault": "duplicate-delivery",
+  "outcome": "not exercised",
+  "holder": null,
+  "holderAtFault": null,
+  "holderAtEnd": null,
+  "phase": "the request was re-delivered and the port aborted before it could complete",
+  "detail": "The request the kill interrupted was delivered a second time: the port's resume re-sent it from the turn its own log had not recorded as complete, which is the duplicate delivery happening. The delivery could not be completed, however — attempt 1 aborted with the framework's \"Expected exactly one update for key 'SharedState'\"; attempt 2 aborted with the framework's \"Expected exactly one update for key 'SharedState'\" — and the port refuses a fresh run over a directory that already holds one, so there is no completed run to compare counts in. The run's log recorded 4 turn end(s) across 2 process(es) and the newest framework checkpoint names return_agent. The row is recorded as not exercised rather than as a comparison: the second delivery was attempted and observed, but what it would have done to the specialist's output is unobservable in this variant. It is not a durability win for the baseline — its recovery is broken, not safe.",
+  "evidence": "the port's resume re-sent the request; attempt 1 aborted with the framework's \"Expected exactly one update for key 'SharedState'\"; attempt 2 aborted with the framework's \"Expected exactly one update for key 'SharedState'\"; holder after: return_agent",
+  "harness": {
+    "dotnet": "10.0.402",
+    "endpoint": "https://openrouter.ai/api/v1",
+    "model": "openai/gpt-4o-mini",
+    "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/duplicate-delivery.sh --variant baseline",
+    "commit": "272baac6735e2d6d15f869a1e4b7fb74d72369fd",
+    "apiKeyFrom": "OPENROUTER_API_KEY",
+    "portKeyFrom": "OPENROUTER_API_KEY",
+    "portKeySubstituted": true
+  },
+  "recordedAt": "2026-11-05T22:21:38.525601+00:00",
+  "observations": {
+    "resumeExit": 1,
+    "completedTurns": 4,
+    "processes": 2,
+    "secondDelivery": "attempted"
+  }
+}

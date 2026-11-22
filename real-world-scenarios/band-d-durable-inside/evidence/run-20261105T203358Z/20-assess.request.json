@@ -1,0 +1,5 @@
+{
+ "input": "Request PA-D2-0001: provider NPI 1720180003, CPT 31628 with ICD-10 R91.1, 14 days of antibiotics with no resolution, PET/CT FDG-avid 1.8 cm nodule. Coverage criteria are met. Use record_assessment to commit this assessment and open the human approval gate, then read working_state and report the approval task id, the task status, the event it is waiting on and the deadline - as the tool returned them.",
+ "stream": false,
+ "agent_session_id": "b34699f92021c4e3a04d0eda60edfac6e4dcfe8fcdb28cac480204ae83aeabe"
+}

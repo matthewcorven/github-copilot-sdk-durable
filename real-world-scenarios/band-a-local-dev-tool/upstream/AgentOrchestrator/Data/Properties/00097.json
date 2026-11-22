@@ -1,0 +1,31 @@
+{
+  "id": 97,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 733000,
+  "currency": "CAD",
+  "address": {
+    "street": "1 Bedford Road, Unit PH02",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M5R 2B4",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 1,
+  "squareFootage": 803,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 1999,
+  "parkingSpaces": 1,
+  "shortDescription": "Modern 2-bedroom suite in Yorkville with premium finishes and full building amenities.",
+  "fullDescription": "Welcome to 1 Bedford Road, Unit PH02 in the vibrant Yorkville neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area showcases original architectural details alongside tasteful modern updates. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. All 2 bedrooms are generously sized, and the primary offers a spa-inspired four-piece ensuite. Smart-home features, updated plumbing, and a newer roof provide peace of mind for years to come. This coveted pocket puts you within walking distance of top schools, green spaces, and vibrant dining.",
+  "keyFeatures": [
+    "Landscaped front and rear gardens",
+    "Walk-in closet in primary bedroom",
+    "Surrounded by cafes, galleries, and boutiques",
+    "Private driveway with detached garage",
+    "Chef’s kitchen with granite countertops and premium appliances",
+    "In-suite laundry with full-size washer and dryer"
+  ],
+  "listedDate": "2026-05-01"
+}

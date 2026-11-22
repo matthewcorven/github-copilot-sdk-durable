@@ -1,0 +1,66 @@
+{
+  "protocolVersion": 3,
+  "runtimeVersion": "0.0.0-replay",
+  "models": [
+    { "id": "replay-model", "name": "Replay Model", "vendor": "replay",
+      "capabilities": { "supports": { "toolCalls": true } } }
+  ],
+  "sessions": [
+    {
+      "id": "customer-one",
+      "model": "replay-model",
+      "turns": [
+        { "messageId": "one-0001", "content": "Customer one: validating.",
+          "toolRequests": [
+            { "name": "set_current_phase", "toolCallId": "one-c1", "arguments": { "phase": "validating" } },
+            { "name": "report_intent", "toolCallId": "one-c2", "arguments": { "intent": "Checking customer one" } } ] },
+        { "messageId": "one-0002", "content": "Customer one: searching.",
+          "toolRequests": [
+            { "name": "set_current_phase", "toolCallId": "one-c3", "arguments": { "phase": "searching" } },
+            { "name": "search_properties", "toolCallId": "one-c4",
+              "arguments": { "type": "", "status": "", "city": "Toronto", "province": "",
+                             "minPrice": 0, "maxPrice": 900000, "minBedrooms": 3, "maxBedrooms": 0,
+                             "minBathrooms": 0, "textContains": "", "limit": 3 } } ] },
+        { "messageId": "one-0003", "content": "Customer one: report written, done.",
+          "toolRequests": [
+            { "name": "set_current_phase", "toolCallId": "one-c5", "arguments": { "phase": "writing_report" } },
+            { "name": "set_current_phase", "toolCallId": "one-c6", "arguments": { "phase": "done" } } ] },
+        { "messageId": "one-0004", "content": "Customer one is done." },
+        { "messageId": "one-0005", "content": "Customer one is done." },
+        { "messageId": "one-0006", "content": "Customer one is done." },
+        { "messageId": "one-0007", "content": "Customer one is done." },
+        { "messageId": "one-0008", "content": "Customer one is done." },
+        { "messageId": "one-0009", "content": "Customer one is done." },
+        { "messageId": "one-0010", "content": "Customer one is done." }
+      ]
+    },
+    {
+      "id": "customer-two",
+      "model": "replay-model",
+      "turns": [
+        { "messageId": "two-0001", "content": "Customer two: validating.",
+          "toolRequests": [
+            { "name": "set_current_phase", "toolCallId": "two-c1", "arguments": { "phase": "validating" } },
+            { "name": "report_intent", "toolCallId": "two-c2", "arguments": { "intent": "Checking customer two" } } ] },
+        { "messageId": "two-0002", "content": "Customer two: searching.",
+          "toolRequests": [
+            { "name": "set_current_phase", "toolCallId": "two-c3", "arguments": { "phase": "searching" } },
+            { "name": "search_properties", "toolCallId": "two-c4",
+              "arguments": { "type": "Condo", "status": "", "city": "Toronto", "province": "",
+                             "minPrice": 0, "maxPrice": 400000, "minBedrooms": 1, "maxBedrooms": 2,
+                             "minBathrooms": 0, "textContains": "parking", "limit": 3 } } ] },
+        { "messageId": "two-0003", "content": "Customer two: report written, done.",
+          "toolRequests": [
+            { "name": "set_current_phase", "toolCallId": "two-c5", "arguments": { "phase": "writing_report" } },
+            { "name": "set_current_phase", "toolCallId": "two-c6", "arguments": { "phase": "done" } } ] },
+        { "messageId": "two-0004", "content": "Customer two is done." },
+        { "messageId": "two-0005", "content": "Customer two is done." },
+        { "messageId": "two-0006", "content": "Customer two is done." },
+        { "messageId": "two-0007", "content": "Customer two is done." },
+        { "messageId": "two-0008", "content": "Customer two is done." },
+        { "messageId": "two-0009", "content": "Customer two is done." },
+        { "messageId": "two-0010", "content": "Customer two is done." }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "variant": "extension",
+  "fault": "restart-after-checkpoint",
+  "outcome": "resumed",
+  "phase": "parked at ManagerApproval after the pre-gate work; a fresh process continued it",
+  "detail": "The first process started the orchestration, reached ManagerApproval and exited with the run Running; its history was: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted. A fresh process — its own host and its own worker, no state from the first — raised the port's answer and reported 'delivered' 1 time(s). Afterwards the run was Running with history: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > EventRaised > TaskScheduled > OrchestratorStarted > TaskCompleted; raised events: ManagerApproval. The restart continued the run rather than repeating it: the history holds 2 task completion(s) — the same single pre-gate step, not a second copy of it — and the raised events are ManagerApproval. What this column cannot state is a model-call count: the vendored sample's executors call no model, so the band's call-count comparison has no measurement here, and none is invented.",
+  "evidence": "instance: i145433795\nfirst process: started and parked, status Running\n  history: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted\nfresh process: 'delivered' printed 1 time(s)\nafter: status Running; raised ManagerApproval\n  history: OrchestratorStarted > ExecutionStarted > TaskScheduled > OrchestratorStarted > TaskCompleted > OrchestratorStarted > EventRaised > TaskScheduled > OrchestratorStarted > TaskCompleted",
+  "measurements": {
+    "scheduler_image_digest": "sha256:82ceb7df2fdfc2e22b0013c7b87b7a8e443bcd220d4fb37c32ced8ee23438719",
+    "status_at_gate": "Running",
+    "status_after_restart": "Running",
+    "answers_raised": "ManagerApproval",
+    "task_completions_after_restart": 2,
+    "model_calls_reason": "The vendored sample's executors call no model, so there is no call to count."
+  },
+  "harness": {
+    "dotnet": "10.0.402",
+    "runtime": "Durable Task Scheduler emulator (docker image mcr.microsoft.com/dts/dts-emulator:latest) + Microsoft.DurableTask.Client/Worker.AzureManaged 1.28.0",
+    "model": "none — the vendored sample's executors call no model; no call count exists in this column",
+    "commit": "d9d475d2136d8d8fe86a05b12d8737c06b697c5e",
+    "command": "./faults/extension.sh --fault restart-after-checkpoint"
+  },
+  "recordedAt": "2026-11-05T20:14:21.106087+00:00"
+}

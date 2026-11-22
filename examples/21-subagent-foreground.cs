@@ -54,6 +54,10 @@ parent = await harness.RootAsync(new AgentChoices
 });
 host = harness;
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await parent.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 // The parent's tool call creates the child, runs one task there, and returns the
 // child's answer.
 var answer = await parent.SubmitAsync(

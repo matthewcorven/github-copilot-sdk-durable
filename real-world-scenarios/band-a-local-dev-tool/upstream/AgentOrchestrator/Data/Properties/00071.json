@@ -1,0 +1,31 @@
+{
+  "id": 71,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 1872000,
+  "currency": "CAD",
+  "address": {
+    "street": "632 College Street",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6G 1B6",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 2,
+  "squareFootage": 1878,
+  "lotSizeSquareFootage": 6085,
+  "yearBuilt": 1995,
+  "parkingSpaces": 1,
+  "shortDescription": "Character-filled 3-bedroom detached residence in Little Italy featuring original details and modern upgrades.",
+  "fullDescription": "Welcome to 632 College Street in the vibrant Little Italy neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. All 3 bedrooms are generously sized, and the primary offers a spa-inspired four-piece ensuite. Smart-home features, updated plumbing, and a newer roof provide peace of mind for years to come. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Private driveway with detached garage",
+    "Close to waterfront trails and cycling paths",
+    "Rooftop terrace with skyline views",
+    "Built-in bookshelves in den",
+    "Exposed brick accent wall",
+    "Pot lights and designer fixtures throughout"
+  ],
+  "listedDate": "2026-03-22"
+}

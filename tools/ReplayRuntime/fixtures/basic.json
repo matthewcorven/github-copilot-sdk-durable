@@ -1,0 +1,32 @@
+{
+  "protocolVersion": 3,
+  "runtimeVersion": "0.0.0-replay",
+  "models": [
+    {
+      "id": "replay-model",
+      "name": "Replay Model",
+      "vendor": "replay",
+      "capabilities": {
+        "supports": {
+          "toolCalls": true
+        }
+      }
+    }
+  ],
+  "sessions": [
+    {
+      "id": "session-replay-1",
+      "model": "replay-model",
+      "turns": [
+        {
+          "messageId": "msg-0001",
+          "content": "Hello from the recorded transcript."
+        },
+        {
+          "messageId": "msg-0002",
+          "content": "Second recorded turn."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "protocolVersion": 3,
+  "runtimeVersion": "0.0.0-replay",
+  "models": [
+    {
+      "id": "replay-model",
+      "name": "Replay Model",
+      "vendor": "replay",
+      "capabilities": {
+        "supports": {
+          "toolCalls": true
+        }
+      }
+    }
+  ],
+  "sessions": [
+    {
+      "id": "baseline-rejection-tool",
+      "model": "replay-model",
+      "turns": [
+        {
+          "messageId": "msg-0001",
+          "content": "This enquiry is not a property enquiry.",
+          "toolRequests": [
+            {
+              "name": "set_current_phase",
+              "toolCallId": "call-0001",
+              "arguments": {
+                "phase": "validating"
+              }
+            },
+            {
+              "name": "report_intent",
+              "toolCallId": "call-0002",
+              "arguments": {
+                "intent": "Checking enquiry"
+              }
+            }
+          ]
+        },
+        {
+          "messageId": "msg-0002",
+          "content": "This is spam, so the enquiry is rejected.",
+          "toolRequests": [
+            {
+              "name": "set_current_phase",
+              "toolCallId": "call-0003",
+              "arguments": {
+                "phase": "rejected_garbage"
+              }
+            }
+          ]
+        },
+        {
+          "messageId": "msg-0003",
+          "content": "Cleaning up after the rejection.",
+          "toolRequests": [
+            {
+              "name": "report_intent",
+              "toolCallId": "call-0004",
+              "arguments": {
+                "intent": "Rejected, wrapping up"
+              }
+            },
+            {
+              "name": "search_properties",
+              "toolCallId": "call-0005",
+              "arguments": {
+                "type": "",
+                "status": "",
+                "city": "Toronto",
+                "province": "",
+                "minPrice": 0,
+                "maxPrice": 0,
+                "minBedrooms": 0,
+                "maxBedrooms": 0,
+                "minBathrooms": 0,
+                "textContains": "",
+                "limit": 3
+              }
+            }
+          ]
+        },
+        {
+          "messageId": "msg-0004",
+          "content": "Rejected as spam."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,153 @@
+@using GitHub.Copilot
+@using GitHub.Copilot.Rpc
+@using System.Text.Json
+@using System.Globalization
+
+@{
+    var args = Request.Arguments;
+    var result = Completion?.Data.Result?.Content;
+    var success = Completion?.Data.Success ?? true;
+    var done = Completion is not null;
+}
+
+<div class="px-1 py-1.5 text-xl leading-snug text-slate-500">
+    @switch (Request.Name)
+    {
+        case "set_current_phase":
+            <div class="flex items-baseline">
+                @Icon("🚦", done)
+                <span>Phase</span>
+                <span class="ml-1">@GetString(args, "phase")</span>
+            </div>
+            break;
+
+        case "report_intent":
+            <div class="flex items-baseline italic">
+                @Icon("💭", done)
+                <span>@GetString(args, "intent")</span>
+            </div>
+            break;
+
+        case "web_fetch":
+            <div class="flex items-baseline">
+                @Icon("🌐", done)
+                <span>Fetching</span>
+            </div>
+            <div class="ml-9 break-all">@GetString(args, "url")</div>
+            @if (done)
+            {
+                <div class="ml-9 mt-0.5 italic @(success ? "" : "text-red-500")">
+                    @(success ? $"Fetched {result?.Length ?? 0:N0} bytes" : "Fetch failed")
+                </div>
+            }
+            break;
+
+        case "search_properties":
+            var filters = FormatFilters(args);
+            <div class="flex items-baseline">
+                @Icon("🔎", done)
+                <span>Searching properties</span>
+            </div>
+            @if (!string.IsNullOrEmpty(filters))
+            {
+                <div class="ml-9">@filters</div>
+            }
+            @if (done)
+            {
+                <div class="ml-9 mt-0.5 italic @(success ? "" : "text-red-500")">
+                    @(success ? FormatSearchResult(result) : "Search failed")
+                </div>
+            }
+            break;
+
+        default:
+            <div class="flex items-baseline">
+                @Icon("🔧", done)
+                <span>@Request.Name</span>
+            </div>
+            @if (args is JsonElement defArgs && defArgs.ValueKind != JsonValueKind.Undefined && defArgs.ValueKind != JsonValueKind.Null)
+            {
+                <div class="ml-9 font-mono break-all">@defArgs.ToString()</div>
+            }
+            @if (done && !success)
+            {
+                <div class="ml-9 mt-0.5 italic text-red-500">Failed</div>
+            }
+            break;
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public AssistantMessageToolRequest Request { get; set; } = default!;
+    [Parameter] public ToolExecutionCompleteEvent? Completion { get; set; }
+
+    private static readonly HashSet<string> PriceFields = new(StringComparer.OrdinalIgnoreCase) { "minPrice", "maxPrice" };
+
+    private RenderFragment Icon(string emoji, bool done) => builder =>
+    {
+        if (done)
+        {
+            builder.AddMarkupContent(0, $"<span class=\"mr-1\">{emoji}</span>");
+        }
+        else
+        {
+            builder.AddMarkupContent(0,
+                "<svg class=\"animate-spin h-5 w-5 mr-2.5 text-slate-400 shrink-0 self-center\" xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\">" +
+                "<circle class=\"opacity-25\" cx=\"12\" cy=\"12\" r=\"10\" stroke=\"currentColor\" stroke-width=\"4\"></circle>" +
+                "<path class=\"opacity-75\" fill=\"currentColor\" d=\"M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z\"></path>" +
+                "</svg>");
+        }
+    };
+
+    private static string GetString(JsonElement? args, string name)
+    {
+        if (args is not JsonElement el || el.ValueKind != JsonValueKind.Object) return "";
+        return el.TryGetProperty(name, out var v) ? v.ToString() : "";
+    }
+
+    private static string FormatFilters(JsonElement? args)
+    {
+        if (args is not JsonElement el || el.ValueKind != JsonValueKind.Object) return "";
+        var parts = new List<string>();
+        foreach (var prop in el.EnumerateObject())
+        {
+            if (prop.Value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) continue;
+            var value = prop.Value.ValueKind == JsonValueKind.Number && PriceFields.Contains(prop.Name)
+                ? "$" + prop.Value.GetInt64().ToString("N0", CultureInfo.InvariantCulture)
+                : prop.Value.ToString();
+            parts.Add($"{prop.Name}: {value}");
+        }
+        return string.Join(", ", parts);
+    }
+
+    private static string FormatSearchResult(string? resultJson)
+    {
+        if (string.IsNullOrWhiteSpace(resultJson)) return "Complete";
+        try
+        {
+            using var doc = JsonDocument.Parse(resultJson);
+            var root = doc.RootElement;
+            if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("count", out var c) && c.ValueKind == JsonValueKind.Number)
+                return $"{c.GetInt32()} results";
+            if (root.ValueKind == JsonValueKind.Array)
+                return $"{root.GetArrayLength()} results";
+        }
+        catch { }
+        return "Complete";
+    }
+
+    private static string GetSearchResultCount(string? resultJson)
+    {
+        if (string.IsNullOrWhiteSpace(resultJson)) return "0";
+        try
+        {
+            using var doc = JsonDocument.Parse(resultJson);
+            if (doc.RootElement.TryGetProperty("count", out var c) && c.ValueKind == JsonValueKind.Number)
+                return c.GetInt32().ToString();
+        }
+        catch { }
+        return "?";
+    }
+}
+
+

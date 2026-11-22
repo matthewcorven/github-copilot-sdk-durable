@@ -1,0 +1,14 @@
+{
+  "variant": "durable",
+  "fault": "duplicate-delivery",
+  "outcome": "refused, not doubled",
+  "phase": "the same triage run delivered twice: two live processes over one repository",
+  "detail": "The first process took the store's exclusive lock; the second was refused at the open (exit 3, 'cannot open the store') before it read the fixture, so it posted 0 comment(s) and wrote no state. 13 comment(s) exist, one per PR, from the one process that proceeded. The duplicate was not deduplicated after the fact — it was prevented. What that costs is also in the record: a refused run does nothing and does not queue, so a delivery that means to wait has to retry, and the refusal is per store file rather than per repository.",
+  "evidence": "deliveries=2; first exit=0 posted=13; second exit=3 posted=0 refused_at_store=1 gated_by_cooldown=0 update_ref_failed=0; state=save; commit(s)/generation=1; triaged in the committed state=[101,102,103,104,105,106,107,109,111,112,113,114,115]",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "none (Band C has no model and no recorded runtime)",
+    "command": "./faults/duplicate-delivery.sh --variant durable"
+  },
+  "recordedAt": "2026-11-05T18:04:37.008999+00:00"
+}

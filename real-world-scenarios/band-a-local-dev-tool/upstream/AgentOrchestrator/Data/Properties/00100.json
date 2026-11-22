@@ -1,0 +1,31 @@
+{
+  "id": 100,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 1584000,
+  "currency": "CAD",
+  "address": {
+    "street": "15 Lowther Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M5R 1C5",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 2,
+  "squareFootage": 2242,
+  "lotSizeSquareFootage": 2524,
+  "yearBuilt": 1908,
+  "parkingSpaces": 1,
+  "shortDescription": "Bright and airy 2-bedroom detached home in the heart of The Annex, move-in ready with generous lot.",
+  "fullDescription": "Welcome to 15 Lowther Avenue in the vibrant The Annex neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. The sleeping quarters comprise 2 comfortable bedrooms, the largest enjoying a private ensuite bathroom. Smart-home features, updated plumbing, and a newer roof provide peace of mind for years to come. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Private south-facing backyard with patio",
+    "Modern eat-in kitchen with stainless steel appliances",
+    "Minutes to parks, shops, and restaurants",
+    "Private driveway with detached garage",
+    "Cosy living room with gas fireplace",
+    "Ensuite bathroom with heated floors"
+  ],
+  "listedDate": "2026-03-10"
+}

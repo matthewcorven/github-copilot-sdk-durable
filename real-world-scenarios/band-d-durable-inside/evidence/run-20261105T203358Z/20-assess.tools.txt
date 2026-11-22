@@ -1,0 +1,44 @@
+-- tool calls and their outputs, in order --
+CALL record_assessment {"request_id":"PA-D2-0001","assessment":"Coverage criteria are met."}{"request_id":"PA-D2-0001","assessment":"Coverage criteria are met."}
+OUTPUT call_IWzV4Ypc9I1Fkpt9lWJmM7qn
+{
+ "approvalTaskId": "t4",
+ "awaitingEvent": "external:approval/PA-D2-0001",
+ "created": true,
+ "deadline": 1793997250.6636398,
+ "note": "the approval is a durable task parked on an external event; nothing is held open",
+ "phase": "awaiting-approval",
+ "requestId": "PA-D2-0001"
+}
+CALL working_state {"request_id":"PA-D2-0001"}{"request_id":"PA-D2-0001"}
+OUTPUT call_IFd6696cXfalbpLb3pix4v4U
+{
+ "approval": {
+  "deadline": 1793997250.6636398,
+  "decision": "",
+  "reviewer": "",
+  "state": "pending"
+ },
+ "approvalTask": {
+  "checkpoint": {
+   "deadline": 1793997250.6636398,
+   "phase": "await",
+   "requestId": "PA-D2-0001",
+   "requestedAt": 1793910850.6636398
+  },
+  "id": "t4",
+  "restarts": 0,
+  "status": "WAITING",
+  "waitingOn": [
+   "external:approval/PA-D2-0001"
+  ]
+ },
+ "assessment": "Coverage criteria are met.",
+ "decidedAt": "",
+ "decidedBy": "",
+ "decision": "",
+ "phase": "awaiting-approval",
+ "requestId": "PA-D2-0001",
+ "resumedCount": 0,
+ "storePath": "/home/session/durable/working-state.jsonl"
+}

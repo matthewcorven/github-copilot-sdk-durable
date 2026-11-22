@@ -1,0 +1,8 @@
+effective model: replay-model
+supervisor task: <id>
+child conversation: <id>
+child owner task: <id>
+child owner conversation: (none)
+registry:
+  researcher: conversationId=<id> requestId=researcher:first-message:<id>
+supervisor status: Pending (background: True)

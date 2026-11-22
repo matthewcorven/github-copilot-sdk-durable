@@ -1,0 +1,27 @@
+{
+  "variant": "durable",
+  "fault": "store-outage-control",
+  "outcome": "completed",
+  "phase": "no outage (the control)",
+  "detail": "Control: the same steps with nothing made immutable. The resume exited 0 and the run ended 'terminal' with verdict 'approved'; the decision on file is 'alice approved', the ledger reads 4 call(s), and a fresh 'inspect' exited 0. This is what the outage run is measured against: the same decision, applied.",
+  "evidence": "at the gate: waiting, 3 call(s)\ndecision before the outage: alice approved (3 call(s)); store 31991 bytes\ndrive under the outage (exit 0): store 47348 bytes\nafter the flag was removed: run terminal, verdict approved, decision alice approved, 4 call(s), fresh inspect exit 0\n",
+  "measurements": {
+    "model_calls_at_gate": 3,
+    "model_calls_after_outage": 4,
+    "drive_exit": 0,
+    "store_bytes_before": "31991",
+    "store_bytes_after": "47348",
+    "run_after_outage": "terminal",
+    "verdict_after_outage": "approved",
+    "decision_after_outage": "alice approved",
+    "fresh_inspect_exit": 0
+  },
+  "harness": {
+    "dotnet": "10.0.402",
+    "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
+    "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
+    "commit": "d9d475d2136d8d8fe86a05b12d8737c06b697c5e",
+    "command": "./faults/store-outage.sh --variant durable --fault-not-injected"
+  },
+  "recordedAt": "2026-11-05T20:14:01.171072+00:00"
+}

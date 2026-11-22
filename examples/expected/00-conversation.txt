@@ -1,0 +1,6 @@
+standalone conversation: <id>
+  parent: (none)
+  owner: (none)
+copilot session: <session>
+conversation count: 2
+effective model: replay-model

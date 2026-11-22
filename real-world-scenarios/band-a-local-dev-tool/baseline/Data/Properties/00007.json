@@ -1,0 +1,31 @@
+{
+  "id": 7,
+  "type": "Semi-Detached",
+  "status": "For Sale",
+  "price": 1795000,
+  "currency": "CAD",
+  "address": {
+    "street": "88 Davisville Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4S 1G3",
+    "country": "Canada"
+  },
+  "bedrooms": 4,
+  "bathrooms": 3,
+  "squareFootage": 2339,
+  "lotSizeSquareFootage": 2553,
+  "yearBuilt": 1998,
+  "parkingSpaces": 1,
+  "shortDescription": "Stylish 4-bedroom semi-detached in Davisville Village blending Victorian charm with contemporary living.",
+  "fullDescription": "Welcome to 88 Davisville Avenue in the vibrant Davisville Village neighbourhood. This charming semi-detached home seamlessly blends period character with modern comfort. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen is a chef’s dream with quartz countertops, a large island, and high-end stainless-steel appliances. The 4 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. Smart-home features, updated plumbing, and a newer roof provide peace of mind for years to come. The location is unbeatable: steps to TTC transit, acclaimed restaurants, and everyday shopping.",
+  "keyFeatures": [
+    "Floor-to-ceiling windows with city views",
+    "In-suite laundry with full-size washer and dryer",
+    "Landscaped front and rear gardens",
+    "Modern eat-in kitchen with stainless steel appliances",
+    "Integrated single-car garage",
+    "Juliet balcony off primary bedroom"
+  ],
+  "listedDate": "2026-04-22"
+}

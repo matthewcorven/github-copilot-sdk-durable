@@ -1,0 +1,25 @@
+{
+  "variant": "durable",
+  "fault": "duplicate-approval-control",
+  "outcome": "one delivery, nothing to refuse",
+  "phase": "one approve process against a live gate (the control)",
+  "detail": "Control: the approval delivered once. alice's approval was recorded (exit 0), the decision on file is 'alice approved', and the gate is still waiting for the run to be driven. This is what the double delivery is measured against.",
+  "evidence": "run before the deliveries: waiting, gate phase wait, 3 call(s)\nfirst delivery (exit 0): decision on file 'alice approved'\nsecond delivery (exit n/a): note '(not delivered)', decision on file '(not delivered)', run still 'waiting', terminal-guard hits 0\ndriven (exit 0): terminal, verdict approved, decision 'alice approved', 4 call(s)",
+  "measurements": {
+    "model_calls_at_gate": 3,
+    "decision_after_first": "alice approved",
+    "decision_after_second": "(not delivered)",
+    "second_refused_by_terminal_guard": "0",
+    "run_after_finish": "terminal",
+    "verdict": "approved",
+    "model_calls_end": 4
+  },
+  "harness": {
+    "dotnet": "10.0.402",
+    "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
+    "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
+    "commit": "d9d475d2136d8d8fe86a05b12d8737c06b697c5e",
+    "command": "./faults/duplicate-approval.sh --variant durable --fault-not-injected"
+  },
+  "recordedAt": "2026-11-05T20:13:41.877878+00:00"
+}

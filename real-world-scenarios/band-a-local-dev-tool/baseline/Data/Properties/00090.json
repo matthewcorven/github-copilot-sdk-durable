@@ -1,0 +1,31 @@
+{
+  "id": 90,
+  "type": "Bungalow",
+  "status": "For Sale",
+  "price": 1720000,
+  "currency": "CAD",
+  "address": {
+    "street": "60 Byng Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M2N 5R6",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 2,
+  "squareFootage": 1419,
+  "lotSizeSquareFootage": 6392,
+  "yearBuilt": 1974,
+  "parkingSpaces": 2,
+  "shortDescription": "Updated 3-bedroom bungalow in Willowdale offering single-level living and a finished basement.",
+  "fullDescription": "Welcome to 60 Byng Avenue in the vibrant Willowdale neighbourhood. This inviting bungalow offers the ease of single-level living with a generous lot and private garden. The main living area features gleaming hardwood floors and an abundance of natural light from oversized windows. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. Upstairs, 3 bright bedrooms include a primary retreat with ensuite and double closets. Additional highlights include in-suite laundry, ample storage, and energy-efficient mechanicals. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Laneway parking for two vehicles",
+    "Renovated galley kitchen with breakfast bar",
+    "Landscaped front and rear gardens",
+    "Hardwood floors throughout main level",
+    "Close to waterfront trails and cycling paths",
+    "Underground parking spot included"
+  ],
+  "listedDate": "2026-03-18"
+}

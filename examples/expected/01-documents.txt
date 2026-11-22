@@ -1,0 +1,7 @@
+effective model: replay-model
+latest notes: after goodbye
+notes at first entry: after hello
+notes at second entry: after goodbye
+committed versions: 2
+  <id>: after hello
+  <id>: after goodbye

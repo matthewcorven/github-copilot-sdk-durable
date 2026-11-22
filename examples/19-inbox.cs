@@ -21,6 +21,10 @@ var registry = new ExtensionRegistry();
 await using var harness = await DurableHarness.OpenAsync(store, registry);
 var root = await harness.RootAsync();
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await root.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 // The first answer waits until we let it go, so the conversation stays busy while
 // we submit more.
 var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

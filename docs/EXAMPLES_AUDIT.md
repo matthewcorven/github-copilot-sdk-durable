@@ -1,6 +1,6 @@
 # Example Suite Fidelity Audit
 
-A strict code audit of all 33 examples (`00` through `32`) in `examples/` against the original reference implementations in Pi Durable (`packages/durable/test/examples/`).
+A strict code audit of examples `00` through `33` (34 of the 38 in the suite) in `examples/` against the original reference implementations in Pi Durable (`packages/durable/test/examples/`). Examples `34`, `35`, `36` and `37` are not covered by this audit.
 
 ---
 
@@ -41,13 +41,15 @@ A strict code audit of all 33 examples (`00` through `32`) in `examples/` agains
 | **30** | `30-reload-and-restart` | **100% Real** | Live Copilot Model | Dual-process execution; in-flight call completes on v1, next on v2, restart re-binds. |
 | **31** | `31-permissions` | **100% Real** | Offline mechanics | Real `PermissionPolicy` handler; denial survives a store reopen and a fork. |
 | **32** | `32-jsonl-store` | **100% Real** | Offline mechanics | Real JSONL backend: explicit-path round-trip, torn-tail truncation, default-path resolution, ephemeral tier. |
+| **33** | `33-sandbox-sdk-filesystem` | **100% Real** | Live Copilot Model | Real `SandboxConfig` wire mapping with `{workspace}` expansion; a real seatbelt backend denies a write into a denied path. |
 
 ---
 
 ## Detailed Notes on Fidelity
 
 ### Real Components Across the Suite
-- **No Mock Engine:** No tests or examples use mocked in-memory stubs pretending to be the Copilot SDK. All live examples connect over JSON-RPC to the actual Copilot CLI runtime and stream real LLM completions from GitHub Copilot models (`gpt-6-luna`, `mai-code-1.1-flash`, etc.).
+- **No Placeholder Engine:** No example substitutes a hand-written transcript for the Copilot SDK. The live examples connect over JSON-RPC to the actual Copilot CLI runtime and stream real LLM completions from GitHub Copilot models (`gpt-6-luna`, `mai-code-1.1-flash`, etc.).
+- **The Recorded Runtime Is a Separate Process, Not an In-Example Stand-In:** `tools/ReplayRuntime/` speaks the same runtime protocol over stdio and answers it from a recorded transcript in `tools/ReplayRuntime/fixtures/`, so the suite can be exercised with no sign-in. An example is never pointed at a recorded answer inside its own source: the harness selects the runtime from `DURABLE_RUNTIME_PATH`, and the same example binary runs unchanged against the real runtime. The credential-free run covers 17 of the 38 examples: the three store-only ones (`32`, `36`, `37`), plus fourteen that create a session the fixture does not record, which the runtime serves from the recording and marks `synthesised session — not a recorded transcript`. The other 21 are printed by name with the reason they cannot run — an unrecorded request, or an assertion about a tool call, a model answer, or a host event the recording does not contain. `scripts/validate.sh --deterministic` is the entry point, and `docs/DESIGN.md` §6.1 states exactly what it does and does not prove.
 - **Self-Asserting Verification:** Every example terminates with explicit programmatic `Check.*` assertions that enforce invariants (state values, task statuses, document history, and event presence). A regression causes the process to exit non-zero.
 
 ### The Single Simplification: Example 04 (`04-watches`)

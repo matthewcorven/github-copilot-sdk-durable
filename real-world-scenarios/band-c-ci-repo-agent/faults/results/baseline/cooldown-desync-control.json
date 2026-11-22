@@ -1,0 +1,45 @@
+{
+  "variant": "baseline",
+  "fault": "cooldown-desync-control",
+  "outcome": "control: doubled",
+  "phase": "run 2 completes and commits its state; run 3, 61m after run 2, over the same state (the control)",
+  "detail": "Control: the same three runs with the Phase 8 seam removed, so run 2 committed its state. Run 3, 61 minutes after run 2, read run 2's record, found it past the cooldown, and wrote 13 comment(s) of which 13 were content already on disk — the same 13 PRs hold two copies as in the fault row. The control is a duplicate too, and stating that is the point: committing the state does not give the baseline an identity for a comment, so it cannot stop a re-post; what the missing state write costs is that the *triage* was redone from a stale view, and the comments were re-posted by a run that believed it had never run. This control does not flip, and the row says so instead of implying the baseline is safe when its state commits.",
+  "evidence": "run1 exit=0 last phase=save run state posted=13 state=done (the state snapshot only exists once Phase 8 has committed); run2 exit=0 last phase=save run state posted=13 state after=done (the state snapshot only exists once Phase 8 has committed); run3 at 2026-11-05T14:31:00Z exit=0 cold start=0 run gate=0 resumed=0 posted=13 adopted=0; state after run3=done (the state snapshot only exists once Phase 8 has committed); run3 read: loaded memory/pr-triage:pr-triage-latest prior run:  2026-11-05T13:30:00Z triaged 13 PR(s); duplicates written by run3=[101,102,103,104,105,106,107,109,111,112,113,114,115] (13); run3 says: triaged 13 PR(s): #101 auto_merge, #102 auto_merge, #103 auto_merge, #104 batch_review, #105 fast_track, #106 defer, #107 batch_review, #109 close, #111 auto_merge, #112 auto_merge, #113 defer, #114 batch_review, #115 batch_review; guard-disabled arm: posted=0 duplicates= []",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "none (Band C has no model and no recorded runtime)",
+    "command": "./faults/cooldown-desync.sh --variant baseline --fault-not-injected"
+  },
+  "recordedAt": "2026-11-05T18:04:20.882063+00:00",
+  "observations": {
+    "run2_comments_posted": 13,
+    "run3_comments_posted": 13,
+    "run3_comments_adopted": 0,
+    "run3_comments_duplicated": 13,
+    "prs_with_two_comments": 13,
+    "prs_doubled": [
+      101,
+      102,
+      103,
+      104,
+      105,
+      106,
+      107,
+      109,
+      111,
+      112,
+      113,
+      114,
+      115
+    ],
+    "run3_cold_start": false,
+    "run3_run_gate": false,
+    "run3_resumed": false,
+    "ledger_entries_before_run3": 0,
+    "run4_comments_posted": 0,
+    "run4_comments_adopted": 0,
+    "run4_comments_duplicated": 0,
+    "guard_disabled_posted": 0,
+    "guard_disabled_duplicated": 0
+  }
+}

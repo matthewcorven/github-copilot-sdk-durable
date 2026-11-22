@@ -76,6 +76,9 @@ chat = await harness.RootAsync(new AgentChoices
 });
 
 // The tool writes the document; the section shows it to the model before every request.
+var effectiveModel = await chat.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 var reply = await chat.SubmitAsync("Add 'fix the build' to my todo list, then confirm.");
 Console.WriteLine($"answer: {reply?.Data.Content}");
 

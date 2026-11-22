@@ -1,0 +1,30 @@
+{
+  "id": 9,
+  "type": "Apartment",
+  "status": "For Sale",
+  "price": 546000,
+  "currency": "CAD",
+  "address": {
+    "street": "15 Erskine Avenue, Unit 2208",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4P 1Y3",
+    "country": "Canada"
+  },
+  "bedrooms": 1,
+  "bathrooms": 1,
+  "squareFootage": 686,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 1985,
+  "parkingSpaces": 0,
+  "shortDescription": "Sleek 1-bedroom apartment in a boutique Yonge-Eglinton building with rooftop terrace access.",
+  "fullDescription": "Welcome to 15 Erskine Avenue, Unit 2208 in the vibrant Yonge-Eglinton neighbourhood. This contemporary apartment features a thoughtfully designed layout that maximises natural light. The main living area boasts an open-concept design with pot lights and a cosy gas fireplace. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. The 1 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. Additional highlights include in-suite laundry, ample storage, and energy-efficient mechanicals. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Juliet balcony off primary bedroom",
+    "Steps to TTC subway and streetcar",
+    "Soaring nine-foot ceilings",
+    "Finished basement with recreation room",
+    "Underground parking spot included"
+  ],
+  "listedDate": "2026-04-10"
+}

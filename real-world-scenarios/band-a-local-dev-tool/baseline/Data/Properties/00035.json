@@ -1,0 +1,31 @@
+{
+  "id": 35,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 589000,
+  "currency": "CAD",
+  "address": {
+    "street": "190 Borough Drive, Unit 812",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M1P 0B6",
+    "country": "Canada"
+  },
+  "bedrooms": 1,
+  "bathrooms": 1,
+  "squareFootage": 734,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2006,
+  "parkingSpaces": 1,
+  "shortDescription": "Bright 1-bedroom condo in Scarborough City Centre with floor-to-ceiling windows and stunning city views.",
+  "fullDescription": "Welcome to 190 Borough Drive, Unit 812 in the vibrant Scarborough City Centre neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. The sleeping quarters comprise 1 comfortable bedrooms, the largest enjoying a private ensuite bathroom. Smart-home features, updated plumbing, and a newer roof provide peace of mind for years to come. This coveted pocket puts you within walking distance of top schools, green spaces, and vibrant dining.",
+  "keyFeatures": [
+    "In-suite laundry with full-size washer and dryer",
+    "Underground parking spot included",
+    "Walk score over 90",
+    "Floor-to-ceiling windows with city views",
+    "Spacious kitchen with marble backsplash and gas range",
+    "Crown mouldings and wainscotting"
+  ],
+  "listedDate": "2026-04-08"
+}

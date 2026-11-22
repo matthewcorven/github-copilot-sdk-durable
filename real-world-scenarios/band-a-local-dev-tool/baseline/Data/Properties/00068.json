@@ -1,0 +1,31 @@
+{
+  "id": 68,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 1632000,
+  "currency": "CAD",
+  "address": {
+    "street": "28 Bayview Ridge",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M2K 2V8",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 3,
+  "squareFootage": 1906,
+  "lotSizeSquareFootage": 2820,
+  "yearBuilt": 2002,
+  "parkingSpaces": 1,
+  "shortDescription": "Character-filled 2-bedroom detached residence in Bayview Village featuring original details and modern upgrades.",
+  "fullDescription": "Welcome to 28 Bayview Ridge in the vibrant Bayview Village neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area opens onto a spacious combined living and dining area flooded with afternoon sun. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. The 2 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. A private outdoor space — perfect for morning coffee or summer entertaining — completes the package. This coveted pocket puts you within walking distance of top schools, green spaces, and vibrant dining.",
+  "keyFeatures": [
+    "Juliet balcony off primary bedroom",
+    "Walk-in closet in primary bedroom",
+    "Surrounded by cafes, galleries, and boutiques",
+    "Hardwood floors throughout main level",
+    "Underground parking spot included",
+    "Modern eat-in kitchen with stainless steel appliances"
+  ],
+  "listedDate": "2026-05-02"
+}

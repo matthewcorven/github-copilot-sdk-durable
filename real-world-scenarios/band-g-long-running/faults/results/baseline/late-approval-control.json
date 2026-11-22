@@ -1,0 +1,17 @@
+{
+  "variant": "baseline",
+  "fault": "late-approval-control",
+  "outcome": "approved in time",
+  "phase": "approved inside the run (the control)",
+  "detail": "Control: the approval delivered on time. The resume exited 0 and the run finished — checkpoint 4534ee47fe9c41d585337eac7641a6b5, 2 checkpoint file(s), 2 model call(s), a post-approval checkpoint present: yes. This is what the late approval is measured against: the same approval, on time, is what finishes the run.",
+  "evidence": "gate checkpoint: 39bb07cad3664ce6b9d5252dc2210e14\non-time resume (exit 0): latest 4534ee47fe9c41d585337eac7641a6b5, 2 file(s), 2 model call(s), post-approval checkpoint: yes\nlate resume (exit n/a): latest (n/a), (n/a) model call(s), 'Approving plan' printed n/a time(s)",
+  "measurements": {},
+  "harness": {
+    "dotnet": "10.0.402",
+    "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
+    "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
+    "commit": "d9d475d2136d8d8fe86a05b12d8737c06b697c5e",
+    "command": "./faults/late-approval.sh --variant baseline --fault-not-injected"
+  },
+  "recordedAt": "2026-11-05T20:11:44.498227+00:00"
+}

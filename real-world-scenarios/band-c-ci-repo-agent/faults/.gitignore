@@ -1,0 +1,5 @@
+bin/
+obj/
+
+# Python bytecode from the harness readers.
+__pycache__/

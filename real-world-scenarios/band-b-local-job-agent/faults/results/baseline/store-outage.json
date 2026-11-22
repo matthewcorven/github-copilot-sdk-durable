@@ -1,0 +1,16 @@
+{
+  "variant": "baseline",
+  "fault": "store-outage",
+  "outcome": "not exercised",
+  "phase": "the run's state on disk",
+  "detail": "The baseline keeps no state outside the job's own files, so there is no store to take away and nothing durable for an outage to fail safely over. Checked rather than assumed: the run finished (verifier 'pass'), and its target holds no file but PLAN.md, PROMPT.md, release-notes.md and docs/*.md — no store, no checkpoint, no session index. Removing one of those would fault the file the job is rewriting, which is a different fault and is not reported under this name.",
+  "evidence": "",
+  "harness": {
+    "dotnet": "dotnet",
+    "model": "gpt-5.1-codex-mini",
+    "command": "./faults/store-outage.sh --variant baseline",
+    "script": "store-outage.sh",
+    "commit": "32770e70b5818b93d8745acfd83286cffb48c072"
+  },
+  "recordedAt": "2026-11-06T03:36:45.424267+00:00"
+}

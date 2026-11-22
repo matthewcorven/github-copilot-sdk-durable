@@ -1,0 +1,31 @@
+{
+  "id": 88,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 1874000,
+  "currency": "CAD",
+  "address": {
+    "street": "55 Finch Avenue East, Unit 1808",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M2N 6R7",
+    "country": "Canada"
+  },
+  "bedrooms": 4,
+  "bathrooms": 2,
+  "squareFootage": 2283,
+  "lotSizeSquareFootage": 5496,
+  "yearBuilt": 1983,
+  "parkingSpaces": 2,
+  "shortDescription": "Bright and airy 4-bedroom detached home in the heart of Willowdale East, move-in ready with generous lot.",
+  "fullDescription": "Welcome to 55 Finch Avenue East, Unit 1808 in the vibrant Willowdale East neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area boasts an open-concept design with pot lights and a cosy gas fireplace. The kitchen is a chef’s dream with quartz countertops, a large island, and high-end stainless-steel appliances. The 4 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. Smart-home features, updated plumbing, and a newer roof provide peace of mind for years to come. This coveted pocket puts you within walking distance of top schools, green spaces, and vibrant dining.",
+  "keyFeatures": [
+    "Chef’s kitchen with granite countertops and premium appliances",
+    "Minutes to parks, shops, and restaurants",
+    "Exposed brick accent wall",
+    "Integrated single-car garage",
+    "Landscaped front and rear gardens",
+    "Surrounded by cafes, galleries, and boutiques"
+  ],
+  "listedDate": "2026-05-04"
+}

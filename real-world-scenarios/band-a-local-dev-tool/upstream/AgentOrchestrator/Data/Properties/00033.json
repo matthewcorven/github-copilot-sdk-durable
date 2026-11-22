@@ -1,0 +1,31 @@
+{
+  "id": 33,
+  "type": "Apartment",
+  "status": "For Sale",
+  "price": 794000,
+  "currency": "CAD",
+  "address": {
+    "street": "3050 Ellesmere Road, Unit 405",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M1E 5E6",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 2,
+  "squareFootage": 835,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 1975,
+  "parkingSpaces": 1,
+  "shortDescription": "Sleek 2-bedroom apartment in a boutique Scarborough Village building with rooftop terrace access.",
+  "fullDescription": "Welcome to 3050 Ellesmere Road, Unit 405 in the vibrant Scarborough Village neighbourhood. This contemporary apartment features a thoughtfully designed layout that maximises natural light. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. All 2 bedrooms are generously sized, and the primary offers a spa-inspired four-piece ensuite. The deep lot provides ample space for gardening, play, or future expansion. This coveted pocket puts you within walking distance of top schools, green spaces, and vibrant dining.",
+  "keyFeatures": [
+    "Spacious kitchen with marble backsplash and gas range",
+    "Private driveway with detached garage",
+    "Large balcony overlooking parkland",
+    "Walk score over 90",
+    "Crown mouldings and wainscotting",
+    "Close to waterfront trails and cycling paths"
+  ],
+  "listedDate": "2026-04-05"
+}

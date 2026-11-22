@@ -1,0 +1,43 @@
+{
+  "variant": "durable",
+  "fault": "duplicate-delivery",
+  "outcome": "not doubled",
+  "holder": "return_agent",
+  "holderAtFault": "return_agent",
+  "holderAtEnd": "return_agent",
+  "phase": "settle",
+  "detail": "The first process was killed with SIGKILL while return_agent held turn 3 with nothing produced, and a second process resumed the same store (exit 0): the request was delivered twice. On the per-turn count, which is the finding, turn 3 committed one output version and nothing was reused, so the request arrived twice and the specialist's tool ran once. Control after recovery was return_agent. The second process found the turn's output already committed, so it produced nothing. What stopped it was that committed output and not an identity for the request: the variant has no record that a delivery is a repeat. A third delivery to the now-finished run (exit 0) is recorded as one separate fact — resume:    the run is already finished; there is nothing to resume. — and is not part of this claim: a finished run being a no-op says nothing about whether the variant could deduplicate a request. verify exited 0.",
+  "evidence": "frozen after the first delivery (pid 38627, SIGKILL, confirmed gone) with holder return_agent and 4 completed turn(s); output versions for the re-delivered turn 3: 0 before, 1 after, 0 reuse record(s); third delivery exit 0: resume:    the run is already finished; there is nothing to resume.; whole-run specialist results before: {\"Order 1234 is currently being processed and will ship in 2 business days.\": 1, \"Refund processed successfully for order 1234.\": 1, \"Return initiated successfully for order 1234. You will receive return instructions via email.\": 1}, after: {\"Order 1234 is currently being processed and will ship in 2 business days.\": 1, \"Refund processed successfully for order 1234.\": 1, \"Return initiated successfully for order 1234. You will receive return instructions via email.\": 2} (delta {\"Return initiated successfully for order 1234. You will receive return instructions via email.\": 1} — reported, not decisive: return_agent answers turn 0 too, so its result appears twice in a no-fault run); completed turns: 4 then 4; second delivery exit: 0; holder after: return_agent; verify exited 0; holders across the run: return_agent -> refund_agent -> order_agent -> return_agent",
+  "harness": {
+    "dotnet": "10.0.402",
+    "endpoint": "https://openrouter.ai/api/v1",
+    "model": "harness default (scripted routing)",
+    "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/duplicate-delivery.sh --variant durable",
+    "commit": "272baac6735e2d6d15f869a1e4b7fb74d72369fd",
+    "apiKeyFrom": "OPENROUTER_API_KEY",
+    "portKeyFrom": null,
+    "portKeySubstituted": null
+  },
+  "recordedAt": "2026-11-05T22:25:18.211470+00:00",
+  "observations": {
+    "outputVersionsForTurn3": 1,
+    "reuseRecordsForTurn3": 0,
+    "toolResultsBefore": {
+      "Order 1234 is currently being processed and will ship in 2 business days.": 1,
+      "Refund processed successfully for order 1234.": 1,
+      "Return initiated successfully for order 1234. You will receive return instructions via email.": 1
+    },
+    "toolResultsAfter": {
+      "Order 1234 is currently being processed and will ship in 2 business days.": 1,
+      "Refund processed successfully for order 1234.": 1,
+      "Return initiated successfully for order 1234. You will receive return instructions via email.": 2
+    },
+    "toolResultsDelta": {
+      "Return initiated successfully for order 1234. You will receive return instructions via email.": 1
+    },
+    "completedTurnsBefore": 4,
+    "completedTurnsAfter": 4,
+    "secondDelivery": "resume",
+    "thirdDeliveryExit": 0
+  }
+}

@@ -1,0 +1,5 @@
+{
+ "input": "Request PA-D2-0001 again. This container was stopped and restarted. Read your durable working state with working_state, then call resume_work, and tell me: which approval task you found, what status it was in, the exact deadline value stored with it, and whether anything about this request had to be redone. Quote the values, do not summarise them.",
+ "stream": false,
+ "agent_session_id": "b34699f92021c4e3a04d0eda60edfac6e4dcfe8fcdb28cac480204ae83aeabe"
+}

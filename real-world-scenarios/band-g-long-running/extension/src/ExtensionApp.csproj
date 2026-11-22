@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>extension-app</AssemblyName>
+    <RootNamespace>BandGExtension</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <NoWarn>NU1604;NU1902;NU1903;NU1701</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="../upstream/Executors.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Agents.AI.DurableTask" Version="1.16.0-preview.261029.1" />
+    <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="1.23.0" />
+    <PackageReference Include="Microsoft.DurableTask.Client.AzureManaged" Version="1.28.0" />
+    <PackageReference Include="Microsoft.DurableTask.Worker.AzureManaged" Version="1.28.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
+  </ItemGroup>
+</Project>

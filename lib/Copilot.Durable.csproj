@@ -13,7 +13,7 @@
     <AssemblyName>Copilot.Durable</AssemblyName>
 
     <PackageId>Copilot.Durable</PackageId>
-    <Version>0.4.0</Version>
+    <Version>0.5.0</Version>
     <Authors>Matthew Corven</Authors>
     <Description>Durable state for GitHub Copilot SDK agents: typed documents with rewindable history and fork policies, checkpointed task state machines with idempotency memos, an extension registry with reload semantics, and a pluggable store.</Description>
     <PackageTags>copilot;ai;agents;durable;state;dotnet</PackageTags>
@@ -31,10 +31,25 @@
 
   <ItemGroup>
     <Compile Include="Durable.cs" />
+    <Compile Include="Durable.DependencyInjection.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Durable.Tests" />
+    <!-- The host reads agent definitions and checkpoint documents directly, and
+         validates a stored sandbox policy with the runtime's own validator so the
+         definition path refuses exactly what a session would refuse. -->
+    <InternalsVisibleTo Include="Durable.Runtime" />
+    <!-- A provider shares the store's exclusive file lock so two writers on one path
+         are refused the same way whatever the provider. -->
+    <InternalsVisibleTo Include="Durable.EfCore" />
+    <!-- The provider's tests assert the store built the provider the options selected. -->
+    <InternalsVisibleTo Include="Durable.EfCore.Tests" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="GitHub.Copilot.SDK" Version="1.0.26" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.2" />
   </ItemGroup>
 
   <ItemGroup>

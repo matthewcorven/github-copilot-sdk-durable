@@ -1,0 +1,23 @@
+run dir:   /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/.scratch/band-d3
+dotnet:    /opt/homebrew/bin/dotnet (10.0.402)
+project:   https://aif-gkr52qggxgbu6.services.ai.azure.com/api/projects/priorauth
+request:   /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/real-world-scenarios/band-d3-outside-orchestrator/evidence/request.txt
+
+run dir:    /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/.scratch/band-d3
+store:      /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/.scratch/band-d3/store/orchestrator.jsonl
+mode:       new run
+memo key:   identity (name+input+agent identity)
+------------------------------------------------------------------------------
+[coverage] resolving the agent the platform is running now
+task:       new durable task t1 (request 20261105T201433Z)
+------------------------------------------------------------------------------
+[coverage] identity d3-coverage-assessor@1:48d2a3c62ecbb105
+[coverage] memo miss step/coverage/1188409be0bb45d0/d3-coverage-assessor@1:48d2a3c62ecbb105 — calling the agent
+[coverage] settled; memo step/coverage/1188409be0bb45d0/d3-coverage-assessor@1:48d2a3c62ecbb105 written
+[gate] request written to /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/.scratch/band-d3/gate/request.json
+[gate] WAITING for a human decision at /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/.scratch/band-d3/gate/decision.json
+[gate] process id 21917 — this is the process to kill
+
+run.sh: the orchestrator exited with status 137
+        run dir: /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/.scratch/band-d3
+kept: /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-161-work/.scratch/band-d3

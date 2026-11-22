@@ -1,0 +1,24 @@
+{
+  "variant": "baseline",
+  "fault": "duplicate-approval",
+  "outcome": "doubled",
+  "phase": "two resume processes against one gate checkpoint",
+  "detail": "The first resume approved and exited 0 (2 model call(s)). The second resume approved the re-emitted request again — it printed 'Approving plan' — and exited 0 after 2 model call(s), leaving the latest checkpoint at 6af9fc40c4c84a4db3b586794618ee48 (3 file(s)). The approval applied twice.",
+  "evidence": "gate checkpoint: f96794ae2cc5436a92c61d852352125f; calls before the first delivery: 2\nfirst delivery (exit 0): checkpoint dbabb758bf0f4d15bcd8ed0424323542, 2 file(s), 2 model call(s), approved checkpoint present: yes\nsecond delivery: 6af9fc40c4c84a4db3b586794618ee48\nsecond delivery (exit 0): checkpoint 6af9fc40c4c84a4db3b586794618ee48, 3 file(s), 2 model call(s), 'Approving plan' printed 1 time(s)",
+  "measurements": {
+    "model_calls_at_gate": 2,
+    "checkpoints_after_first": "2",
+    "model_calls_first": 2,
+    "second_delivery_ran": "1",
+    "model_calls_second": 2,
+    "checkpoints_after_second": "3"
+  },
+  "harness": {
+    "dotnet": "10.0.402",
+    "runtime": "tools/ReplayRuntime (recorded runtime) and faults/lib/baseline_endpoint.py (recorded transcript)",
+    "model": "no network, no key: the baseline is served the recorded transcript behind the endpoint it names; the Durable variant runs the repository's recorded runtime with the scenario's deterministic answers",
+    "commit": "d9d475d2136d8d8fe86a05b12d8737c06b697c5e",
+    "command": "./faults/duplicate-approval.sh --variant baseline"
+  },
+  "recordedAt": "2026-11-05T20:11:37.031019+00:00"
+}

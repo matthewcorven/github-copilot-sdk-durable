@@ -1,0 +1,31 @@
+{
+  "id": 53,
+  "type": "Loft",
+  "status": "For Sale",
+  "price": 558000,
+  "currency": "CAD",
+  "address": {
+    "street": "60 Mill Street, Unit 312",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M5A 0C3",
+    "country": "Canada"
+  },
+  "bedrooms": 1,
+  "bathrooms": 1,
+  "squareFootage": 715,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2015,
+  "parkingSpaces": 0,
+  "shortDescription": "Converted warehouse loft in Distillery District featuring 1 bedrooms, original beams, and polished concrete.",
+  "fullDescription": "Welcome to 60 Mill Street, Unit 312 in the vibrant Distillery District neighbourhood. This converted loft showcases soaring ceilings, exposed structural elements, and an open industrial aesthetic. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. All 1 bedrooms are generously sized, and the primary offers a spa-inspired four-piece ensuite. The deep lot provides ample space for gardening, play, or future expansion. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Finished basement with recreation room",
+    "Underground parking spot included",
+    "Open kitchen with waterfall island and pot lights",
+    "Steps to TTC subway and streetcar",
+    "Private south-facing backyard with patio",
+    "Cosy living room with gas fireplace"
+  ],
+  "listedDate": "2026-04-24"
+}

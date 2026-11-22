@@ -1,0 +1,31 @@
+{
+  "id": 95,
+  "type": "Semi-Detached",
+  "status": "For Sale",
+  "price": 1817000,
+  "currency": "CAD",
+  "address": {
+    "street": "180 Coxwell Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4L 3B5",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 3,
+  "squareFootage": 2151,
+  "lotSizeSquareFootage": 3500,
+  "yearBuilt": 1934,
+  "parkingSpaces": 1,
+  "shortDescription": "Well-maintained 2-bedroom semi in East End with updated kitchen and south-facing garden.",
+  "fullDescription": "Welcome to 180 Coxwell Avenue in the vibrant East End neighbourhood. This charming semi-detached home seamlessly blends period character with modern comfort. The main living area opens onto a spacious combined living and dining area flooded with afternoon sun. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. All 2 bedrooms are generously sized, and the primary offers a spa-inspired four-piece ensuite. Additional highlights include in-suite laundry, ample storage, and energy-efficient mechanicals. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Chef’s kitchen with granite countertops and premium appliances",
+    "Two-car attached garage",
+    "Walking distance to top-rated schools",
+    "Pet-friendly building",
+    "Open-concept living and dining area",
+    "Landscaped front and rear gardens"
+  ],
+  "listedDate": "2026-04-01"
+}

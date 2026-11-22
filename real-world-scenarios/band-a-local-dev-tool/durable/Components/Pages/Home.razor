@@ -1,0 +1,367 @@
+@page "/"
+@using System.Text.Json
+@using Microsoft.JSInterop
+@implements IDisposable
+@inject AppState AppState
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>AgentOrchestrator (Durable)</PageTitle>
+
+<div class="flex h-screen overflow-hidden font-sans">
+    @* Pipeline panel *@
+    <div class="flex-1 px-8 pt-3 overflow-y-auto relative"
+         style="background-color: #17171b;
+                background-image: radial-gradient(rgba(255,255,255,0.10) 1px, transparent 1px);
+                background-size: 20px 20px;">
+
+        @* Add enquiry button *@
+        <div class="absolute top-3 right-8 inline-block z-40">
+            <button class="flex items-center justify-center w-10 h-10 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 rounded-md border border-zinc-700 cursor-pointer transition-colors"
+                    @onclick="ToggleAddMenu">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" clip-rule="evenodd" />
+                </svg>
+            </button>
+            @if (_showAddMenu)
+            {
+                <div class="absolute right-0 top-full mt-1 w-[28rem] bg-zinc-900 rounded-md shadow-xl border border-zinc-700 py-1 max-h-96 overflow-y-auto">
+                    <div class="px-3 py-2 text-sm font-medium text-zinc-500">Sample enquiries</div>
+                    @foreach (var enquiry in SampleEnquiries)
+                    {
+                        <button class="w-full text-left px-3 py-2 text-lg text-zinc-300 hover:bg-zinc-800 cursor-pointer leading-snug"
+                                @onclick="() => SubmitEnquiry(enquiry)">
+                            @enquiry
+                        </button>
+                    }
+                </div>
+            }
+        </div>
+
+        <div class="relative" style="height: @(MaxRowCount * RowHeight)px">
+            @* Flow lines + arrowheads *@
+            <svg class="absolute inset-0 pointer-events-none z-0" style="width: 100%; height: 100%; overflow: visible">
+                <defs>
+                    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5"
+                            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                        <path d="M 0 0 L 10 5 L 0 10 z" fill="#a1a1aa" />
+                    </marker>
+                </defs>
+                @foreach (var edge in PipelineConfig.Edges)
+                {
+                    var from = PipelineConfig.Nodes[edge.From];
+                    var to = PipelineConfig.Nodes[edge.To];
+                    var fromX = from.Col * ColWidth + ColOffset;
+                    var toX   = to.Col   * ColWidth + ColOffset;
+                    var fromY = from.Row * RowHeight + from.YOffset;
+                    var toY   = to.Row   * RowHeight + to.YOffset;
+
+                    if (from.Col == to.Col)
+                    {
+                        var cx = fromX + CardWidth / 2;
+                        var y1 = fromY + CardHeight;
+                        var y2 = toY - 2;
+                        <line x1="@cx" y1="@y1" x2="@cx" y2="@y2"
+                              stroke="#a1a1aa" stroke-width="2" stroke-linecap="round"
+                              marker-end="url(#arrow)" />
+                    }
+                    else
+                    {
+                        var srcIsLeft = from.Col < to.Col;
+                        var x1 = srcIsLeft ? fromX + CardWidth : fromX;
+                        var x2 = srcIsLeft ? toX - 2          : toX + CardWidth + 2;
+                        var y1 = fromY + CardHeight / 2;
+                        var y2 = toY + CardHeight / 2;
+                        <line x1="@x1" y1="@y1" x2="@x2" y2="@y2"
+                              stroke="#a1a1aa" stroke-width="2" stroke-linecap="round"
+                              marker-end="url(#arrow)" />
+                    }
+                }
+            </svg>
+
+            @* Phase cards *@
+            @foreach (var (phase, node) in PipelineConfig.Nodes)
+            {
+                var x = node.Col * ColWidth + ColOffset;
+                var y = node.Row * RowHeight + node.YOffset;
+                var isRejected = node.IsFinished && phase != Phase.Done;
+                var isDone = phase == Phase.Done;
+
+                <div class="absolute z-10 rounded-lg border flex shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04),_0_10px_28px_-8px_rgba(0,0,0,0.55)]
+                            @(isDone     ? "border-emerald-400/60" :
+                              isRejected ? "border-rose-400/60" :
+                                           "border-zinc-700")"
+                     style="left: @(x)px; top: @(y)px; width: @(CardWidth)px; height: @(CardHeight)px; background: linear-gradient(180deg, #26262b 0%, #222227 60%, #1f1f24 100%);">
+                    <div class="shrink-0 pl-5 pt-4"
+                         style="width: @(HeaderColWidth)px">
+                        <h3 class="text-2xl font-medium tracking-tight leading-snug
+                                   @(isDone ? "text-emerald-400" :
+                                     isRejected ? "text-rose-400" :
+                                     "text-zinc-100")">
+                            @node.Label
+                        </h3>
+                    </div>
+                </div>
+            }
+
+            @* Enquiry rows: absolutely positioned, animate between cards *@
+            @foreach (var enquiry in AllEnquiries())
+            {
+                var node = PipelineConfig.Nodes[enquiry.Phase];
+                var atPhase = EnquiriesAtPhase(enquiry.Phase);
+                var stackIndex = atPhase.FindIndex(a => a.EnquiryId == enquiry.EnquiryId);
+                if (stackIndex < 0) stackIndex = 0;
+                var cardX = node.Col * ColWidth + ColOffset;
+                var cardY = node.Row * RowHeight + node.YOffset;
+                var x = cardX + HeaderColWidth + ChipPadX;
+                var y = cardY + BodyPadY + stackIndex * ChipHeight;
+                var isSelected = enquiry.EnquiryId == _selectedEnquiryId;
+                var isRejected = node.IsFinished && enquiry.Phase != Phase.Done;
+                var isDone = enquiry.Phase == Phase.Done;
+
+                var isFading = enquiry.IsRejected && Hidden(enquiry);
+
+                var isBusy = !enquiry.IsTerminal;
+                var dotColor   = isDone     ? "text-emerald-400" :
+                                 isRejected ? "text-rose-400" :
+                                              "text-amber-300";
+                var titleColor = isSelected ? "text-indigo-300" :
+                                 isDone     ? "text-emerald-400" :
+                                 isRejected ? "text-rose-400" :
+                                              "text-zinc-100";
+
+                <button @key="enquiry.EnquiryId"
+                        class="absolute z-20 flex flex-col justify-start cursor-pointer text-left rounded-md pl-4 pr-5 pt-2.5 pb-2
+                               @(isSelected ? "bg-indigo-500/20 hover:bg-indigo-500/25 ring-1 ring-indigo-400" :
+                                 "bg-zinc-700 hover:bg-zinc-600")"
+                        style="top: @(y)px; left: @(x)px; width: @(ChipWidth)px; height: @(ChipHeight - 4)px; opacity: @(isFading ? "0" : "1"); transition: top 0.7s cubic-bezier(0.76, 0, 0.24, 1), left 0.7s cubic-bezier(0.76, 0, 0.24, 1), opacity @(isFading ? "2s ease-in" : "0.3s"), background-color 0.15s"
+                        @onclick="() => SelectEnquiry(enquiry.EnquiryId)">
+                    <div class="flex items-center gap-2.5 min-w-0">
+                        <span class="relative inline-flex h-3 w-3 shrink-0 @dotColor">
+                            @if (isBusy)
+                            {
+                                <span class="absolute inset-0 rounded-full bg-current agent-throb"></span>
+                            }
+                            <span class="relative inline-block h-3 w-3 rounded-full bg-current"></span>
+                        </span>
+                        <span class="text-xl font-normal truncate leading-snug @titleColor">@enquiry.Enquiry</span>
+                    </div>
+                    <div class="text-lg text-zinc-400 truncate leading-snug mt-1.5 ml-[22px]">
+                        @enquiry.Intent
+                    </div>
+                </button>
+            }
+        </div>
+    </div>
+
+    @* Sidebar — always visible *@
+    <div @ref="_sidebar" class="w-[28rem] bg-white p-7 overflow-y-auto shadow-[-8px_0_30px_-4px_rgba(0,0,0,0.15)] z-30">
+        @if (_selected is not null)
+        {
+            var node = PipelineConfig.Nodes[_selected.Phase];
+            var isRejected = node.IsFinished && _selected.Phase != Phase.Done;
+
+            <div class="flex items-center justify-between mb-6">
+                <h3 class="text-base font-semibold tracking-widest uppercase text-slate-400">Enquiry Details</h3>
+                <button class="text-slate-300 hover:text-slate-500 transition-colors cursor-pointer" @onclick="DeselectEnquiry">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-7 w-7" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+                    </svg>
+                </button>
+            </div>
+            <dl class="space-y-5">
+                <div>
+                    <dt class="text-sm uppercase tracking-wider text-slate-400">ID</dt>
+                    <dd class="mt-1.5 text-xl"><code class="bg-slate-100 px-2.5 py-1 rounded text-lg text-slate-600 font-mono">@_selected.EnquiryId</code></dd>
+                </div>
+                <div>
+                    <dt class="text-sm uppercase tracking-wider text-slate-400">Conversation</dt>
+                    <dd class="mt-1.5 text-lg"><code class="bg-slate-100 px-2.5 py-1 rounded text-slate-600 font-mono">@_selectedConversationId</code></dd>
+                </div>
+                <div>
+                    <dt class="text-sm uppercase tracking-wider text-slate-400">Enquiry</dt>
+                    <dd class="mt-1.5 text-xl text-slate-700 leading-relaxed">@_selected.Enquiry</dd>
+                </div>
+                <div>
+                    <dt class="text-sm uppercase tracking-wider text-slate-400">Phase</dt>
+                    <dd class="mt-1.5">
+                        <span class="inline-block text-lg px-3 py-1 rounded-full
+                                     @(isRejected ? "bg-rose-50 text-rose-700 ring-1 ring-rose-200" :
+                                        _selected.Phase == Phase.Done ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200" :
+                                        "bg-amber-50 text-amber-700 ring-1 ring-amber-200")">
+                            @node.Label
+                        </span>
+                    </dd>
+                </div>
+                <div>
+                    <dt class="text-sm uppercase tracking-wider text-slate-400">Started</dt>
+                    <dd class="mt-1.5 text-xl text-slate-700">@FormatElapsed(_selected.StartedAt)</dd>
+                </div>
+                @if (_selected.Restarts > 0)
+                {
+                    <div>
+                        <dt class="text-sm uppercase tracking-wider text-slate-400">Resumed</dt>
+                        <dd class="mt-1.5 text-xl text-slate-700">@_selected.Restarts time(s) after a restart</dd>
+                    </div>
+                }
+                @if (_selected.HideAt is not null)
+                {
+                    <div>
+                        <dt class="text-sm uppercase tracking-wider text-slate-400">Card hidden at</dt>
+                        <dd class="mt-1.5 text-xl text-slate-700">@_selected.HideAt</dd>
+                    </div>
+                }
+            </dl>
+
+            @if (_selected.Report is { Length: > 0 })
+            {
+                <div class="mt-7">
+                    <h3 class="text-base font-semibold tracking-widest uppercase text-slate-400 mb-3">Report</h3>
+                    <div class="prose-xs text-lg text-slate-700 leading-relaxed whitespace-pre-wrap">@_selected.Report</div>
+                </div>
+            }
+
+            @if (_selected.Entries.Count > 0)
+            {
+                <div class="mt-7">
+                    <h3 class="text-base font-semibold tracking-widest uppercase text-slate-400 mb-3">Transcript</h3>
+                    <div class="space-y-2">
+                        @foreach (var entry in _selected.Entries)
+                        {
+                            <div class="text-lg leading-snug text-slate-600">
+                                <span class="text-slate-400 text-base uppercase tracking-wider mr-2">@entry.Kind</span>
+                                @entry.Text
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        }
+        else
+        {
+            <div class="text-slate-400 text-lg">Select an enquiry to see its details. Everything shown here is read from the durable store.</div>
+        }
+    </div>
+</div>
+
+@code {
+    // Geometry copied from the baseline so the two variants look the same.
+    private const int HeaderColWidth = 216;
+    private const int CardWidth      = 462;
+    private const int CardHeight     = 200;
+
+    private const int ColWidth        = 516;   // 462 + 54 gap
+    private const int RowHeight       = 240;   // 200 + 40 gap
+    private const int ColOffset       = 0;
+
+    private const int BodyPadY    = 16;
+    private const int ChipHeight  = 84;   // 2 lines: text-xl + text-lg with comfortable padding
+    private const int ChipPadX    = 12;
+    private const int ChipWidth   = CardWidth - HeaderColWidth - ChipPadX * 2;
+
+    private int MaxRowCount => PipelineConfig.Nodes.Values.Max(n => n.Row) + 1;
+
+    private ElementReference _sidebar;
+    private bool _sidebarAutoScrollSetup;
+
+    private string? _selectedEnquiryId;
+    private string? _selectedConversationId;
+    private bool _showAddMenu;
+
+    private EnquiryState? _selected =>
+        _selectedConversationId is not null ? AppState.Find(_selectedConversationId) : null;
+
+    private static readonly string[] SampleEnquiries =
+    [
+        "Looking for a 3-bed family home near good schools in the suburbs, budget around $500k",
+        "Need a downtown condo with parking, 1-2 bedrooms, under $350k",
+        "Seeking waterfront property with at least 4 bedrooms for retirement",
+        "Budget max $450k, want to be near Sugar Wharf Podium School",
+        "Want a rural property with land, at least 5 acres, horse-friendly",
+        "asdkjh asdkjhasd this is spam garbage text!!!",
+        "Investor looking for multi-unit rental property near university campus",
+        "Need an accessible single-story home with wheelchair modifications, 2+ bed",
+        "Looking for a fixer-upper Victorian in the historic district",
+        "BUY CRYPTO NOW!!! Not actually looking for property lol",
+    ];
+
+    protected override void OnInitialized()
+    {
+        AppState.UpdateUi += OnStateChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_sidebarAutoScrollSetup)
+        {
+            _sidebarAutoScrollSetup = true;
+            await JS.InvokeVoidAsync("setupAutoScrollEnd", _sidebar);
+        }
+    }
+
+    private void OnStateChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void SelectEnquiry(string conversationId)
+    {
+        _selectedEnquiryId = AppState.Find(conversationId)?.EnquiryId;
+        _selectedConversationId = conversationId;
+    }
+
+    private void DeselectEnquiry()
+    {
+        _selectedEnquiryId = null;
+        _selectedConversationId = null;
+    }
+
+    private void ToggleAddMenu()
+    {
+        _showAddMenu = !_showAddMenu;
+    }
+
+    private void SubmitEnquiry(string enquiry)
+    {
+        _showAddMenu = false;
+        _ = AppState.RunAgentAsync(enquiry);
+    }
+
+    private List<EnquiryState> AllEnquiries()
+    {
+        var now = DateTimeOffset.UtcNow;
+        return AppState.Enquiries()
+            .Where(state => !Hidden(state, now))
+            .ToList();
+    }
+
+    private List<EnquiryState> EnquiriesAtPhase(Phase phase)
+    {
+        return AllEnquiries()
+            .Where(state => state.Phase == phase)
+            .OrderBy(state => state.StartedAt, StringComparer.Ordinal)
+            .ThenBy(state => state.EnquiryId, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    // A rejected enquiry's card fades on its own once the committed hide time passes. The record
+    // is never removed: that is the difference from the baseline's fifteen-second delete.
+    private static bool Hidden(EnquiryState state, DateTimeOffset? now = null) =>
+        state.HideAt is { Length: > 0 } hideAt
+        && DateTimeOffset.TryParse(hideAt, out var at)
+        && ((now ?? DateTimeOffset.UtcNow) - at).TotalSeconds >= 0;
+
+    private static string FormatElapsed(string startedAt)
+    {
+        if (!DateTimeOffset.TryParse(startedAt, out var at)) return "just now";
+        var elapsed = DateTimeOffset.UtcNow - at;
+        if (elapsed.TotalSeconds < 60) return $"{(int)elapsed.TotalSeconds}s ago";
+        if (elapsed.TotalMinutes < 60) return $"{(int)elapsed.TotalMinutes}m ago";
+        return $"{(int)elapsed.TotalHours}h ago";
+    }
+
+    public void Dispose()
+    {
+        AppState.UpdateUi -= OnStateChanged;
+    }
+}

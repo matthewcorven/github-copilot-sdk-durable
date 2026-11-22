@@ -499,6 +499,55 @@ public class DurableStoreTests
         }
     }
 
+    [Theory]
+    [InlineData("\n", "\n", "")]
+    [InlineData("\r\n", "\r\n", "")]
+    [InlineData("\n", "\r\n", "")]
+    [InlineData("\r\n", "\n", "{\"v\":")]
+    [InlineData("\r\n", "\r\n", "{\"v\":")]
+    [InlineData("\n", "\n", "{\"v\":1,\"seq\":3,\"type\":\"conversation\",\"payload\":{\"id\":\"uncommitted\"}}")]
+    [InlineData("\r\n", "\r\n", "{\"v\":1,\"seq\":3,\"type\":\"conversation\",\"payload\":{\"id\":\"uncommitted\"}}")]
+    public async Task JsonlBackend_ReplayPreservesExactUtf8Boundaries(
+        string firstNewline, string secondNewline, string tail)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"durable-byte-boundary-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "store.jsonl");
+        const string unicodeId = "c-\u00e9-\U0001f600";
+        var complete = $"{{\"v\":1,\"seq\":1,\"type\":\"conversation\",\"payload\":{{\"id\":\"{unicodeId}\"}}}}{firstNewline}"
+            + $"{{\"v\":1,\"seq\":2,\"type\":\"conversation\",\"payload\":{{\"id\":\"c-two\"}}}}{secondNewline}";
+        var committedBytes = System.Text.Encoding.UTF8.GetBytes(complete);
+        try
+        {
+            File.WriteAllBytes(path, System.Text.Encoding.UTF8.GetBytes(complete + tail));
+            using (var store = DurableStore.Create(new DurableStoreOptions { Path = path, Format = DurableStoreFormat.Jsonl }))
+            {
+                Assert.Equal(committedBytes, File.ReadAllBytes(path));
+                Assert.Equal(2, store.Conversations.Count);
+                Assert.NotNull(store.Conversation(unicodeId));
+                Assert.Null(store.Conversation("uncommitted"));
+                await store.CommitAsync(transaction =>
+                {
+                    transaction.CreateConversation();
+                    return Task.CompletedTask;
+                });
+            }
+
+            var afterAppend = File.ReadAllBytes(path);
+            var appendedText = System.Text.Encoding.UTF8.GetString(afterAppend[committedBytes.Length..]);
+            Assert.EndsWith("\n", appendedText, StringComparison.Ordinal);
+            Assert.DoesNotContain("\r", appendedText, StringComparison.Ordinal);
+            using var reopened = DurableStore.Create(new DurableStoreOptions { Path = path, Format = DurableStoreFormat.Jsonl });
+            Assert.Equal(3, reopened.Conversations.Count);
+            Assert.NotNull(reopened.Conversation(unicodeId));
+            Assert.Equal(afterAppend, File.ReadAllBytes(path));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task DurableStoreOptions_ExplicitPathWinsOverDefaultPath()
     {
@@ -629,6 +678,65 @@ public class DurableStoreTests
                 new Dictionary<string, string> { ["text"] = "legacy" },
                 DurableJson.FromElement<Dictionary<string, string>>(document.Latest!.Value));
             Assert.Single(second.Entries(conversationId));
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Format_ReportsTheResolvedFormatNotTheRequestedAuto()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"durable-test-format-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var freshPath = Path.Combine(dir, "fresh.jsonl");
+        var legacyPath = Path.Combine(dir, "legacy.json");
+
+        try
+        {
+            // Auto over a path that does not exist yet resolves to the canonical JSONL
+            // format, so the store reports what it writes rather than the request.
+            using (var fresh = DurableStore.Create(new DurableStoreOptions
+            {
+                Path = freshPath,
+                Format = DurableStoreFormat.Auto,
+            }))
+            {
+                Assert.Equal(DurableStoreFormat.Jsonl, fresh.Format);
+                Assert.True(fresh.IsPersistent);
+            }
+
+            // Auto over an existing legacy snapshot resolves to the format it was written in.
+            using (var legacy = DurableStore.Create(new DurableStoreOptions
+            {
+                Path = legacyPath,
+                Format = DurableStoreFormat.LegacyJson,
+            }))
+            {
+                Assert.Equal(DurableStoreFormat.LegacyJson, legacy.Format);
+                await legacy.CommitAsync(transaction =>
+                {
+                    transaction.CreateConversation();
+                    return Task.CompletedTask;
+                });
+            }
+
+            using (var reopened = DurableStore.Create(new DurableStoreOptions
+            {
+                Path = legacyPath,
+                Format = DurableStoreFormat.Auto,
+            }))
+            {
+                Assert.Equal(DurableStoreFormat.LegacyJson, reopened.Format);
+            }
+
+            using var ephemeral = DurableStore.CreateEphemeral();
+            Assert.Equal(DurableStoreFormat.InMemory, ephemeral.Format);
+            Assert.False(ephemeral.IsPersistent);
         }
         finally
         {

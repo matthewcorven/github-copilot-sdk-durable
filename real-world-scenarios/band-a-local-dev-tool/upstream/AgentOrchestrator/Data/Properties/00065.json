@@ -1,0 +1,31 @@
+{
+  "id": 65,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 840000,
+  "currency": "CAD",
+  "address": {
+    "street": "870 Dundas Street West, Unit 305",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6J 1V3",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 1,
+  "squareFootage": 1002,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2022,
+  "parkingSpaces": 1,
+  "shortDescription": "Bright 2-bedroom condo in Little Portugal with floor-to-ceiling windows and stunning city views.",
+  "fullDescription": "Welcome to 870 Dundas Street West, Unit 305 in the vibrant Little Portugal neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area showcases original architectural details alongside tasteful modern updates. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. Upstairs, 2 bright bedrooms include a primary retreat with ensuite and double closets. Additional highlights include in-suite laundry, ample storage, and energy-efficient mechanicals. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Wraparound porch with heritage details",
+    "Soaring nine-foot ceilings",
+    "Modern eat-in kitchen with stainless steel appliances",
+    "Walk-in closet in primary bedroom",
+    "Private driveway with detached garage",
+    "Open-concept living and dining area"
+  ],
+  "listedDate": "2026-05-03"
+}

@@ -1,0 +1,16 @@
+{
+  "variant": "baseline",
+  "fault": "concurrent-clients",
+  "outcome": "not corrupted",
+  "phase": "two enquiries in flight together",
+  "detail": "Both enquiries completed with the first held inside a tool call when the second was submitted: 2 agents on the page, completed=2, rejected=0, 2 model turn(s) reached the runtime. In this sample the dictionary race did not manifest — the defect is present in the code (unlocked Dictionary<string, Agent> mutated from every run task), but one concurrent pair is not enough to make it throw. This row is a tie on behaviour and a difference only in the code.",
+  "evidence": "cards=2 completed=2 processing=0 rejected=0; session.send frames=2; driver status=0; exception lines in the server log=0",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "tools/ReplayRuntime",
+    "command": "./faults/concurrent-clients.sh --variant baseline",
+    "script": "concurrent-clients.sh",
+    "commit": "4ab32e3371a4738eac5ac1c1c6ee7fd64d9b2cc8"
+  },
+  "recordedAt": "2026-11-05T17:18:14.186390+00:00"
+}

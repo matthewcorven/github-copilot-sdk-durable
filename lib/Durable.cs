@@ -20,6 +20,7 @@ using System.Text.Json.Serialization.Metadata;
 using GitHub.Copilot;
 using GitHub.Copilot.Rpc;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Durable;
 
@@ -226,7 +227,11 @@ public sealed class DurableTaskRecord
     /// <summary>Whether the task is background work that does not block its owner.</summary>
     public bool Background { get; set; }
 
-    /// <summary>The child tasks this task waits on.</summary>
+    /// <summary>
+    /// The child tasks, and the external events, this task waits on. A name in this list
+    /// is an external event when <see cref="TaskCommit.IsExternalEvent"/> says so; every
+    /// other name is a child task id.
+    /// </summary>
     public List<string> WaitingOn { get; set; } = [];
 
     /// <summary>Idempotency memos, so a rerun after a crash does not repeat an effect.</summary>
@@ -274,6 +279,40 @@ public sealed class TaskCommit
     /// <summary>Creates a commit that continues the task, waiting on child tasks.</summary>
     public static TaskCommit Waiting(JsonElement checkpoint, IEnumerable<string> on) =>
         new(TaskStatus.Waiting, checkpoint, null) { WaitingOn = on.ToList() };
+
+    /// <summary>
+    /// Creates a commit that parks the task until an external event is delivered against
+    /// the store. The event is not a child task: nothing in the store produces it, so the
+    /// run ends here with the task <see cref="TaskStatus.Waiting"/>, and
+    /// <see cref="DurableStore.RaiseEventAsync"/> is what makes it runnable again.
+    /// </summary>
+    /// <remarks>
+    /// A task waiting on an external event holds no invocation and no timer. The deadline is
+    /// the caller's business — put it in <paramref name="checkpoint"/> and use
+    /// <see cref="TaskRuntime.SleepUntilAsync"/> on the run the event starts — because a task
+    /// that nothing ever wakes must stay observable as waiting rather than disappear.
+    /// </remarks>
+    public static TaskCommit WaitingForEvent(JsonElement checkpoint, string eventName)
+    {
+        if (string.IsNullOrWhiteSpace(eventName))
+        {
+            throw new ArgumentException("An external event name is required.", nameof(eventName));
+        }
+
+        return new(TaskStatus.Waiting, checkpoint, null) { WaitingOn = [eventName] };
+    }
+
+    /// <summary>
+    /// Whether a name in <see cref="WaitingOn"/> is an external event rather than a child
+    /// task id. The prefix keeps the two namespaces apart in one stored list, so a store
+    /// written before external events existed reads back unchanged: every name it holds is
+    /// a child task.
+    /// </summary>
+    public static bool IsExternalEvent(string name) =>
+        name.StartsWith(ExternalEventPrefix, StringComparison.Ordinal);
+
+    /// <summary>The prefix that marks a <see cref="WaitingOn"/> entry as an external event.</summary>
+    public const string ExternalEventPrefix = "external:";
 
     /// <summary>Creates a commit that finishes the task successfully.</summary>
     public static TaskCommit Completed(JsonElement result) =>
@@ -345,6 +384,22 @@ public sealed class TaskRuntime
         _store.ScheduleTask(taskId, cancellationToken);
 
     /// <summary>Reads an idempotency memo, or writes one when <paramref name="value"/> is supplied.</summary>
+    /// <remarks>
+    /// <para>
+    /// Call this from a phase handler, not from inside a
+    /// <see cref="CommitAsync(Func{Transaction, Task{TaskCommit}})"/> callback: it takes the store's
+    /// commit gate, and the commit running the callback already holds it, so the call cannot make
+    /// progress. Rather than wait for a release that the commit cannot give, it throws
+    /// <see cref="DurableCommitReentryException"/> — an error a caller can catch, log and fix,
+    /// instead of a run that stops.
+    /// </para>
+    /// <para>
+    /// Inside a transaction, use <see cref="Transaction.Memo"/>. It writes the memo into the task's
+    /// memo map before the transaction commits, so the memo is saved with the checkpoint that
+    /// surrounds it and discarded if that commit rolls back — one commit for the effect and its
+    /// record, rather than two.
+    /// </para>
+    /// </remarks>
     public Task<JsonElement?> MemoAsync(string key, JsonElement? value = null) =>
         _store.MemoAsync(Task.Id, key, value);
 
@@ -488,6 +543,273 @@ public sealed class ConversationRecord
     public string? OwnerConversationId { get; set; }
 }
 
+/// <summary>How far a fork has got.</summary>
+public enum ForkIntentState
+{
+    /// <summary>
+    /// The fork's durable half exists — the conversation record, the inherited transcript, and
+    /// the inherited documents — but the native session has not been created yet. A fork found
+    /// in this state was interrupted, and is completed or abandoned on the next open.
+    /// </summary>
+    Pending,
+
+    /// <summary>The fork is complete: its native session exists and is recorded here.</summary>
+    Completed,
+
+    /// <summary>
+    /// The fork was abandoned. Its durable half is kept — a conversation record cannot be
+    /// removed from a store — but it is never given a session, so it is inert.
+    /// </summary>
+    Abandoned,
+}
+
+/// <summary>
+/// The durable record of a fork in progress, owned by the fork itself.
+/// </summary>
+/// <remarks>
+/// It is written in the same transaction that creates the fork's conversation record and
+/// before the native fork RPC, so a crash between the two is detectable: a fork whose intent
+/// is still <see cref="ForkIntentState.Pending"/> has no session, and reopening the store
+/// either completes it or abandons it. The document uses <see cref="ForkPolicy.Initial"/> so a
+/// fork of a fork starts with a fresh intent rather than inheriting its parent's.
+/// </remarks>
+public sealed class ForkIntent
+{
+    /// <summary>The conversation the fork was taken from.</summary>
+    public string ParentConversationId { get; set; } = string.Empty;
+
+    /// <summary>The parent's durable entry the fork was taken at.</summary>
+    public string ForkEntryId { get; set; } = string.Empty;
+
+    /// <summary>The native session the fork was given, once it has one.</summary>
+    public string? SessionId { get; set; }
+
+    /// <summary>How far the fork has got.</summary>
+    public ForkIntentState State { get; set; }
+}
+
+/// <summary>
+/// The durable record binding a conversation to the native SDK session that serves it.
+/// </summary>
+/// <remarks>
+/// The binding is a document, not a store column: it is written in the same transaction as the
+/// entry that records it, so a conversation and the session it was bound to are never observed
+/// apart. It is declared with <see cref="ForkPolicy.Initial"/>, so a fork does not inherit its
+/// parent's session identifier — a fork is a new conversation and gets its own session.
+/// </remarks>
+public sealed class SessionBinding
+{
+    /// <summary>The native SDK session identifier.</summary>
+    public string? SessionId { get; set; }
+
+    /// <summary>The model the session was created with.</summary>
+    public string? Model { get; set; }
+
+    /// <summary>When the binding was recorded, as an ISO 8601 timestamp.</summary>
+    public string? BoundAt { get; set; }
+
+    /// <summary>
+    /// Whether the durable layer chose <see cref="SessionId"/> itself and recorded it before the
+    /// session existed.
+    /// </summary>
+    /// <remarks>
+    /// A pinned id is one the durable layer can ask the runtime for again, so a conversation
+    /// created under it is recoverable from a process that never saw the session. An id the
+    /// runtime allocated is not: the durable layer only learned it after the fact, so a runtime
+    /// that does not hold it has lost the transcript and the host has to decide what to do.
+    /// </remarks>
+    public bool Pinned { get; set; }
+}
+
+/// <summary>
+/// The durable record of one prompt's admission, written before the prompt is sent.
+/// </summary>
+/// <remarks>
+/// Admission is the durable half of a send. It is committed before the prompt reaches the
+/// runtime, so a process that dies mid-send leaves a record of what it was trying to do. The
+/// <see cref="State"/> then says how far it got: <c>admitted</c> (committed, not yet sent),
+/// <c>completed</c> (the turn finished and its checkpoint committed), <c>failed</c> (the runtime
+/// reported an error), or <c>uncertain</c> (the send was issued but its outcome is unknown).
+/// An uncertain admission is never replayed automatically: the caller reconciles it.
+/// </remarks>
+public sealed class InputAdmission
+{
+    /// <summary>The admission's identifier.</summary>
+    public string? AdmissionId { get; set; }
+
+    /// <summary>The prompt that was admitted.</summary>
+    public string? Prompt { get; set; }
+
+    /// <summary>The admission's state.</summary>
+    public string? State { get; set; }
+
+    /// <summary>When the admission was committed, as an ISO 8601 timestamp.</summary>
+    public string? AdmittedAt { get; set; }
+
+    /// <summary>When the admission reached a terminal state, as an ISO 8601 timestamp.</summary>
+    public string? SettledAt { get; set; }
+}
+
+/// <summary>
+/// The durable record of one checkpoint: a turn that finished, or a tool call that completed.
+/// </summary>
+/// <remarks>
+/// Each checkpoint is a new version of the conversation's checkpoint document, so the document's
+/// history is the checkpoint log. <see cref="EventId"/> is the deduplication key: a checkpoint
+/// whose key is already the document's latest value is not written again, so a runtime that
+/// delivers the same event twice does not produce two checkpoints.
+/// </remarks>
+public sealed class ConversationCheckpoint
+{
+    /// <summary>The checkpoint's identifier.</summary>
+    public string? CheckpointId { get; set; }
+
+    /// <summary>What the checkpoint records: <c>turn</c> or <c>tool</c>.</summary>
+    public string? Kind { get; set; }
+
+    /// <summary>The deduplication key.</summary>
+    public string? EventId { get; set; }
+
+    /// <summary>The assistant message identifier, for a turn checkpoint.</summary>
+    public string? MessageId { get; set; }
+
+    /// <summary>The tool name, for a tool checkpoint.</summary>
+    public string? ToolName { get; set; }
+
+    /// <summary>The tool arguments, for a tool checkpoint.</summary>
+    public string? ToolArgs { get; set; }
+
+    /// <summary>Whether the tool call succeeded, for a tool checkpoint.</summary>
+    public bool? Success { get; set; }
+
+    /// <summary>The failure message, for a failed tool checkpoint.</summary>
+    public string? Error { get; set; }
+
+    /// <summary>The assistant's answer, for a turn checkpoint.</summary>
+    public string? Content { get; set; }
+
+    /// <summary>When the checkpoint was recorded, as an ISO 8601 timestamp.</summary>
+    public string? RecordedAt { get; set; }
+}
+
+/// <summary>
+/// Thrown when a conversation cannot be resumed because the native transcript of the session it
+/// was bound to is gone.
+/// </summary>
+/// <remarks>
+/// The durable conversation is intact — its entries, documents, and choices are all in the store.
+/// What is missing is the runtime's own transcript. Continuing with a fresh, empty session would
+/// silently discard the model's context, so the resume fails instead and the host decides what to
+/// do: re-create the session deliberately, or surface the loss.
+/// </remarks>
+public sealed class DurableRecoveryRequiredException : InvalidOperationException
+{
+    /// <summary>Creates the exception.</summary>
+    public DurableRecoveryRequiredException(string conversationId, string? sessionId, Exception? innerException = null)
+        : base(
+            $"Conversation '{conversationId}' cannot be resumed: the recorded SDK session "
+            + $"'{sessionId ?? "(none)"}' has no recoverable native transcript. The conversation "
+            + "itself is intact in the store; re-create its session deliberately rather than "
+            + "continuing with an empty replacement.",
+            innerException)
+    {
+        ConversationId = conversationId;
+        SessionId = sessionId;
+    }
+
+    /// <summary>The conversation that could not be resumed.</summary>
+    public string ConversationId { get; }
+
+    /// <summary>The session identifier that was recorded, when there was one.</summary>
+    public string? SessionId { get; }
+}
+
+/// <summary>
+/// Thrown when a stored sandbox policy cannot be applied to a session as written.
+/// </summary>
+/// <remarks>
+/// The alternative to failing is worse than failing. A policy that is silently narrowed, or
+/// silently dropped, produces a session that looks protected and is not: the conversation runs
+/// with more authority than the store says it has, and nothing in the transcript records the
+/// difference. So the session is not created and not resumed, and the host decides what to do —
+/// correct the stored policy, or clear it deliberately to run the conversation unsandboxed.
+/// </remarks>
+public sealed class DurableSandboxPolicyException : InvalidOperationException
+{
+    /// <summary>Creates the exception.</summary>
+    /// <param name="reason">What about the policy cannot be applied.</param>
+    /// <param name="policy">The stored policy that could not be applied.</param>
+    /// <param name="innerException">The failure underneath, when there is one.</param>
+    public DurableSandboxPolicyException(
+        string reason,
+        DurableSandboxPolicy policy,
+        Exception? innerException = null)
+        : base(
+            $"The stored sandbox policy cannot be applied: {reason} The session was not created "
+            + "or resumed, because running it without the protection the policy asks for would be "
+            + "a silent downgrade. Correct the stored policy, or clear it deliberately to run the "
+            + "conversation unsandboxed.",
+            innerException)
+    {
+        Reason = reason;
+        Policy = policy;
+    }
+
+    /// <summary>What about the policy cannot be applied.</summary>
+    public string Reason { get; }
+
+    /// <summary>The stored policy that could not be applied.</summary>
+    public DurableSandboxPolicy Policy { get; }
+}
+
+/// <summary>
+/// Thrown when an operation that takes the store's commit gate is called from inside a commit
+/// on that same store.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The gate is held for the whole of a commit's callback and is not reentrant, so a call that
+/// re-entered it would wait for a release only the enclosing commit can perform — and the
+/// enclosing commit is awaiting the call. That is a hang with no stack trace and no time limit,
+/// which is the worst failure mode an idempotency API can have. The gate therefore refuses the
+/// re-entry instead of queueing it.
+/// </para>
+/// <para>
+/// The guard is scoped to the async flow: a <em>different</em> task or thread calling the same
+/// method while the commit is in progress waits normally, because it is outside the context the
+/// commit set. Only re-entry from inside the committing callback throws.
+/// </para>
+/// <para>
+/// The catchable path is also the fix. Inside a transaction, write the memo through
+/// <see cref="Transaction.Memo"/> — it lands in the task's memo map before the transaction
+/// commits, so it is saved with the checkpoint and rolled back with it.
+/// </para>
+/// </remarks>
+public sealed class DurableCommitReentryException : InvalidOperationException
+{
+    /// <summary>Creates the exception.</summary>
+    /// <param name="operation">The operation that tried to re-enter the commit gate.</param>
+    /// <param name="commitOperation">The commit whose callback is running.</param>
+    public DurableCommitReentryException(string operation, string commitOperation)
+        : base(
+            $"{operation} was called from inside {commitOperation}'s callback, on the same store. "
+            + "That commit holds the store's commit gate for the whole callback and the gate is not "
+            + "reentrant, so the inner call would wait for a release that only the outer commit can "
+            + "give -- it would not return. Use Transaction.Memo inside the transaction: it writes "
+            + "the memo in the same commit as the checkpoint, so nothing is written twice and the "
+            + "memo is never lost between two commits.")
+    {
+        Operation = operation;
+        CommitOperation = commitOperation;
+    }
+
+    /// <summary>The operation that re-entered the gate.</summary>
+    public string Operation { get; }
+
+    /// <summary>The commit whose callback was running.</summary>
+    public string CommitOperation { get; }
+}
+
 /// <summary>The on-disk format of a durable store.</summary>
 public enum DurableStoreFormat
 {
@@ -515,6 +837,26 @@ public sealed class DurableStoreOptions
 
     /// <summary>The file name used under the per-user default directory.</summary>
     public string FileName { get; init; } = "durable-store.jsonl";
+
+    /// <summary>
+    /// A factory for the provider that backs the store. When set, it takes precedence
+    /// over <see cref="ProviderName"/> and over <see cref="Format"/>: the store is
+    /// built over the provider the factory returns instead of one of the built-in
+    /// file formats.
+    /// </summary>
+    /// <remarks>
+    /// The factory receives these options, so a provider can read whatever it needs
+    /// from them. It is called once per store, and the provider it returns is owned
+    /// and disposed by that store.
+    /// </remarks>
+    public Func<DurableStoreOptions, IDurableStoreProvider>? Provider { get; init; }
+
+    /// <summary>
+    /// The name of a provider registered with <see cref="DurableStore.RegisterProvider"/>.
+    /// When set and <see cref="Provider"/> is not, the store is built over the
+    /// registered provider.
+    /// </summary>
+    public string? ProviderName { get; init; }
 }
 
 /// <summary>
@@ -591,8 +933,30 @@ public interface IDurableStoreProvider : IDisposable
     /// <summary>Reads a document's state, creating it on first use.</summary>
     DocumentState EnsureDocument(string kind, string ownerId, ForkPolicy fork);
 
+    /// <summary>
+    /// Reads a document's state, creating it on first use and remembering the document's
+    /// initial value. The initial value is what a <see cref="ForkPolicy.Initial"/> fork
+    /// inherits, so it has to be recorded alongside the document, not recomputed later.
+    /// </summary>
+    DocumentState EnsureDocument(string kind, string ownerId, ForkPolicy fork, JsonElement? initial) =>
+        EnsureDocument(kind, ownerId, fork);
+
     /// <summary>Records a committed version of a document.</summary>
     void RecordDocumentVersion(DocumentState state, string entryId, JsonElement value);
+
+    /// <summary>
+    /// Reads a document's state, creating it only when it has never been written. This is the
+    /// create-if-absent primitive: <see cref="EnsureDocument(string, string, ForkPolicy)"/>
+    /// answers a document that exists-but-is-empty exactly like an absent one, so a caller that
+    /// needs "exactly one creator wins" cannot use it.
+    /// </summary>
+    /// <param name="kind">The document kind.</param>
+    /// <param name="ownerId">The owner the document belongs to.</param>
+    /// <param name="fork">The fork policy to record if the document is created.</param>
+    /// <param name="initial">The initial value to record if the document is created.</param>
+    /// <param name="state">The document's state when it exists, or was created by this call.</param>
+    /// <returns>Whether this call created the document.</returns>
+    bool TryCreateDocument(string kind, string ownerId, ForkPolicy fork, JsonElement? initial, out DocumentState state);
 
     /// <summary>Copies a document into another owner, honouring its fork policy.</summary>
     void CopyDocument(DocumentState source, string toOwner, string? forkEntryId);
@@ -711,6 +1075,14 @@ public class InMemoryStoreProvider : IDurableStoreProvider
         Persist();
     }
 
+    /// <summary>
+    /// Ends the transaction in flight without undoing it. A provider whose
+    /// <see cref="Persist"/> can fail keeps the undo log until the backend has accepted
+    /// the write, then calls this to discard it; a failed write is undone with
+    /// <see cref="Rollback"/> instead, so the provider is left exactly as it was.
+    /// </summary>
+    protected void EndTransaction() => _undo = null;
+
     /// <summary>The monotonic write sequence.</summary>
     public long Sequence => _sequence;
 
@@ -788,12 +1160,16 @@ public class InMemoryStoreProvider : IDurableStoreProvider
     }
 
     /// <summary>Reads a document's state, creating it on first use.</summary>
-    public DocumentState EnsureDocument(string kind, string ownerId, ForkPolicy fork)
+    public DocumentState EnsureDocument(string kind, string ownerId, ForkPolicy fork) =>
+        EnsureDocument(kind, ownerId, fork, initial: null);
+
+    /// <summary>Reads a document's state, creating it on first use and remembering its initial value.</summary>
+    public DocumentState EnsureDocument(string kind, string ownerId, ForkPolicy fork, JsonElement? initial)
     {
         var key = DocumentKey(kind, ownerId);
         if (!_documents.TryGetValue(key, out var state))
         {
-            state = new DocumentState(kind, ownerId, fork);
+            state = new DocumentState(kind, ownerId, fork, initial?.Clone());
             _documents[key] = state;
             _undo?.Remove(_documents, key);
         }
@@ -808,14 +1184,44 @@ public class InMemoryStoreProvider : IDurableStoreProvider
         state.Versions.Add(new DocumentVersion(entryId, value.Clone(), NextSequence()));
     }
 
+    /// <summary>Reads a document's state, creating it only when it has never been written.</summary>
+    /// <remarks>
+    /// "Never been written" means the store holds no state record for the key at all. A document
+    /// whose state record exists but has no committed version — which is what
+    /// <see cref="EnsureDocument(string, string, ForkPolicy, JsonElement?)"/> leaves behind when a
+    /// transaction rolls back after touching it — counts as existing here, because the next
+    /// claimant would otherwise treat a rolled-back placeholder as an absent document and win a
+    /// claim that never committed.
+    /// </remarks>
+    public bool TryCreateDocument(
+        string kind,
+        string ownerId,
+        ForkPolicy fork,
+        JsonElement? initial,
+        out DocumentState state)
+    {
+        var key = DocumentKey(kind, ownerId);
+        if (_documents.TryGetValue(key, out var existing))
+        {
+            state = existing;
+            return false;
+        }
+
+        state = new DocumentState(kind, ownerId, fork, initial?.Clone());
+        _documents[key] = state;
+        _undo?.Remove(_documents, key);
+        return true;
+    }
+
     /// <summary>Copies a document into another owner, honouring its fork policy.</summary>
     public void CopyDocument(DocumentState source, string toOwner, string? forkEntryId)
     {
-        var target = EnsureDocument(source.Kind, toOwner, source.Fork);
+        var target = EnsureDocument(source.Kind, toOwner, source.Fork, source.Initial);
         JsonElement? value = source.Fork switch
         {
             ForkPolicy.AsOf => forkEntryId is null ? source.Latest : source.AsOfOrBefore(forkEntryId, SequenceOf),
             ForkPolicy.Current => source.Latest,
+            ForkPolicy.Initial => source.Initial,
             _ => null,
         };
 
@@ -845,7 +1251,7 @@ public class InMemoryStoreProvider : IDurableStoreProvider
         var current = TaskStateSnapshot.Capture(record);
         if (_undo is not null && _taskStates.TryGetValue(record.Id, out var previous))
         {
-            _undo.Restore(previous, record);
+            _undo.Restore(previous, record, _taskStates);
         }
 
         _taskStates[record.Id] = current;
@@ -870,6 +1276,7 @@ public class InMemoryStoreProvider : IDurableStoreProvider
             Kind = d.Kind,
             OwnerId = d.OwnerId,
             Fork = d.Fork,
+            Initial = d.Initial?.Clone(),
             Versions = d.Versions.Select(v => new DocumentVersionSnapshot
             {
                 EntryId = v.EntryId,
@@ -898,7 +1305,7 @@ public class InMemoryStoreProvider : IDurableStoreProvider
 
         foreach (var document in snapshot.Documents)
         {
-            var state = new DocumentState(document.Kind, document.OwnerId, document.Fork);
+            var state = new DocumentState(document.Kind, document.OwnerId, document.Fork, document.Initial?.Clone());
             foreach (var version in document.Versions)
             {
                 state.Versions.Add(new DocumentVersion(version.EntryId, version.Value.Clone(), version.Sequence));
@@ -1201,6 +1608,7 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
             FileAccess.Write,
             FileShare.Read);
         using var writer = new StreamWriter(stream, new UTF8Encoding(false));
+        writer.NewLine = "\n";
         foreach (var record in records)
         {
             writer.WriteLine(JsonSerializer.Serialize(record, DurableJson.Options));
@@ -1220,14 +1628,18 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
     /// </summary>
     private void Replay(string path)
     {
-        long? truncateAfter = null;
+        long? truncateAfter = 0;
         using (var reader = new StreamReader(path, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: false))
         {
             var offset = 0L;
-            while (reader.ReadLine() is { } line)
+            while (ReadJsonlLine(reader, out var terminated) is { } line)
             {
-                // ReadLine consumes the terminator, so the byte offset of the next
-                // line is the offset after this line's text plus its newline.
+                if (!terminated)
+                {
+                    break;
+                }
+
+                // Retain CR in the text so CRLF and LF both count their exact UTF-8 bytes.
                 var lineEnd = offset + Encoding.UTF8.GetByteCount(line) + 1;
                 JsonlRecord? record = null;
                 try
@@ -1269,6 +1681,24 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
         SeedCommittedFromReplay();
     }
 
+    private static string? ReadJsonlLine(StreamReader reader, out bool terminated)
+    {
+        var line = new StringBuilder();
+        terminated = false;
+        while (reader.Read() is var value && value >= 0)
+        {
+            if (value == '\n')
+            {
+                terminated = true;
+                return line.ToString();
+            }
+
+            line.Append((char)value);
+        }
+
+        return line.Length == 0 ? null : line.ToString();
+    }
+
     /// <summary>Applies one replayed record to the in-memory state.</summary>
     private void Apply(JsonlRecord record)
     {
@@ -1298,7 +1728,9 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
                 EnsureDocument(
                     record.Payload.GetProperty("kind").GetString()!,
                     record.Payload.GetProperty("ownerId").GetString()!,
-                    record.Payload.GetProperty("fork").Deserialize<ForkPolicy>(DurableJson.Options));
+                    record.Payload.GetProperty("fork").Deserialize<ForkPolicy>(DurableJson.Options),
+                    // Older records predate the initial value; a missing property is not an error.
+                    record.Payload.TryGetProperty("initial", out var initial) ? initial.Clone() : null);
                 break;
             case "document-version":
                 // A version carries the sequence RecordDocumentVersion minted for it,
@@ -1368,7 +1800,7 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
             if (_emittedDocuments.Add(key))
             {
                 records.Add(JsonlRecord.For("document", Sequence, new JsonlDocumentRef(
-                    document.Kind, document.OwnerId, document.Fork)));
+                    document.Kind, document.OwnerId, document.Fork, document.Initial?.Clone())));
             }
 
             var committed = _committedVersions.GetValueOrDefault(key);
@@ -1433,7 +1865,7 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
 
     private sealed record JsonlEntryRef(string ConversationId, string EntryId);
 
-    private sealed record JsonlDocumentRef(string Kind, string OwnerId, ForkPolicy Fork);
+    private sealed record JsonlDocumentRef(string Kind, string OwnerId, ForkPolicy Fork, JsonElement? Initial);
 
     private sealed record JsonlDocumentVersion(
         string Kind, string OwnerId, ForkPolicy Fork, string EntryId, long Sequence, JsonElement Value);
@@ -1450,10 +1882,86 @@ internal sealed class JsonlStoreProvider : InMemoryStoreProvider
 /// </remarks>
 public sealed class DurableStore : IDisposable
 {
+    private static readonly ConcurrentDictionary<string, Func<DurableStoreOptions, IDurableStoreProvider>> ProviderFactories =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private readonly IDurableStoreProvider _provider;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly string? _path;
     private readonly DurableStoreFormat _format;
+
+    /// <summary>
+    /// The commit scope in flight in the current async flow, if any.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is what makes the non-reentrant gate refuse a re-entry instead of hanging on it.
+    /// An async-local is captured by each flow that awaits inside the callback, so it cannot by
+    /// itself say whether a caller is the committing flow or a flow that inherited the scope.
+    /// It is paired with <see cref="_gateHolder"/>: the scope object of the commit that holds the
+    /// gate <em>right now</em>. A flow whose scope is that same object is the committing flow (or
+    /// a continuation of it) and would deadlock, so the call is refused. A flow that inherited a
+    /// scope from a commit that has since released is a child of finished work — a fan-out — and
+    /// is allowed to queue normally.
+    /// </para>
+    /// <para>
+    /// A child started inside a callback that commits <em>while</em> the callback still holds the
+    /// gate is indistinguishable from a re-entry on the committing flow: the async-local flows
+    /// into it and .NET has no way to tell the two apart. Waiting there would deadlock whenever
+    /// the callback awaits the child, so it is refused with the same named error. Work dispatched
+    /// by the runtime crosses <see cref="OutsideCommitScopeAsync"/> at the task boundary, and a
+    /// fan-out that must commit is scheduled to run after its parent's commit returns.
+    /// </para>
+    /// </remarks>
+    private readonly AsyncLocal<CommitScope?> _commitScope = new();
+
+    /// <summary>
+    /// The scope object of the commit that currently holds the gate, or <c>null</c> when the gate
+    /// is free. Written only by the gate holder, read by every caller of
+    /// <see cref="EnterGateAsync"/> to tell a live re-entry from a stale inherited scope.
+    /// </summary>
+    private volatile CommitScope? _gateHolder;
+
+    /// <summary>
+    /// Registers a provider factory under a name, so a store can be opened over that
+    /// provider with <see cref="DurableStoreOptions.ProviderName"/>. Registering the
+    /// same name again replaces the factory.
+    /// </summary>
+    /// <remarks>
+    /// This is additive surface: the built-in formats keep the arms they had, and a
+    /// store that names no provider is created exactly as before. Registration is
+    /// process-wide, so a host that embeds the durable layer registers once at startup
+    /// — or references a package that registers on the host's behalf — and thereafter
+    /// selects the provider by name in the options it already passes to
+    /// <see cref="Create(DurableStoreOptions)"/>.
+    /// <para>
+    /// The factory is called once per store and receives the options the store was
+    /// created with. The provider it returns is owned and disposed by that store.
+    /// </para>
+    /// </remarks>
+    public static void RegisterProvider(string name, Func<DurableStoreOptions, IDurableStoreProvider> factory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(factory);
+        ProviderFactories[name] = factory;
+    }
+
+    /// <summary>
+    /// Removes a provider factory registered with <see cref="RegisterProvider"/>.
+    /// </summary>
+    /// <returns><c>true</c> when a factory was registered under the name.</returns>
+    public static bool UnregisterProvider(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        return ProviderFactories.TryRemove(name, out _);
+    }
+
+    /// <summary>Whether a provider is registered under the name.</summary>
+    public static bool IsProviderRegistered(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        return ProviderFactories.ContainsKey(name);
+    }
 
     /// <summary>Creates a store. When <paramref name="path"/> is given, state is persisted to that file.</summary>
     public DurableStore(string? path = null)
@@ -1493,19 +2001,69 @@ public sealed class DurableStore : IDisposable
                 Path = DefaultStorePath(options.FileName),
                 Format = options.Format,
                 FileName = options.FileName,
+                Provider = options.Provider,
+                ProviderName = options.ProviderName,
             };
         }
 
-        IDurableStoreProvider provider = options.Format switch
+        IDurableStoreProvider provider = SelectProvider(options);
+
+        provider.Open(options);
+        return new DurableStore(provider, options.Path, ResolveFormat(provider, options));
+    }
+
+    /// <summary>
+    /// Resolves the format the store will actually use. <see cref="DurableStoreFormat.Auto"/>
+    /// is a request, not a format: it is settled at open time by sniffing the file, so the
+    /// store records the answer rather than the question.
+    /// </summary>
+    /// <remarks>
+    /// The provider the options selected is the answer, because that is what the store
+    /// writes through. A provider that is not one of the built-in file formats — a
+    /// caller-supplied factory or a registered name — has no format to report, so the
+    /// requested format is kept as-is.
+    /// </remarks>
+    private static DurableStoreFormat ResolveFormat(IDurableStoreProvider provider, DurableStoreOptions options) =>
+        provider switch
+        {
+            JsonlStoreProvider => DurableStoreFormat.Jsonl,
+            LegacyJsonStoreProvider => DurableStoreFormat.LegacyJson,
+            InMemoryStoreProvider => DurableStoreFormat.InMemory,
+            _ => options.Format,
+        };
+
+    /// <summary>
+    /// Picks the provider the options select. An explicit factory wins, then a
+    /// registered provider name, then the built-in formats — so the seam only ever
+    /// adds a way to name a provider, and every existing caller keeps the provider
+    /// it had.
+    /// </summary>
+    private static IDurableStoreProvider SelectProvider(DurableStoreOptions options)
+    {
+        if (options.Provider is not null)
+        {
+            return options.Provider(options);
+        }
+
+        if (options.ProviderName is not null)
+        {
+            if (!ProviderFactories.TryGetValue(options.ProviderName, out var factory))
+            {
+                throw new InvalidOperationException(
+                    $"No durable store provider is registered under the name '{options.ProviderName}'. " +
+                    "Register one with DurableStore.RegisterProvider before creating the store.");
+            }
+
+            return factory(options);
+        }
+
+        return options.Format switch
         {
             DurableStoreFormat.InMemory => new InMemoryStoreProvider(),
             DurableStoreFormat.LegacyJson => new LegacyJsonStoreProvider(),
             DurableStoreFormat.Jsonl => new JsonlStoreProvider(),
             _ => CreateProviderForAuto(options.Path),
         };
-
-        provider.Open(options);
-        return new DurableStore(provider, options.Path, options.Format);
     }
 
     /// <summary>
@@ -1681,6 +2239,88 @@ public sealed class DurableStore : IDisposable
         _format = format;
     }
 
+    /// <summary>What the commit in flight in the current flow is, for the re-entry guard's message.</summary>
+    private sealed record CommitScope(string Operation);
+
+    /// <summary>
+    /// Takes the commit gate, refusing a call that would re-enter a commit this flow is already
+    /// inside.
+    /// </summary>
+    /// <param name="operation">The gate-taking operation, used to name it in the refusal.</param>
+    /// <exception cref="DurableCommitReentryException">
+    /// The current flow is inside a commit's callback on this store <em>and</em> that commit still
+    /// holds the gate, so waiting for it would never return.
+    /// </exception>
+    /// <remarks>
+    /// The refusal is keyed on the gate holder, not merely on "this flow inherited a scope". A
+    /// scope inherited from a commit that has since released — a child started from a callback —
+    /// is a fan-out, and waiting for the gate is correct and completes. See
+    /// <see cref="_commitScope"/> for why a child that commits before its parent releases is
+    /// still refused.
+    /// </remarks>
+    private async Task EnterGateAsync(string operation)
+    {
+        if (_commitScope.Value is { } commit && ReferenceEquals(commit, _gateHolder))
+        {
+            throw new DurableCommitReentryException(operation, commit.Operation);
+        }
+
+        await _gate.WaitAsync();
+    }
+
+    /// <summary>
+    /// Runs a gate-held operation, marking the flow as inside it so a re-entry from inside its
+    /// callback is refused rather than queued behind it.
+    /// </summary>
+    private async Task<T> InCommitAsync<T>(string operation, Func<Task<T>> body)
+    {
+        await EnterGateAsync(operation);
+        var scope = new CommitScope(operation);
+        var previous = _commitScope.Value;
+        _commitScope.Value = scope;
+        _gateHolder = scope;
+        try
+        {
+            return await body();
+        }
+        finally
+        {
+            _gateHolder = null;
+            _commitScope.Value = previous;
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Runs <paramref name="body"/> outside any commit scope, then restores the caller's scope.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The scope is an <see cref="AsyncLocal{T}"/>, so it flows into continuations — including work
+    /// started from inside a commit's callback. A task created and scheduled by a callback (a
+    /// fan-out) therefore inherits the parent's scope, and <see cref="EnterGateAsync"/> would see
+    /// that inheritance. The gate-holder check already permits such a child once the parent has
+    /// released; this boundary makes the child start with no scope at all, so its own commit is
+    /// never judged against a parent's lifetime.
+    /// </para>
+    /// <para>
+    /// Every task run crosses this boundary.
+    /// </para>
+    /// </remarks>
+    internal async Task<T> OutsideCommitScopeAsync<T>(Func<Task<T>> body)
+    {
+        var previous = _commitScope.Value;
+        _commitScope.Value = null;
+        try
+        {
+            return await body();
+        }
+        finally
+        {
+            _commitScope.Value = previous;
+        }
+    }
+
     /// <summary>The conversations known to this store.</summary>
     public IReadOnlyCollection<ConversationRecord> Conversations => _provider.Conversations;
 
@@ -1691,10 +2331,15 @@ public sealed class DurableStore : IDisposable
     public IReadOnlyCollection<DocumentState> Documents => _provider.Documents;
 
     /// <summary>Runs a transaction. Everything written inside is saved together, or discarded if it throws.</summary>
-    public async Task<T> CommitAsync<T>(Func<Transaction, Task<T>> body)
+    /// <remarks>
+    /// The callback runs inside the store's commit gate. An operation that takes the gate again
+    /// from inside it — <see cref="TaskRuntime.MemoAsync"/>, say — throws
+    /// <see cref="DurableCommitReentryException"/> instead of waiting for a release that cannot
+    /// happen; a caller inside this callback writes a memo through <see cref="Transaction.Memo"/>.
+    /// </remarks>
+    public Task<T> CommitAsync<T>(Func<Transaction, Task<T>> body)
     {
-        await _gate.WaitAsync();
-        try
+        return InCommitAsync("DurableStore.CommitAsync", async () =>
         {
             var transaction = new Transaction(this);
             _provider.BeginTransaction();
@@ -1713,11 +2358,7 @@ public sealed class DurableStore : IDisposable
 
             _provider.Commit();
             return result;
-        }
-        finally
-        {
-            _gate.Release();
-        }
+        });
     }
 
     /// <summary>Runs a transaction that produces no value.</summary>
@@ -1734,6 +2375,116 @@ public sealed class DurableStore : IDisposable
     /// <summary>Reads a task record.</summary>
     public DurableTaskRecord? Task(string id) => _provider.Task(id);
 
+    /// <summary>
+    /// Delivers an external event to every task parked on it, and returns the ids of the
+    /// tasks the event woke.
+    /// </summary>
+    /// <remarks>
+    /// A task parks on an event with <see cref="TaskCommit.WaitingForEvent"/>: it commits a
+    /// <see cref="TaskStatus.Waiting"/> checkpoint and ends the run, holding no invocation and
+    /// no timer. This is the other half of that commit, and it exists on the store because an
+    /// event outlives the process that parked on it — the caller may be a different process
+    /// over the same file, delivering the event that a stopped container was waiting for.
+    /// <para>
+    /// The event is the answer itself: the delivered payload is written as the task's memo
+    /// <see cref="ExternalEventMemoKey"/>, and the task's <see cref="DurableTaskRecord.WaitingOn"/>
+    /// list drops the event inside the same transaction that writes the memo. A reading
+    /// phase therefore cannot see the memo without the task having stopped waiting for it,
+    /// and a redelivery finds no waiter and writes nothing. A memo the task already holds is
+    /// never overwritten: the first delivery is the answer.
+    /// </para>
+    /// <para>
+    /// The task is left <see cref="TaskStatus.Running"/>, so the next run of the task runner
+    /// re-enters it at the checkpoint the caller wrote in <see cref="TaskCommit.WaitingForEvent"/>.
+    /// This method does not start that run: it knows nothing about the runner, and the host
+    /// that owns one calls <c>ResumeAsync</c> (or <c>RunTaskAsync</c>) after it returns.
+    /// </para>
+    /// </remarks>
+    /// <param name="eventName">The event name the task parked on.</param>
+    /// <param name="payload">The event's answer, stored as a memo on each task it wakes.</param>
+    /// <returns>The ids of the tasks the event woke, in store order.</returns>
+    public async Task<IReadOnlyList<string>> RaiseEventAsync(string eventName, JsonElement payload)
+    {
+        if (string.IsNullOrWhiteSpace(eventName))
+        {
+            throw new ArgumentException("An external event name is required.", nameof(eventName));
+        }
+
+        if (!TaskCommit.IsExternalEvent(eventName))
+        {
+            throw new ArgumentException(
+                $"An external event name is written '{TaskCommit.ExternalEventPrefix}<name>'; "
+                + $"'{eventName}' would be read back as a child task id.",
+                nameof(eventName));
+        }
+
+        return await InCommitAsync<IReadOnlyList<string>>("DurableStore.RaiseEventAsync", () =>
+        {
+            var waiting = _provider.Tasks
+                .Where(task => task.Status == TaskStatus.Waiting && task.WaitingOn.Contains(eventName))
+                .Select(task => task.Id)
+                .ToList();
+            if (waiting.Count == 0)
+            {
+                return System.Threading.Tasks.Task.FromResult<IReadOnlyList<string>>([]);
+            }
+
+            var transaction = new Transaction(this);
+            _provider.BeginTransaction();
+            List<string> woken;
+            try
+            {
+                woken = [];
+                foreach (var taskId in waiting)
+                {
+                    var task = _provider.Task(taskId);
+                    if (task is null)
+                    {
+                        continue;
+                    }
+
+                    // The task's own state is part of the transaction, so a failure below puts
+                    // it back where it was rather than leaving it half-woken.
+                    _provider.UpdateTask(task);
+
+                    // The first delivery is the answer. A second one is a duplicate, and the
+                    // task already has its reply.
+                    if (!task.Memos.ContainsKey(ExternalEventMemoKey))
+                    {
+                        task.Memos[ExternalEventMemoKey] = payload.Clone();
+                    }
+
+                    task.WaitingOn.RemoveAll(name => string.Equals(name, eventName, StringComparison.Ordinal));
+                    task.Status = TaskStatus.Running;
+                    _provider.UpdateTask(task);
+                    woken.Add(taskId);
+                }
+
+                _provider.Commit();
+            }
+            catch
+            {
+                _provider.Rollback();
+                throw;
+            }
+
+            return System.Threading.Tasks.Task.FromResult<IReadOnlyList<string>>(woken);
+        });
+    }
+
+    /// <summary>
+    /// The memo key an external event's payload is delivered under. A task parked on
+    /// <c>external:&lt;name&gt;</c> reads its answer with
+    /// <c>runtime.MemoAsync(DurableStore.ExternalEventMemoKey)</c>.
+    /// </summary>
+    /// <remarks>
+    /// It is one key rather than one per event because a task waits for one event at a time:
+    /// the checkpoint that names the event is the record of which event was asked, and the
+    /// memo is only the answer. A task that wants two answers asks twice, and reads the first
+    /// before it parks on the second.
+    /// </remarks>
+    public static string ExternalEventMemoKey => "external-event";
+
     /// <summary>Reads a conversation record.</summary>
     public ConversationRecord? Conversation(string id) => _provider.Conversation(id);
 
@@ -1745,10 +2496,9 @@ public sealed class DurableStore : IDisposable
     /// the same transaction. Everything the callback writes is saved together with the
     /// checkpoint, or discarded if the callback throws.
     /// </summary>
-    internal async Task<TaskCommit> CommitTaskAsync(string taskId, Func<Transaction, Task<TaskCommit>> commit)
+    internal Task<TaskCommit> CommitTaskAsync(string taskId, Func<Transaction, Task<TaskCommit>> commit)
     {
-        await _gate.WaitAsync();
-        try
+        return InCommitAsync<TaskCommit>("TaskRuntime.CommitAsync", async () =>
         {
             var task = _provider.Task(taskId);
             if (task is null)
@@ -1806,37 +2556,45 @@ public sealed class DurableStore : IDisposable
             _provider.UpdateTask(task);
             _provider.Commit();
             return next;
-        }
-        finally
-        {
-            _gate.Release();
-        }
+        });
     }
 
-    internal async Task<TaskCommit> CommitTaskAsync(string taskId, Func<TaskCommit> commit)
+    internal Task<TaskCommit> CommitTaskAsync(string taskId, Func<TaskCommit> commit)
     {
-        await _gate.WaitAsync();
-        try
+        return InCommitAsync<TaskCommit>("TaskRuntime.CommitAsync", () =>
         {
             var task = _provider.Task(taskId);
             if (task is null)
             {
-                return TaskCommit.Failed("unknown task");
+                return System.Threading.Tasks.Task.FromResult(TaskCommit.Failed("unknown task"));
             }
 
             // A terminal task's outcome is final.
             if (task.Status == TaskStatus.Terminal)
             {
-                return task.Outcome is { } existing
+                return System.Threading.Tasks.Task.FromResult(task.Outcome is { } existing
                     ? TaskCommit.Completed(existing)
-                    : TaskCommit.Completed(DurableJson.ToElement(new TaskOutcome("completed")));
+                    : TaskCommit.Completed(DurableJson.ToElement(new TaskOutcome("completed"))));
             }
 
             var next = commit();
+
+            // The task's own state is part of the commit: the checkpoint, the status, the
+            // names it is waiting on, and the outcome are written together or not at all.
+            // WaitingOn is written on both arms of this overload pair: a commit that is
+            // `waiting` and whose names were dropped is indistinguishable from `running`,
+            // and the task would never be resumed by the name it parked on.
+            _provider.UpdateTask(task);
             task.Status = next.Status;
             if (next.Checkpoint is { } checkpoint)
             {
                 task.Checkpoint = checkpoint;
+            }
+
+            if (next.WaitingOn.Count > 0)
+            {
+                task.WaitingOn.Clear();
+                task.WaitingOn.AddRange(next.WaitingOn);
             }
 
             if (next.Outcome is { } outcome)
@@ -1846,18 +2604,20 @@ public sealed class DurableStore : IDisposable
 
             _provider.UpdateTask(task);
             _provider.Commit();
-            return next;
-        }
-        finally
-        {
-            _gate.Release();
-        }
+            return System.Threading.Tasks.Task.FromResult(next);
+        });
     }
 
     /// <summary>Reads or writes an idempotency memo.</summary>
+    /// <remarks>
+    /// This takes the store's commit gate. Called from inside a commit's callback — where the
+    /// gate is already held by a commit this flow is running — it throws
+    /// <see cref="DurableCommitReentryException"/> instead of waiting for a release that cannot
+    /// happen. <see cref="Transaction.Memo"/> is the form that writes a memo inside a transaction.
+    /// </remarks>
     internal async Task<JsonElement?> MemoAsync(string taskId, string key, JsonElement? value)
     {
-        await _gate.WaitAsync();
+        await EnterGateAsync("TaskRuntime.MemoAsync");
         try
         {
             var task = _provider.Task(taskId);
@@ -1915,10 +2675,55 @@ public sealed class DurableStore : IDisposable
     }
 
     /// <summary>
-    /// Schedules a task to run. The harness owns the runner, so the store asks it to
+    /// Schedules a task to run. The runtime owns the runner, so the store asks it to
     /// start the task rather than running it itself.
     /// </summary>
-    internal Action<string, CancellationToken>? TaskScheduler { get; set; }
+    /// <remarks>
+    /// A store has at most one runner. The slot is claimed by the runtime that drives the
+    /// store and released when that runtime is disposed, so two runtimes over one store
+    /// cannot both schedule the same task: the second claim fails instead of silently
+    /// replacing the first.
+    /// </remarks>
+    internal Action<string, CancellationToken>? TaskScheduler { get; private set; }
+
+    private readonly object _schedulerGate = new();
+    private object? _schedulerOwner;
+
+    /// <summary>Claims the store's single task-runner slot for <paramref name="owner"/>.</summary>
+    /// <exception cref="InvalidOperationException">
+    /// Another runtime already drives this store. A store has one task runner, so a second
+    /// runtime over the same store would compete with the first for the same tasks.
+    /// </exception>
+    internal void ClaimTaskScheduler(object owner, Action<string, CancellationToken> scheduler)
+    {
+        lock (_schedulerGate)
+        {
+            if (_schedulerOwner is not null && !ReferenceEquals(_schedulerOwner, owner))
+            {
+                throw new InvalidOperationException(
+                    "This store is already driven by another durable runtime. A store has one task "
+                    + "runner, so share the runtime instead of opening a second one over the same store.");
+            }
+
+            _schedulerOwner = owner;
+            TaskScheduler = scheduler;
+        }
+    }
+
+    /// <summary>Releases the task-runner slot, if <paramref name="owner"/> still holds it.</summary>
+    internal void ReleaseTaskScheduler(object owner)
+    {
+        lock (_schedulerGate)
+        {
+            if (!ReferenceEquals(_schedulerOwner, owner))
+            {
+                return;
+            }
+
+            _schedulerOwner = null;
+            TaskScheduler = null;
+        }
+    }
 
     internal void ScheduleTask(string taskId, CancellationToken cancellationToken) =>
         TaskScheduler?.Invoke(taskId, cancellationToken);
@@ -1928,6 +2733,21 @@ public sealed class DurableStore : IDisposable
     /// records a transaction owns -- a fork's inherited entries, a copied document.
     /// </summary>
     internal IDurableStoreProvider Provider => _provider;
+
+    /// <summary>
+    /// The format the store actually resolved to. <see cref="DurableStoreFormat.Auto"/> is
+    /// resolved at open time by sniffing the file, so this reports what the store does
+    /// rather than what the caller asked for — the same distinction <see cref="IsPersistent"/>
+    /// draws.
+    /// </summary>
+    /// <remarks>
+    /// The host prints this at startup so an operator can tell which backend a run is
+    /// writing to without reading the store file. It stays internal because the resolved
+    /// format is an implementation detail of the open: a caller that asked for
+    /// <see cref="DurableStoreFormat.Auto"/> has no reason to branch on the answer, and
+    /// the public surface should not grow to expose it.
+    /// </remarks>
+    internal DurableStoreFormat Format => _format;
 
     /// <summary>
     /// Re-reads the store file into memory, discarding the in-memory state. A store
@@ -1943,7 +2763,7 @@ public sealed class DurableStore : IDisposable
     /// </remarks>
     public async Task RefreshAsync()
     {
-        await _gate.WaitAsync();
+        await EnterGateAsync("DurableStore.RefreshAsync");
         try
         {
             if (_provider.IsPersistent)
@@ -2010,12 +2830,53 @@ public sealed class Transaction
     /// <summary>Reads an editable copy of a document, creating it on first use.</summary>
     public DocumentDraft<T> Doc<T>(DocumentDefinition<T> definition, string ownerId)
     {
-        var state = _provider.EnsureDocument(definition.Kind, ownerId, definition.Fork);
+        var state = EnsureDocumentWithInitial(definition, ownerId);
         var current = state.Latest is { } latest
             ? latest.Deserialize<T>(DurableJson.Options)!
             : definition.Initial();
         return new DocumentDraft<T>(this, definition, ownerId, current);
     }
+
+    /// <summary>
+    /// Ensures the document exists, recording the definition's initial value the first time
+    /// it is seen. A <see cref="ForkPolicy.Initial"/> fork inherits that value, so it has to
+    /// be captured while the definition is in hand.
+    /// </summary>
+    private DocumentState EnsureDocumentWithInitial<T>(DocumentDefinition<T> definition, string ownerId) =>
+        _provider.EnsureDocument(
+            definition.Kind,
+            ownerId,
+            definition.Fork,
+            DurableJson.ToElement(definition.Initial()));
+
+    /// <summary>
+    /// Creates a document only when the store holds no state for it. The caller commits the
+    /// first version with <see cref="CommitDocument{T}"/> and the entry it created.
+    /// </summary>
+    /// <returns><c>true</c> when this transaction created the document.</returns>
+    /// <remarks>
+    /// <para>
+    /// This is the create-if-absent primitive the claim record is built on. It exists because
+    /// <see cref="Doc{T}"/> cannot express it: <see cref="Doc{T}"/> answers an absent document
+    /// with the definition's initial value, so two transactions that both read-then-write would
+    /// both believe they hold the claim. Here the read and the write are one step, inside the
+    /// transaction the store's commit gate serializes, so exactly one caller in a process sees
+    /// <c>true</c>.
+    /// </para>
+    /// <para>
+    /// It is deliberately not a "compare and swap". Creating and replacing are different
+    /// operations with different losers: a create reports "someone else was first" and a
+    /// replace reports "what you read is stale". Folding them together would make the refusal
+    /// message ambiguous, and the refusal message is the conflict path.
+    /// </para>
+    /// </remarks>
+    public bool TryCreateDocument<T>(DocumentDefinition<T> definition, string ownerId) =>
+        _provider.TryCreateDocument(
+            definition.Kind,
+            ownerId,
+            definition.Fork,
+            DurableJson.ToElement(definition.Initial()),
+            out _);
 
     /// <summary>Creates a task and returns its record.</summary>
     public DurableTaskRecord CreateTask(
@@ -2035,9 +2896,62 @@ public sealed class Transaction
         return record;
     }
 
+    /// <summary>
+    /// Reads or writes an idempotency memo as part of this transaction.
+    /// </summary>
+    /// <param name="taskId">The task the memo belongs to.</param>
+    /// <param name="key">The memo key.</param>
+    /// <param name="value">
+    /// The value to write, or <see langword="null"/> to read. The parameter means what
+    /// <see cref="TaskRuntime.MemoAsync"/>'s does: a memo holds a JSON value, and a JSON
+    /// null is not a memo worth writing.
+    /// </param>
+    /// <returns>The memo's value after the call, or <see langword="null"/> when it is not set.</returns>
+    /// <remarks>
+    /// <para>
+    /// <see cref="TaskRuntime.MemoAsync"/> is the form to call from a phase handler, outside a
+    /// transaction. It takes the store's commit gate, and so does the commit that is running the
+    /// handler, so calling it from inside a commit callback cannot make progress: the gate is not
+    /// reentrant and the callback cannot return. It therefore throws
+    /// <see cref="DurableCommitReentryException"/> rather than waiting.
+    /// </para>
+    /// <para>
+    /// This overload exists for the one shape the other cannot express: an external effect whose
+    /// memo has to commit with the checkpoint, so a crash between the effect and its record leaves
+    /// either both or neither. The write lands in the task's memo map before the transaction
+    /// commits, so a rollback restores it through the same snapshot that restores the task's status
+    /// and checkpoint.
+    /// </para>
+    /// </remarks>
+    public JsonElement? Memo(string taskId, string key, JsonElement? value = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(taskId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
+        var task = _provider.Task(taskId);
+        if (task is null)
+        {
+            return null;
+        }
+
+        if (value is { } element)
+        {
+            task.Memos[key] = element.Clone();
+            // The task record changed inside the transaction, so the provider is told about it; that
+            // is what arms the undo with the pre-transaction memo map. A rollback then discards this
+            // write — including on the *next* failed transaction, which restores the snapshot the
+            // undo put back into the provider's baseline rather than the state this write produced.
+            // `UndoLog.Restore` is where both halves of that live.
+            _provider.UpdateTask(task);
+            return task.Memos[key];
+        }
+
+        return task.Memos.TryGetValue(key, out var existing) ? existing : null;
+    }
+
     internal void CommitDocument<T>(DocumentDefinition<T> definition, string ownerId, T value, string entryId)
     {
-        var state = _provider.EnsureDocument(definition.Kind, ownerId, definition.Fork);
+        var state = EnsureDocumentWithInitial(definition, ownerId);
         _provider.RecordDocumentVersion(state, entryId, DurableJson.ToElement(value));
     }
 }
@@ -2102,6 +3016,9 @@ public sealed class DocumentSnapshot
 
     /// <summary>The fork policy.</summary>
     public ForkPolicy Fork { get; set; }
+
+    /// <summary>The document's initial value, inherited by a <see cref="ForkPolicy.Initial"/> fork.</summary>
+    public JsonElement? Initial { get; set; }
 
     /// <summary>The committed versions.</summary>
     public List<DocumentVersionSnapshot> Versions { get; set; } = [];
@@ -2379,6 +3296,284 @@ public static class PermissionPolicy
     }
 }
 
+/// <summary>
+/// The durable sandbox policy for a conversation.
+/// </summary>
+/// <remarks>
+/// This is the durable layer's own shape, deliberately not the SDK's experimental
+/// <c>GitHub.Copilot.Rpc.SandboxConfig</c> wire type. The wire type is what the runtime
+/// accepts today; the stored type is what a conversation keeps meaning. A field the SDK
+/// renames or removes cannot change what a stored conversation means, and a mapping that
+/// drops a field is a visible bug in this file rather than a silent change in the store.
+/// <para>
+/// <c>null</c> on <see cref="AgentChoices.Sandbox"/> means "no sandbox": the session is
+/// created with no sandbox configuration at all, which is what every example before this
+/// one did.
+/// </para>
+/// <para>
+/// Paths in <see cref="Filesystem"/> may contain the <see cref="WorkspaceToken"/> token
+/// (<c>{workspace}</c>). The token is expanded when the session is built, against the
+/// conversation's working directory, so a fork keeps the policy's shape but not the
+/// parent's absolute grants.
+/// </para>
+/// </remarks>
+public sealed class DurableSandboxPolicy : IEquatable<DurableSandboxPolicy>
+{
+    /// <summary>The token that stands for the conversation's working directory.</summary>
+    public const string WorkspaceToken = "{workspace}";
+
+    /// <summary>Whether the sandbox is enabled for the session.</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>Whether the working directory is added to the readwrite paths automatically.</summary>
+    public bool? AddCurrentWorkingDirectory { get; set; }
+
+    /// <summary>
+    /// Whether the agent may ask for an individual command to run outside the sandbox.
+    /// Fail-closed: absent or <c>false</c> means no bypass.
+    /// </summary>
+    public bool? AllowBypass { get; set; }
+
+    /// <summary>
+    /// Whether the agent may read the dev tool directories. Fail-closed: absent or
+    /// <c>false</c> means no dev tool access.
+    /// </summary>
+    public bool? AllowDevToolAccess { get; set; }
+
+    /// <summary>Whether MCP servers are sandboxed. Only an explicit <c>false</c> opts out.</summary>
+    public bool? SandboxMcpServers { get; set; }
+
+    /// <summary>Whether LSP servers are sandboxed. Only an explicit <c>false</c> opts out.</summary>
+    public bool? SandboxLspServers { get; set; }
+
+    /// <summary>
+    /// Whether the working directory is trusted for the session. <c>null</c> leaves the
+    /// existing folder trust unchanged.
+    /// </summary>
+    public bool? TrustWorkingDirectory { get; set; }
+
+    /// <summary>GitHub and git credential forwarding.</summary>
+    public DurableSandboxAuth? Auth { get; set; }
+
+    /// <summary>Credentials injected into the sandboxed process.</summary>
+    public DurableSandboxCredentials? Credentials { get; set; }
+
+    /// <summary>The filesystem policy.</summary>
+    public DurableSandboxFilesystem? Filesystem { get; set; }
+
+    /// <summary>The network policy.</summary>
+    public DurableSandboxNetwork? Network { get; set; }
+
+    /// <summary>Whether the keychain is reachable. Seatbelt only.</summary>
+    public bool? KeychainAccess { get; set; }
+
+    /// <summary>
+    /// Expands the <see cref="WorkspaceToken"/> token in a policy path against a working
+    /// directory. A path without the token is returned unchanged, so an absolute grant
+    /// stays absolute.
+    /// </summary>
+    public static string ExpandPath(string path, string? workingDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        if (!path.Contains(WorkspaceToken, StringComparison.Ordinal))
+        {
+            return path;
+        }
+
+        return path.Replace(
+            WorkspaceToken,
+            workingDirectory ?? Environment.CurrentDirectory,
+            StringComparison.Ordinal);
+    }
+
+    /// <inheritdoc />
+    public bool Equals(DurableSandboxPolicy? other) =>
+        other is not null
+        && Enabled == other.Enabled
+        && AddCurrentWorkingDirectory == other.AddCurrentWorkingDirectory
+        && AllowBypass == other.AllowBypass
+        && AllowDevToolAccess == other.AllowDevToolAccess
+        && SandboxMcpServers == other.SandboxMcpServers
+        && SandboxLspServers == other.SandboxLspServers
+        && TrustWorkingDirectory == other.TrustWorkingDirectory
+        && KeychainAccess == other.KeychainAccess
+        && Equals(Auth, other.Auth)
+        && Equals(Credentials, other.Credentials)
+        && Equals(Filesystem, other.Filesystem)
+        && Equals(Network, other.Network);
+
+    /// <inheritdoc />
+    public override bool Equals(object? obj) => Equals(obj as DurableSandboxPolicy);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => HashCode.Combine(
+        Enabled,
+        AddCurrentWorkingDirectory,
+        AllowBypass,
+        AllowDevToolAccess,
+        SandboxMcpServers,
+        SandboxLspServers,
+        TrustWorkingDirectory,
+        KeychainAccess);
+}
+
+/// <summary>GitHub and git credential forwarding for a sandboxed session.</summary>
+public sealed class DurableSandboxAuth : IEquatable<DurableSandboxAuth>
+{
+    /// <summary>Whether the GitHub CLI's credentials are forwarded.</summary>
+    public bool? Gh { get; set; }
+
+    /// <summary>Whether git credentials are forwarded.</summary>
+    public bool? Git { get; set; }
+
+    /// <inheritdoc />
+    public bool Equals(DurableSandboxAuth? other) => other is not null && Gh == other.Gh && Git == other.Git;
+
+    /// <inheritdoc />
+    public override bool Equals(object? obj) => Equals(obj as DurableSandboxAuth);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => HashCode.Combine(Gh, Git);
+}
+
+/// <summary>Credentials injected into a sandboxed session.</summary>
+public sealed class DurableSandboxCredentials : IEquatable<DurableSandboxCredentials>
+{
+    /// <summary>
+    /// The environment variables to inject, and for each one the hosts it is injected into.
+    /// A value is a list of HTTPS hostnames or <c>*.example.com</c> patterns; a bare
+    /// <c>*</c> is not accepted, and an empty list is not a valid injection.
+    /// </summary>
+    public Dictionary<string, List<string>>? EnvVars { get; set; }
+
+    /// <inheritdoc />
+    public bool Equals(DurableSandboxCredentials? other) => other is not null && EnvVarsEqual(EnvVars, other.EnvVars);
+
+    private static bool EnvVarsEqual(Dictionary<string, List<string>>? left, Dictionary<string, List<string>>? right)
+    {
+        if (left is null || right is null)
+        {
+            return left is null && right is null;
+        }
+
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        foreach (var pair in left)
+        {
+            if (!right.TryGetValue(pair.Key, out var hosts) || !(pair.Value ?? []).SequenceEqual(hosts ?? []))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <inheritdoc />
+    public override bool Equals(object? obj) => Equals(obj as DurableSandboxCredentials);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => EnvVars?.Count ?? 0;
+}
+
+/// <summary>The filesystem policy of a sandbox.</summary>
+public sealed class DurableSandboxFilesystem : IEquatable<DurableSandboxFilesystem>
+{
+    /// <summary>Whether the policy is cleared when the session exits.</summary>
+    public bool? ClearPolicyOnExit { get; set; }
+
+    /// <summary>Paths the sandboxed process may not read at all.</summary>
+    public List<string>? DeniedPaths { get; set; }
+
+    /// <summary>Paths the sandboxed process may read but not write.</summary>
+    public List<string>? ReadonlyPaths { get; set; }
+
+    /// <summary>Paths the sandboxed process may read and write.</summary>
+    public List<string>? ReadwritePaths { get; set; }
+
+    /// <inheritdoc />
+    public bool Equals(DurableSandboxFilesystem? other) =>
+        other is not null
+        && ClearPolicyOnExit == other.ClearPolicyOnExit
+        && (DeniedPaths ?? []).SequenceEqual(other.DeniedPaths ?? [])
+        && (ReadonlyPaths ?? []).SequenceEqual(other.ReadonlyPaths ?? [])
+        && (ReadwritePaths ?? []).SequenceEqual(other.ReadwritePaths ?? []);
+
+    /// <inheritdoc />
+    public override bool Equals(object? obj) => Equals(obj as DurableSandboxFilesystem);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => HashCode.Combine(
+        ClearPolicyOnExit,
+        DeniedPaths?.Count,
+        ReadonlyPaths?.Count,
+        ReadwritePaths?.Count);
+}
+
+/// <summary>The network policy of a sandbox.</summary>
+public sealed class DurableSandboxNetwork : IEquatable<DurableSandboxNetwork>
+{
+    /// <summary>Hosts the sandboxed process may reach.</summary>
+    public List<string>? AllowedHosts { get; set; }
+
+    /// <summary>Hosts the sandboxed process may not reach.</summary>
+    public List<string>? BlockedHosts { get; set; }
+
+    /// <summary>Whether outbound network access is allowed. Fail-closed.</summary>
+    public bool? AllowOutbound { get; set; }
+
+    /// <summary>Whether the local network is reachable. Fail-closed.</summary>
+    public bool? AllowLocalNetwork { get; set; }
+
+    /// <summary>The proxy the sandboxed process is routed through.</summary>
+    public DurableSandboxProxy? Proxy { get; set; }
+
+    /// <inheritdoc />
+    public bool Equals(DurableSandboxNetwork? other) =>
+        other is not null
+        && AllowOutbound == other.AllowOutbound
+        && AllowLocalNetwork == other.AllowLocalNetwork
+        && (AllowedHosts ?? []).SequenceEqual(other.AllowedHosts ?? [])
+        && (BlockedHosts ?? []).SequenceEqual(other.BlockedHosts ?? [])
+        && Equals(Proxy, other.Proxy);
+
+    /// <inheritdoc />
+    public override bool Equals(object? obj) => Equals(obj as DurableSandboxNetwork);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => HashCode.Combine(
+        AllowOutbound,
+        AllowLocalNetwork,
+        AllowedHosts?.Count,
+        BlockedHosts?.Count);
+}
+
+/// <summary>The proxy a sandboxed network is routed through.</summary>
+public sealed class DurableSandboxProxy : IEquatable<DurableSandboxProxy>
+{
+    /// <summary>The proxy URL.</summary>
+    public string? Url { get; set; }
+
+    /// <summary>The proxy username.</summary>
+    public string? Username { get; set; }
+
+    /// <summary>The proxy password.</summary>
+    public string? Password { get; set; }
+
+    /// <inheritdoc />
+    public bool Equals(DurableSandboxProxy? other) =>
+        other is not null && Url == other.Url && Username == other.Username && Password == other.Password;
+
+    /// <inheritdoc />
+    public override bool Equals(object? obj) => Equals(obj as DurableSandboxProxy);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => HashCode.Combine(Url, Username, Password);
+}
+
 /// <summary>The per-conversation agent choices. Stored by name, so they outlive the code.</summary>
 public sealed class AgentChoices
 {
@@ -2429,6 +3624,22 @@ public sealed class AgentChoices
     public List<string>? Permissions { get; set; }
 
     /// <summary>
+    /// The sandbox policy for this conversation, or <c>null</c> for no sandbox.
+    /// </summary>
+    /// <remarks>
+    /// The policy is persisted with the choices, so a conversation that ran sandboxed before a
+    /// restart still runs sandboxed after, and a fork inherits the policy as a snapshot. Paths
+    /// may use the <see cref="DurableSandboxPolicy.WorkspaceToken"/> token, which is expanded
+    /// against the conversation's working directory when the session is built — so a fork
+    /// inherits the policy's shape but not the parent's absolute grants.
+    /// <para>
+    /// <c>null</c> is the default and means the session is created with no sandbox
+    /// configuration at all, which is what every example before this one did.
+    /// </para>
+    /// </remarks>
+    public DurableSandboxPolicy? Sandbox { get; set; }
+
+    /// <summary>
     /// Session hooks. Hooks are code-level configuration, so they are not persisted with the
     /// document; they are supplied when the conversation is created.
     /// </summary>
@@ -2447,17 +3658,1084 @@ public sealed record ResolvedAgent(
     InfiniteSessionConfig? InfiniteSessions,
     IReadOnlyList<Extension> Extensions,
     IReadOnlyList<AIFunction> Tools,
-    IReadOnlyList<string>? Permissions);
+    IReadOnlyList<string>? Permissions,
+    DurableSandboxPolicy? Sandbox);
+
+/// <summary>
+/// A named agent the runtime host can run: the durable, persisted form of
+/// <see cref="AgentChoices"/>.
+/// </summary>
+/// <remarks>
+/// An agent definition is a document, not a configuration file. A file is an import surface
+/// only; once imported, the store is the single source of truth, so a definition that was
+/// valid when the host started is still the definition the host runs, and a definition that
+/// changed on disk cannot silently change what a scheduled run does.
+/// <para>
+/// The definition is owned by <c>agent:{name}</c> rather than by a conversation, because it
+/// outlives every conversation it is used to create. The <c>agent:</c> prefix keeps that owner
+/// id namespace disjoint from conversation ids (<c>c{n}</c>), task ids (<c>t{n}</c>), entry ids
+/// (<c>e{n}</c>), and admission ids (<c>a{Guid}</c>).
+/// </para>
+/// <para>
+/// There is deliberately no permission handler field. A handler is a delegate, so it cannot be
+/// persisted, and a definition that named one would be a definition whose authority lived
+/// outside the store. The definition carries <see cref="Permissions"/> — grants, which are
+/// data — and the host supplies the handler.
+/// </para>
+/// </remarks>
+public sealed class AgentDefinition
+{
+    /// <summary>The document kind an agent definition is stored under.</summary>
+    public const string DocumentKind = "durable.agent-definition";
+
+    /// <summary>The prefix of the owner id an agent definition is stored under.</summary>
+    public const string OwnerPrefix = "agent:";
+
+    /// <summary>The owner id a definition with this name is stored under.</summary>
+    public static string OwnerId(string name) => $"{OwnerPrefix}{name}";
+
+    /// <summary>The stable identifier, and the document owner id suffix.</summary>
+    public required string Name { get; init; }
+
+    /// <summary>A human-readable description, for listings.</summary>
+    public string? Description { get; init; }
+
+    /// <summary>Extra instructions appended to the system prompt.</summary>
+    public string? Instructions { get; init; }
+
+    /// <summary>
+    /// The model to <i>request</i>. This is never the effective model: only the runtime's own
+    /// report says which model actually ran.
+    /// </summary>
+    public string? Model { get; init; }
+
+    /// <summary>The reasoning effort level to request.</summary>
+    public string? ReasoningEffort { get; init; }
+
+    /// <summary>The working directory to run in.</summary>
+    public string? WorkingDirectory { get; init; }
+
+    /// <summary>The extension names this agent needs. Every one must resolve.</summary>
+    public List<string>? Extensions { get; init; }
+
+    /// <summary>The tool names this agent needs. Every one must resolve.</summary>
+    public List<string>? Tools { get; init; }
+
+    /// <summary>The permission grants this agent may use, as <c>kind</c> or <c>kind:scope</c>.</summary>
+    public List<string>? Permissions { get; init; }
+
+    /// <summary>The sandbox policy, or <c>null</c> for no sandbox.</summary>
+    public DurableSandboxPolicy? Sandbox { get; init; }
+
+    /// <summary>Whether the session streams assistant message deltas.</summary>
+    public bool? Streaming { get; init; }
+
+    /// <summary>Native session compaction settings.</summary>
+    public InfiniteSessionConfig? InfiniteSessions { get; init; }
+
+    /// <summary>
+    /// The choices this definition stands for. The only conversion, and it is total: every
+    /// field of the definition has a home in the choices, so nothing is dropped on the way in.
+    /// </summary>
+    public AgentChoices ToChoices() => new()
+    {
+        Extensions = Extensions is null ? null : [.. Extensions],
+        Tools = Tools is null ? null : [.. Tools],
+        Model = Model,
+        ReasoningEffort = ReasoningEffort,
+        WorkingDirectory = WorkingDirectory,
+        Instructions = Instructions,
+        Streaming = Streaming,
+        InfiniteSessions = InfiniteSessions,
+        Permissions = Permissions is null ? null : [.. Permissions],
+        Sandbox = Sandbox,
+    };
+}
+
+/// <summary>What a scheduler does with the occurrences it missed while the host was down.</summary>
+/// <remarks>
+/// The three policies answer the same question — "the host was not running across a scheduled
+/// instant, so what now?" — and each answer is observable in the store afterwards. They are
+/// persisted by name rather than by number, because a schedule record is state a person reads.
+/// </remarks>
+[JsonConverter(typeof(JsonStringEnumConverter<MissedRunPolicy>))]
+public enum MissedRunPolicy
+{
+    /// <summary>
+    /// Abandon the missed occurrences. Nothing runs, and the cadence resumes at the first
+    /// instant after now.
+    /// </summary>
+    Skip,
+
+    /// <summary>
+    /// Collapse the whole missed window into one occurrence, run now, and resume the cadence
+    /// at the first instant after now.
+    /// </summary>
+    Coalesce,
+
+    /// <summary>
+    /// Run one occurrence per scheduler pass until the backlog is drained, so a long outage
+    /// is caught up gradually instead of all at once.
+    /// </summary>
+    RunOnce,
+}
+
+/// <summary>
+/// A recurring schedule for an agent, stored as durable state rather than as a timer.
+/// </summary>
+/// <remarks>
+/// A <see cref="System.Threading.Timer"/> dies with the process and takes the schedule with it.
+/// This record is the schedule: <see cref="NextDue"/> is the durable wake time, so a host that
+/// restarts reads the schedule back out of the store and either resumes the wait or applies
+/// <see cref="MissedRun"/> to the instants it slept through.
+/// <para>
+/// The record is owned by <c>schedule:{agent}</c> rather than by a conversation, so it outlives
+/// every conversation the agent creates and is never copied by a conversation fork. The prefix
+/// keeps the owner namespace disjoint from <c>c{n}</c>, <c>t{n}</c>, <c>e{n}</c>, and
+/// <c>agent:{name}</c>.
+/// </para>
+/// <para>
+/// <see cref="Enabled"/> is how a schedule is removed. The store is append-only, so a removal
+/// commits a disabled version rather than deleting a record; a scheduler treats a disabled
+/// schedule exactly as it treats an absent one.
+/// </para>
+/// </remarks>
+public sealed record DurableSchedule
+{
+    /// <summary>The document kind a schedule is stored under.</summary>
+    public const string DocumentKind = "durable.schedule";
+
+    /// <summary>The prefix of the owner id a schedule is stored under.</summary>
+    public const string OwnerPrefix = "schedule:";
+
+    /// <summary>The owner id a schedule for this agent is stored under.</summary>
+    public static string OwnerId(string agent) => $"{OwnerPrefix}{agent}";
+
+    /// <summary>The agent this schedule runs.</summary>
+    public required string Agent { get; init; }
+
+    /// <summary>The interval as it was written, e.g. <c>5m</c>, for listings.</summary>
+    public required string Every { get; init; }
+
+    /// <summary>The interval in milliseconds, so the cadence never depends on re-parsing text.</summary>
+    public required long EveryMilliseconds { get; init; }
+
+    /// <summary>What to do with the occurrences missed while the host was down.</summary>
+    public MissedRunPolicy MissedRun { get; init; } = MissedRunPolicy.Skip;
+
+    /// <summary>The next instant this schedule is due, in UTC.</summary>
+    public required DateTimeOffset NextDue { get; init; }
+
+    /// <summary>The instant of the most recent occurrence, or <c>null</c> if none has run.</summary>
+    public DateTimeOffset? LastRun { get; init; }
+
+    /// <summary>How many occurrences this schedule has run.</summary>
+    public long Runs { get; init; }
+
+    /// <summary>Whether the scheduler drives this schedule. A removal commits <c>false</c>.</summary>
+    public bool Enabled { get; init; } = true;
+
+    /// <summary>The prompt each occurrence sends, or <c>null</c> for the host's default.</summary>
+    public string? Input { get; init; }
+
+    /// <summary>The interval as a duration.</summary>
+    public TimeSpan Interval => TimeSpan.FromMilliseconds(EveryMilliseconds);
+}
+
+/// <summary>What a shift claim currently is, as the store records it.</summary>
+/// <remarks>
+/// The value is persisted as text rather than as this enum, and an unrecognized value is read
+/// back as <see cref="Uncertain"/>. That is deliberate: a store written by a newer build may hold
+/// a state this build has never heard of, and the honest answer to "what is this claim?" is then
+/// "I do not know" — which must fail the caller read-only rather than let it act on a guess.
+/// </remarks>
+public enum ShiftClaimStatus
+{
+    /// <summary>Some owner holds the shift.</summary>
+    Active,
+
+    /// <summary>The owner released the shift after committing a handoff.</summary>
+    Released,
+
+    /// <summary>
+    /// The recorded state is not one this build understands, or the claim record is incomplete.
+    /// A caller must not mutate on this: reconcile it by hand.
+    /// </summary>
+    Uncertain,
+}
+
+/// <summary>
+/// The durable record of one shift's ownership: who holds it, which attempt it is, and how it
+/// got there.
+/// </summary>
+/// <remarks>
+/// <para>
+/// A shift claim is a document rather than a lock. A lock that lived for the duration of a shift
+/// would be a lock that outlives the process holding it, which is the stale-lock problem the
+/// store file lock already solves by dying with the process. This record is instead the durable
+/// fact of who was last granted the shift, checked at each transition, so a host that dies simply
+/// stops transitioning and the next host reads the last committed attempt.
+/// </para>
+/// <para>
+/// <see cref="Owner"/> is an opaque token the caller chooses — a host instance id, a session id,
+/// or a name. It is compared for equality and never interpreted, because the store has no way to
+/// know which process a token belongs to.
+/// </para>
+/// </remarks>
+public sealed class DurableShiftClaim
+{
+    /// <summary>The document kind a shift claim is stored under.</summary>
+    public const string DocumentKind = "durable.shift-claim";
+
+    /// <summary>The prefix of the owner id a shift claim is stored under.</summary>
+    public const string OwnerPrefix = "shift:";
+
+    /// <summary>The owner id a claim for this shift key is stored under.</summary>
+    public static string OwnerId(string key) => $"{OwnerPrefix}{key}";
+
+    /// <summary>The shift key, e.g. <c>sessions/po-shift</c>.</summary>
+    public required string Key { get; init; }
+
+    /// <summary>The member whose shift this is, for listings.</summary>
+    public string? Member { get; init; }
+
+    /// <summary>The token of the owner the shift was granted to.</summary>
+    public required string Owner { get; init; }
+
+    /// <summary>The owner's session, when it has one.</summary>
+    public string? SessionId { get; init; }
+
+    /// <summary>
+    /// The claim state exactly as the store holds it: the single authority for what the record
+    /// says. It is deliberately a string so a value written by a newer build survives this
+    /// build's reader instead of throwing, and is reported as <see cref="ShiftClaimStatus.Uncertain"/>.
+    /// </summary>
+    public string? StatusText { get; init; }
+
+    /// <summary>
+    /// The claim state, as this build reads it. A computed view of <see cref="StatusText"/>,
+    /// resolved through this build's vocabulary; it is never written and never used as a
+    /// fallback for missing text.
+    /// </summary>
+    [JsonIgnore]
+    public ShiftClaimStatus Status => DurableShifts.ReadStatus(StatusText).Status;
+
+    /// <summary>The acquisition counter. Every new grant increments it.</summary>
+    public long Attempt { get; init; }
+
+    /// <summary>The attempt this grant resumed from, or <c>null</c> for a fresh shift.</summary>
+    public long? ResumedFrom { get; init; }
+
+    /// <summary>When the grant was committed, in UTC.</summary>
+    public DateTimeOffset ClaimedAt { get; init; }
+
+    /// <summary>When the owner released the shift, in UTC, or <c>null</c> while it is held.</summary>
+    public DateTimeOffset? ReleasedAt { get; init; }
+
+    /// <summary>How many times this shift has been granted. Equal to <see cref="Attempt"/>.</summary>
+    /// <remarks>
+    /// A computed view, not a stored field: the ports do not write it, so writing it here would be
+    /// an undocumented wire asymmetry for a value no reader consults.
+    /// </remarks>
+    [JsonIgnore]
+    public long Grants => Attempt;
+}
+
+/// <summary>
+/// The claim-state vocabulary, in the spelling the store holds.
+/// </summary>
+/// <remarks>
+/// Persisting text rather than an enum is what lets a value written by a newer build read as
+/// <see cref="ShiftClaimStatus.Uncertain"/> instead of throwing. These spellings are the
+/// cross-language wire contract: TypeScript and Python write and read exactly them.
+/// </remarks>
+public static class ShiftClaimStatusWire
+{
+    /// <summary>The stored spelling of <see cref="ShiftClaimStatus.Active"/>.</summary>
+    public const string Active = "active";
+
+    /// <summary>The stored spelling of <see cref="ShiftClaimStatus.Released"/>.</summary>
+    public const string Released = "released";
+
+    /// <summary>The stored spelling of <see cref="ShiftClaimStatus.Uncertain"/>.</summary>
+    public const string Uncertain = "uncertain";
+}
+
+/// <summary>What a committed handoff means: work is starting, or work has stopped.</summary>
+/// <remarks>
+/// The canonical wire spelling is the lowercase one the ports write — <c>running</c> and
+/// <c>handedOff</c> — so C#, TypeScript and Python all write and read the same text. The
+/// previous C# build wrote the enum's own names, <c>Running</c> and <c>HandedOff</c>, and
+/// <see cref="ShiftHandoffPhaseConverter"/> still reads them: an existing store must keep
+/// working, and a phase misread as <c>handedOff</c> would let a second session claim a live
+/// shift and duplicate the run. Nothing writes the capitalized form any more.
+/// </remarks>
+[JsonConverter(typeof(ShiftHandoffPhaseConverter))]
+public enum ShiftHandoffPhase
+{
+    /// <summary>
+    /// Committed before the turn runs. The owner may be mid-work, so only the same session —
+    /// the process that wrote it and restarted — may resume from it. Stored as <c>running</c>.
+    /// </summary>
+    Running,
+
+    /// <summary>
+    /// Committed when the shift stops, before release. Any successor may resume from it.
+    /// Stored as <c>handedOff</c>.
+    /// </summary>
+    HandedOff,
+}
+
+/// <summary>
+/// Reads and writes <see cref="ShiftHandoffPhase"/> in the ports' lowercase spelling, and still
+/// reads the capitalized names the previous C# build wrote.
+/// </summary>
+/// <remarks>
+/// A read of an unrecognized phase is <see cref="ShiftHandoffPhase.HandedOff"/>, the permissive
+/// phase: refusing the whole record would make a store written by a newer build unreadable, and a
+/// successor that resumed from a stopped shift is safe even if it should have been held. The
+/// dangerous direction — reading a running shift as handed off — cannot come from an unknown
+/// spelling, only from the literal <c>running</c> this converter recognises in either case.
+/// </remarks>
+public sealed class ShiftHandoffPhaseConverter : JsonConverter<ShiftHandoffPhase>
+{
+    /// <summary>The stored spelling of <see cref="ShiftHandoffPhase.Running"/>.</summary>
+    public const string RunningText = "running";
+
+    /// <summary>The stored spelling of <see cref="ShiftHandoffPhase.HandedOff"/>.</summary>
+    public const string HandedOffText = "handedOff";
+
+    /// <inheritdoc />
+    public override ShiftHandoffPhase Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        var text = reader.TokenType == JsonTokenType.String ? reader.GetString() : null;
+        return FromText(text);
+    }
+
+    /// <inheritdoc />
+    public override void Write(Utf8JsonWriter writer, ShiftHandoffPhase value, JsonSerializerOptions options)
+    {
+        writer.WriteStringValue(ToText(value));
+    }
+
+    /// <summary>Resolves a stored phase text, accepting the previous build's capitalized names.</summary>
+    /// <param name="text">The stored text, possibly <c>null</c> for a missing field.</param>
+    /// <returns>
+    /// <see cref="ShiftHandoffPhase.Running"/> for <c>running</c>/<c>Running</c>;
+    /// <see cref="ShiftHandoffPhase.HandedOff"/> for everything else.
+    /// </returns>
+    public static ShiftHandoffPhase FromText(string? text) =>
+        string.Equals(text, RunningText, StringComparison.OrdinalIgnoreCase)
+            ? ShiftHandoffPhase.Running
+            : ShiftHandoffPhase.HandedOff;
+
+    /// <summary>The canonical stored spelling of a phase.</summary>
+    /// <param name="phase">The phase to write.</param>
+    /// <returns><c>running</c> or <c>handedOff</c>.</returns>
+    public static string ToText(ShiftHandoffPhase phase) =>
+        phase is ShiftHandoffPhase.Running ? RunningText : HandedOffText;
+}
+
+/// <summary>
+/// The durable handoff a shift owner commits before it releases the shift.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The handoff is what makes an interrupted shift recoverable. A claim alone records who may run;
+/// the handoff records what was running and what is owed. A successor therefore has two different
+/// situations to tell apart: a shift held by an owner with no handoff (work may be in flight — do
+/// not take it) and a shift held by an owner with a committed handoff (work stopped at a known
+/// point — resume from it).
+/// </para>
+/// <para>
+/// Writing the handoff is not a separate bookkeeping step the caller may skip. The release refuses
+/// to commit without a handoff for the attempt being released, so a store can never describe a
+/// shift that was let go with nothing recorded.
+/// </para>
+/// </remarks>
+public sealed class DurableShiftHandoff
+{
+    /// <summary>The document kind a shift handoff is stored under.</summary>
+    public const string DocumentKind = "durable.shift-handoff";
+
+    /// <summary>The prefix of the owner id a shift handoff is stored under.</summary>
+    public const string OwnerPrefix = "shift-handoff:";
+
+    /// <summary>The owner id a handoff for this shift key is stored under.</summary>
+    public static string OwnerId(string key) => $"{OwnerPrefix}{key}";
+
+    /// <summary>The shift key the handoff covers.</summary>
+    public required string Key { get; init; }
+
+    /// <summary>The claim attempt the handoff was written for.</summary>
+    public required long Attempt { get; init; }
+
+    /// <summary>The owner token that wrote the handoff.</summary>
+    public required string Owner { get; init; }
+
+    /// <summary>
+    /// Whether the handoff records work starting or work stopping. A <see cref="ShiftHandoffPhase.Running"/>
+    /// handoff is the recovery point of an interrupted run; a <see cref="ShiftHandoffPhase.HandedOff"/>
+    /// one is the stopping point of a finished shift.
+    /// </summary>
+    public ShiftHandoffPhase Phase { get; init; } = ShiftHandoffPhase.HandedOff;
+
+    /// <summary>What this shift worked on.</summary>
+    public string? Selected { get; init; }
+
+    /// <summary>What it completed.</summary>
+    public string? Achieved { get; init; }
+
+    /// <summary>What is still owed.</summary>
+    public string? Remaining { get; init; }
+
+    /// <summary>The next action a successor should take first.</summary>
+    public string? Next { get; init; }
+
+    /// <summary>Blockers a successor must know about.</summary>
+    public string? Blockers { get; init; }
+
+    /// <summary>When the handoff was committed, in UTC.</summary>
+    public required DateTimeOffset WrittenAt { get; init; }
+}
+
+/// <summary>What a claim request did.</summary>
+/// <remarks>
+/// <see cref="Acquired"/> is the only outcome that permits running work. <see cref="Conflict"/>
+/// means a different owner holds the shift with no committed handoff, so the work may be in
+/// flight. <see cref="ReadOnly"/> means the store's record cannot be understood or is internally
+/// inconsistent: the caller must report and stop, not retry into a mutation.
+/// </remarks>
+[JsonConverter(typeof(JsonStringEnumConverter<ShiftClaimOutcome>))]
+public enum ShiftClaimOutcome
+{
+    /// <summary>This caller now holds the shift.</summary>
+    Acquired,
+
+    /// <summary>Another owner holds the shift and no handoff makes it resumable.</summary>
+    Conflict,
+
+    /// <summary>The state cannot be trusted. Read-only: report and stop.</summary>
+    ReadOnly,
+}
+
+/// <summary>The result of a claim or release attempt.</summary>
+/// <param name="Outcome">What happened.</param>
+/// <param name="Claim">The claim as the store now holds it, or as it was found.</param>
+/// <param name="Message">A human-readable reason, always present for a refusal.</param>
+public sealed record ShiftClaimResult(ShiftClaimOutcome Outcome, DurableShiftClaim? Claim, string Message);
+
+/// <summary>
+/// The shared shift-claim and handoff operations, built on ordinary documents.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Nothing here is a new persistence primitive. A claim is a document of kind
+/// <see cref="DurableShiftClaim.DocumentKind"/> owned by <c>shift:{key}</c>; a handoff is a
+/// document of kind <see cref="DurableShiftHandoff.DocumentKind"/> owned by
+/// <c>shift-handoff:{key}</c>. Both are <see cref="ForkPolicy.Initial"/>, because forking a
+/// conversation is not inheriting a shift.
+/// </para>
+/// <para>
+/// The one primitive this needed and the layer did not have is
+/// <see cref="Transaction.TryCreateDocument{T}"/>. Read-then-write through
+/// <see cref="Transaction.Doc{T}"/> cannot express "create only if absent": an absent document
+/// reads back as its initial value, so both claimants would believe they were first.
+/// </para>
+/// </remarks>
+public static class DurableShifts
+{
+    /// <summary>The definition a claim is stored under.</summary>
+    public static readonly DocumentDefinition<DurableShiftClaim> ClaimDefinition =
+        new(DurableShiftClaim.DocumentKind, DocumentHistory.Rewindable, ForkPolicy.Initial);
+
+    /// <summary>The definition a handoff is stored under.</summary>
+    public static readonly DocumentDefinition<DurableShiftHandoff> HandoffDefinition =
+        new(DurableShiftHandoff.DocumentKind, DocumentHistory.Rewindable, ForkPolicy.Initial);
+
+    /// <summary>
+    /// Claims a shift for <paramref name="owner"/> if nobody else holds it, or resumes it when the
+    /// holder committed a handoff.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A held shift is only taken over when the store holds a handoff for the held attempt. That
+    /// is the whole duplicate-safety rule: an owner with no handoff may be mid-turn, so a second
+    /// claimant is refused and told who holds it; an owner with a handoff has recorded where it
+    /// stopped, so the successor resumes rather than repeating work. Age plays no part — a claim
+    /// is never taken because a clock says it is old.
+    /// </para>
+    /// <para>
+    /// The read, the decision, and the write are one transaction under the store's commit gate, so
+    /// two claimants in one process cannot both win. Two processes are already separated by the
+    /// store file's exclusive lock: the second never opens the file.
+    /// </para>
+    /// </remarks>
+    public static Task<ShiftClaimResult> ClaimAsync(
+        DurableStore store,
+        string key,
+        string owner,
+        DateTimeOffset now,
+        string? member = null,
+        string? sessionId = null)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+
+        return store.CommitAsync(transaction =>
+        {
+            var claimOwnerId = DurableShiftClaim.OwnerId(key);
+            var existing = store.Document(DurableShiftClaim.DocumentKind, claimOwnerId);
+            var current = existing?.Latest is { } latest
+                ? latest.Deserialize<DurableShiftClaim>(DurableJson.Options)
+                : null;
+
+            var definition = ClaimDefinition;
+
+            // No record at all: this is the create-if-absent path. It is the only path where the
+            // document itself has to appear, and it has to happen atomically with the decision.
+            if (current is null)
+            {
+                var created = new DurableShiftClaim
+                {
+                    Key = key,
+                    Member = member,
+                    Owner = owner,
+                    SessionId = sessionId,
+                    StatusText = Text(ShiftClaimStatus.Active),
+                    Attempt = 1,
+                    ClaimedAt = now,
+                };
+
+                var entryId = transaction.AppendEntry(claimOwnerId, "shift-claim");
+                if (!transaction.TryCreateDocument(definition, claimOwnerId))
+                {
+                    return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                        ShiftClaimOutcome.ReadOnly,
+                        null,
+                        $"the store holds a claim for '{key}' that this transaction could not read back; "
+                        + "treating it as uncertain rather than claiming over it."));
+                }
+
+                transaction.CommitDocument(definition, claimOwnerId, created, entryId);
+                return System.Threading.Tasks.Task.FromResult(
+                    new ShiftClaimResult(ShiftClaimOutcome.Acquired, created, $"acquired attempt 1 for '{owner}'."));
+            }
+
+            var read = current.Status;
+            if (read is ShiftClaimStatus.Uncertain)
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.ReadOnly,
+                    current,
+                    $"the claim for '{key}' records state '{current.StatusText ?? "(none)"}', which this build "
+                    + "cannot interpret. Read-only: reconcile it before claiming."));
+            }
+
+            if (read is ShiftClaimStatus.Active && string.Equals(current.Owner, owner, StringComparison.Ordinal))
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.Acquired,
+                    current,
+                    $"'{owner}' already holds attempt {current.Attempt} of '{key}'."));
+            }
+
+            if (read is ShiftClaimStatus.Active)
+            {
+                var handoff = ReadHandoff(store, key);
+                if (handoff is null)
+                {
+                    return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                        ShiftClaimOutcome.Conflict,
+                        current,
+                        $"'{key}' is held by '{current.Owner}' (attempt {current.Attempt}) with no committed "
+                        + "handoff, so the work may be in flight. Not taking it over."));
+                }
+
+                if (handoff.Attempt != current.Attempt)
+                {
+                    return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                        ShiftClaimOutcome.ReadOnly,
+                        current,
+                        $"the claim for '{key}' is attempt {current.Attempt} but the newest handoff is for attempt "
+                        + $"{handoff.Attempt}. The records disagree; reconcile them rather than resuming."));
+                }
+
+                // An in-flight handoff is only resumable by the session that wrote it. The same
+                // session means the same process, restarted: its work stopped at a known point.
+                // A different session could be racing a live owner, and age is not evidence that
+                // it died, so it is refused rather than resuming over a running shift.
+                var sameSession =
+                    !string.IsNullOrEmpty(current.SessionId)
+                    && string.Equals(current.SessionId, sessionId, StringComparison.Ordinal);
+
+                if (handoff.Phase is ShiftHandoffPhase.Running && !sameSession)
+                {
+                    return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                        ShiftClaimOutcome.Conflict,
+                        current,
+                        $"'{key}' is held by '{current.Owner}' (attempt {current.Attempt}, session "
+                        + $"'{current.SessionId ?? "(none)"}') with an in-flight handoff. Only that session resumes it; "
+                        + "a different session must not duplicate the run."));
+                }
+            }
+
+            // Either the previous owner released it, or it is held with a matching handoff. Both
+            // are safe to take: the first is a finished shift, the second an interrupted one whose
+            // stopping point is written down.
+            var resumedFrom = current.Attempt;
+            var next = new DurableShiftClaim
+            {
+                Key = key,
+                Member = member ?? current.Member,
+                Owner = owner,
+                SessionId = sessionId,
+                StatusText = Text(ShiftClaimStatus.Active),
+                Attempt = current.Attempt + 1,
+                ResumedFrom = resumedFrom,
+                ClaimedAt = now,
+            };
+
+            var nextEntryId = transaction.AppendEntry(claimOwnerId, "shift-claim");
+            transaction.CommitDocument(definition, claimOwnerId, next, nextEntryId);
+
+            var reason = read is ShiftClaimStatus.Released
+                ? $"acquired attempt {next.Attempt} of '{key}' after '{current.Owner}' released it."
+                : $"resumed attempt {next.Attempt} of '{key}' from committed handoff {resumedFrom}.";
+            return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(ShiftClaimOutcome.Acquired, next, reason));
+        });
+    }
+
+    /// <summary>Reads a shift claim, or <c>null</c> when the store holds none.</summary>
+    public static DurableShiftClaim? ReadClaim(DurableStore store, string key)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        var document = store.Document(DurableShiftClaim.DocumentKind, DurableShiftClaim.OwnerId(key));
+        return document?.Latest is { } latest
+            ? latest.Deserialize<DurableShiftClaim>(DurableJson.Options)
+            : null;
+    }
+
+    /// <summary>Reads the newest committed handoff, or <c>null</c> when there is none.</summary>
+    public static DurableShiftHandoff? ReadHandoff(DurableStore store, string key)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        var document = store.Document(DurableShiftHandoff.DocumentKind, DurableShiftHandoff.OwnerId(key));
+        return document?.Latest is { } latest
+            ? latest.Deserialize<DurableShiftHandoff>(DurableJson.Options)
+            : null;
+    }
+
+    /// <summary>Commits a handoff for the attempt the owner currently holds.</summary>
+    /// <returns><c>false</c> when the owner does not hold the attempt being described.</returns>
+    /// <remarks>
+    /// The handoff is refused rather than silently written when the claim it describes is not the
+    /// caller's. A handoff that named someone else's attempt would let a successor resume another
+    /// owner's in-flight work, which is the duplicate execution this record exists to prevent.
+    /// </remarks>
+    public static Task<bool> WriteHandoffAsync(
+        DurableStore store,
+        string key,
+        string owner,
+        long attempt,
+        DateTimeOffset now,
+        ShiftHandoffPhase phase = ShiftHandoffPhase.HandedOff,
+        string? selected = null,
+        string? achieved = null,
+        string? remaining = null,
+        string? next = null,
+        string? blockers = null)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+
+        return store.CommitAsync(transaction =>
+        {
+            var claim = ReadClaim(store, key);
+            if (claim is null
+                || claim.Attempt != attempt
+                || !string.Equals(claim.Owner, owner, StringComparison.Ordinal)
+                || claim.Status is not ShiftClaimStatus.Active)
+            {
+                return System.Threading.Tasks.Task.FromResult(false);
+            }
+
+            var handoff = new DurableShiftHandoff
+            {
+                Key = key,
+                Attempt = attempt,
+                Owner = owner,
+                Phase = phase,
+                Selected = selected,
+                Achieved = achieved,
+                Remaining = remaining,
+                Next = next,
+                Blockers = blockers,
+                WrittenAt = now,
+            };
+
+            var handoffOwnerId = DurableShiftHandoff.OwnerId(key);
+            var handoffEntryId = transaction.AppendEntry(handoffOwnerId, "shift-handoff");
+            transaction.CommitDocument(HandoffDefinition, handoffOwnerId, handoff, handoffEntryId);
+            return System.Threading.Tasks.Task.FromResult(true);
+        });
+    }
+
+    /// <summary>
+    /// Releases a held shift, refusing unless the caller owns the held attempt and a handoff for
+    /// that attempt is already committed.
+    /// </summary>
+    /// <returns>
+    /// <see cref="ShiftClaimOutcome.Acquired"/> on success (the caller no longer holds it),
+    /// <see cref="ShiftClaimOutcome.Conflict"/> for a refusal the caller can fix, and
+    /// <see cref="ShiftClaimOutcome.ReadOnly"/> when the records do not agree.
+    /// </returns>
+    /// <remarks>
+    /// Releasing is idempotent for the owner that released: releasing again reports success with
+    /// the released record. That keeps a retried shutdown harmless without letting the retry
+    /// rewrite history.
+    /// </remarks>
+    public static Task<ShiftClaimResult> ReleaseAsync(
+        DurableStore store,
+        string key,
+        string owner,
+        DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+
+        return store.CommitAsync(transaction =>
+        {
+            var current = ReadClaim(store, key);
+            if (current is null)
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.Conflict,
+                    null,
+                    $"the store holds no claim for '{key}', so there is nothing to release."));
+            }
+
+            var status = current.Status;
+            if (status is ShiftClaimStatus.Uncertain)
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.ReadOnly,
+                    current,
+                    $"the claim for '{key}' records state '{current.StatusText ?? "(none)"}', which this build "
+                    + "cannot interpret. Read-only: not releasing."));
+            }
+
+            if (!string.Equals(current.Owner, owner, StringComparison.Ordinal))
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.Conflict,
+                    current,
+                    $"'{key}' is held by '{current.Owner}', not by '{owner}'. Only the holding owner releases."));
+            }
+
+            if (status is ShiftClaimStatus.Released)
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.Acquired,
+                    current,
+                    $"'{key}' was already released by '{owner}' at {current.ReleasedAt:O}."));
+            }
+
+            var handoff = ReadHandoff(store, key);
+            if (handoff is null)
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.Conflict,
+                    current,
+                    $"'{owner}' holds '{key}' but no handoff is committed. Write the handoff before releasing."));
+            }
+
+            if (handoff.Attempt != current.Attempt)
+            {
+                return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                    ShiftClaimOutcome.ReadOnly,
+                    current,
+                    $"the claim for '{key}' is attempt {current.Attempt} but the newest handoff is for attempt "
+                    + $"{handoff.Attempt}. The records disagree; read-only, not releasing."));
+            }
+
+            var released = new DurableShiftClaim
+            {
+                Key = current.Key,
+                Member = current.Member,
+                Owner = current.Owner,
+                SessionId = current.SessionId,
+                StatusText = Text(ShiftClaimStatus.Released),
+                Attempt = current.Attempt,
+                ResumedFrom = current.ResumedFrom,
+                ClaimedAt = current.ClaimedAt,
+                ReleasedAt = now,
+            };
+
+            var releaseOwnerId = DurableShiftClaim.OwnerId(key);
+            var releaseEntryId = transaction.AppendEntry(releaseOwnerId, "shift-claim");
+            transaction.CommitDocument(ClaimDefinition, releaseOwnerId, released, releaseEntryId);
+            return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
+                ShiftClaimOutcome.Acquired,
+                released,
+                $"released attempt {released.Attempt} of '{key}' with handoff {handoff.Attempt}."));
+        });
+    }
+
+    /// <summary>
+    /// Reads a stored claim's status, resolving the text through this build's vocabulary.
+    /// A value this build does not recognize — including a missing one — is
+    /// <see cref="ShiftClaimStatus.Uncertain"/>, which is the only safe reading of "unknown".
+    /// </summary>
+    /// <param name="statusText">The status text exactly as the store holds it.</param>
+    /// <returns>The resolved status, and the text it was read from (or <c>null</c> when absent).</returns>
+    public static (ShiftClaimStatus Status, string? Text) ReadStatus(string? statusText)
+    {
+        if (string.IsNullOrWhiteSpace(statusText))
+        {
+            // A record with no text is a record this build cannot verify: the text is the field
+            // the store actually holds, so its absence means the record is incomplete, not that
+            // it is active. There is no earlier format to be compatible with, so nothing is
+            // guessed from the typed property.
+            return (ShiftClaimStatus.Uncertain, null);
+        }
+
+        if (Enum.TryParse<ShiftClaimStatus>(statusText, ignoreCase: true, out var parsed)
+            && parsed is ShiftClaimStatus.Active or ShiftClaimStatus.Released)
+        {
+            return (parsed, statusText);
+        }
+
+        return (ShiftClaimStatus.Uncertain, statusText);
+    }
+
+    /// <summary>The stored spelling of a claim status.</summary>
+    /// <param name="status">The status to spell.</param>
+    /// <returns><c>active</c>, <c>released</c> or <c>uncertain</c>.</returns>
+    public static string Text(ShiftClaimStatus status) => status switch
+    {
+        ShiftClaimStatus.Active => ShiftClaimStatusWire.Active,
+        ShiftClaimStatus.Released => ShiftClaimStatusWire.Released,
+        _ => ShiftClaimStatusWire.Uncertain,
+    };
+}
+
+/// <summary>
+/// The model a runtime reported for a session or for one turn of it.
+/// </summary>
+/// <remarks>
+/// This is the model the runtime <i>reported</i>, not the model the host asked for. A runtime
+/// that substitutes a model — because the requested one is unavailable, because the request
+/// was routed, or because a recorded run was produced against another model — reports the
+/// substitute here, so the substitution is visible rather than hidden behind the request.
+/// <para>
+/// When the runtime reports no model at all, <see cref="Model"/> is <c>null</c> and
+/// <see cref="HasModel"/> is <c>false</c>. There is no fallback to
+/// <see cref="DurableHarness.DefaultModel"/>: "the runtime said nothing" and "the runtime said
+/// <c>gpt-6-luna</c>" are different facts, and silently turning the first into the second is
+/// exactly what this type exists to prevent.
+/// </para>
+/// </remarks>
+public sealed class DurableModelReport
+{
+    /// <summary>The report for a runtime that has not reported a model.</summary>
+    public static DurableModelReport NotReported { get; } = new(null, null);
+
+    private DurableModelReport(string? model, string? source)
+    {
+        Model = model;
+        Source = source;
+    }
+
+    /// <summary>The model identifier the runtime reported, or <c>null</c> when it reported none.</summary>
+    public string? Model { get; }
+
+    /// <summary>
+    /// Where the report came from: <c>session</c>, <c>turn</c>, or <c>usage</c>. It names the
+    /// event that carried the value, so a diagnosis can tell a session-level report from a
+    /// turn-level one. <c>null</c> when nothing was reported.
+    /// </summary>
+    public string? Source { get; }
+
+    /// <summary>Whether the runtime reported a model.</summary>
+    public bool HasModel => !string.IsNullOrEmpty(Model);
+
+    /// <summary>
+    /// The reported model, or an error when the runtime reported none. Use this where a model
+    /// is required and its absence should stop the run rather than pass silently.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The runtime reported no model.</exception>
+    public string RequiredModel => HasModel
+        ? Model!
+        : throw new InvalidOperationException(
+            "The runtime reported no model. Check the runtime's transcript: a deterministic " +
+            "runtime only reports a model when its recording carries one.");
+
+    /// <summary>Creates a report from a runtime event's model value, or the not-reported one.</summary>
+    internal static DurableModelReport From(string? model, string source) =>
+        string.IsNullOrWhiteSpace(model) ? NotReported : new DurableModelReport(model, source);
+
+    /// <inheritdoc />
+    public override string ToString() => HasModel ? Model! : "(no model reported)";
+}
+
+/// <summary>
+/// Accumulates the model reports a single conversation observes: the session-level report and
+/// one report per assistant turn.
+/// </summary>
+/// <remarks>
+/// The tracker is deliberately separate from <see cref="DurableConversation"/> so the
+/// sequencing rules can be exercised directly: a session can report a model when it starts or
+/// when it changes model, an assistant turn can report one through <c>assistant.turn_start</c>
+/// and again through <c>assistant.usage</c>, and a turn whose runtime names no model must stay
+/// visible as a gap rather than borrowing a neighbour's model.
+/// </remarks>
+internal sealed class DurableModelTracker
+{
+    private readonly List<DurableModelReport> _turns = [];
+    private DurableModelReport _effective = DurableModelReport.NotReported;
+    private bool _passOpen;
+
+    /// <summary>The most recent model the runtime reported, or not-reported.</summary>
+    internal DurableModelReport Effective
+    {
+        get
+        {
+            lock (_turns)
+            {
+                return _effective;
+            }
+        }
+    }
+
+    /// <summary>The model reported for each turn, oldest first.</summary>
+    internal IReadOnlyList<DurableModelReport> Turns
+    {
+        get
+        {
+            lock (_turns)
+            {
+                return _turns.ToList();
+            }
+        }
+    }
+
+    /// <summary>Records a session-level report from <c>session.start</c> or a model change.</summary>
+    /// <remarks>
+    /// A session-level report is not a turn: it describes the session, so it updates the
+    /// effective value but leaves the per-turn list alone.
+    /// </remarks>
+    internal DurableModelReport RecordSession(string? model, string source)
+    {
+        var report = DurableModelReport.From(model, source);
+        lock (_turns)
+        {
+            if (report.HasModel)
+            {
+                _effective = report;
+            }
+        }
+
+        return report;
+    }
+
+    /// <summary>Records a turn-level report from <c>assistant.turn_start</c> or usage.</summary>
+    /// <remarks>
+    /// A turn is one assistant pass, and a single pass can report its model twice — once at
+    /// <c>assistant.turn_start</c>, once with its usage — so a second report for the pass that
+    /// is still open refines the entry instead of adding another. A pass whose runtime reports
+    /// no model is still recorded, as <see cref="DurableModelReport.NotReported"/>, so the list
+    /// stays aligned with the turn sequence and silence never borrows a neighbour's model.
+    /// </remarks>
+    internal DurableModelReport RecordTurn(string? model, string source)
+    {
+        var report = DurableModelReport.From(model, source);
+        lock (_turns)
+        {
+            if (_passOpen)
+            {
+                // Refine the open pass. A pass that has already named a model keeps it: the
+                // later report belongs to the same pass, so swapping in a not-reported value
+                // would erase a fact the runtime did state.
+                if (report.HasModel)
+                {
+                    _turns[^1] = report;
+                }
+            }
+            else
+            {
+                _turns.Add(report);
+                _passOpen = true;
+            }
+
+            if (report.HasModel)
+            {
+                _effective = report;
+            }
+        }
+
+        return report;
+    }
+
+    /// <summary>
+    /// Closes the pass in flight. A pass that reported nothing stays recorded as not-reported.
+    /// </summary>
+    internal void CloseTurn()
+    {
+        lock (_turns)
+        {
+            _passOpen = false;
+        }
+    }
+
+    /// <summary>
+    /// Routes a session event's model report into this tracker.
+    /// </summary>
+    /// <remarks>
+    /// The runtime reports the model on the events it already emits: <c>session.start</c> and
+    /// <c>session.model_change</c> describe the session, <c>assistant.turn_start</c> and
+    /// <c>assistant.usage</c> describe a turn. Nothing here reads the requested model, so a
+    /// runtime that substitutes one is visible.
+    /// </remarks>
+    /// <returns>The report the event produced, or <c>null</c> when the event carries no model.</returns>
+    internal DurableModelReport? Record(SessionEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+
+        return evt switch
+        {
+            SessionStartEvent start => RecordSession(start.Data.SelectedModel, "session"),
+            SessionModelChangeEvent change => RecordSession(change.Data.NewModel, "session"),
+            AssistantTurnStartEvent turnStart => RecordTurn(turnStart.Data.Model, "turn"),
+            AssistantUsageEvent usage => RecordTurn(usage.Data.Model, "usage"),
+            _ => null,
+        };
+    }
+}
 
 /// <summary>A conversation handle: a Copilot session bound to durable app state.</summary>
 public sealed class DurableConversation
 {
-    private readonly DurableHarness _harness;
+    private readonly DurableRuntime _runtime;
     private readonly List<string> _answers = [];
+    private readonly List<SandboxDecisionEvent> _sandboxDecisions = [];
+    private readonly List<(Func<SandboxDecisionEvent, bool> Match, TaskCompletionSource<SandboxDecisionEvent> Completion)> _sandboxWaiters = [];
+    private readonly DurableModelTracker _modelTracker = new();
+    private readonly List<TaskCompletionSource<DurableModelReport>> _modelWaiters = [];
+    private readonly object _modelObservationGate = new();
+    private bool _hasObservedModelReport;
+    private readonly object _checkpointGate = new();
+    private readonly ConcurrentDictionary<string, (string? Name, JsonElement? Arguments)> _toolCalls = [];
 
-    internal DurableConversation(DurableHarness harness, CopilotSession session, ConversationRecord record)
+    private Task _checkpointChain = Task.CompletedTask;
+    private Exception? _checkpointFailure;
+
+    internal DurableConversation(DurableRuntime runtime, CopilotSession session, ConversationRecord record)
     {
-        _harness = harness;
+        _runtime = runtime;
         Session = session;
         Record = record;
     }
@@ -2475,16 +4753,346 @@ public sealed class DurableConversation
         Session = session;
         // A permanent subscription records every answer the session produces, so a
         // review loop can look at the passes it has already made.
-        _subscription = session.On<SessionEvent>(evt =>
+        _subscription = session.On<SessionEvent>(Observe);
+
+        // Session creation can emit session.start before Attach has a chance to subscribe.
+        // Read the session's history to recover a model report lost in that window.
+        _ = RecoverMissedModelEventsAsync(session);
+    }
+
+    private async Task RecoverMissedModelEventsAsync(CopilotSession session)
+    {
+        try
         {
-            if (evt is AssistantMessageEvent message && !string.IsNullOrEmpty(message.Data.Content))
+            var history = await session.GetEventsAsync().ConfigureAwait(false);
+            lock (_modelObservationGate)
+            {
+                if (_hasObservedModelReport)
+                {
+                    return;
+                }
+
+                foreach (var evt in history)
+                {
+                    if (evt is SessionStartEvent or SessionModelChangeEvent)
+                    {
+                        ObserveModel(evt);
+                    }
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Recovery is best-effort; a failed history read leaves the conversation unchanged.
+        }
+    }
+
+    /// <summary>
+    /// Records what one session event says about this conversation. This is the body of the
+    /// permanent subscription <see cref="Attach"/> installs, kept separate so the observation
+    /// rules can be exercised without a live session.
+    /// </summary>
+    internal void Observe(SessionEvent evt)
+    {
+        if (evt is AssistantMessageEvent message)
+        {
+            if (!string.IsNullOrEmpty(message.Data.Content))
             {
                 RecordAnswer(message.Data.Content);
             }
-        });
+
+            // The answer ends the pass being recorded, so the next model report starts a
+            // new turn instead of refining this one.
+            CloseTurn();
+        }
+
+        // Sandbox decisions ride the same subscription: the runtime reports what the
+        // sandbox resolved, whether it engaged, and what it denied as ordinary session
+        // events, so a durable conversation can record them without a second stream.
+        if (evt is SandboxDecisionEvent decision)
+        {
+            RecordSandboxDecision(decision);
+        }
+
+        // The model the runtime actually used rides the same subscription too. It is
+        // recorded from the runtime's own reports, never from the requested model, so a
+        // substitution is visible.
+        lock (_modelObservationGate)
+        {
+            ObserveModel(evt);
+        }
+    }
+
+    private void ObserveModel(SessionEvent evt)
+    {
+        if (_modelTracker.Record(evt) is not { } report)
+        {
+            return;
+        }
+
+        if (report.HasModel)
+        {
+            _hasObservedModelReport = true;
+            _runtime.PublishModel(report);
+            ReleaseModelWaiters(report);
+        }
+    }
+
+    /// <summary>
+    /// Completes every pending <see cref="WaitForEffectiveModelAsync"/> with the report that
+    /// just arrived.
+    /// </summary>
+    private void ReleaseModelWaiters(DurableModelReport report)
+    {
+        List<TaskCompletionSource<DurableModelReport>>? waiting = null;
+        lock (_modelWaiters)
+        {
+            if (_modelWaiters.Count == 0)
+            {
+                return;
+            }
+
+            waiting = [.. _modelWaiters];
+            _modelWaiters.Clear();
+        }
+
+        foreach (var waiter in waiting)
+        {
+            waiter.TrySetResult(report);
+        }
     }
 
     private IDisposable? _subscription;
+
+    /// <summary>
+    /// Removes the permanent subscription installed by <see cref="Attach"/>. Called when the
+    /// runtime is disposed, so a session event that arrives during disposal cannot write into a
+    /// store that is going away. Idempotent.
+    /// </summary>
+    internal void Detach()
+    {
+        _subscription?.Dispose();
+        _subscription = null;
+    }
+
+    /// <summary>
+    /// The sandbox decisions this conversation has observed, oldest first.
+    /// </summary>
+    /// <remarks>
+    /// The list is fed by the permanent subscription installed in <see cref="Attach"/>, so it
+    /// holds every decision the runtime reported for this session — the resolved policy, the
+    /// spawn result, the enforcement state, and each access denial. It is in-memory: a decision
+    /// is an observation about a live session, not durable state, and a restored conversation
+    /// starts with an empty list.
+    /// </remarks>
+    public IReadOnlyList<SandboxDecisionEvent> SandboxDecisions
+    {
+        get
+        {
+            lock (_sandboxDecisions)
+            {
+                return _sandboxDecisions.ToList();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Waits for a sandbox decision that matches a predicate.
+    /// </summary>
+    /// <param name="match">The predicate a decision must satisfy.</param>
+    /// <param name="timeout">How long to wait. Defaults to 30 seconds.</param>
+    /// <param name="cancellationToken">Cancels the wait.</param>
+    /// <returns>The first matching decision, including one already observed.</returns>
+    /// <exception cref="TimeoutException">
+    /// No decision matched within the timeout. The message names the decisions that were
+    /// observed, so a caller can tell "the sandbox never reported" from "it reported something
+    /// else".
+    /// </exception>
+    public async Task<SandboxDecisionEvent> WaitForSandboxDecisionAsync(
+        Func<SandboxDecisionEvent, bool> match,
+        TimeSpan? timeout = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(match);
+
+        TaskCompletionSource<SandboxDecisionEvent> completion;
+        lock (_sandboxDecisions)
+        {
+            // A decision that already arrived satisfies the wait immediately: the caller may
+            // be looking at a turn that has already finished.
+            foreach (var observed in _sandboxDecisions)
+            {
+                if (match(observed))
+                {
+                    return observed;
+                }
+            }
+
+            completion = new TaskCompletionSource<SandboxDecisionEvent>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            _sandboxWaiters.Add((match, completion));
+        }
+
+        try
+        {
+            return await completion.Task.WaitAsync(timeout ?? TimeSpan.FromSeconds(30), cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            lock (_sandboxDecisions)
+            {
+                _sandboxWaiters.RemoveAll(waiter => ReferenceEquals(waiter.Completion, completion));
+            }
+
+            var observed = SandboxDecisions;
+            var summary = observed.Count == 0
+                ? "no sandbox decisions were reported at all"
+                : $"observed: {string.Join(", ", observed.Select(DescribeSandboxDecision))}";
+            throw new TimeoutException(
+                $"No sandbox decision matched within {(timeout ?? TimeSpan.FromSeconds(30)).TotalSeconds:0.###}s ({summary}). " +
+                "A sandbox that is not engaged reports no decisions; check the backend for this platform.");
+        }
+    }
+
+    private static string DescribeSandboxDecision(SandboxDecisionEvent decision) =>
+        decision.Data is null ? "(no data)" : $"{decision.Data.Kind ?? "?"}";
+
+    /// <summary>
+    /// The model the runtime reported for this conversation: the session-level report when the
+    /// session started or changed model, otherwise the latest report from a turn or a usage
+    /// record.
+    /// </summary>
+    /// <remarks>
+    /// The value is the runtime's, not the host's request, so a runtime that substitutes a
+    /// model is visible here. A conversation whose runtime has not reported a model returns
+    /// <see cref="DurableModelReport.NotReported"/> — <see cref="DurableModelReport.HasModel"/>
+    /// is <c>false</c> and the value is <c>null</c>; it is never silently replaced with
+    /// <see cref="DurableHarness.DefaultModel"/>.
+    /// <para>
+    /// The session-level report arrives asynchronously, after the create call has returned, so
+    /// reading this immediately after <see cref="DurableHarness.CreateConversationAsync"/> can
+    /// still see the not-reported value. Use <see cref="WaitForEffectiveModelAsync"/> when the
+    /// answer is needed rather than the current value.
+    /// </para>
+    /// </remarks>
+    public DurableModelReport EffectiveModel => _modelTracker.Effective;
+
+    /// <summary>
+    /// Waits for the runtime to report a model for this conversation, and returns the report.
+    /// </summary>
+    /// <param name="timeout">How long to wait. Defaults to 10 seconds.</param>
+    /// <param name="cancellationToken">Cancels the wait.</param>
+    /// <returns>
+    /// The report the runtime made, or <see cref="DurableModelReport.NotReported"/> when the
+    /// runtime reported no model within the timeout.
+    /// </returns>
+    /// <remarks>
+    /// A session-level report arrives asynchronously: the runtime announces the model on
+    /// <c>session.start</c>, which is delivered after the create call has already returned, so
+    /// reading <see cref="EffectiveModel"/> immediately after
+    /// <see cref="DurableHarness.CreateConversationAsync"/> can still see
+    /// <see cref="DurableModelReport.NotReported"/>. This waits for the report instead of
+    /// guessing at a delay, and it returns the not-reported value rather than throwing when the
+    /// runtime never names a model — a runtime that reports nothing is a fact to report, not an
+    /// error to raise.
+    /// </remarks>
+    public async Task<DurableModelReport> WaitForEffectiveModelAsync(
+        TimeSpan? timeout = null,
+        CancellationToken cancellationToken = default)
+    {
+        var current = EffectiveModel;
+        if (current.HasModel)
+        {
+            return current;
+        }
+
+        TaskCompletionSource<DurableModelReport> completion;
+        lock (_modelWaiters)
+        {
+            // Re-checked under the lock: a report that arrived between the read above and the
+            // registration below would otherwise be missed and the wait would time out.
+            var latest = _modelTracker.Effective;
+            if (latest.HasModel)
+            {
+                return latest;
+            }
+
+            completion = new TaskCompletionSource<DurableModelReport>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            _modelWaiters.Add(completion);
+        }
+
+        try
+        {
+            return await completion.Task.WaitAsync(timeout ?? TimeSpan.FromSeconds(10), cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            lock (_modelWaiters)
+            {
+                _modelWaiters.Remove(completion);
+            }
+
+            return DurableModelReport.NotReported;
+        }
+    }
+
+    /// <summary>
+    /// The model the runtime reported for each completed turn, oldest first.
+    /// </summary>
+    /// <remarks>
+    /// A turn is one assistant pass: a turn that calls tools produces several, and each
+    /// records the model the runtime named for it. A pass whose runtime named no model is
+    /// recorded as <see cref="DurableModelReport.NotReported"/> rather than being dropped, so
+    /// the list stays aligned with the turn sequence.
+    /// <para>
+    /// The list is in-memory: a model report is an observation about a live session, so a
+    /// restored conversation starts with an empty list.
+    /// </para>
+    /// </remarks>
+    public IReadOnlyList<DurableModelReport> TurnModels => _modelTracker.Turns;
+
+    /// <summary>
+    /// Closes the turn in flight. Called when an assistant message arrives: the next model
+    /// report belongs to the next pass, and a pass that reported nothing stays recorded as
+    /// not-reported instead of borrowing the previous turn's model.
+    /// </summary>
+    private void CloseTurn() => _modelTracker.CloseTurn();
+
+    private void RecordSandboxDecision(SandboxDecisionEvent decision)
+    {
+        List<(Func<SandboxDecisionEvent, bool> Match, TaskCompletionSource<SandboxDecisionEvent> Completion)>? matched = null;
+        lock (_sandboxDecisions)
+        {
+            _sandboxDecisions.Add(decision);
+            for (var i = _sandboxWaiters.Count - 1; i >= 0; i--)
+            {
+                var waiter = _sandboxWaiters[i];
+                bool isMatch;
+                try
+                {
+                    isMatch = waiter.Match(decision);
+                }
+                catch (Exception)
+                {
+                    isMatch = false;
+                }
+
+                if (!isMatch)
+                {
+                    continue;
+                }
+
+                (matched ??= []).Add(waiter);
+                _sandboxWaiters.RemoveAt(i);
+            }
+        }
+
+        foreach (var waiter in matched ?? [])
+        {
+            waiter.Completion.TrySetResult(decision);
+        }
+    }
 
     /// <summary>The durable conversation record.</summary>
     public ConversationRecord Record { get; }
@@ -2523,21 +5131,21 @@ public sealed class DurableConversation
 
     /// <summary>Reads the latest value of a document.</summary>
     public T? Snapshot<T>(DocumentDefinition<T> definition) =>
-        _harness.Store.Document(definition.Kind, Id)?.Latest is { } latest
+        _runtime.Store.Document(definition.Kind, Id)?.Latest is { } latest
             ? latest.Deserialize<T>(DurableJson.Options)
             : default;
 
     /// <summary>Reads the value a document had in the same transaction as the given entry.</summary>
     public T? SnapshotAsOf<T>(DocumentDefinition<T> definition, string entryId) =>
-        _harness.Store.Document(definition.Kind, Id)?.AsOf(entryId) is { } value
+        _runtime.Store.Document(definition.Kind, Id)?.AsOf(entryId) is { } value
             ? value.Deserialize<T>(DurableJson.Options)
             : default;
 
     /// <summary>Runs a transaction against the durable store.</summary>
-    public Task<T> CommitAsync<T>(Func<Transaction, Task<T>> body) => _harness.Store.CommitAsync(body);
+    public Task<T> CommitAsync<T>(Func<Transaction, Task<T>> body) => _runtime.Store.CommitAsync(body);
 
     /// <summary>Runs a transaction against the durable store.</summary>
-    public Task CommitAsync(Func<Transaction, Task> body) => _harness.Store.CommitAsync(body);
+    public Task CommitAsync(Func<Transaction, Task> body) => _runtime.Store.CommitAsync(body);
 
     /// <summary>Appends an entry to this conversation's transcript.</summary>
     public Task<string> AppendEntryAsync(string kind, string? data = null) =>
@@ -2548,13 +5156,214 @@ public sealed class DurableConversation
             return entryId;
         });
 
+    /// <summary>The binding recorded for this conversation, or null before one is written.</summary>
+    public SessionBinding? Binding() => Snapshot(_runtime.SessionBindingDocument);
+
+    /// <summary>The most recent input admission, or null before one is written.</summary>
+    public InputAdmission? Admission() => Snapshot(_runtime.AdmissionDocument);
+
+    /// <summary>The most recent checkpoint, or null before one is written.</summary>
+    public ConversationCheckpoint? Checkpoint() => Snapshot(_runtime.CheckpointDocument);
+
+    /// <summary>
+    /// Writes the binding that records which native session serves this conversation.
+    /// </summary>
+    /// <remarks>
+    /// The binding is written in one transaction with the entry that records it, so the
+    /// conversation's transcript and the session it names are never observed apart. Writing the
+    /// same binding twice is a no-op, so a re-attach does not grow the log.
+    /// </remarks>
+    internal async Task BindAsync(string? sessionId, string? model, CancellationToken cancellationToken = default)
+    {
+        await CommitAsync(async tx =>
+        {
+            var current = tx.Doc(_runtime.SessionBindingDocument, Id);
+            if (current.Value?.SessionId == sessionId)
+            {
+                await Task.CompletedTask;
+                return;
+            }
+
+            current.Value = new SessionBinding
+            {
+                SessionId = sessionId,
+                Model = model,
+                BoundAt = DateTimeOffset.UtcNow.ToString("O"),
+            };
+            current.Save(tx.AppendEntry(Id, "session-binding", sessionId));
+            await Task.CompletedTask;
+        });
+    }
+
+    /// <summary>
+    /// Commits an admission for a prompt before the prompt is sent.
+    /// </summary>
+    /// <remarks>
+    /// The commit happens before the send is issued, so a failure here surfaces to the caller
+    /// and nothing is sent: the durable record and the send are ordered, not concurrent. The
+    /// returned identifier settles the admission once the outcome is known.
+    /// </remarks>
+    internal async Task<string> AdmitAsync(string prompt)
+    {
+        var admissionId = $"a{Guid.NewGuid():N}";
+        await CommitAsync(async tx =>
+        {
+            var draft = tx.Doc(_runtime.AdmissionDocument, Id);
+            draft.Value = new InputAdmission
+            {
+                AdmissionId = admissionId,
+                Prompt = prompt,
+                State = "admitted",
+                AdmittedAt = DateTimeOffset.UtcNow.ToString("O"),
+            };
+            draft.Save(tx.AppendEntry(Id, "admission", admissionId));
+            await Task.CompletedTask;
+        });
+
+        return admissionId;
+    }
+
+    /// <summary>Settles an admission to its terminal state.</summary>
+    internal Task SettleAsync(string admissionId, string state) =>
+        CommitAsync(async tx =>
+        {
+            var draft = tx.Doc(_runtime.AdmissionDocument, Id);
+            var current = draft.Value;
+            if (current is null || current.AdmissionId != admissionId)
+            {
+                await Task.CompletedTask;
+                return;
+            }
+
+            draft.Value = new InputAdmission
+            {
+                AdmissionId = current.AdmissionId,
+                Prompt = current.Prompt,
+                State = state,
+                AdmittedAt = current.AdmittedAt,
+                SettledAt = DateTimeOffset.UtcNow.ToString("O"),
+            };
+            draft.Save(tx.AppendEntry(Id, "admission-settled", state));
+            await Task.CompletedTask;
+        });
+
+    /// <summary>
+    /// Queues a checkpoint write on this conversation's serial chain and returns the write.
+    /// </summary>
+    /// <remarks>
+    /// Checkpoint writes are serialized per conversation, so two events that arrive together
+    /// cannot interleave their read-then-write and lose one another's version. The chain is a
+    /// composition of tasks rather than a fire-and-forget continuation: the caller holds the
+    /// returned task, so a failed write is observed by whoever awaits the barrier instead of
+    /// being swallowed.
+    /// </remarks>
+    private Task QueueCheckpointAsync(Func<Task> write)
+    {
+        lock (_checkpointGate)
+        {
+            var next = _checkpointChain.ContinueWith(
+                async previous =>
+                {
+                    try
+                    {
+                        await previous;
+                    }
+                    catch (Exception error)
+                    {
+                        // A failed earlier write must not stop later checkpoints from being
+                        // attempted; the failure is kept for the barrier to report.
+                        _checkpointFailure ??= error;
+                    }
+
+                    await write();
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default).Unwrap();
+
+            _checkpointChain = next.ContinueWith(
+                previous =>
+                {
+                    try
+                    {
+                        previous.GetAwaiter().GetResult();
+                    }
+                    catch (Exception error)
+                    {
+                        _checkpointFailure ??= error;
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default);
+
+            return next;
+        }
+    }
+
+    /// <summary>
+    /// Writes a checkpoint unless the document's latest version already carries the same event.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ConversationCheckpoint.EventId"/> is the deduplication key. The comparison is
+    /// made inside the write's own transaction, on the same serial chain, so a duplicate
+    /// delivered twice concurrently is still written once.
+    /// </remarks>
+    internal Task CheckpointAsync(ConversationCheckpoint checkpoint) =>
+        QueueCheckpointAsync(() => CommitAsync(async tx =>
+        {
+            var draft = tx.Doc(_runtime.CheckpointDocument, Id);
+            if (draft.Value?.EventId == checkpoint.EventId)
+            {
+                await Task.CompletedTask;
+                return;
+            }
+
+            draft.Value = checkpoint;
+            draft.Save(tx.AppendEntry(Id, "checkpoint", checkpoint.EventId));
+            await Task.CompletedTask;
+        }));
+
+    /// <summary>
+    /// Awaits every checkpoint write queued so far and reports the first failure.
+    /// </summary>
+    /// <remarks>
+    /// This is the completion barrier: a durable submission does not report success until the
+    /// checkpoints its turn produced have committed. Failures are reported, never retried
+    /// silently, because a checkpoint that did not commit means the durable record is behind
+    /// what the caller was told.
+    /// </remarks>
+    internal async Task CheckpointBarrierAsync(CancellationToken cancellationToken = default)
+    {
+        Task pending;
+        lock (_checkpointGate)
+        {
+            pending = _checkpointChain;
+        }
+
+        await pending.WaitAsync(cancellationToken);
+
+        if (_checkpointFailure is { } failure)
+        {
+            throw new InvalidOperationException(
+                $"Conversation '{Id}' could not commit a checkpoint: {failure.Message}",
+                failure);
+        }
+    }
+
     /// <summary>Sends a prompt and waits for the assistant's answer.</summary>
     public async Task<AssistantMessageEvent?> SubmitAsync(string prompt, CancellationToken cancellationToken = default)
     {
         var completion = new TaskCompletionSource<AssistantMessageEvent?>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         AssistantMessageEvent? last = null;
+        string? answer = null;
         SetBusy(true);
+
+        // Admission is durable before the prompt is sent. A store failure here means the send
+        // never happens, so the caller sees the persistence failure rather than an unrecorded
+        // prompt.
+        var admissionId = await AdmitAsync(prompt);
 
         // A turn that calls tools emits an assistant message *before* the tool runs, and
         // the final answer comes after the tool result. Waiting for the session to go
@@ -2565,20 +5374,71 @@ public sealed class DurableConversation
             {
                 case AssistantMessageEvent message:
                     last = message;
+                    if (!string.IsNullOrEmpty(message.Data.Content))
+                    {
+                        answer = message.Data.Content;
+                    }
+
+                    break;
+                case ToolExecutionStartEvent start:
+                    _toolCalls[start.Data.ToolCallId] = (start.Data.ToolName, start.Data.Arguments);
+                    break;
+                case ToolExecutionCompleteEvent complete:
+                    RecordToolCheckpoint(complete);
                     break;
                 case SessionIdleEvent:
                     completion.TrySetResult(last);
                     break;
                 case SessionErrorEvent error:
+                    // A host hook the sandbox denied is a failure of the host's own
+                    // configuration, not of the conversation. When the host asked for that to
+                    // be tolerated, the turn's answer is returned and the denial stays visible
+                    // in SandboxDecisions.
+                    if (_runtime.Options.TolerateHostHookFailures && IsHostHookFailure(error.Data.Message))
+                    {
+                        completion.TrySetResult(last);
+                        break;
+                    }
+
                     completion.TrySetException(new InvalidOperationException(error.Data.Message));
                     break;
             }
         });
 
-        await Session.SendAsync(new MessageOptions { Prompt = prompt }, cancellationToken);
         try
         {
-            return await completion.Task.WaitAsync(cancellationToken);
+            try
+            {
+                await Session.SendAsync(new MessageOptions { Prompt = prompt }, cancellationToken);
+            }
+            catch
+            {
+                // The send itself failed, so the prompt was not delivered: the admission is
+                // settled as failed rather than left looking like it might have run.
+                await SettleQuietlyAsync(admissionId, "failed");
+                throw;
+            }
+
+            var result = await completion.Task.WaitAsync(cancellationToken);
+
+            // The turn checkpoint is queued from the event that completed the turn, and the
+            // barrier below is what makes the submission durable: success is reported only
+            // after the checkpoint commits.
+            if (result is not null)
+            {
+                await CheckpointAsync(TurnCheckpoint(result, answer));
+            }
+
+            await CheckpointBarrierAsync(cancellationToken);
+            await SettleAsync(admissionId, "completed");
+            return result;
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // The send was issued and its outcome is not a clean failure: the turn may have
+            // run. The admission is marked uncertain and is never replayed automatically.
+            await SettleQuietlyAsync(admissionId, "uncertain");
+            throw;
         }
         finally
         {
@@ -2586,9 +5446,98 @@ public sealed class DurableConversation
         }
     }
 
+    /// <summary>
+    /// Records a completed tool call as a checkpoint, deduplicated on the tool call identifier.
+    /// </summary>
+    /// <remarks>
+    /// The write is queued on the conversation's serial chain and observed by the completion
+    /// barrier, so it is awaited before the turn reports success rather than being a
+    /// fire-and-forget continuation.
+    /// </remarks>
+    private void RecordToolCheckpoint(ToolExecutionCompleteEvent complete)
+    {
+        _toolCalls.TryRemove(complete.Data.ToolCallId, out var started);
+
+        var checkpoint = new ConversationCheckpoint
+        {
+            CheckpointId = $"c{Guid.NewGuid():N}",
+            Kind = "tool",
+            EventId = $"tool:{complete.Data.ToolCallId}",
+            ToolName = started.Name ?? complete.Data.ToolDescription?.Name,
+            ToolArgs = started.Arguments?.GetRawText(),
+            Success = complete.Data.Success,
+            Error = complete.Data.Error?.Message,
+            Content = complete.Data.Result?.Content,
+            RecordedAt = DateTimeOffset.UtcNow.ToString("O"),
+        };
+
+        _ = CheckpointAsync(checkpoint);
+    }
+
+    private static ConversationCheckpoint TurnCheckpoint(AssistantMessageEvent message, string? answer) => new()
+    {
+        CheckpointId = $"c{Guid.NewGuid():N}",
+        Kind = "turn",
+        EventId = message.Data.MessageId is { Length: > 0 } messageId
+            ? $"turn:{messageId}"
+            : $"turn:{message.Id:N}",
+        MessageId = message.Data.MessageId,
+        Content = answer ?? message.Data.Content,
+        RecordedAt = DateTimeOffset.UtcNow.ToString("O"),
+    };
+
+    private async Task SettleQuietlyAsync(string admissionId, string state)
+    {
+        try
+        {
+            await SettleAsync(admissionId, state);
+        }
+        catch (Exception)
+        {
+            // The failure that brought us here is the one worth reporting; a second failure
+            // while settling must not replace it. The admission stays at its committed state,
+            // which is exactly the "unknown outcome" the record exists to preserve.
+        }
+    }
+
+    /// <summary>
+    /// Whether a session error is the runtime reporting that a host hook was denied by the
+    /// sandbox, rather than a failure of the turn itself.
+    /// </summary>
+    internal static bool IsHostHookFailure(string? message) =>
+        message is not null
+        && message.Contains("hook", StringComparison.OrdinalIgnoreCase)
+        && (message.Contains("sandbox", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("Operation not permitted", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("code 126", StringComparison.OrdinalIgnoreCase));
+
     /// <summary>Reads the stored transcript entries, newest first.</summary>
-    public IReadOnlyList<string> Entries(int limit = 20) =>
-        _harness.Store.Entries(Id).AsEnumerable().Reverse().Take(limit).ToList();
+    /// <remarks>
+    /// The transcript is the conversation's own entries: the ones the app wrote, plus the
+    /// inherited prefix a fork was taken at. The entries the durable layer writes to anchor its
+    /// own bookkeeping — the fork intent, and the agent choices a conversation was created or
+    /// reconfigured with — are not part of it, so a fork's transcript is the parent's transcript
+    /// up to the fork entry plus whatever the fork wrote itself.
+    /// <para>
+    /// The exclusion is derived from the store's document state, not from an entry's kind: the
+    /// kind is caller-supplied, so an app may legitimately write a <c>"fork"</c> entry of its
+    /// own. An entry is bookkeeping when every document version anchored to it belongs to an
+    /// internal document kind and it is not an entry a fork in the conversation's ancestry was
+    /// taken at. Because documents are persisted, the answer is the same after the store is
+    /// reopened.
+    /// </para>
+    /// </remarks>
+    public IReadOnlyList<string> Entries(int limit = 20)
+    {
+        var entries = _runtime.Store.Entries(Id);
+        var bookkeeping = _runtime.BookkeepingEntries(Id, entries);
+        return entries
+            .AsEnumerable()
+            .Reverse()
+            .Where(entry => !bookkeeping.Contains(entry))
+            .Take(limit)
+            .ToList();
+    }
 
     /// <summary>Reads the effective model context: the transcript as the model sees it.</summary>
     public Task<IReadOnlyList<SessionEvent>> ContextAsync(CancellationToken cancellationToken = default) =>
@@ -2599,7 +5548,7 @@ public sealed class DurableConversation
     {
         await CommitAsync(async tx =>
         {
-            var draft = tx.Doc(_harness.AgentDocument, Id);
+            var draft = tx.Doc(_runtime.AgentDocument, Id);
             draft.Value = choices;
             draft.Save(tx.AppendEntry(Id, "agent"));
             await Task.CompletedTask;
@@ -2615,14 +5564,14 @@ public sealed class DurableConversation
     }
 
     /// <summary>Reads the stored agent choices.</summary>
-    public AgentChoices? Choices() => Snapshot(_harness.AgentDocument);
+    public AgentChoices? Choices() => Snapshot(_runtime.AgentDocument);
 
     /// <summary>Resolves the stored choices against the registry.</summary>
     public ResolvedAgent Agent()
     {
         var choices = Choices() ?? new AgentChoices();
-        var extensions = _harness.ResolveExtensions(choices.Extensions);
-        var tools = _harness.ResolveTools(extensions, choices.Tools);
+        var extensions = _runtime.ResolveExtensions(choices.Extensions);
+        var tools = _runtime.ResolveTools(extensions, choices.Tools);
         return new ResolvedAgent(
             choices.Model,
             choices.ReasoningEffort,
@@ -2633,42 +5582,315 @@ public sealed class DurableConversation
             choices.InfiniteSessions,
             extensions,
             tools,
-            choices.Permissions);
+            choices.Permissions,
+            choices.Sandbox);
     }
 
     /// <summary>Forks this conversation at the given entry.</summary>
+    /// <param name="entryId">
+    /// This conversation's <b>durable entry id</b> — the value <see cref="Transaction.AppendEntry"/>
+    /// returns, e.g. <c>e7</c> — never an SDK event id. The fork holds that entry and everything
+    /// before it.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The forked conversation, with its session attached.</returns>
     public Task<DurableConversation> ForkAsync(string entryId, CancellationToken cancellationToken = default) =>
-        _harness.ForkAsync(this, entryId, cancellationToken);
+        _runtime.ForkAsync(this, entryId, cancellationToken);
 }
 
-/// <summary>The harness: the durable host that owns the store, the registry, and the conversations.</summary>
-public sealed class DurableHarness : IAsyncDisposable
+/// <summary>Options for opening a <see cref="DurableHarness"/>.</summary>
+public sealed class DurableHarnessOptions
+{
+    /// <summary>
+    /// The permission handler installed on every session the harness creates, or <c>null</c>
+    /// to keep the durable default.
+    /// </summary>
+    /// <remarks>
+    /// The durable default is <see cref="PermissionPolicy.Handler"/>, which is fail-closed
+    /// against the conversation's stored grants. Supplying a handler here replaces that
+    /// decision for every conversation the harness opens, so it is the escape hatch for a host
+    /// that has its own approval UI — not a way to widen a single conversation's authority.
+    /// <para>
+    /// The SDK's own default is <see cref="PermissionHandler.ApproveAll"/>, which approves
+    /// everything. Passing it here is possible and is exactly as unsafe as it sounds: the
+    /// agent's authority then lives outside the store.
+    /// </para>
+    /// </remarks>
+    public Func<PermissionRequest, PermissionInvocation, Task<PermissionDecision>>? PermissionHandler { get; set; }
+
+    /// <summary>
+    /// Whether repository-origin file hooks run for the sessions this harness creates, or
+    /// <c>null</c> to leave the SDK default.
+    /// </summary>
+    /// <remarks>
+    /// A host hook is host code, not sandboxed code: the runtime runs it inside the session's
+    /// sandbox, so a sandbox policy that does not grant the hook's own command denies it and
+    /// the tool call fails after it succeeded. A host that runs sandboxed conversations and
+    /// does not want to widen the policy for its own hooks turns them off here.
+    /// <para>
+    /// This flag only controls repository-origin hooks (<c>.github/hooks/</c> and trusted
+    /// repository-configured roots). A hook installed in the user's own configuration
+    /// directory — <c>~/.copilot/hooks/</c> — is not repository-origin, so it still runs with
+    /// this set to <c>false</c>. Turning that off is a host configuration decision outside
+    /// this harness; see <c>docs/SANDBOX_MATRIX.md</c>.
+    /// </para>
+    /// <para>
+    /// This is host configuration, not durable state: it is not persisted with the
+    /// conversation, so it never travels with a fork.
+    /// </para>
+    /// </remarks>
+    public bool? EnableFileHooks { get; set; }
+
+    /// <summary>
+    /// Whether a turn that fails only because a host hook was denied by the sandbox is
+    /// reported as an answer instead of an exception.
+    /// </summary>
+    /// <remarks>
+    /// The runtime runs host hooks inside the session's sandbox. A hook the policy does not
+    /// grant is denied, and the runtime reports the turn as a session error even though the
+    /// tool call itself succeeded. That failure is about the host's own configuration, not
+    /// about the conversation, so a host that runs sandboxed conversations can choose to
+    /// tolerate it: the turn's answer is returned and the denial is still visible in
+    /// <see cref="DurableConversation.SandboxDecisions"/>.
+    /// <para>
+    /// The default is <c>false</c>: a session error is an error. Only a failure the runtime
+    /// attributes to a hook is tolerated; a genuine tool or model failure still throws.
+    /// </para>
+    /// </remarks>
+    public bool TolerateHostHookFailures { get; set; }
+
+    /// <summary>
+    /// The name of the environment variable that selects the runtime executable when
+    /// <see cref="RuntimePath"/> is not set. Its value is a path, exactly like
+    /// <see cref="RuntimePath"/>.
+    /// </summary>
+    public const string RuntimePathEnvironmentVariable = "DURABLE_RUNTIME_PATH";
+
+    /// <summary>
+    /// The runtime executable the harness connects to over stdio, or <c>null</c> to spawn the
+    /// bundled runtime.
+    /// </summary>
+    /// <remarks>
+    /// When this is set, <see cref="DurableHarness.OpenAsync(DurableStore, ExtensionRegistry, DurableHarnessOptions, CancellationToken)"/>
+    /// connects to that executable with the SDK's
+    /// <see cref="RuntimeConnection.ForStdio"/> transport instead of the bundled runtime. When
+    /// it is <c>null</c>, the <see cref="RuntimePathEnvironmentVariable"/> environment variable
+    /// (<c>DURABLE_RUNTIME_PATH</c>) is consulted instead; when that is unset or empty too, the
+    /// harness spawns the bundled runtime exactly as it always has.
+    /// <para>
+    /// The environment variable exists so a script can select a runtime without editing the
+    /// examples: <c>DURABLE_RUNTIME_PATH=/path/to/runtime scripts/validate.sh</c>. A value set
+    /// here wins over the environment variable.
+    /// </para>
+    /// <para>
+    /// A path that names no existing file fails the open with an exception that names the path,
+    /// before any process is started.
+    /// </para>
+    /// <para>
+    /// This is host configuration, not durable state: it is not persisted with the
+    /// conversation, so it never travels with a fork.
+    /// </para>
+    /// </remarks>
+    public string? RuntimePath { get; set; }
+
+    /// <summary>
+    /// Arguments passed to the runtime executable named by <see cref="RuntimePath"/>.
+    /// </summary>
+    /// <remarks>
+    /// A runtime selected by path is started with these arguments, so a host can point the
+    /// harness at a runtime that needs its own configuration — a recorded transcript, for
+    /// instance. The bundled runtime is started with none.
+    /// </remarks>
+    public IList<string> RuntimeArguments { get; set; } = Array.Empty<string>();
+}
+
+/// <summary>
+/// The shared durable runtime: the one place that binds a store, an SDK client, a registry, and
+/// the conversations over them.
+/// </summary>
+/// <remarks>
+/// <see cref="DurableHarness"/> and <see cref="DurableCopilotClient"/> are two front doors onto
+/// this type, not two implementations. Everything that makes a conversation durable — the
+/// conversation binding, the session configuration, extension and tool resolution, task
+/// coordination, and the lifecycle — lives here, so a conversation created through either door
+/// is the same object with the same behaviour.
+/// <para>
+/// <b>Binding.</b> The runtime is constructed with the registry and the host options, which are
+/// known before anything is opened, and is bound to a store and a client by
+/// <see cref="Attach"/>. Binding is not I/O: it records two references, decides ownership, and
+/// claims the store's single task-scheduler slot. The harness binds in its constructor because
+/// it has already created both; the facade binds during
+/// <see cref="DurableCopilotClient.InitializeAsync"/> because creating them is the I/O.
+/// </para>
+/// <para>
+/// <b>One runner per store.</b> A store has at most one task scheduler, and the runtime claims
+/// it. A second runtime over the same store fails the claim instead of silently replacing the
+/// first, which is what keeps two hosts from running the same task twice.
+/// </para>
+/// </remarks>
+internal sealed class DurableRuntime : IAsyncDisposable
 {
     /// <summary>
     /// The model used when a conversation does not name one. It is a cheap,
     /// reasoning-capable model: the examples are about durable mechanics, not model
     /// quality, and a fixed model makes an example's behaviour reproducible.
     /// </summary>
-    public const string DefaultModel = "gpt-6-luna";
+    internal const string DefaultModel = "gpt-6-luna";
+
+    /// <summary>
+    /// JSON-RPC 2.0's reserved "method not found" code. The SDK exposes it as
+    /// <c>RemoteRpcException.MethodNotFoundErrorCode</c>, but that member is not public in the
+    /// referenced package, so the value is repeated here.
+    /// </summary>
+    private const int MethodNotFoundErrorCode = -32601;
 
     private readonly Dictionary<string, DurableConversation> _conversations = [];
     private readonly ConcurrentDictionary<string, TaskCompletionSource<TaskOutcome>> _taskCompletions = [];
     private readonly ConcurrentDictionary<string, byte> _runningTasks = [];
+    private readonly ConcurrentDictionary<string, Task> _inFlight = [];
+    private readonly object _lifecycleGate = new();
 
-    private DurableHarness(CopilotClient client, DurableStore store, ExtensionRegistry registry)
+    private CopilotClient? _client;
+    private DurableStore? _store;
+    private Dictionary<string, ModelInfo>? _models;
+    private bool _disposed;
+    private DurableModelReport _effectiveModel = DurableModelReport.NotReported;
+    private readonly object _modelGate = new();
+
+    internal DurableRuntime(ExtensionRegistry registry, DurableHarnessOptions? options = null)
     {
-        Client = client;
-        Store = store;
+        ArgumentNullException.ThrowIfNull(registry);
+
         Registry = registry;
+        Options = options ?? new DurableHarnessOptions();
         // Rewindable with "asOf", so a fork starts with the agent choices its parent had at
         // the fork entry.
         AgentDocument = new DocumentDefinition<AgentChoices>("durable.agent", DocumentHistory.Rewindable, ForkPolicy.AsOf);
-
-        // A task created by another task asks the harness to schedule it.
-        store.TaskScheduler = (taskId, cancellationToken) => _ = RunTaskAsync(taskId, cancellationToken);
+        // "initial", so a fork of a fork starts with a fresh intent instead of inheriting the
+        // parent's completed one.
+        ForkDocument = new DocumentDefinition<ForkIntent>("durable.fork", DocumentHistory.Rewindable, ForkPolicy.Initial);
+        // Initial, so a fork does not inherit its parent's SDK session id: the fork has its own
+        // native transcript, and resuming the parent's would replay the wrong conversation.
+        SessionBindingDocument = new DocumentDefinition<SessionBinding>("durable.session-binding", DocumentHistory.Rewindable, ForkPolicy.Initial);
+        AdmissionDocument = new DocumentDefinition<InputAdmission>("durable.admission", DocumentHistory.Rewindable, ForkPolicy.AsOf);
+        CheckpointDocument = new DocumentDefinition<ConversationCheckpoint>("durable.checkpoint", DocumentHistory.Rewindable, ForkPolicy.AsOf);
+        // Initial, so a fork of a conversation does not inherit a definition it never used. The
+        // definition is owned by "agent:{name}" rather than by a conversation, so a conversation
+        // fork never copies it in the first place; the policy is here so the kind is complete.
+        AgentDefinitionDocument = new DocumentDefinition<AgentDefinition>(AgentDefinition.DocumentKind, DocumentHistory.Rewindable, ForkPolicy.Initial);
     }
 
-    private Dictionary<string, ModelInfo>? _models;
+    /// <summary>The document that records which SDK session a durable conversation is bound to.</summary>
+    internal DocumentDefinition<SessionBinding> SessionBindingDocument { get; }
+
+    /// <summary>The document that records each prompt's admission, before it is sent.</summary>
+    internal DocumentDefinition<InputAdmission> AdmissionDocument { get; }
+
+    /// <summary>The document that records a checkpoint per completed turn or tool call.</summary>
+    internal DocumentDefinition<ConversationCheckpoint> CheckpointDocument { get; }
+
+    /// <summary>The document that records a persisted agent definition, owned by <c>agent:{name}</c>.</summary>
+    internal DocumentDefinition<AgentDefinition> AgentDefinitionDocument { get; }
+
+    /// <summary>The Copilot client, once the runtime is bound.</summary>
+    internal CopilotClient Client => _client
+        ?? throw new InvalidOperationException(
+            "The SDK client is created during InitializeAsync; await that first.");
+
+    /// <summary>The durable store, once the runtime is bound.</summary>
+    internal DurableStore Store => _store
+        ?? throw new InvalidOperationException(
+            "The store is created during InitializeAsync; await that first.");
+
+    /// <summary>The extension registry. Never unavailable: an empty registry is a valid one.</summary>
+    internal ExtensionRegistry Registry { get; }
+
+    /// <summary>The host configuration applied to every session this runtime configures.</summary>
+    internal DurableHarnessOptions Options { get; }
+
+    /// <summary>The document holding per-conversation agent choices.</summary>
+    internal DocumentDefinition<AgentChoices> AgentDocument { get; }
+
+    /// <summary>The document holding a fork's intent, owned by the fork.</summary>
+    internal DocumentDefinition<ForkIntent> ForkDocument { get; }
+
+    /// <summary>The conversations this runtime knows about.</summary>
+    internal IReadOnlyCollection<DurableConversation> Conversations => _conversations.Values;
+
+    /// <summary>
+    /// The most recent model any conversation over this runtime reported.
+    /// </summary>
+    /// <remarks>
+    /// It is <see cref="DurableModelReport.NotReported"/> until a session or a turn reports a
+    /// model. It never falls back to <see cref="DefaultModel"/>: the default is what the host
+    /// asked for, and this property reports only what the runtime said.
+    /// </remarks>
+    internal DurableModelReport EffectiveModel
+    {
+        get
+        {
+            lock (_modelGate)
+            {
+                return _effectiveModel;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Records the model a conversation observed. Conversations report here as well as in their
+    /// own list, so the runtime-level value follows the most recent session or turn.
+    /// </summary>
+    internal void PublishModel(DurableModelReport report)
+    {
+        if (!report.HasModel)
+        {
+            return;
+        }
+
+        lock (_modelGate)
+        {
+            _effectiveModel = report;
+        }
+    }
+
+    /// <summary>Whether the runtime is bound to a store and a client.</summary>
+    internal bool IsAttached => _store is not null && _client is not null;
+
+    /// <summary>Whether disposal disposes the SDK client.</summary>
+    internal bool OwnsClient { get; private set; }
+
+    /// <summary>Whether disposal disposes the store.</summary>
+    internal bool OwnsStore { get; private set; }
+
+    /// <summary>
+    /// Binds the runtime to a store and a client, deciding what disposal owns.
+    /// </summary>
+    /// <remarks>
+    /// Binding performs no I/O. It claims the store's task-scheduler slot, so a store that
+    /// another runtime already drives is rejected here rather than being silently taken over.
+    /// </remarks>
+    internal void Attach(CopilotClient client, DurableStore store, bool ownsClient, bool ownsStore)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(store);
+
+        lock (_lifecycleGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_store is not null || _client is not null)
+            {
+                throw new InvalidOperationException("The runtime is already bound to a store and a client.");
+            }
+
+            _client = client;
+            _store = store;
+            OwnsClient = ownsClient;
+            OwnsStore = ownsStore;
+        }
+
+        // A task created by another task asks the runtime to schedule it.
+        store.ClaimTaskScheduler(this, (taskId, cancellationToken) => _ = RunTaskAsync(taskId, cancellationToken));
+    }
 
     /// <summary>
     /// Whether the given model accepts a reasoning effort. The runtime rejects a session
@@ -2685,26 +5907,11 @@ public sealed class DurableHarness : IAsyncDisposable
         return _models.TryGetValue(model, out var info) && info.SupportedReasoningEfforts is { Count: > 0 };
     }
 
-    /// <summary>The Copilot client.</summary>
-    public CopilotClient Client { get; }
-
-    /// <summary>The durable store.</summary>
-    public DurableStore Store { get; }
-
-    /// <summary>The extension registry.</summary>
-    public ExtensionRegistry Registry { get; }
-
-    /// <summary>The document holding per-conversation agent choices.</summary>
-    public DocumentDefinition<AgentChoices> AgentDocument { get; }
-
-    /// <summary>The conversations this harness knows about.</summary>
-    public IReadOnlyCollection<DurableConversation> Conversations => _conversations.Values;
-
     /// <summary>
-    /// Finds a conversation by id, restoring it from the store if the harness has not
+    /// Finds a conversation by id, restoring it from the store if the runtime has not
     /// opened it yet. A conversation that was created before a restart is still there.
     /// </summary>
-    public DurableConversation? FindConversation(string conversationId)
+    internal DurableConversation? FindConversation(string conversationId)
     {
         if (_conversations.TryGetValue(conversationId, out var existing))
         {
@@ -2721,31 +5928,30 @@ public sealed class DurableHarness : IAsyncDisposable
             ? latest.Deserialize<AgentChoices>(DurableJson.Options)
             : null;
 
-        var session = Client.CreateSessionAsync(BuildSessionConfig(choices, null)).GetAwaiter().GetResult();
+        var session = CreatePinnedSessionAsync(conversationId, choices, null, CancellationToken.None)
+            .GetAwaiter().GetResult();
         var conversation = new DurableConversation(this, null!, record);
         conversation.Attach(session);
+        conversation.BindAsync(session.SessionId, choices?.Model ?? DefaultModel).GetAwaiter().GetResult();
         _conversations[conversationId] = conversation;
         return conversation;
     }
 
-    /// <summary>Opens a harness over a store and a registry.</summary>
-    public static async Task<DurableHarness> OpenAsync(
-        DurableStore store,
-        ExtensionRegistry registry,
-        CancellationToken cancellationToken = default)
-    {
-        var client = new CopilotClient();
-        await client.StartAsync(cancellationToken);
-        return new DurableHarness(client, store, registry);
-    }
-
     /// <summary>Creates a conversation and its Copilot session.</summary>
-    public async Task<DurableConversation> CreateConversationAsync(
+    internal async Task<DurableConversation> CreateConversationAsync(
         AgentChoices? choices = null,
         string? ownerTaskId = null,
         string? ownerConversationId = null,
         CancellationToken cancellationToken = default)
     {
+        // Checked before the record is committed: a conversation whose policy cannot be applied
+        // must not be written at all, or the store would hold a conversation that can never be
+        // opened while claiming the protection it does not have.
+        if (choices?.Sandbox is { } requested)
+        {
+            ValidateSandboxPolicy(requested);
+        }
+
         var record = await Store.CommitAsync(tx =>
         {
             var created = tx.CreateConversation(ownerTaskId, ownerConversationId);
@@ -2762,14 +5968,15 @@ public sealed class DurableHarness : IAsyncDisposable
         // The conversation handle exists before the session is created, so prompt
         // sections can read the conversation's durable documents.
         var conversation = new DurableConversation(this, null!, record);
-        var session = await Client.CreateSessionAsync(BuildSessionConfig(choices, conversation), cancellationToken);
+        var session = await CreatePinnedSessionAsync(record.Id, choices, conversation, cancellationToken);
         conversation.Attach(session);
+        await conversation.BindAsync(session.SessionId, choices?.Model ?? DefaultModel, cancellationToken);
         _conversations[record.Id] = conversation;
         return conversation;
     }
 
     /// <summary>Returns the root conversation, creating it on first use.</summary>
-    public async Task<DurableConversation> RootAsync(
+    internal async Task<DurableConversation> RootAsync(
         AgentChoices? choices = null,
         CancellationToken cancellationToken = default)
     {
@@ -2797,32 +6004,134 @@ public sealed class DurableHarness : IAsyncDisposable
     /// Restores the conversations a reopened store already holds, giving each one a
     /// Copilot session again.
     /// </summary>
+    /// <remarks>
+    /// Parents are restored before forks, because completing an interrupted fork forks its
+    /// parent's session and so needs the parent to have one.
+    /// </remarks>
     private async Task RestoreConversationsAsync(CancellationToken cancellationToken)
     {
-        foreach (var record in Store.Conversations.ToList())
+        var records = Store.Conversations.ToList();
+
+        foreach (var record in records.Where(record => ForkIntentOf(record.Id) is null))
         {
-            if (_conversations.ContainsKey(record.Id))
-            {
-                continue;
-            }
+            await RestoreConversationAsync(record, cancellationToken);
+        }
 
-            var choices = Store.Document(AgentDocument.Kind, record.Id)?.Latest is { } latest
-                ? latest.Deserialize<AgentChoices>(DurableJson.Options)
-                : null;
-
-            var session = await Client.CreateSessionAsync(BuildSessionConfig(choices, null), cancellationToken);
-            var conversation = new DurableConversation(this, null!, record);
-            conversation.Attach(session);
-            _conversations[record.Id] = conversation;
+        foreach (var record in records.Where(record => ForkIntentOf(record.Id) is not null))
+        {
+            await RestoreForkAsync(record, cancellationToken);
         }
     }
 
+    /// <summary>Gives a restored conversation a fresh session.</summary>
+    private async Task RestoreConversationAsync(ConversationRecord record, CancellationToken cancellationToken)
+    {
+        if (_conversations.ContainsKey(record.Id))
+        {
+            return;
+        }
+
+        var choices = Store.Document(AgentDocument.Kind, record.Id)?.Latest is { } latest
+            ? latest.Deserialize<AgentChoices>(DurableJson.Options)
+            : null;
+
+        var session = await CreatePinnedSessionAsync(record.Id, choices, null, cancellationToken);
+        var conversation = new DurableConversation(this, null!, record);
+        conversation.Attach(session);
+        await conversation.BindAsync(session.SessionId, choices?.Model ?? DefaultModel, cancellationToken);
+        _conversations[record.Id] = conversation;
+    }
+
+    /// <summary>
+    /// Restores a fork, completing it when its creation was interrupted and abandoning it when
+    /// it can no longer be completed.
+    /// </summary>
+    private async Task RestoreForkAsync(ConversationRecord record, CancellationToken cancellationToken)
+    {
+        if (_conversations.ContainsKey(record.Id))
+        {
+            return;
+        }
+
+        var intent = ForkIntentOf(record.Id)!;
+        if (intent.State is ForkIntentState.Abandoned)
+        {
+            return;
+        }
+
+        if (intent.State is ForkIntentState.Completed)
+        {
+            // A reopened store starts every conversation on a fresh session, forks included.
+            await RestoreConversationAsync(record, cancellationToken);
+            return;
+        }
+
+        // Pending: the durable half exists but the native fork never finished. Complete it if
+        // the parent is available; otherwise abandon it, because a fork with no session and no
+        // parent can never be completed.
+        if (!_conversations.TryGetValue(intent.ParentConversationId, out var parent))
+        {
+            await AbandonForkAsync(record.Id);
+            return;
+        }
+
+        var choices = Store.Document(AgentDocument.Kind, record.Id)?.Latest is { } latest
+            ? latest.Deserialize<AgentChoices>(DurableJson.Options)
+            : null;
+
+        var conversation = new DurableConversation(this, null!, record);
+        var session = await ForkSessionAsync(parent, conversation, choices, cancellationToken);
+        conversation.Attach(session);
+        _conversations[record.Id] = conversation;
+    }
+
     /// <summary>Forks a conversation at an entry.</summary>
-    public async Task<DurableConversation> ForkAsync(
+    /// <param name="parent">The conversation to fork from.</param>
+    /// <param name="entryId">
+    /// The parent's <b>durable entry id</b> (the value <see cref="Transaction.AppendEntry"/>
+    /// returns, e.g. <c>e7</c>) to fork at — never an SDK event id. The durable transcript is
+    /// the boundary the store can map, so it is the one the fork is defined by.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The forked conversation, with its session attached.</returns>
+    /// <remarks>
+    /// <para>
+    /// <b>Boundary asymmetry.</b> The durable transcript is copied <i>inclusively</i> — the fork
+    /// holds <paramref name="entryId"/> and everything before it — while the native fork RPC
+    /// takes an exclusive event boundary. The two are not the same coordinate space, and no
+    /// durable-entry-to-event mapping exists, so the native fork is taken over the whole
+    /// transcript and the durable copy is what bounds the fork. The fork's own entries are
+    /// appended after the inherited ones, so the inherited prefix is exactly the parent's
+    /// transcript up to <paramref name="entryId"/>.
+    /// </para>
+    /// <para>
+    /// <b>Choices.</b> The fork is configured from the choices the parent had at
+    /// <paramref name="entryId"/>, not the ones it has now, so a fork can never silently widen
+    /// the parent's grants.
+    /// </para>
+    /// <para>
+    /// <b>Recoverability.</b> The fork's durable half — record, transcript, documents, and a
+    /// <see cref="ForkIntentState.Pending"/> intent — is committed before the native fork is
+    /// attempted. A crash in between leaves a fork that the next open completes or abandons.
+    /// </para>
+    /// </remarks>
+    internal async Task<DurableConversation> ForkAsync(
         DurableConversation parent,
         string entryId,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(parent);
+
+        if (!Store.Entries(parent.Id).Contains(entryId))
+        {
+            throw new ArgumentException(
+                $"'{entryId}' is not an entry of conversation '{parent.Id}'.",
+                nameof(entryId));
+        }
+
+        // The choices the parent had at the boundary, not the ones it has now.
+        var choices = ChoicesAsOf(parent.Id, entryId);
+
         var record = await Store.CommitAsync(tx =>
         {
             var created = tx.CreateConversation(parentConversationId: parent.Id, forkEntryId: entryId);
@@ -2834,18 +6143,201 @@ public sealed class DurableHarness : IAsyncDisposable
                 Store.Provider.CopyDocument(document, created.Id, entryId);
             }
 
+            // Durable before the native fork, so a crash between the two is detectable.
+            var intent = tx.Doc(ForkDocument, created.Id);
+            intent.Value = new ForkIntent
+            {
+                ParentConversationId = parent.Id,
+                ForkEntryId = entryId,
+                State = ForkIntentState.Pending,
+            };
+            intent.Save(tx.AppendEntry(created.Id, "fork"));
+
             return Task.FromResult(created);
         });
 
         var conversation = new DurableConversation(this, null!, record);
-        var session = await Client.CreateSessionAsync(BuildSessionConfig(parent.Choices(), conversation), cancellationToken);
+        var session = await ForkSessionAsync(parent, conversation, choices, cancellationToken);
         conversation.Attach(session);
+        // A fork names its own session: the binding document is ForkPolicy.Initial, so a fork
+        // never inherits its parent's session id, and this write records the new one.
+        await conversation.BindAsync(session.SessionId, parent.Choices()?.Model ?? DefaultModel, cancellationToken);
         _conversations[record.Id] = conversation;
         return conversation;
     }
 
+    /// <summary>Reads the agent choices a conversation had at an entry.</summary>
+    private AgentChoices? ChoicesAsOf(string conversationId, string entryId) =>
+        Store.Document(AgentDocument.Kind, conversationId)?.AsOfOrBefore(entryId, Store.Provider.SequenceOf) is { } value
+            ? value.Deserialize<AgentChoices>(DurableJson.Options)
+            : null;
+
+    /// <summary>Reads a conversation's fork intent, or <c>null</c> when it is not a fork.</summary>
+    private ForkIntent? ForkIntentOf(string conversationId) =>
+        Store.Document(ForkDocument.Kind, conversationId)?.Latest is { } latest
+            ? latest.Deserialize<ForkIntent>(DurableJson.Options)
+            : null;
+
+    /// <summary>
+    /// The entries of a conversation that exist only to anchor the durable layer's own
+    /// bookkeeping, and so are not part of the conversation's transcript.
+    /// </summary>
+    /// <remarks>
+    /// The durable layer writes an entry whenever it commits one of its internal documents: the
+    /// fork intent, and the agent choices a conversation was created or reconfigured with. Those
+    /// entries are durable state, not conversation, so they are kept out of
+    /// <see cref="DurableConversation.Entries"/>.
+    /// <para>
+    /// The set is derived from the store's document state rather than from an entry's kind,
+    /// because the kind is caller-supplied: an app may write a <c>"fork"</c> entry of its own and
+    /// must still see it. An entry is bookkeeping when it is anchored by at least one document
+    /// version and every version anchored to it belongs to an internal document kind. The entry a
+    /// fork was taken at is never bookkeeping: it is inherited transcript, and a fork's copy of
+    /// the parent's agent document is anchored to it.
+    /// </para>
+    /// <para>
+    /// A fork inherits the parent's entries verbatim, including the ones that were bookkeeping in
+    /// the parent, so the answer is the union over the conversation and its ancestors. Each
+    /// conversation in the chain contributes its own documents, and every fork entry in the chain
+    /// is inherited transcript rather than bookkeeping.
+    /// </para>
+    /// <para>
+    /// Documents are persisted, so a reopened store derives the same set.
+    /// </para>
+    /// </remarks>
+    internal HashSet<string> BookkeepingEntries(string conversationId, IReadOnlyList<string> entries)
+    {
+        var bookkeeping = new HashSet<string>(StringComparer.Ordinal);
+        var boundaries = new HashSet<string>(StringComparer.Ordinal);
+        var userAnchored = new HashSet<string>(StringComparer.Ordinal);
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+
+        for (var current = conversationId; current is not null && visited.Add(current);)
+        {
+            var record = Store.Conversation(current);
+            if (record?.ForkEntryId is { } boundary)
+            {
+                boundaries.Add(boundary);
+            }
+
+            var anchored = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var document in Store.Documents.Where(document => document.OwnerId == current))
+            {
+                var isInternal = IsInternalDocument(document.Kind);
+                foreach (var version in document.Versions)
+                {
+                    if (version.EntryId.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    anchored.Add(version.EntryId);
+                    if (!isInternal)
+                    {
+                        userAnchored.Add(version.EntryId);
+                    }
+                }
+            }
+
+            foreach (var entry in entries)
+            {
+                if (anchored.Contains(entry))
+                {
+                    bookkeeping.Add(entry);
+                }
+            }
+
+            current = record?.ParentConversationId;
+        }
+
+        bookkeeping.ExceptWith(userAnchored);
+        bookkeeping.ExceptWith(boundaries);
+        return bookkeeping;
+    }
+
+    /// <summary>Whether a document kind belongs to the durable layer rather than to the app.</summary>
+    /// <remarks>
+    /// Derived from the documents this runtime defines rather than from a list of kind strings,
+    /// so a document the durable layer adds later is covered without a second edit here.
+    /// </remarks>
+    private bool IsInternalDocument(string kind) =>
+        InternalDocumentKinds.Contains(kind);
+
+    /// <summary>The kinds of the documents the durable layer owns.</summary>
+    private HashSet<string> InternalDocumentKinds => _internalDocumentKinds ??=
+    [
+        AgentDocument.Kind,
+        ForkDocument.Kind,
+        SessionBindingDocument.Kind,
+        AdmissionDocument.Kind,
+        CheckpointDocument.Kind,
+        AgentDefinitionDocument.Kind,
+        DurableSchedule.DocumentKind,
+        DurableShiftClaim.DocumentKind,
+        DurableShiftHandoff.DocumentKind,
+    ];
+
+    private HashSet<string>? _internalDocumentKinds;
+
+    /// <summary>
+    /// Gives a fork its native session: forks the parent's transcript, resumes the result, and
+    /// records the session on the intent so a later open can find it again.
+    /// </summary>
+    private async Task<CopilotSession> ForkSessionAsync(
+        DurableConversation parent,
+        DurableConversation conversation,
+        AgentChoices? choices,
+        CancellationToken cancellationToken)
+    {
+        string? forkedSessionId = null;
+        try
+        {
+            var forked = await Client.Rpc.Sessions.ForkAsync(
+                parent.SessionId,
+                toEventId: null,
+                name: null,
+                cancellationToken);
+            forkedSessionId = forked.SessionId;
+        }
+        catch (IOException ex) when (ex.InnerException is RemoteRpcException { ErrorCode: MethodNotFoundErrorCode })
+        {
+            // A runtime without sessions.fork cannot fork natively. The durable half of the
+            // fork is already committed, so it continues as a new session over the inherited
+            // transcript rather than failing outright.
+        }
+
+        var session = forkedSessionId is null
+            ? await CreatePinnedSessionAsync(conversation.Id, choices, conversation, cancellationToken)
+            : await Client.ResumeSessionAsync(
+                forkedSessionId,
+                BuildResumeSessionConfig(choices, conversation),
+                cancellationToken);
+
+        await Store.CommitAsync(tx =>
+        {
+            var intent = tx.Doc(ForkDocument, conversation.Id);
+            intent.Value.SessionId = session.SessionId;
+            intent.Value.State = ForkIntentState.Completed;
+            intent.Save(tx.AppendEntry(conversation.Id, "fork"));
+            return Task.CompletedTask;
+        });
+
+        return session;
+    }
+
+    /// <summary>Marks a fork abandoned, so it is never given a session.</summary>
+    private Task AbandonForkAsync(string conversationId) =>
+        Store.CommitAsync(tx =>
+        {
+            var intent = tx.Doc(ForkDocument, conversationId);
+            intent.Value.State = ForkIntentState.Abandoned;
+            intent.Save(tx.AppendEntry(conversationId, "fork"));
+            return Task.CompletedTask;
+        });
+
     /// <summary>Creates a durable task and schedules it.</summary>
-    public async Task<DurableTaskRecord> CreateTaskAsync(
+    internal async Task<DurableTaskRecord> CreateTaskAsync(
         DurableTaskDefinition definition,
         JsonElement input,
         string? ownerConversationId = null,
@@ -2860,9 +6352,32 @@ public sealed class DurableHarness : IAsyncDisposable
         return record;
     }
 
-    /// <summary>Runs a task to completion, resuming from its last checkpoint.</summary>
-    public async Task<TaskOutcome> RunTaskAsync(string taskId, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// The completion a run of a task settles. A task that parked and is woken runs again,
+    /// so each run gets its own completion: reusing the settled one would hand a caller the
+    /// outcome of a run that ended before the event arrived.
+    /// </summary>
+    private TaskCompletionSource<TaskOutcome> BeginCompletion(string taskId) =>
+        _taskCompletions[taskId] = new TaskCompletionSource<TaskOutcome>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>
+    /// Settles a task's completion and forgets it, so the next run of the task starts a new
+    /// one. Called once per run, at the point the run ends.
+    /// </summary>
+    private void EndCompletion(string taskId, TaskOutcome outcome, TaskCompletionSource<TaskOutcome> completion)
     {
+        _taskCompletions.TryRemove(
+            new KeyValuePair<string, TaskCompletionSource<TaskOutcome>>(taskId, completion));
+        completion.TrySetResult(outcome);
+    }
+
+    /// <summary>Runs a task to completion, resuming from its last checkpoint.</summary>
+    internal async Task<TaskOutcome> RunTaskAsync(string taskId, CancellationToken cancellationToken = default)
+    {
+        // A run already in flight keeps its completion; a task that parked has no run, so
+        // this one gets a fresh completion. The record is read first because "is a run in
+        // flight" is answered by the running table below, not by the completion cache.
         var completion = _taskCompletions.GetOrAdd(taskId, _ => new TaskCompletionSource<TaskOutcome>(
             TaskCreationOptions.RunContinuationsAsynchronously));
 
@@ -2880,12 +6395,26 @@ public sealed class DurableHarness : IAsyncDisposable
             return await completion.Task.WaitAsync(cancellationToken);
         }
 
+        var run = Store.OutsideCommitScopeAsync(() => RunTaskCoreAsync(taskId, record, completion, cancellationToken));
+        // Recorded before the first await so disposal can drain a run that is mid-commit.
+        _inFlight[taskId] = run;
         try
         {
-            return await RunTaskCoreAsync(taskId, record, completion, cancellationToken);
+            return await run;
+        }
+        catch (Exception exception)
+        {
+            // Nothing observes this run: it is started fire-and-forget by
+            // CreateTaskAsync, WaitForTaskAsync and ResumeAsync. A fault that escapes
+            // the core loop has to settle the completion source, or every waiter for
+            // this task waits for an outcome that will never come. The run still
+            // fails, so a caller awaiting it -- ResumeAsync, say -- is told why.
+            completion.TrySetResult(new TaskOutcome("failed", Error: exception.Message));
+            throw;
         }
         finally
         {
+            _inFlight.TryRemove(taskId, out _);
             _runningTasks.TryRemove(taskId, out _);
         }
     }
@@ -2901,7 +6430,7 @@ public sealed class DurableHarness : IAsyncDisposable
             var existing = record.Outcome is { } outcome
                 ? outcome.Deserialize<TaskOutcome>(DurableJson.Options)!
                 : new TaskOutcome("completed");
-            completion.TrySetResult(existing);
+            EndCompletion(taskId, existing, completion);
             return existing;
         }
 
@@ -2909,7 +6438,7 @@ public sealed class DurableHarness : IAsyncDisposable
         if (definition is null)
         {
             var unknown = new TaskOutcome("failed", Error: $"unknown task definition {record.Name}");
-            completion.TrySetResult(unknown);
+            EndCompletion(taskId, unknown, completion);
             return unknown;
         }
 
@@ -2920,6 +6449,17 @@ public sealed class DurableHarness : IAsyncDisposable
             // is told about it before the transaction commits.
             Store.Provider.UpdateTask(record);
             await Store.CommitAsync(_ => Task.CompletedTask);
+        }
+
+        // A task re-entered from a checkpoint it committed while WAITING still owes that wait. The
+        // wait is a recorded fact -- the checkpoint names the children -- so it survives the process
+        // that committed it, and re-entering the next phase before the children have finished would
+        // let a parent act on an outcome that does not exist yet. Recover it here, before the first
+        // phase runs, and only for a record that is still Waiting: a fresh record has no children to
+        // wait on, and a Running one is not waiting on anything.
+        if (Store.Task(taskId)?.Status == TaskStatus.Waiting)
+        {
+            await WaitForChildrenAsync(taskId, record.WaitingOn, cancellationToken);
         }
 
         var runtime = new TaskRuntime(Store, record, definition, cancellationToken);
@@ -2933,12 +6473,18 @@ public sealed class DurableHarness : IAsyncDisposable
                 break;
             }
 
-            var phase = record.Checkpoint.ValueKind == JsonValueKind.Object
-                && record.Checkpoint.TryGetProperty("phase", out var phaseElement)
-                    ? phaseElement.GetString() ?? "run"
-                    : "run";
+            // A checkpoint's phase is the name of a handler, so it has to be a JSON
+            // string. Anything else is a definition error: say which kind was found
+            // and fail the task, rather than letting GetString throw out of the run
+            // where nothing can observe it.
+            var (phase, phaseError) = ReadPhase(record.Checkpoint);
+            if (phaseError is not null)
+            {
+                await Store.CommitTaskAsync(taskId, () => TaskCommit.Failed(phaseError));
+                break;
+            }
 
-            if (!definition.Phases.TryGetValue(phase, out var handler))
+            if (!definition.Phases.TryGetValue(phase!, out var handler))
             {
                 await Store.CommitTaskAsync(taskId, () => TaskCommit.Failed($"unknown phase {phase}"));
                 break;
@@ -2963,28 +6509,87 @@ public sealed class DurableHarness : IAsyncDisposable
 
             if (commit.Outcome is { } outcome)
             {
-                completion.TrySetResult(outcome);
+                EndCompletion(taskId, outcome, completion);
                 break;
             }
 
             // A task that is waiting on child tasks holds no invocation: it is
-            // resumed when its children finish.
+            // resumed when its children finish. A task waiting on an external event
+            // holds no invocation either, but nothing in the store ever produces that
+            // event, so the run ends with the task still `waiting` and RaiseEventAsync
+            // is what makes it runnable again. Reading the event name as a child task id
+            // would find no task, and end it as failed instead of parked.
             if (commit.Status == TaskStatus.Waiting)
             {
-                var children = commit.WaitingOn;
+                var children = commit.WaitingOn
+                    .Where(name => !TaskCommit.IsExternalEvent(name))
+                    .ToList();
+                if (children.Count == 0)
+                {
+                    break;
+                }
+
                 await WaitForChildrenAsync(taskId, children, cancellationToken);
                 continue;
             }
         }
 
-        var final = Store.Task(taskId)?.Outcome is { } finalOutcome
-            ? finalOutcome.Deserialize<TaskOutcome>(DurableJson.Options)!
-            : new TaskOutcome("failed", Error: "task did not finish");
-        completion.TrySetResult(final);
+        var settled = Store.Task(taskId);
+        TaskOutcome final;
+        if (settled?.Outcome is { } finalOutcome)
+        {
+            final = finalOutcome.Deserialize<TaskOutcome>(DurableJson.Options)!;
+        }
+        else if (settled?.Status == TaskStatus.Waiting)
+        {
+            // The task parked on something outside the store -- an external event -- so the
+            // run ends without it being over. "Pending" is what the store already reports for
+            // a task with no outcome; it is not a failure, and a caller that treats it as one
+            // would fail a task that RaiseEventAsync can still wake.
+            final = new TaskOutcome("pending");
+        }
+        else
+        {
+            final = new TaskOutcome("failed", Error: "task did not finish");
+        }
+
+        EndCompletion(taskId, final, completion);
         return final;
     }
 
-    /// <summary>Waits for a task to finish.</summary>
+    /// <summary>
+    /// Reads the handler name a checkpoint names, without throwing. A checkpoint is
+    /// caller-supplied data: it can come from an enum serializer, an older schema, or
+    /// hand-edited JSON, and none of those is a reason to escape the run.
+    /// </summary>
+    /// <returns>The phase name, or the failure to report when the checkpoint cannot be read.</returns>
+    private static (string? Phase, string? Error) ReadPhase(JsonElement checkpoint)
+    {
+        if (checkpoint.ValueKind != JsonValueKind.Object
+            || !checkpoint.TryGetProperty("phase", out var element)
+            || element.ValueKind == JsonValueKind.Null)
+        {
+            // A task with no phase in its checkpoint starts at "run", which is what
+            // every definition's initial checkpoint looks like before its first commit.
+            return ("run", null);
+        }
+
+        return element.ValueKind == JsonValueKind.String
+            ? (element.GetString() ?? "run", null)
+            : (null, $"checkpoint phase must be a string, found {JsonKind(element.ValueKind)}");
+    }
+
+    /// <summary>
+    /// The JSON name of a value's kind. <see cref="JsonValueKind.ToString"/> says
+    /// "True"/"False" for booleans, which is not a JSON type name and would make this
+    /// message differ from the ports'.
+    /// </summary>
+    private static string JsonKind(JsonValueKind kind) => kind switch
+    {
+        JsonValueKind.True or JsonValueKind.False => "Boolean",
+        _ => kind.ToString(),
+    };
+
     /// <summary>
     /// Waits for child tasks to finish, then resumes the waiting parent. The parent
     /// holds no invocation while it waits: its checkpoint says which children it is
@@ -3011,7 +6616,8 @@ public sealed class DurableHarness : IAsyncDisposable
         }
     }
 
-    public async Task<TaskOutcome> WaitForTaskAsync(string taskId, CancellationToken cancellationToken = default)
+    /// <summary>Waits for a task to finish.</summary>
+    internal async Task<TaskOutcome> WaitForTaskAsync(string taskId, CancellationToken cancellationToken = default)
     {
         var record = Store.Task(taskId);
         if (record is null)
@@ -3036,7 +6642,7 @@ public sealed class DurableHarness : IAsyncDisposable
     }
 
     /// <summary>Aborts a task, running its abort handler.</summary>
-    public async Task AbortTaskAsync(string taskId, CancellationToken cancellationToken = default)
+    internal async Task AbortTaskAsync(string taskId, CancellationToken cancellationToken = default)
     {
         var record = Store.Task(taskId);
         if (record is null || record.Status == TaskStatus.Terminal)
@@ -3061,25 +6667,149 @@ public sealed class DurableHarness : IAsyncDisposable
         await definition.Abort(runtime);
     }
 
-    /// <summary>Resumes every task that was running when the process stopped.</summary>
-    public async Task ResumeAsync(CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Re-binds a stored conversation to the native session it recorded, or fails explicitly.
+    /// </summary>
+    /// <remarks>
+    /// The binding is the record of which SDK session served the conversation. Resuming reads it
+    /// and asks the client for that session: a native transcript that is still there is resumed,
+    /// so the conversation continues with its history. A transcript that is gone throws
+    /// <see cref="DurableRecoveryRequiredException"/> instead of quietly creating a new, empty
+    /// session — a replacement would answer with no memory of the conversation while looking
+    /// perfectly healthy. A conversation that never recorded a binding has nothing to recover,
+    /// so it is bound to a fresh session and that binding is written.
+    /// </remarks>
+    internal async Task<DurableConversation> ResumeConversationAsync(
+        string conversationId,
+        CancellationToken cancellationToken = default)
     {
-        foreach (var record in Store.Tasks.Where(t => t.Status is TaskStatus.Running or TaskStatus.Pending))
+        if (_conversations.TryGetValue(conversationId, out var live))
         {
-            _ = RunTaskAsync(record.Id, cancellationToken);
+            return live;
         }
 
-        await Task.CompletedTask;
+        var record = Store.Conversation(conversationId)
+            ?? throw new InvalidOperationException($"No conversation '{conversationId}' is stored.");
+
+        var choices = Store.Document(AgentDocument.Kind, conversationId)?.Latest is { } latest
+            ? latest.Deserialize<AgentChoices>(DurableJson.Options)
+            : null;
+
+        var binding = Store.Document(SessionBindingDocument.Kind, conversationId)?.Latest is { } bound
+            ? bound.Deserialize<SessionBinding>(DurableJson.Options)
+            : null;
+
+        var conversation = new DurableConversation(this, null!, record);
+
+        if (binding?.SessionId is { Length: > 0 } recordedSessionId)
+        {
+            // The configuration is built before the metadata probe, so a stored policy that
+            // cannot be applied fails here — before any RPC — rather than after the runtime has
+            // already been asked to continue the session.
+            var resumeConfig = BuildResumeSessionConfig(BuildSessionConfig(choices, conversation));
+
+            // A null result is the SDK saying it has no such session. What that means depends on
+            // who chose the id: a pinned id is one the durable layer asked for at creation, so it
+            // can ask for it again and the conversation keeps its identity; an id the runtime
+            // allocated is one the durable layer only learned after the fact, so a runtime that
+            // does not hold it has lost the transcript and only the host can decide what to do.
+            var metadata = await Client.GetSessionMetadataAsync(recordedSessionId, cancellationToken);
+            if (metadata is null)
+            {
+                if (!binding.Pinned)
+                {
+                    throw new DurableRecoveryRequiredException(conversationId, recordedSessionId);
+                }
+
+                var recreated = await Client.CreateSessionAsync(
+                    WithSessionId(BuildSessionConfig(choices, conversation), recordedSessionId),
+                    cancellationToken);
+                conversation.Attach(recreated);
+                _conversations[conversationId] = conversation;
+                return conversation;
+            }
+
+            var resumed = await Client.ResumeSessionAsync(recordedSessionId, resumeConfig, cancellationToken);
+            conversation.Attach(resumed);
+            _conversations[conversationId] = conversation;
+            return conversation;
+        }
+
+        var session = await CreatePinnedSessionAsync(conversationId, choices, conversation, cancellationToken);
+        conversation.Attach(session);
+        await conversation.BindAsync(session.SessionId, choices?.Model ?? DefaultModel, cancellationToken);
+        _conversations[conversationId] = conversation;
+        return conversation;
+    }
+
+    /// <summary>Names the session a configuration asks for.</summary>
+    private static SessionConfig WithSessionId(SessionConfig config, string sessionId)
+    {
+        config.SessionId = sessionId;
+        return config;
+    }
+
+    /// <summary>
+    /// Copies a session configuration into the shape resuming takes.
+    /// </summary>
+    /// <remarks>
+    /// Resuming accepts a <see cref="ResumeSessionConfig"/>, which carries every setting a new
+    /// session does but is a separate type. Copying rather than rebuilding keeps the two paths
+    /// from drifting: the resumed session runs with exactly the configuration a new session
+    /// would have been given.
+    /// </remarks>
+    private static ResumeSessionConfig BuildResumeSessionConfig(SessionConfig config) => new()
+    {
+        Model = config.Model,
+        ReasoningEffort = config.ReasoningEffort,
+        WorkingDirectory = config.WorkingDirectory,
+        Streaming = config.Streaming,
+        Hooks = config.Hooks,
+        InfiniteSessions = config.InfiniteSessions,
+        Tools = config.Tools,
+        SystemMessage = config.SystemMessage,
+        OnPermissionRequest = config.OnPermissionRequest,
+        SandboxConfig = config.SandboxConfig,
+        EnableFileHooks = config.EnableFileHooks,
+    };
+
+    /// <summary>Resumes every task that was still in flight when the process stopped.</summary>
+    /// <remarks>
+    /// The tasks are awaited, not started and forgotten: a caller that resumes work needs to
+    /// know when the work is done, and a fire-and-forget start would report success before a
+    /// single phase had run. Each task is re-entered from its last checkpoint, and the outcomes
+    /// come back in store order so a caller can pair them with the records it read.
+    /// <para>
+    /// A task left <see cref="TaskStatus.Waiting"/> is unfinished for the same reason a
+    /// <see cref="TaskStatus.Running"/> one is: it holds a checkpoint to continue from and it has
+    /// no invocation in flight, because waiting on children is a commit rather than a call that
+    /// stays open. Skipping it strands the parent while its children finish underneath it, which
+    /// is a workflow that is half-done with nothing left to drive it.
+    /// </para>
+    /// </remarks>
+    internal async Task<IReadOnlyList<TaskOutcome>> ResumeAsync(CancellationToken cancellationToken = default)
+    {
+        var resumable = Store.Tasks
+            .Where(t => t.Status is TaskStatus.Running or TaskStatus.Pending or TaskStatus.Waiting)
+            .ToList();
+
+        var outcomes = new List<TaskOutcome>(resumable.Count);
+        foreach (var record in resumable)
+        {
+            outcomes.Add(await RunTaskAsync(record.Id, cancellationToken));
+        }
+
+        return outcomes;
     }
 
     /// <summary>Reads the task graph: tasks and their owner edges.</summary>
-    public IReadOnlyList<(DurableTaskRecord Task, string? Owner)> TaskGraph() =>
+    internal IReadOnlyList<(DurableTaskRecord Task, string? Owner)> TaskGraph() =>
         Store.Tasks
             .Select(task => (task, Owner: task.OwnerTaskId ?? task.OwnerConversationId))
             .ToList();
 
     /// <summary>Resolves extension names against the registry.</summary>
-    public IReadOnlyList<Extension> ResolveExtensions(IReadOnlyList<string>? names)
+    internal IReadOnlyList<Extension> ResolveExtensions(IReadOnlyList<string>? names)
     {
         if (names is null)
         {
@@ -3095,7 +6825,7 @@ public sealed class DurableHarness : IAsyncDisposable
     /// place: the tool keeps its position in the list, but the later implementation wins.
     /// Wrappers are applied last, so a wrapper decorates whichever implementation won.
     /// </summary>
-    public IReadOnlyList<AIFunction> ResolveTools(IReadOnlyList<Extension> extensions, IReadOnlyList<string>? names)
+    internal IReadOnlyList<AIFunction> ResolveTools(IReadOnlyList<Extension> extensions, IReadOnlyList<string>? names)
     {
         // Later extensions replace earlier ones by name, keeping the original position.
         var available = new List<AIFunction>();
@@ -3136,8 +6866,268 @@ public sealed class DurableHarness : IAsyncDisposable
             .ToList();
     }
 
+    /// <summary>
+    /// Maps a durable sandbox policy onto the SDK's wire type, expanding the
+    /// <see cref="DurableSandboxPolicy.WorkspaceToken"/> token against the working directory.
+    /// </summary>
+    /// <remarks>
+    /// Every nested object is constructed explicitly. The wire type's constructor leaves every
+    /// reference null, so a field this method forgets is a field the runtime never sees — which
+    /// is why the mapping is written out field by field rather than copied.
+    /// </remarks>
+    internal static SandboxConfig BuildSandboxConfig(DurableSandboxPolicy policy, string? workingDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        ValidateSandboxPolicy(policy);
+
+        var config = new SandboxConfig
+        {
+            Enabled = policy.Enabled,
+            AddCurrentWorkingDirectory = policy.AddCurrentWorkingDirectory,
+            AllowBypass = policy.AllowBypass,
+            AllowDevToolAccess = policy.AllowDevToolAccess,
+            SandboxMcpServers = policy.SandboxMcpServers,
+            SandboxLspServers = policy.SandboxLspServers,
+        };
+
+        if (policy.Auth is { } auth)
+        {
+            config.Auth = new SandboxConfigAuth { Gh = auth.Gh, Git = auth.Git };
+        }
+
+        if (policy.Credentials?.EnvVars is { } envVars)
+        {
+            var credentials = new SandboxCredentialsConfig { EnvVars = new Dictionary<string, SandboxMaskedEnvVar>() };
+            foreach (var pair in envVars)
+            {
+                credentials.EnvVars[pair.Key] = new SandboxMaskedEnvVar
+                {
+                    InjectHosts = pair.Value?.ToList() ?? [],
+                };
+            }
+
+            config.Credentials = credentials;
+        }
+
+        if (policy.Filesystem is { } filesystem)
+        {
+            config.UserPolicy ??= new SandboxConfigUserPolicy();
+            config.UserPolicy.Filesystem = new SandboxConfigUserPolicyFilesystem
+            {
+                ClearPolicyOnExit = filesystem.ClearPolicyOnExit,
+                DeniedPaths = ExpandPaths(filesystem.DeniedPaths, workingDirectory),
+                ReadonlyPaths = ExpandPaths(filesystem.ReadonlyPaths, workingDirectory),
+                ReadwritePaths = ExpandPaths(filesystem.ReadwritePaths, workingDirectory),
+            };
+        }
+
+        if (policy.Network is { } network)
+        {
+            config.UserPolicy ??= new SandboxConfigUserPolicy();
+            config.UserPolicy.Network = new SandboxConfigUserPolicyNetwork
+            {
+                AllowedHosts = network.AllowedHosts?.ToList() ?? [],
+                BlockedHosts = network.BlockedHosts?.ToList() ?? [],
+                AllowOutbound = network.AllowOutbound,
+                AllowLocalNetwork = network.AllowLocalNetwork,
+            };
+
+            // A proxy without a URL is not a proxy: the wire type requires one, so a policy
+            // that names only credentials is dropped rather than sent as an empty URL.
+            if (network.Proxy is { Url: { } proxyUrl } proxy)
+            {
+                var wireProxy = new SandboxConfigUserPolicyNetworkProxy { Url = proxyUrl };
+                if (proxy.Username is { } username)
+                {
+                    wireProxy.Username = username;
+                }
+
+                if (proxy.Password is { } password)
+                {
+                    wireProxy.Password = password;
+                }
+
+                config.UserPolicy.Network.Proxy = wireProxy;
+            }
+        }
+
+        if (policy.KeychainAccess is { } keychainAccess)
+        {
+            config.UserPolicy ??= new SandboxConfigUserPolicy();
+            config.UserPolicy.Seatbelt = new SandboxConfigUserPolicySeatbelt { KeychainAccess = keychainAccess };
+        }
+
+        return config;
+    }
+
+    /// <summary>
+    /// Rejects a stored policy the wire type cannot express faithfully.
+    /// </summary>
+    /// <remarks>
+    /// Each rule here guards a field the mapping would otherwise have to narrow. Narrowing is
+    /// the failure mode this method exists to prevent: a policy that asks for one thing and a
+    /// session that gets another is a silent downgrade, and the store would go on claiming the
+    /// protection the session does not have.
+    /// </remarks>
+    /// <remarks>
+    /// Internal rather than private so the runtime host validates an agent definition's policy
+    /// with the same rules a session applies, instead of a second copy that can drift.
+    /// </remarks>
+    internal static void ValidateSandboxPolicy(DurableSandboxPolicy policy)
+    {
+        // A disabled sandbox enforces nothing, so a policy that disables it while still naming
+        // restrictions describes a session that would run unsandboxed while the store claims
+        // otherwise. That is the silent downgrade this method exists to refuse.
+        if (!policy.Enabled
+            && (policy.Auth is not null
+                || policy.Credentials is not null
+                || policy.Filesystem is not null
+                || policy.Network is not null
+                || policy.KeychainAccess is not null))
+        {
+            throw new DurableSandboxPolicyException(
+                "the policy disables the sandbox but still names credential, filesystem, network, "
+                + "or keychain restrictions, which a disabled sandbox cannot enforce. Enable the "
+                + "sandbox, or clear the restrictions to opt out deliberately.",
+                policy);
+        }
+
+        if (policy.Credentials?.EnvVars is not { } envVars)
+        {
+            return;
+        }
+
+        foreach (var pair in envVars)
+        {
+            if (string.IsNullOrWhiteSpace(pair.Key))
+            {
+                throw new DurableSandboxPolicyException(
+                    "a credential is listed under an empty environment variable name.",
+                    policy);
+            }
+
+            var hosts = pair.Value;
+            if (hosts is null || hosts.Count == 0)
+            {
+                throw new DurableSandboxPolicyException(
+                    $"the credential '{pair.Key}' names no inject hosts, so it would be injected "
+                    + "nowhere. Name at least one HTTPS host or host pattern.",
+                    policy);
+            }
+
+            foreach (var host in hosts)
+            {
+                if (string.IsNullOrWhiteSpace(host))
+                {
+                    throw new DurableSandboxPolicyException(
+                        $"the credential '{pair.Key}' names an empty inject host.",
+                        policy);
+                }
+
+                if (host.Trim() == "*")
+                {
+                    throw new DurableSandboxPolicyException(
+                        $"the credential '{pair.Key}' names a bare '*' inject host, which would "
+                        + "send the value to every host. Name the hosts it may reach.",
+                        policy);
+                }
+            }
+        }
+    }
+
+    private static List<string> ExpandPaths(List<string>? paths, string? workingDirectory) =>
+        paths is null
+            ? []
+            : paths.Select(path => DurableSandboxPolicy.ExpandPath(path, workingDirectory)).ToList();
+
+    /// <summary>
+    /// Creates a session under an id the durable layer chose and recorded first.
+    /// </summary>
+    /// <remarks>
+    /// The id is pinned so the binding names a session the durable layer can ask for again. An id
+    /// the runtime allocates is only learned after the fact, so a second process has no way to
+    /// name the session its conversation lives in, and the conversation is unrecoverable even
+    /// though the runtime would have served it. Pinning is a create-time decision: a resumed
+    /// session already has its id, and <see cref="ResumeSessionConfig"/> has no such property.
+    /// </remarks>
+    private async Task<CopilotSession> CreatePinnedSessionAsync(
+        string conversationId,
+        AgentChoices? choices,
+        DurableConversation? conversation,
+        CancellationToken cancellationToken)
+    {
+        var config = BuildSessionConfig(choices, conversation);
+        config.SessionId = await PinSessionIdAsync(conversationId, choices?.Model ?? DefaultModel, cancellationToken);
+        return await Client.CreateSessionAsync(config, cancellationToken);
+    }
+
+    /// <summary>
+    /// Returns the id a conversation's session is created under, recording it before the session
+    /// exists.
+    /// </summary>
+    /// <remarks>
+    /// The id is generated once and written to the binding, rather than derived from the
+    /// conversation id: the store then holds exactly the id the runtime was asked for, and the
+    /// scheme that produced it can change without orphaning every conversation already on disk.
+    /// The write happens before the create RPC, so a crash in between leaves a conversation whose
+    /// binding names the session it was about to open — the same id the next attempt asks for.
+    /// A conversation that already has a pinned id keeps it, so restoring a reopened store does
+    /// not rename the session a conversation is on.
+    /// </remarks>
+    private async Task<string> PinSessionIdAsync(
+        string conversationId,
+        string? model,
+        CancellationToken cancellationToken)
+    {
+        var existing = Store.Document(SessionBindingDocument.Kind, conversationId)?.Latest is { } latest
+            ? latest.Deserialize<SessionBinding>(DurableJson.Options)
+            : null;
+
+        if (existing is { Pinned: true, SessionId: { Length: > 0 } pinned })
+        {
+            return pinned;
+        }
+
+        var sessionId = $"s{Guid.NewGuid():N}";
+        await Store.CommitAsync(tx =>
+        {
+            var draft = tx.Doc(SessionBindingDocument, conversationId);
+            draft.Value = new SessionBinding
+            {
+                SessionId = sessionId,
+                Model = model,
+                Pinned = true,
+                BoundAt = DateTimeOffset.UtcNow.ToString("O"),
+            };
+            draft.Save(tx.AppendEntry(conversationId, "session-binding", sessionId));
+            return Task.CompletedTask;
+        });
+
+        return sessionId;
+    }
+
     /// <summary>Builds the Copilot session configuration for a set of choices.</summary>
-    public SessionConfig BuildSessionConfig(AgentChoices? choices, DurableConversation? conversation)
+    internal SessionConfig BuildSessionConfig(AgentChoices? choices, DurableConversation? conversation) =>
+        (SessionConfig)BuildSessionConfig(choices, conversation, new SessionConfig());
+
+    /// <summary>
+    /// Builds the config used to resume a forked session. It is the same config a created
+    /// session gets, so the fork runs with the choices inherited at the fork boundary, plus
+    /// the resume-only switches: the fork is a new session, so it must not replay a resume
+    /// event, and it must not continue work the parent had pending.
+    /// </summary>
+    internal ResumeSessionConfig BuildResumeSessionConfig(AgentChoices? choices, DurableConversation? conversation)
+    {
+        var config = (ResumeSessionConfig)BuildSessionConfig(choices, conversation, new ResumeSessionConfig());
+        config.SuppressResumeEvent = true;
+        config.ContinuePendingWork = false;
+        return config;
+    }
+
+    private SessionConfigBase BuildSessionConfig(
+        AgentChoices? choices,
+        DurableConversation? conversation,
+        SessionConfigBase config)
     {
         var resolved = new ResolvedAgent(
             choices?.Model,
@@ -3149,21 +7139,42 @@ public sealed class DurableHarness : IAsyncDisposable
             choices?.InfiniteSessions,
             ResolveExtensions(choices?.Extensions),
             ResolveTools(ResolveExtensions(choices?.Extensions), choices?.Tools),
-            choices?.Permissions);
+            choices?.Permissions,
+            choices?.Sandbox);
 
-        var config = new SessionConfig
+        // The default is a cheap, reasoning-capable model rather than "auto": "auto"
+        // does not accept a reasoning effort, and it re-routes per request, which
+        // makes an example's behaviour less reproducible.
+        config.Model = resolved.Model ?? DefaultModel;
+
+        // Fail-closed: a durable conversation may only use what it was explicitly granted.
+        // The SDK's own default approves everything, which would make the agent's behaviour
+        // depend on state that is not in the store. A host that supplies its own handler
+        // takes over that decision for every conversation this runtime opens.
+        config.OnPermissionRequest = Options.PermissionHandler ?? PermissionPolicy.Handler(resolved.Permissions);
+        config.WorkingDirectory = resolved.WorkingDirectory;
+
+        if (Options.EnableFileHooks is { } enableFileHooks)
         {
-            // The default is a cheap, reasoning-capable model rather than "auto": "auto"
-            // does not accept a reasoning effort, and it re-routes per request, which
-            // makes an example's behaviour less reproducible.
-            Model = resolved.Model ?? DefaultModel,
+            config.EnableFileHooks = enableFileHooks;
+        }
 
-            // Fail-closed: a durable conversation may only use what it was explicitly granted.
-            // The SDK's own default approves everything, which would make the agent's behaviour
-            // depend on state that is not in the store.
-            OnPermissionRequest = PermissionPolicy.Handler(resolved.Permissions),
-            WorkingDirectory = resolved.WorkingDirectory,
-        };
+        // A null policy means "no sandbox": the session is created with no sandbox
+        // configuration at all, exactly as every example before this one did.
+        if (resolved.Sandbox is { } sandbox)
+        {
+            config.SandboxConfig = BuildSandboxConfig(sandbox, resolved.WorkingDirectory);
+            // Trust is a create-time decision: a resumed session already has its working
+            // directory, so the resume config has no such property to set. Nothing is lost by
+            // leaving it alone — the trust in force is the one this same stored policy set when
+            // the session was created.
+            if (config is SessionConfig created && sandbox.TrustWorkingDirectory is { } trust)
+            {
+                created.TrustWorkingDirectory = trust
+                    ? WorkingDirectoryTrust.User
+                    : WorkingDirectoryTrust.Session;
+            }
+        }
 
         var sections = resolved.Extensions.SelectMany(extension => extension.Sections).ToList();
 
@@ -3180,9 +7191,13 @@ public sealed class DurableHarness : IAsyncDisposable
             config.Streaming = streaming;
         }
 
+        // The caller's hook set is copied, never adopted: building a configuration is a read of
+        // the caller's choices, so composing the durable sections below must not write through to
+        // the object the caller still holds. Every hook is carried over, so a hook the durable
+        // layer does not compose is still the caller's.
         if (resolved.Hooks is not null)
         {
-            config.Hooks = resolved.Hooks;
+            config.Hooks = CopyHooks(resolved.Hooks);
         }
 
         // Native compaction: the SDK summarizes the model context itself once it grows past
@@ -3239,11 +7254,36 @@ public sealed class DurableHarness : IAsyncDisposable
     }
 
     /// <summary>
+    /// Copies a hook set, so a configuration built from it can compose its own hooks without
+    /// changing the caller's.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="SessionHooks"/> is a plain settable class with no copy constructor, so every
+    /// hook is carried over by hand. The copy is exhaustive over the type as it stands, so a hook
+    /// the durable layer does not compose is still the caller's.
+    /// </remarks>
+    private static SessionHooks CopyHooks(SessionHooks hooks) => new()
+    {
+        OnPreToolUse = hooks.OnPreToolUse,
+        OnPreMcpToolCall = hooks.OnPreMcpToolCall,
+        OnPostToolUse = hooks.OnPostToolUse,
+        OnPostToolUseFailure = hooks.OnPostToolUseFailure,
+        OnUserPromptSubmitted = hooks.OnUserPromptSubmitted,
+        OnUserPromptTransformed = hooks.OnUserPromptTransformed,
+        OnSessionStart = hooks.OnSessionStart,
+        OnSessionEnd = hooks.OnSessionEnd,
+        OnErrorOccurred = hooks.OnErrorOccurred,
+        OnAgentStop = hooks.OnAgentStop,
+        OnSubagentStart = hooks.OnSubagentStart,
+        OnSubagentStop = hooks.OnSubagentStop,
+    };
+
+    /// <summary>
     /// Renders the prompt sections for a conversation, the way they are rendered
     /// before each request. A section that reads a durable document sees the
     /// document's value at the time of the call.
     /// </summary>
-    public async Task<string> RenderSectionsAsync(DurableConversation conversation)
+    internal async Task<string> RenderSectionsAsync(DurableConversation conversation)
     {
         var resolved = conversation.Agent();
         var sections = resolved.Extensions.SelectMany(extension => extension.Sections).ToList();
@@ -3273,7 +7313,7 @@ public sealed class DurableHarness : IAsyncDisposable
     }
 
     /// <summary>Renders the system message from the selected extensions' sections.</summary>
-    public string BuildSystemMessage(
+    internal string BuildSystemMessage(
         ResolvedAgent agent,
         IReadOnlyList<PromptSection> sections,
         DurableConversation? conversation)
@@ -3299,10 +7339,1171 @@ public sealed class DurableHarness : IAsyncDisposable
         return string.Join("\n\n", parts);
     }
 
-    /// <summary>Disposes the harness and its client.</summary>
+    /// <summary>
+    /// Waits for the task runs in flight to finish, so a checkpoint that is being written
+    /// completes before the store is closed.
+    /// </summary>
+    private async Task DrainTasksAsync()
+    {
+        while (true)
+        {
+            var pending = _inFlight.Values.ToArray();
+            if (pending.Length == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                await Task.WhenAll(pending);
+            }
+            catch
+            {
+                // A run's failure is recorded in the task's outcome, not thrown at disposal.
+            }
+        }
+    }
+
+    /// <summary>
+    /// Disposes what the runtime owns: at most once, and never a borrowed store or client.
+    /// </summary>
+    /// <remarks>
+    /// The order matters. Subscriptions are removed first, so a session event that arrives
+    /// during disposal cannot write into a store that is going away. Task runs in flight are
+    /// then drained, so a checkpoint that is mid-commit finishes. Only then is the store's
+    /// task-scheduler slot released and the owned resources disposed.
+    /// </remarks>
     public async ValueTask DisposeAsync()
     {
-        await Client.DisposeAsync();
+        CopilotClient? client;
+        DurableStore? store;
+        lock (_lifecycleGate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            client = _client;
+            store = _store;
+            // Unbind, so IsInitialized reports false and the getters stop handing out
+            // resources that are about to be released.
+            _client = null;
+            _store = null;
+        }
+
+        foreach (var conversation in _conversations.Values)
+        {
+            conversation.Detach();
+        }
+
+        _conversations.Clear();
+
+        await DrainTasksAsync();
+
+        if (store is not null)
+        {
+            store.ReleaseTaskScheduler(this);
+        }
+
+        if (OwnsClient && client is not null)
+        {
+            await client.DisposeAsync();
+        }
+
+        if (OwnsStore && store is not null)
+        {
+            store.Dispose();
+        }
+    }
+}
+
+/// <summary>The harness: the durable host that owns the store, the registry, and the conversations.</summary>
+/// <remarks>
+/// The harness is a front door onto <see cref="DurableRuntime"/>, not a second implementation of
+/// it. It creates and owns its SDK client, borrows the store and the registry the caller
+/// supplied, and delegates every durable operation to the runtime — which is the same runtime
+/// <see cref="DurableCopilotClient"/> drives, so a conversation opened here and one opened
+/// through the facade are the same object over the same store.
+/// </remarks>
+public sealed class DurableHarness : IAsyncDisposable
+{
+    /// <summary>
+    /// The model used when a conversation does not name one. It is a cheap,
+    /// reasoning-capable model: the examples are about durable mechanics, not model
+    /// quality, and a fixed model makes an example's behaviour reproducible.
+    /// </summary>
+    public const string DefaultModel = DurableRuntime.DefaultModel;
+
+    private readonly DurableRuntime _runtime;
+
+    private DurableHarness(
+        CopilotClient client,
+        DurableStore store,
+        ExtensionRegistry registry,
+        DurableHarnessOptions? options = null)
+    {
+        _runtime = new DurableRuntime(registry, options);
+        // The harness always created its client, so it always owns it. The store is the
+        // caller's: the harness never disposes it.
+        _runtime.Attach(client, store, ownsClient: true, ownsStore: false);
+    }
+
+    /// <summary>
+    /// Binds a harness to a client the caller already started. The harness owns the client
+    /// from here on; the store stays the caller's.
+    /// </summary>
+    internal static DurableHarness Attach(
+        CopilotClient client,
+        DurableStore store,
+        ExtensionRegistry registry,
+        DurableHarnessOptions? options = null) =>
+        new(client, store, registry, options);
+
+    /// <summary>The Copilot client.</summary>
+    public CopilotClient Client => _runtime.Client;
+
+    /// <summary>The durable store.</summary>
+    public DurableStore Store => _runtime.Store;
+
+    /// <summary>The extension registry.</summary>
+    public ExtensionRegistry Registry => _runtime.Registry;
+
+    /// <summary>The options this harness was opened with.</summary>
+    public DurableHarnessOptions Options => _runtime.Options;
+
+    /// <summary>The document holding per-conversation agent choices.</summary>
+    public DocumentDefinition<AgentChoices> AgentDocument => _runtime.AgentDocument;
+
+    /// <summary>The conversations this harness knows about.</summary>
+    public IReadOnlyCollection<DurableConversation> Conversations => _runtime.Conversations;
+
+    /// <summary>
+    /// The model the runtime reported for the most recent session or turn this harness opened.
+    /// </summary>
+    /// <remarks>
+    /// It is fed from the runtime's own reports — <c>session.start</c> and
+    /// <c>session.model_change</c> for the session's model, <c>assistant.turn_start</c> and
+    /// <c>assistant.usage</c> for each turn — never from the model the host requested, so a
+    /// runtime that substitutes a model is visible here.
+    /// <para>
+    /// <see cref="OpenAsync(DurableStore, ExtensionRegistry, DurableHarnessOptions, CancellationToken)"/>
+    /// only starts the client: no session exists yet, so the value is
+    /// <see cref="DurableModelReport.NotReported"/> immediately after it returns and becomes
+    /// populated once a conversation opens a session and the runtime reports. Read it again
+    /// after <see cref="CreateConversationAsync"/> or <see cref="RootAsync"/> to see the
+    /// session-level report, and after a turn completes to see the turn-level one.
+    /// </para>
+    /// <para>
+    /// When the runtime reports no model — a deterministic runtime whose recording carries none,
+    /// for instance — the value stays <see cref="DurableModelReport.NotReported"/> with
+    /// <see cref="DurableModelReport.Model"/> <c>null</c>. There is deliberately no fallback to
+    /// <see cref="DefaultModel"/>: "the runtime reported nothing" must not be indistinguishable
+    /// from "the runtime reported the default".
+    /// </para>
+    /// </remarks>
+    public DurableModelReport EffectiveModel => _runtime.EffectiveModel;
+
+    /// <summary>
+    /// Finds a conversation by id, restoring it from the store if the harness has not
+    /// opened it yet. A conversation that was created before a restart is still there.
+    /// </summary>
+    public DurableConversation? FindConversation(string conversationId) =>
+        _runtime.FindConversation(conversationId);
+
+    /// <summary>Opens a harness over a store and a registry.</summary>
+    public static Task<DurableHarness> OpenAsync(
+        DurableStore store,
+        ExtensionRegistry registry,
+        CancellationToken cancellationToken = default) =>
+        OpenAsync(store, registry, new DurableHarnessOptions(), cancellationToken);
+
+    /// <summary>Opens a harness over a store and a registry with explicit options.</summary>
+    public static async Task<DurableHarness> OpenAsync(
+        DurableStore store,
+        ExtensionRegistry registry,
+        DurableHarnessOptions options,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        var runtimePath = ResolveRuntimePath(options);
+        var client = runtimePath is null
+            ? new CopilotClient()
+            : new CopilotClient(new CopilotClientOptions
+            {
+                Connection = RuntimeConnection.ForStdio(runtimePath, options.RuntimeArguments),
+            });
+
+        await client.StartAsync(cancellationToken);
+        return new DurableHarness(client, store, registry, options);
+    }
+
+    /// <summary>
+    /// The runtime executable the options select: the explicit path, else the environment
+    /// variable, else <c>null</c> for the bundled runtime. A named path that does not exist is
+    /// an error that names it, so the caller is never left guessing why the open failed.
+    /// </summary>
+    internal static string? ResolveRuntimePath(DurableHarnessOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        var path = options.RuntimePath;
+        var origin = $"DurableHarnessOptions.{nameof(DurableHarnessOptions.RuntimePath)}";
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            path = Environment.GetEnvironmentVariable(DurableHarnessOptions.RuntimePathEnvironmentVariable);
+            origin = $"the {DurableHarnessOptions.RuntimePathEnvironmentVariable} environment variable";
+        }
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        if (!File.Exists(path))
+        {
+            throw new FileNotFoundException(
+                $"The runtime executable named by {origin} does not exist: '{path}'.",
+                path);
+        }
+
+        return path;
+    }
+
+    /// <summary>Creates a conversation and its Copilot session.</summary>
+    public Task<DurableConversation> CreateConversationAsync(
+        AgentChoices? choices = null,
+        string? ownerTaskId = null,
+        string? ownerConversationId = null,
+        CancellationToken cancellationToken = default) =>
+        _runtime.CreateConversationAsync(choices, ownerTaskId, ownerConversationId, cancellationToken);
+
+    /// <summary>Returns the root conversation, creating it on first use.</summary>
+    public Task<DurableConversation> RootAsync(
+        AgentChoices? choices = null,
+        CancellationToken cancellationToken = default) =>
+        _runtime.RootAsync(choices, cancellationToken);
+
+    /// <summary>Rebinds a stored conversation to the native session it recorded.</summary>
+    public Task<DurableConversation> ResumeConversationAsync(
+        string conversationId,
+        CancellationToken cancellationToken = default) =>
+        _runtime.ResumeConversationAsync(conversationId, cancellationToken);
+
+    /// <summary>Forks a conversation at an entry.</summary>
+    /// <param name="parent">The conversation to fork from.</param>
+    /// <param name="entryId">
+    /// The parent's <b>durable entry id</b> — the value <see cref="Transaction.AppendEntry"/>
+    /// returns, e.g. <c>e7</c> — never an SDK event id. The fork holds that entry and everything
+    /// before it.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The forked conversation, with its session attached.</returns>
+    public Task<DurableConversation> ForkAsync(
+        DurableConversation parent,
+        string entryId,
+        CancellationToken cancellationToken = default) =>
+        _runtime.ForkAsync(parent, entryId, cancellationToken);
+
+    /// <summary>Creates a durable task and schedules it.</summary>
+    public Task<DurableTaskRecord> CreateTaskAsync(
+        DurableTaskDefinition definition,
+        JsonElement input,
+        string? ownerConversationId = null,
+        string? ownerTaskId = null,
+        bool background = false,
+        CancellationToken cancellationToken = default) =>
+        _runtime.CreateTaskAsync(definition, input, ownerConversationId, ownerTaskId, background, cancellationToken);
+
+    /// <summary>Runs a task to completion, resuming from its last checkpoint.</summary>
+    public Task<TaskOutcome> RunTaskAsync(string taskId, CancellationToken cancellationToken = default) =>
+        _runtime.RunTaskAsync(taskId, cancellationToken);
+
+    /// <summary>Waits for a task to finish.</summary>
+    public Task<TaskOutcome> WaitForTaskAsync(string taskId, CancellationToken cancellationToken = default) =>
+        _runtime.WaitForTaskAsync(taskId, cancellationToken);
+
+    /// <summary>Aborts a task, running its abort handler.</summary>
+    public Task AbortTaskAsync(string taskId, CancellationToken cancellationToken = default) =>
+        _runtime.AbortTaskAsync(taskId, cancellationToken);
+
+    /// <summary>Resumes every task that was still in flight when the process stopped.</summary>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The outcome of each task that was re-entered, in store order.</returns>
+    /// <remarks>
+    /// In flight means <see cref="TaskStatus.Pending"/>, <see cref="TaskStatus.Running"/> or
+    /// <see cref="TaskStatus.Waiting"/>: the first was committed but never started, the second was
+    /// in a phase when the process ended, and the third holds a checkpoint whose children may have
+    /// finished underneath it. All three are unfinished, and there is no invocation still running
+    /// for any of them — a waiting task commits its wait rather than holding a call open.
+    /// <para>
+    /// The tasks are awaited rather than started and forgotten, so the returned task completes
+    /// when the resumed work does. This is the same shape
+    /// <see cref="DurableCopilotClient.ResumeTasksAsync"/> has: one operation, one way to await
+    /// it, whichever entry point a host uses.
+    /// </para>
+    /// </remarks>
+    public Task<IReadOnlyList<TaskOutcome>> ResumeAsync(CancellationToken cancellationToken = default) =>
+        _runtime.ResumeAsync(cancellationToken);
+
+    /// <summary>Reads the task graph: tasks and their owner edges.</summary>
+    public IReadOnlyList<(DurableTaskRecord Task, string? Owner)> TaskGraph() => _runtime.TaskGraph();
+
+    /// <summary>Resolves extension names against the registry.</summary>
+    public IReadOnlyList<Extension> ResolveExtensions(IReadOnlyList<string>? names) =>
+        _runtime.ResolveExtensions(names);
+
+    /// <summary>
+    /// Resolves tool names against the selected extensions. When two selected extensions
+    /// contribute a tool with the same name, the later one replaces the earlier one in
+    /// place: the tool keeps its position in the list, but the later implementation wins.
+    /// Wrappers are applied last, so a wrapper decorates whichever implementation won.
+    /// </summary>
+    public IReadOnlyList<AIFunction> ResolveTools(IReadOnlyList<Extension> extensions, IReadOnlyList<string>? names) =>
+        _runtime.ResolveTools(extensions, names);
+
+    /// <summary>
+    /// Maps a durable sandbox policy onto the SDK's wire type, expanding the
+    /// <see cref="DurableSandboxPolicy.WorkspaceToken"/> token against the working directory.
+    /// </summary>
+    public static SandboxConfig BuildSandboxConfig(DurableSandboxPolicy policy, string? workingDirectory) =>
+        DurableRuntime.BuildSandboxConfig(policy, workingDirectory);
+
+    /// <summary>Builds the Copilot session configuration for a set of choices.</summary>
+    public SessionConfig BuildSessionConfig(AgentChoices? choices, DurableConversation? conversation) =>
+        _runtime.BuildSessionConfig(choices, conversation);
+
+    /// <summary>
+    /// Renders the prompt sections for a conversation, the way they are rendered
+    /// before each request. A section that reads a durable document sees the
+    /// document's value at the time of the call.
+    /// </summary>
+    public Task<string> RenderSectionsAsync(DurableConversation conversation) =>
+        _runtime.RenderSectionsAsync(conversation);
+
+    /// <summary>Renders the system message from the selected extensions' sections.</summary>
+    public string BuildSystemMessage(
+        ResolvedAgent agent,
+        IReadOnlyList<PromptSection> sections,
+        DurableConversation? conversation) =>
+        _runtime.BuildSystemMessage(agent, sections, conversation);
+
+    /// <summary>Disposes the harness and the client it created.</summary>
+    public ValueTask DisposeAsync() => _runtime.DisposeAsync();
+}
+/// <summary>
+/// Everything a <see cref="DurableCopilotClient"/> is built from: the store, the caller's
+/// extension registry, the Copilot SDK client, and the ownership flags that decide what the
+/// durable layer disposes.
+/// </summary>
+/// <remarks>
+/// An options object is a description, not a resource. Constructing one touches nothing:
+/// no file is opened, no process is started, and no connection is made. The stores and
+/// clients it points at are created by the caller (or by
+/// <see cref="DurableClientOptions.StoreOptions"/> / <see cref="DurableClientOptions.ClientOptions"/>)
+/// before <see cref="DurableClientBuilder.Build"/> is called.
+/// <para>
+/// <b>Ownership.</b> The durable layer borrows what the caller supplies and owns what it
+/// creates. Concretely:
+/// </para>
+/// <list type="bullet">
+///   <item>
+///     <description>
+///     <see cref="Store"/> set by the caller is borrowed: the durable layer never disposes it.
+///     A store created from <see cref="StoreOptions"/> is owned, and
+///     <see cref="DurableCopilotClient.DisposeAsync"/> disposes it exactly once.
+///     </description>
+///   </item>
+///   <item>
+///     <description>
+///     <see cref="Client"/> set by the caller is borrowed: the durable layer never disposes it,
+///     and the caller remains responsible for calling <c>DisposeAsync</c> on it. A client
+///     created from <see cref="ClientOptions"/> is owned, and is disposed exactly once.
+///     </description>
+///   </item>
+///   <item>
+///     <description>
+///     <see cref="OwnsStore"/> and <see cref="OwnsClient"/> override the default for a
+///     resource the caller supplied. Set them to <c>true</c> to hand a supplied resource to
+///     the durable layer, or <c>false</c> to keep a resource the durable layer would otherwise
+///     own. <c>null</c> — the default — means "borrow what was supplied, own what was created".
+///     </description>
+///   </item>
+/// </list>
+/// <para>
+/// The registry is never disposed: it holds this process's code, not a resource, and nothing
+/// in it is persisted.
+/// </para>
+/// </remarks>
+public sealed class DurableClientOptions
+{
+    /// <summary>
+    /// The store the client reads and writes durable state through, or <c>null</c> when
+    /// <see cref="StoreOptions"/> describes one instead.
+    /// </summary>
+    /// <remarks>
+    /// A store supplied here is borrowed. Its lifetime — including the exclusive writer lock a
+    /// persistent store holds — stays with the caller, so a host that opens one store and hands
+    /// it to several clients disposes it once, after the last client is gone.
+    /// </remarks>
+    public DurableStore? Store { get; set; }
+
+    /// <summary>
+    /// How to create the store when <see cref="Store"/> is <c>null</c>, or <c>null</c> to
+    /// require a supplied store.
+    /// </summary>
+    /// <remarks>
+    /// A store created from these options is owned by the durable layer. The creation happens
+    /// during <see cref="DurableCopilotClient.InitializeAsync"/>, not during
+    /// <see cref="DurableClientBuilder.Build"/>: opening a persistent store is I/O, and
+    /// <c>Build()</c> performs none.
+    /// <para>
+    /// The options follow the settled store contract — <see cref="DurableStore.Create"/> is the
+    /// factory, an unspecified format means the persistent per-user path, and the ephemeral
+    /// tier is asked for explicitly with <see cref="DurableStoreFormat.InMemory"/>.
+    /// </para>
+    /// </remarks>
+    public DurableStoreOptions? StoreOptions { get; set; }
+
+    /// <summary>
+    /// The extension registry the client resolves tools, prompt sections, hooks, and task
+    /// definitions from, or <c>null</c> to build with an empty registry.
+    /// </summary>
+    /// <remarks>
+    /// The registry is this process's code, so it is never persisted and never disposed.
+    /// Installing an extension after <see cref="DurableClientBuilder.Build"/> is allowed and
+    /// takes effect the next time a session is configured or a section is rendered, exactly as
+    /// it does for <see cref="DurableHarness"/>.
+    /// </remarks>
+    public ExtensionRegistry? Registry { get; set; }
+
+    /// <summary>
+    /// The Copilot SDK client the durable layer drives, or <c>null</c> when
+    /// <see cref="ClientOptions"/> describes one instead.
+    /// </summary>
+    /// <remarks>
+    /// A client supplied here is borrowed: the durable layer never disposes it, and it never
+    /// starts it. The caller is responsible for the client's lifetime and for its own
+    /// <c>StartAsync</c> / <c>DisposeAsync</c> calls.
+    /// <para>
+    /// Supplying a client is how a host shares one SDK client across the durable layer and its
+    /// own code — a second client would mean a second process and a second runtime, so the
+    /// durable layer never creates one when the caller has already supplied it.
+    /// </para>
+    /// </remarks>
+    public CopilotClient? Client { get; set; }
+
+    /// <summary>
+    /// How to create the Copilot SDK client when <see cref="Client"/> is <c>null</c>, or
+    /// <c>null</c> to use the SDK's defaults.
+    /// </summary>
+    /// <remarks>
+    /// A client created from these options is owned by the durable layer, and is constructed
+    /// and started during <see cref="DurableCopilotClient.InitializeAsync"/> — never during
+    /// <see cref="DurableClientBuilder.Build"/>. Starting it is the first operation that leaves
+    /// the process, which is why it is asynchronous and why <c>Build()</c> does not do it.
+    /// </remarks>
+    public CopilotClientOptions? ClientOptions { get; set; }
+
+    /// <summary>
+    /// The harness options applied to every session the client configures.
+    /// </summary>
+    /// <remarks>
+    /// These are host configuration, not durable state: the permission handler, the
+    /// repository-hook switch, and the host-hook failure tolerance never travel with a
+    /// conversation and never change what a stored choice means. They are the same options
+    /// <see cref="DurableHarness.OpenAsync(DurableStore, ExtensionRegistry, DurableHarnessOptions, CancellationToken)"/>
+    /// takes, because the client drives the same runtime the harness does.
+    /// </remarks>
+    public DurableHarnessOptions Harness { get; set; } = new();
+
+    /// <summary>
+    /// Whether the durable layer disposes <see cref="Store"/>, or <c>null</c> to apply the
+    /// default policy.
+    /// </summary>
+    /// <remarks>
+    /// The default policy is "borrow what the caller supplied, own what the durable layer
+    /// created". Set this to <c>true</c> only when the caller obtained the store for this
+    /// client alone and wants the client's disposal to release it — including the exclusive
+    /// writer lock on a store file. Set it to <c>false</c> to keep the store open past the
+    /// client's lifetime.
+    /// <para>
+    /// Whatever the value, the store is disposed at most once: the client's disposal is
+    /// idempotent and a second call is a no-op.
+    /// </para>
+    /// </remarks>
+    public bool? OwnsStore { get; set; }
+
+    /// <summary>
+    /// Whether the durable layer disposes <see cref="Client"/>, or <c>null</c> to apply the
+    /// default policy.
+    /// </summary>
+    /// <remarks>
+    /// The default policy is "borrow what the caller supplied, own what the durable layer
+    /// created". A supplied client is typically shared with the host's own code, so the default
+    /// is to leave it alone; set this to <c>true</c> when the client was created for this
+    /// durable client alone.
+    /// <para>
+    /// Whatever the value, the client is disposed at most once: the client's disposal is
+    /// idempotent and a second call is a no-op.
+    /// </para>
+    /// </remarks>
+    public bool? OwnsClient { get; set; }
+}
+
+/// <summary>
+/// Builds a <see cref="DurableCopilotClient"/>: the facade that turns the Copilot SDK client
+/// into a durable host.
+/// </summary>
+/// <remarks>
+/// The builder exists so a host can state the pieces it already has — its store, its SDK
+/// client, its registry — and let the durable layer supply the rest. Every <c>Use…</c> method
+/// replaces what the previous call set; the builder is a description, so ordering does not
+/// matter beyond last-write-wins.
+/// <para>
+/// <b><see cref="Build"/> validates and constructs. It does not connect, and it performs no
+/// persistence I/O.</b> It opens no store file, starts no SDK client, resumes no task, and
+/// renders no prompt section. Everything that leaves the process happens in
+/// <see cref="DurableCopilotClient.InitializeAsync"/>, which is asynchronous and safe when
+/// several first operations race: the work happens once and every caller awaits the same
+/// result.
+/// </para>
+/// <para>
+/// The split matters because construction is cheap and fallible in only one way — a missing or
+/// contradictory option — while initialization is slow and fallible in many. A host can build a
+/// client during dependency-injection container construction without doing I/O there, and
+/// decide on its own terms when to pay for startup.
+/// </para>
+/// </remarks>
+public sealed class DurableClientBuilder
+{
+    /// <summary>Creates a builder with no pieces chosen yet.</summary>
+    public DurableClientBuilder()
+    {
+    }
+
+    /// <summary>The options describing the client that will be built.</summary>
+    /// <remarks>
+    /// Exposed so a host can inspect or adjust what the <c>Use…</c> methods set, and so a
+    /// dependency-injection registration can configure the same object a manual build would.
+    /// </remarks>
+    public DurableClientOptions Options { get; } = new();
+
+    /// <summary>Borrows a store the caller owns.</summary>
+    /// <param name="store">The store to read and write durable state through.</param>
+    /// <returns>This builder, so calls can be chained.</returns>
+    /// <remarks>
+    /// The store is borrowed unless <see cref="DurableClientOptions.OwnsStore"/> says otherwise.
+    /// Most hosts open one store for the process, hand it to the client, and dispose it after
+    /// the client — which is also the only safe order for a persistent store, whose exclusive
+    /// writer lock is released on disposal.
+    /// </remarks>
+    public DurableClientBuilder UseStore(DurableStore store)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        Options.Store = store;
+        Options.StoreOptions = null;
+        return this;
+    }
+
+    /// <summary>Asks the durable layer to create and own a store.</summary>
+    /// <param name="options">How to create the store.</param>
+    /// <returns>This builder, so calls can be chained.</returns>
+    /// <remarks>
+    /// The store is created during <see cref="DurableCopilotClient.InitializeAsync"/>, not here,
+    /// because opening a persistent store takes its writer lock and reads the file.
+    /// </remarks>
+    public DurableClientBuilder UseStore(DurableStoreOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        Options.Store = null;
+        Options.StoreOptions = options;
+        return this;
+    }
+
+    /// <summary>Borrows a Copilot SDK client the caller owns.</summary>
+    /// <param name="client">The client the durable layer drives.</param>
+    /// <returns>This builder, so calls can be chained.</returns>
+    /// <remarks>
+    /// The client is borrowed unless <see cref="DurableClientOptions.OwnsClient"/> says
+    /// otherwise, and the durable layer does not start it: a host that supplies a client has
+    /// already started it, or will start it before the first operation that needs it.
+    /// </remarks>
+    public DurableClientBuilder UseClient(CopilotClient client)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        Options.Client = client;
+        Options.ClientOptions = null;
+        return this;
+    }
+
+    /// <summary>Asks the durable layer to create, own, and start an SDK client.</summary>
+    /// <param name="options">How to create the client.</param>
+    /// <returns>This builder, so calls can be chained.</returns>
+    /// <remarks>
+    /// The client is constructed and started during
+    /// <see cref="DurableCopilotClient.InitializeAsync"/>. Passing options with a null
+    /// <paramref name="options"/> is allowed and means "create one with the SDK's defaults".
+    /// </remarks>
+    public DurableClientBuilder UseClient(CopilotClientOptions? options)
+    {
+        Options.Client = null;
+        Options.ClientOptions = options ?? new CopilotClientOptions();
+        return this;
+    }
+
+    /// <summary>Sets the extension registry the client resolves code from.</summary>
+    /// <param name="registry">The registry holding this process's extensions.</param>
+    /// <returns>This builder, so calls can be chained.</returns>
+    /// <remarks>
+    /// The registry is held by reference and never disposed, so extensions installed after the
+    /// build are visible to the next configuration the client performs.
+    /// </remarks>
+    public DurableClientBuilder UseRegistry(ExtensionRegistry registry)
+    {
+        ArgumentNullException.ThrowIfNull(registry);
+        Options.Registry = registry;
+        return this;
+    }
+
+    /// <summary>Sets the harness options applied to every session the client configures.</summary>
+    /// <param name="options">The host configuration for the sessions.</param>
+    /// <returns>This builder, so calls can be chained.</returns>
+    public DurableClientBuilder UseHarnessOptions(DurableHarnessOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        Options.Harness = options;
+        return this;
+    }
+
+    /// <summary>Adjusts the options in place.</summary>
+    /// <param name="configure">The adjustments to apply.</param>
+    /// <returns>This builder, so calls can be chained.</returns>
+    /// <remarks>
+    /// The escape hatch for the options no <c>Use…</c> method names — the ownership flags in
+    /// particular. It runs immediately, not at build time.
+    /// </remarks>
+    public DurableClientBuilder Configure(Action<DurableClientOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        configure(Options);
+        return this;
+    }
+
+    /// <summary>Validates the options and constructs the client.</summary>
+    /// <returns>A client that has not been initialized yet.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// The options cannot describe a client — for example when neither
+    /// <see cref="DurableClientOptions.Store"/> nor <see cref="DurableClientOptions.StoreOptions"/>
+    /// is set, or when both a supplied store and an ownership flag that contradicts it are
+    /// present.
+    /// </exception>
+    /// <remarks>
+    /// <b>Validate and construct only.</b> No connection is made, no store file is opened, no
+    /// task is resumed, and no persistence I/O of any kind happens here. The returned client is
+    /// inert until <see cref="DurableCopilotClient.InitializeAsync"/> runs, which is what makes
+    /// it safe to build during dependency-injection container construction or at the top of a
+    /// program that later decides not to do any work.
+    /// <para>
+    /// The return type is the facade, not the SDK's <c>CopilotClient</c>: what the caller gets
+    /// back is the durable host, and the SDK client is one of the things it drives. Use
+    /// <see cref="DurableCopilotClient.NativeClient"/> to reach the SDK client itself, on the
+    /// understanding described there.
+    /// </para>
+    /// </remarks>
+    public DurableCopilotClient Build()
+    {
+        var options = Options;
+
+        // Validate and construct only. Nothing here opens a store, starts a client, or
+        // touches the file system: everything that leaves the process happens in
+        // InitializeAsync.
+        if (options.Store is null && options.StoreOptions is null)
+        {
+            throw new InvalidOperationException(
+                "A durable client needs a store: call UseStore(DurableStore) to borrow one, or " +
+                "UseStore(DurableStoreOptions) to have the durable layer create and own one.");
+        }
+
+        if (options.Store is not null && options.StoreOptions is not null)
+        {
+            throw new InvalidOperationException(
+                "A durable client takes one store source: Store and StoreOptions are both set. " +
+                "UseStore replaces the previous choice, so this means the options were adjusted " +
+                "directly; clear one of them.");
+        }
+
+        if (options.Client is not null && options.ClientOptions is not null)
+        {
+            throw new InvalidOperationException(
+                "A durable client takes one SDK client source: Client and ClientOptions are both " +
+                "set. UseClient replaces the previous choice, so this means the options were " +
+                "adjusted directly; clear one of them.");
+        }
+
+        if (options.OwnsStore is true && options.Store is null)
+        {
+            throw new InvalidOperationException(
+                "OwnsStore is set but no store was supplied. A store the durable layer creates is " +
+                "always owned; the flag only decides the fate of a store the caller supplied.");
+        }
+
+        if (options.OwnsClient is true && options.Client is null)
+        {
+            throw new InvalidOperationException(
+                "OwnsClient is set but no SDK client was supplied. A client the durable layer " +
+                "creates is always owned; the flag only decides the fate of a client the caller " +
+                "supplied.");
+        }
+
+        if (options.Harness is null)
+        {
+            throw new InvalidOperationException("Harness options cannot be null; use the default.");
+        }
+
+        // Finding 1: the registry is resolved once, here, and the same instance is what
+        // Options.Registry and Registry both report. A getter that allocated a fresh empty
+        // registry per read would hand out a different object every time, so an extension
+        // installed through one read would be invisible to the next.
+        options.Registry ??= new ExtensionRegistry();
+
+        return new DurableCopilotClient(options);
+    }
+}
+
+/// <summary>
+/// The durable host: a Copilot SDK client bound to a store, a registry, and conversation
+/// handles that survive a restart.
+/// </summary>
+/// <remarks>
+/// A <see cref="DurableCopilotClient"/> is what <see cref="DurableClientBuilder.Build"/>
+/// returns, and it is the supported entry point for an application that wants durable
+/// conversations without assembling the pieces itself. It drives the same internal runtime
+/// <see cref="DurableHarness"/> drives — the same conversation binding, the same configuration
+/// building, the same task coordination, and the same lifecycle — so a conversation created
+/// through the facade is indistinguishable from one created through the harness, and the two
+/// can be used together over one store. Sharing configuration helpers alone would not be
+/// enough: the runtime, not the helpers, is what holds the bindings.
+/// <para>
+/// <b>Initialization.</b> A built client is inert. The first operation that needs the store or
+/// the SDK client — an explicit <see cref="InitializeAsync"/> or any conversation operation —
+/// initializes the client, and concurrent first operations share one initialization: the work
+/// happens once and every caller awaits the same result. Initialization is asynchronous because
+/// it may open a store, start an SDK client process, and re-enter running tasks, and because
+/// waiting synchronously for any of those would risk a deadlock in a host with a
+/// synchronization context.
+/// </para>
+/// <para>
+/// <b>Disposal.</b> Exactly once. The state is idempotent: a second
+/// <see cref="DisposeAsync"/> is a no-op. Borrowed stores and clients are left alone; created
+/// ones are disposed. See <see cref="DurableClientOptions"/> for the policy and its overrides.
+/// </para>
+/// <para>
+/// <b>Native SDK access.</b> <see cref="NativeClient"/> is an explicit escape hatch. Calls made
+/// through it — creating a session, resuming one, forking one, or any other SDK operation the
+/// facade does not expose — are the caller's own, and they sit outside the facade's durability
+/// guarantees. A session the caller creates that way is not a
+/// <see cref="DurableConversation"/>: its choices are not stored, its documents are not bound,
+/// its grants are not enforced by the durable permission policy, and it does not appear in
+/// <see cref="FindConversation(Func{DurableConversation, bool})"/>. Reach for it to configure
+/// the SDK, not to route around the facade.
+/// </para>
+/// </remarks>
+public sealed class DurableCopilotClient : IAsyncDisposable
+{
+    private readonly DurableClientOptions _options;
+    private readonly DurableRuntime _runtime;
+    private readonly object _initGate = new();
+
+    private Task? _initialization;
+    private bool _disposed;
+
+    internal DurableCopilotClient(DurableClientOptions options)
+    {
+        _options = options;
+        // Finding 1: the registry is resolved once, by Build(), and this is that instance.
+        // Options.Registry and Registry therefore report the same object, so an extension
+        // installed through one is visible through the other.
+        _runtime = new DurableRuntime(options.Registry!, options.Harness);
+    }
+
+    /// <summary>The options this client was built from.</summary>
+    public DurableClientOptions Options => _options;
+
+    /// <summary>The store the client reads and writes durable state through.</summary>
+    /// <remarks>
+    /// Available as soon as the client is initialized. A store described by
+    /// <see cref="DurableClientOptions.StoreOptions"/> is created during initialization, so
+    /// reading this before then is an error.
+    /// </remarks>
+    public DurableStore Store => _runtime.Store;
+
+    /// <summary>
+    /// The extension registry the client resolves code from, or an empty registry when none was
+    /// supplied.
+    /// </summary>
+    public ExtensionRegistry Registry => _runtime.Registry;
+
+    /// <summary>
+    /// The Copilot SDK client the durable layer drives.
+    /// </summary>
+    /// <remarks>
+    /// This is the escape hatch: everything reachable from here is the SDK's own surface, and
+    /// operations performed through it are outside the facade's durability guarantees. Use it to
+    /// configure the SDK client — models, telemetry, logging — not to create or fork sessions;
+    /// a session created that way has none of the durable layer's state, choices, or grants.
+    /// <para>
+    /// A supplied client is returned as it was supplied; a created one exists once the client is
+    /// initialized. The durable layer never disposes a borrowed client, and never starts one it
+    /// was given.
+    /// </para>
+    /// </remarks>
+    public CopilotClient NativeClient => _runtime.Client;
+
+    /// <summary>Whether initialization has completed and the client is ready for work.</summary>
+    public bool IsInitialized => _runtime.IsAttached;
+
+    /// <summary>Initializes the client, at most once, safely across concurrent callers.</summary>
+    /// <param name="cancellationToken">Cancels the initialization attempt.</param>
+    /// <returns>A task that completes when the client is ready.</returns>
+    /// <remarks>
+    /// The first operation that needs the store or the SDK client performs this, so calling it
+    /// is optional — but a host that wants startup cost and failures at a known point calls it
+    /// itself. Concurrent calls, and concurrent first operations, share one initialization: the
+    /// work happens once and every caller awaits the same result. A failed initialization is
+    /// not retried implicitly; the caller decides whether to try again.
+    /// <para>
+    /// Because the attempt is shared, the first caller's cancellation token governs it: a
+    /// caller that arrives while initialization is running joins the attempt already in
+    /// progress rather than starting a second one.
+    /// </para>
+    /// </remarks>
+    public Task InitializeAsync(CancellationToken cancellationToken = default)
+    {
+        lock (_initGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return _initialization ??= InitializeCoreAsync(cancellationToken);
+        }
+    }
+
+    private async Task InitializeCoreAsync(CancellationToken cancellationToken)
+    {
+        // Everything that leaves the process happens here, never in Build().
+        var ownsStore = _options.Store is null;
+        var ownsClient = _options.Client is null;
+
+        DurableStore? createdStore = null;
+        CopilotClient? createdClient = null;
+
+        try
+        {
+            var store = _options.Store;
+            if (store is null)
+            {
+                createdStore = DurableStore.Create(_options.StoreOptions!);
+                store = createdStore;
+            }
+
+            var client = _options.Client;
+            if (client is null)
+            {
+                createdClient = new CopilotClient(_options.ClientOptions ?? new CopilotClientOptions());
+                await createdClient.StartAsync(cancellationToken);
+                client = createdClient;
+            }
+
+            // A supplied resource is borrowed unless the caller handed it over explicitly; a
+            // created one is always owned.
+            _runtime.Attach(
+                client,
+                store,
+                ownsClient: ownsClient || _options.OwnsClient is true,
+                ownsStore: ownsStore || _options.OwnsStore is true);
+        }
+        catch
+        {
+            // A half-built client owns nothing: release what this attempt created, in the
+            // reverse order, and let the failure surface to every caller that joined it.
+            if (createdClient is not null)
+            {
+                await createdClient.DisposeAsync();
+            }
+
+            if (createdStore is not null)
+            {
+                createdStore.Dispose();
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>Creates a conversation and its Copilot session.</summary>
+    /// <param name="choices">
+    /// The conversation's stored choices, or <c>null</c> for the defaults. The choices are
+    /// written to the store before the session is created, so a crash between the two leaves a
+    /// conversation whose choices are already durable.
+    /// </param>
+    /// <param name="ownerTaskId">The task that owns the conversation, if any.</param>
+    /// <param name="ownerConversationId">The conversation that spawned it, if any.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The durable conversation handle.</returns>
+    /// <remarks>
+    /// The handle is a <see cref="DurableConversation"/> — the same type the harness returns,
+    /// not a second durable-session abstraction. Its documents, entries, answers, and forks are
+    /// the store's, and its session configuration is built by the shared runtime.
+    /// </remarks>
+    public async Task<DurableConversation> CreateConversationAsync(
+        AgentChoices? choices = null,
+        string? ownerTaskId = null,
+        string? ownerConversationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+        return await _runtime.CreateConversationAsync(choices, ownerTaskId, ownerConversationId, cancellationToken);
+    }
+
+    /// <summary>Returns a conversation, creating it on first use.</summary>
+    /// <param name="choices">The choices to create it with, when it has to be created.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The store's root conversation.</returns>
+    /// <remarks>
+    /// A store reopened from disk already holds its conversations, and they are restored before
+    /// a new one is created, so the root is the conversation that was there before a restart
+    /// rather than a second one.
+    /// </remarks>
+    public async Task<DurableConversation> RootAsync(
+        AgentChoices? choices = null,
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+        return await _runtime.RootAsync(choices, cancellationToken);
+    }
+
+    /// <summary>Rebinds a stored conversation to a live session.</summary>
+    /// <param name="conversationId">The stored conversation's identifier.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The conversation handle, with its session attached.</returns>
+    /// <remarks>
+    /// Resuming reads the conversation's stored choices and builds the session from them — the
+    /// precedence rule in <see cref="GetSessionConfig(AgentChoices?, DurableConversation?)"/>
+    /// applies — so a conversation resumed after a restart runs with the authority and the
+    /// sandbox policy it had when it was last configured.
+    /// </remarks>
+    public async Task<DurableConversation> ResumeConversationAsync(
+        string conversationId,
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+        return await _runtime.ResumeConversationAsync(conversationId, cancellationToken);
+    }
+
+    /// <summary>Forks a conversation at one of its entries.</summary>
+    /// <param name="parent">The conversation to fork from.</param>
+    /// <param name="entryId">
+    /// The parent's <b>durable entry id</b> — the value <see cref="Transaction.AppendEntry"/>
+    /// returns, e.g. <c>e7</c> — never an SDK event id. The fork holds that entry and everything
+    /// before it.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The new conversation handle.</returns>
+    /// <remarks>
+    /// <para>
+    /// The fork copies the parent's transcript up to the entry and each document's value under
+    /// its own <see cref="ForkPolicy"/>, and inherits the parent's choices as a snapshot — so a
+    /// fork can never silently widen the parent's grants. The isolation is in the store: the two
+    /// conversations hold independent copies, and a commit in one is not visible in the other.
+    /// </para>
+    /// <para>
+    /// The fork's durable half is committed before the native fork is attempted, so an
+    /// interrupted fork is completed or abandoned the next time the store is opened.
+    /// </para>
+    /// </remarks>
+    public async Task<DurableConversation> ForkAsync(
+        DurableConversation parent,
+        string entryId,
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+        return await _runtime.ForkAsync(parent, entryId, cancellationToken);
+    }
+
+    /// <summary>Finds a live conversation handle by its identifier.</summary>
+    /// <param name="conversationId">The conversation's identifier.</param>
+    /// <returns>The handle, or <c>null</c> when it is not bound in this client.</returns>
+    /// <remarks>
+    /// Only conversations this client created or resumed are bound. A conversation in the store
+    /// that no session is attached to is not returned; resume it first.
+    /// </remarks>
+    public DurableConversation? FindConversation(string conversationId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(conversationId);
+        // Deliberately not the runtime's store-backed lookup: this answers "is this client
+        // holding that conversation", and restoring one here would create a session as a side
+        // effect of a read.
+        return _runtime.Conversations.FirstOrDefault(c => c.Id == conversationId);
+    }
+
+    /// <summary>Finds a live conversation handle by predicate.</summary>
+    /// <param name="match">The predicate a handle must satisfy.</param>
+    /// <returns>The first matching handle, or <c>null</c> when none matches.</returns>
+    public DurableConversation? FindConversation(Func<DurableConversation, bool> match)
+    {
+        ArgumentNullException.ThrowIfNull(match);
+        return _runtime.Conversations.FirstOrDefault(match);
+    }
+
+    /// <summary>
+    /// Builds the Copilot session configuration for a set of stored choices, applying the
+    /// persisted-agent-choice precedence rule.
+    /// </summary>
+    /// <param name="choices">
+    /// The choices to build from, or <c>null</c> to use the client's defaults.
+    /// </param>
+    /// <param name="conversation">
+    /// The conversation the session belongs to, or <c>null</c> when the configuration is being
+    /// inspected outside a conversation. Sections that read durable documents need the
+    /// conversation; a configuration built without one has no document-bound sections.
+    /// </param>
+    /// <returns>The session configuration the runtime would use.</returns>
+    /// <remarks>
+    /// <b>Precedence.</b> The persisted agent choices are authoritative. They are the record of
+    /// what this conversation is: its model, reasoning effort, working directory, streaming
+    /// flag, extension and tool selection, permission grants, sandbox policy, and instructions.
+    /// Where a stored choice is set, it wins over anything the SDK configuration says about the
+    /// same thing. Where a stored choice is unset, the SDK configuration's value — or the
+    /// runtime's default when the configuration is silent too — applies.
+    /// <para>
+    /// The rule exists because the store is what makes a conversation reproducible: a grant that
+    /// lives only in host configuration is not part of the durable record, so it would change
+    /// across a restart and travel badly across a fork. Reading the configuration back through
+    /// this overload is how a host sees the effective result — the stored choices already
+    /// resolved against the registry's code and the runtime's defaults — rather than having to
+    /// reconstruct the merge itself.
+    /// </para>
+    /// <para>
+    /// Host-level options are not part of this merge and cannot be overridden by a stored
+    /// choice: <see cref="DurableHarnessOptions.PermissionHandler"/>,
+    /// <see cref="DurableHarnessOptions.EnableFileHooks"/>, and
+    /// <see cref="DurableHarnessOptions.TolerateHostHookFailures"/> describe the process, not
+    /// the conversation. Supplying a permission handler replaces the fail-closed durable policy
+    /// for every conversation, which moves the agent's authority out of the store and out of
+    /// these guarantees — see <see cref="DurableHarnessOptions.PermissionHandler"/>.
+    /// </para>
+    /// </remarks>
+    public SessionConfig GetSessionConfig(
+        AgentChoices? choices = null,
+        DurableConversation? conversation = null)
+    {
+        // The stored choices are authoritative, so a conversation's own choices win over
+        // whatever the caller passed; the argument only supplies defaults for a conversation
+        // that has none stored.
+        var effective = conversation?.Choices() ?? choices;
+        return _runtime.BuildSessionConfig(effective, conversation);
+    }
+
+    /// <summary>
+    /// Builds the session configuration a stored conversation would be resumed with, without
+    /// creating a session.
+    /// </summary>
+    /// <param name="conversationId">The stored conversation's identifier.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The session configuration the runtime would use.</returns>
+    /// <remarks>
+    /// The asynchronous counterpart of <see cref="GetSessionConfig(AgentChoices?, DurableConversation?)"/>
+    /// for a conversation that is not bound to a live handle. The same precedence rule applies:
+    /// the stored choices are authoritative and the SDK configuration only fills what they leave
+    /// unset. This performs store reads but creates no session and no sandbox.
+    /// </remarks>
+    public async Task<SessionConfig> GetSessionConfigAsync(
+        string conversationId,
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+
+        var stored = _runtime.Store.Document(_runtime.AgentDocument.Kind, conversationId)?.Latest;
+        var choices = stored is { } latest
+            ? latest.Deserialize<AgentChoices>(DurableJson.Options)
+            : null;
+
+        // No session is created and no sandbox is started: the configuration is built the way
+        // the runtime would build it, from the store's choices alone.
+        return _runtime.BuildSessionConfig(choices, null);
+    }
+
+    /// <summary>Re-enters the tasks the store records as still in flight.</summary>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The outcome of each task that was re-entered, in store order.</returns>
+    /// <remarks>
+    /// A task is resumed from its last checkpoint, and its idempotency memo decides which of its
+    /// effects are replayed and which are skipped. This is the operation a host calls right after
+    /// startup, once the client is initialized, so work interrupted by the previous process
+    /// finishes. <see cref="DurableHarness.ResumeAsync"/> defines which tasks count as in flight:
+    /// pending, running, and waiting on children.
+    /// </remarks>
+    public async Task<IReadOnlyList<TaskOutcome>> ResumeTasksAsync(CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+        return await _runtime.ResumeAsync(cancellationToken);
+    }
+
+    /// <summary>Waits for a durable task to finish.</summary>
+    /// <param name="taskId">The task's identifier.</param>
+    /// <param name="cancellationToken">Cancels the wait.</param>
+    /// <returns>The task's outcome.</returns>
+    public async Task<TaskOutcome> WaitForTaskAsync(string taskId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(taskId);
+        await InitializeAsync(cancellationToken);
+        return await _runtime.WaitForTaskAsync(taskId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Disposes the resources the durable layer owns: at most once, and never a borrowed store
+    /// or client.
+    /// </summary>
+    /// <returns>A task that completes when disposal has finished.</returns>
+    /// <remarks>
+    /// Idempotent: a second call is a no-op, so a <c>using</c> statement, an explicit call, and a
+    /// container's disposal can all run without double-disposing anything. A created store is
+    /// disposed here, which releases its exclusive writer lock; a created SDK client is disposed
+    /// here too. Borrowed ones are left for their owner, and the order in which a host disposes a
+    /// borrowed store against this client is the host's choice — but a persistent store must be
+    /// disposed before another process opens the same path.
+    /// </remarks>
+    public async ValueTask DisposeAsync()
+    {
+        Task? initialization;
+        lock (_initGate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            initialization = _initialization;
+        }
+
+        // An initialization that is still running has to finish before the runtime can be
+        // disposed, or disposal would race the attach. A failed one is not an error here: the
+        // runtime owns nothing, so there is nothing to release.
+        if (initialization is not null)
+        {
+            try
+            {
+                await initialization;
+            }
+            catch
+            {
+                return;
+            }
+        }
+
+        await _runtime.DisposeAsync();
     }
 }
 
@@ -3342,8 +8543,23 @@ internal sealed class UndoLog
     /// Records the task's own state, so a failed phase leaves the checkpoint where
     /// it was and the task can be resumed.
     /// </summary>
-    public void Restore(TaskStateSnapshot snapshot, DurableTaskRecord task) =>
-        _actions.Add(() => snapshot.ApplyTo(task));
+    /// <remarks>
+    /// The record is not the only thing to put back. The provider keeps a baseline of each task's
+    /// last known state so the *next* transaction can arm its own undo with it, and
+    /// <see cref="InMemoryStoreProvider.UpdateTask"/> has already moved that baseline forward to the
+    /// state this transaction wrote. Restoring only the record leaves the baseline ahead of it, so
+    /// the next failed transaction restores the state this one discarded — a memo or checkpoint that
+    /// reappears one rollback later. Both are put back here.
+    /// </remarks>
+    public void Restore(
+        TaskStateSnapshot snapshot,
+        DurableTaskRecord task,
+        Dictionary<string, TaskStateSnapshot> states) =>
+        _actions.Add(() =>
+        {
+            snapshot.ApplyTo(task);
+            states[task.Id] = snapshot;
+        });
 }
 
 /// <summary>Convenience helpers for the durable layer.</summary>

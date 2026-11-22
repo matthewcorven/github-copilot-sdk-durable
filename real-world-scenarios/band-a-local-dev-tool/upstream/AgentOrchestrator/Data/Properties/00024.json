@@ -1,0 +1,31 @@
+{
+  "id": 24,
+  "type": "Apartment",
+  "status": "For Sale",
+  "price": 510000,
+  "currency": "CAD",
+  "address": {
+    "street": "80 John Street, Unit 1808",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M5V 3X4",
+    "country": "Canada"
+  },
+  "bedrooms": 1,
+  "bathrooms": 1,
+  "squareFootage": 615,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2020,
+  "parkingSpaces": 0,
+  "shortDescription": "Contemporary 1-bedroom apartment in Entertainment District with designer finishes and vibrant neighbourhood.",
+  "fullDescription": "Welcome to 80 John Street, Unit 1808 in the vibrant Entertainment District neighbourhood. This contemporary apartment features a thoughtfully designed layout that maximises natural light. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. The sleeping quarters comprise 1 comfortable bedrooms, the largest enjoying a private ensuite bathroom. Smart-home features, updated plumbing, and a newer roof provide peace of mind for years to come. This coveted pocket puts you within walking distance of top schools, green spaces, and vibrant dining.",
+  "keyFeatures": [
+    "Steps to TTC subway and streetcar",
+    "Walk-in closet in primary bedroom",
+    "Pot lights and designer fixtures throughout",
+    "Two-car attached garage",
+    "Fenced yard ideal for children and pets",
+    "Wraparound porch with heritage details"
+  ],
+  "listedDate": "2026-04-22"
+}

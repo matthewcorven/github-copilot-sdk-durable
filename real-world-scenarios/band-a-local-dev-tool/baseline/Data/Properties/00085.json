@@ -1,0 +1,31 @@
+{
+  "id": 85,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 2219000,
+  "currency": "CAD",
+  "address": {
+    "street": "158 Woodbine Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4L 3P2",
+    "country": "Canada"
+  },
+  "bedrooms": 5,
+  "bathrooms": 3,
+  "squareFootage": 2386,
+  "lotSizeSquareFootage": 4974,
+  "yearBuilt": 1952,
+  "parkingSpaces": 2,
+  "shortDescription": "Bright and airy 5-bedroom detached home in the heart of Woodbine Corridor, move-in ready with generous lot.",
+  "fullDescription": "Welcome to 158 Woodbine Avenue in the vibrant Woodbine Corridor neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area showcases original architectural details alongside tasteful modern updates. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. Upstairs, 5 bright bedrooms include a primary retreat with ensuite and double closets. The deep lot provides ample space for gardening, play, or future expansion. This coveted pocket puts you within walking distance of top schools, green spaces, and vibrant dining.",
+  "keyFeatures": [
+    "Rooftop terrace with skyline views",
+    "Laneway parking for two vehicles",
+    "Open kitchen with waterfall island and pot lights",
+    "24-hour concierge and security",
+    "Minutes to parks, shops, and restaurants",
+    "Pot lights and designer fixtures throughout"
+  ],
+  "listedDate": "2026-04-10"
+}

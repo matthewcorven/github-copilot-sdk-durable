@@ -1,0 +1,31 @@
+{
+  "id": 44,
+  "type": "Townhouse",
+  "status": "For Sale",
+  "price": 927000,
+  "currency": "CAD",
+  "address": {
+    "street": "185 Parliament Street",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M5A 2Z3",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 1,
+  "squareFootage": 1129,
+  "lotSizeSquareFootage": 1290,
+  "yearBuilt": 2005,
+  "parkingSpaces": 1,
+  "shortDescription": "Stylish 3-bedroom freehold townhouse in Corktown with three levels of living space.",
+  "fullDescription": "Welcome to 185 Parliament Street in the vibrant Corktown neighbourhood. This stylish multi-level townhouse provides the space of a house with the convenience of condo living. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. The sleeping quarters comprise 3 comfortable bedrooms, the largest enjoying a private ensuite bathroom. Smart-home features, updated plumbing, and a newer roof provide peace of mind for years to come. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Chef’s kitchen with granite countertops and premium appliances",
+    "Minutes to parks, shops, and restaurants",
+    "Two-car attached garage",
+    "Energy-efficient windows and furnace",
+    "Large balcony overlooking parkland",
+    "Built-in bookshelves in den"
+  ],
+  "listedDate": "2026-04-15"
+}

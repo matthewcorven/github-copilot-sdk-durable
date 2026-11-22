@@ -1,0 +1,31 @@
+{
+  "variant": "durable",
+  "fault": "duplicate-delivery-control",
+  "outcome": "control: delivered once",
+  "holder": "return_agent",
+  "holderAtFault": "return_agent",
+  "holderAtEnd": "return_agent",
+  "phase": "the closing request was delivered once and nothing was killed (the control)",
+  "detail": "Control: the closing request delivered once, in one process, with nothing killed. The store holds 1 output version(s) for turn 3 and the specialist results {\"Order 1234 is currently being processed and will ship in 2 business days.\": 1, \"Refund processed successfully for order 1234.\": 1, \"Return initiated successfully for order 1234. You will receive return instructions via email.\": 2} across 4 turn(s); the run ended with return_agent holding control. Turn 3's output version count is what the fault row is measured against, because the whole-run multiset cannot answer the question: return_agent answers turn 0 and turn 3, so its result legitimately appears twice in any run that serves both turns.",
+  "evidence": "tool results: {\"Order 1234 is currently being processed and will ship in 2 business days.\": 1, \"Refund processed successfully for order 1234.\": 1, \"Return initiated successfully for order 1234. You will receive return instructions via email.\": 2}; completed turns: 4; holder after: return_agent",
+  "harness": {
+    "dotnet": "10.0.402",
+    "endpoint": "https://openrouter.ai/api/v1",
+    "model": "harness default (scripted routing)",
+    "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/duplicate-delivery.sh --variant durable --fault-not-injected",
+    "commit": "272baac6735e2d6d15f869a1e4b7fb74d72369fd",
+    "apiKeyFrom": "OPENROUTER_API_KEY",
+    "portKeyFrom": null,
+    "portKeySubstituted": null
+  },
+  "recordedAt": "2026-11-05T22:25:47.436576+00:00",
+  "observations": {
+    "toolResults": {
+      "Order 1234 is currently being processed and will ship in 2 business days.": 1,
+      "Refund processed successfully for order 1234.": 1,
+      "Return initiated successfully for order 1234. You will receive return instructions via email.": 2
+    },
+    "completedTurns": 4,
+    "outputVersionsForTurn3": 1
+  }
+}

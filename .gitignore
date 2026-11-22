@@ -2,6 +2,12 @@
 .scratch/
 .scratch-*/
 
+# Marker files the deterministic run writes to tell a synthesised session from a recorded one.
+.replay-markers-*.txt
+
+# The advisory sandbox job's captured log; the workflow writes it beside the checkout.
+sandbox-advisory.log
+
 # .NET build artifacts from file-based apps.
 bin/
 obj/
@@ -25,3 +31,19 @@ obj/
 artifacts/
 *.nupkg
 *.snupkg
+
+# Node toolchain for the TypeScript port (lib/ts).
+node_modules/
+
+# Copilot CLI local tool-approval state (machine-local, never shared).
+.copilot/
+
+# Band A baseline: properties.db and its sidecars land beside the assembly if
+# someone runs `dotnet run` from baseline/ directly; run.sh publishes into
+# $TMPDIR so they do not. `.copilot/` is already ignored globally, above.
+real-world-scenarios/band-a-local-dev-tool/baseline/properties.db
+real-world-scenarios/band-a-local-dev-tool/baseline/properties.db-*
+
+# Python bytecode from the fault harness's readers.
+__pycache__/
+*.pyc

@@ -1,0 +1,60 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <ResourcePreloader />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                fontFamily: {
+                    sans: ['Inter', 'system-ui', 'sans-serif'],
+                },
+            },
+        }
+    </script>
+    <script>
+        // Auto-scrolls an element to its bottom whenever its contents change,
+        // but only if the user was already at (or near) the bottom beforehand.
+        window.setupAutoScrollEnd = function (el) {
+            if (!el || el.__autoScrollSet) return;
+            el.__autoScrollSet = true;
+
+            const threshold = 24; // px of slack
+            let stickToBottom = true;
+
+            const isAtBottom = () =>
+                el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+
+            el.addEventListener('scroll', () => {
+                stickToBottom = isAtBottom();
+            }, { passive: true });
+
+            const obs = new MutationObserver(() => {
+                if (stickToBottom) {
+                    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+                }
+            });
+            obs.observe(el, { childList: true, subtree: true, characterData: true });
+        };
+    </script>
+    <link rel="stylesheet" href="@Assets["app.css"]" />
+    <link rel="stylesheet" href="@Assets["AgentOrchestrator.styles.css"]" />
+    <ImportMap />
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <HeadOutlet />
+</head>
+
+<body class="bg-white text-slate-800 antialiased">
+    <Routes />
+    <ReconnectModal />
+    <script src="@Assets["_framework/blazor.web.js"]"></script>
+</body>
+
+</html>

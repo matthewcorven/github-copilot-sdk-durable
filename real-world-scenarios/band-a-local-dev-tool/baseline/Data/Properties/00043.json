@@ -1,0 +1,31 @@
+{
+  "id": 43,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 694000,
+  "currency": "CAD",
+  "address": {
+    "street": "11 Wellesley Street West, Unit 1601",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4Y 0G4",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 2,
+  "squareFootage": 859,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2007,
+  "parkingSpaces": 1,
+  "shortDescription": "Spacious 2-bedroom condo in Church-Yonge Corridor with open layout, balcony, and underground parking.",
+  "fullDescription": "Welcome to 11 Wellesley Street West, Unit 1601 in the vibrant Church-Yonge Corridor neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area showcases original architectural details alongside tasteful modern updates. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. Upstairs, 2 bright bedrooms include a primary retreat with ensuite and double closets. A private outdoor space — perfect for morning coffee or summer entertaining — completes the package. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Close to waterfront trails and cycling paths",
+    "Underground parking spot included",
+    "Pet-friendly building",
+    "Open kitchen with waterfall island and pot lights",
+    "Fenced yard ideal for children and pets",
+    "Two-car attached garage"
+  ],
+  "listedDate": "2026-05-01"
+}

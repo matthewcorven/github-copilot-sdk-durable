@@ -1,0 +1,26 @@
+{
+  "variant": "baseline",
+  "fault": "kill-mid-delegation-control",
+  "outcome": "control: completed in one process",
+  "holder": "triage_agent",
+  "holderAtFault": "return_agent",
+  "holderAtEnd": "triage_agent",
+  "phase": "the delegation committed and nothing was killed (the control)",
+  "detail": "Control: the same run with no kill. The process was left alone, finished all five turns itself, and ended with triage_agent holding control. No second process existed, so the recovery — and its failure to complete — in the fault run is attributable to the kill.",
+  "evidence": "holder when the kill would have struck: return_agent; holder at the end: triage_agent",
+  "harness": {
+    "dotnet": "10.0.402",
+    "endpoint": "https://openrouter.ai/api/v1",
+    "model": "openai/gpt-4o-mini",
+    "command": "/Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-173-work/real-world-scenarios/band-f-multi-agent/faults/kill-mid-delegation.sh --variant baseline --fault-not-injected",
+    "commit": "272baac6735e2d6d15f869a1e4b7fb74d72369fd",
+    "apiKeyFrom": "OPENROUTER_API_KEY",
+    "portKeyFrom": "OPENROUTER_API_KEY",
+    "portKeySubstituted": true
+  },
+  "recordedAt": "2026-11-05T22:21:08.154679+00:00",
+  "observations": {
+    "processes": 1,
+    "holderAtPoint": "return_agent"
+  }
+}

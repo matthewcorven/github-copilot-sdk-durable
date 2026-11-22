@@ -1,6 +1,6 @@
 # Durable GitHub Copilot SDK agents in C#
 
-A suite of 33 self-contained C# examples that build **durable** agents on the
+A suite of 38 self-contained C# examples that build **durable** agents on the
 [GitHub Copilot SDK](https://github.com/github/copilot-sdk). Every example is a single
 file-based .NET app — no `.csproj`, no solution, no build step beyond `dotnet run`.
 
@@ -62,9 +62,15 @@ In-depth technical reports, design notes, and audits are available in [`docs/`](
 
 - [**Comparative Architecture Analysis**](docs/COMPARATIVE_ANALYSIS.md): Comprehensive matrices comparing every storage and runtime subsystem of this project against Pi Durable.
 - [**Why this Layer is Necessary (Durability Analysis)**](docs/DURABILITY_ANALYSIS.md): Detailed breakdown of what the Copilot SDK provides natively, what it lacks, and what this library proves.
-- [**Example Suite Fidelity Audit**](docs/EXAMPLES_AUDIT.md): Complete audit verifying that all 33 examples run against real engine components rather than simulations or shortcuts.
+- [**Temporal × Microsoft Agent Framework Comparison**](docs/TEMPORAL_MAF_COMPARISON.md): Three-way matrices — [Temporal's MAF plugin](https://github.com/temporalio/ai-integrations/tree/main/dotnet/microsoft-agent-framework), this library, and the Copilot SDK alone — covering durability, agent surface, operations, and when each is the right reach.
+- [**Example Suite Fidelity Audit**](docs/EXAMPLES_AUDIT.md): Strict code audit of examples `00` through `33`, verifying that each runs against real engine components rather than shortcuts.
 - [**Copilot SDK Notes & Gotchas**](docs/COPILOT_SDK_NOTES.md): SDK behaviors, tool authoring pitfalls (silent tool shadowing, serialization limits, async deadlocks), and model billing pricing tables.
 - [**Architecture Design Document**](docs/DESIGN.md): The foundational specification and concept mapping between Pi Durable and the GitHub Copilot SDK (.NET).
+- [**Sandbox Capability Matrix**](docs/SANDBOX_MATRIX.md): What the durable sandbox policy can express and what each host's backend enforces.
+- [**Sandbox CI**](docs/SANDBOX_CI.md): The advisory sandbox job's platform matrix, what each CI level proves, and the degrade-don't-fail rule.
+- [**Real-world Matrix**](docs/REAL_WORLD_MATRIX.md): Durable against first-party reference applications, band by band, every cell a measurement with a link to its evidence file.
+- [**Architect Configuration Design**](docs/ARCHITECT_CONFIG_DESIGN.md): Design only — versioned declarative member configuration, its lifecycle state machine, trust boundaries, and persistence, layered over `AgentDefinition` and `ScheduleStore`.
+- [**Architect Configuration Product Brief**](docs/PRODUCT_BRIEF_ARCHITECT_CONFIG.md): Product planning for architect-configured members, lifecycle and workflows — goal, scope, current-versus-missing inventory, verified delivery graph and ETA honesty. Proposal, not delivered capability.
 
 ---
 
@@ -74,7 +80,7 @@ In-depth technical reports, design notes, and audits are available in [`docs/`](
 |---|---|---|
 | .NET SDK | 10.0 or later | File-based apps (`dotnet run file.cs`) need .NET 10 |
 | GitHub Copilot CLI | 1.0.103 or later | The SDK drives the CLI over RPC |
-| GitHub Copilot access | an active subscription | 20 of the 33 examples need a signed-in CLI: 19 make live model calls, and `07` only queries `models.list` to confirm the model supports a reasoning effort |
+| GitHub Copilot access | an active subscription | 23 of the 38 examples need a signed-in CLI: 22 make live model calls, and `07` only queries `models.list` to confirm the model supports a reasoning effort |
 
 Check both:
 
@@ -93,6 +99,95 @@ copilot
 
 ## Running an example
 
+### TypeScript and Python parity (`00`–`35`)
+
+The ports bind to the official SDK packages **`@github/copilot-sdk`** (npm) and
+**`github-copilot-sdk`** (PyPI), pinned by the existing language manifests. They use
+the same durable concepts and JSONL store, not a replacement runtime. The global
+contract is [`examples/parity.json`](examples/parity.json); its schema, conditional
+LIVE assertions, and language mapping are documented in [DESIGN §3.15.1](docs/DESIGN.md#3151-language-ports-and-the-parity-contract).
+The newer C#-only examples `36` and `37` are outside this parity contract.
+
+From the repository root, restore the declared language dependencies once:
+
+```bash
+npm --prefix lib/ts ci
+npm --prefix examples/ts ci
+python3 -m venv examples/py/.venv
+source examples/py/.venv/bin/activate
+python -m pip install -e examples/py
+```
+
+The persistent TypeScript store requires the declared native `fs-ext` lock binding.
+Missing native locking fails explicitly; it never falls back to unlocked persistence.
+Installation and locking have been exercised on macOS, not certified on every platform.
+
+Run every ported example against the signed-in native CLI, including sandbox LIVE effects:
+
+```bash
+npm run examples:ts
+python examples/run_all.py
+```
+
+`--all-available` explicitly selects the same default mode. Missing APIs, assertions,
+timeouts, or runtime failures produce a nonzero exit; they are not successful skips.
+Remove `DURABLE_RUNTIME_PATH` and replay-fixture overrides before this mode.
+
+For the sign-in-free suite and **five full-output comparisons per language to actual
+checked-in C# output**, build the real ReplayRuntime and use deterministic mode:
+
+```bash
+dotnet build tools/ReplayRuntime/ReplayRuntime.csproj --nologo -v q
+npm run examples:ts -- --deterministic
+python examples/run_all.py --deterministic
+npm run examples:ts -- --deterministic --list
+python examples/run_all.py --deterministic --list
+```
+
+Both runners select `00,01,03,04,05,06,09,11,12,14,17,18,23,32,35` and print every
+exclusion with the exact reason from `scripts/validate.sh`. `17`, `18`, and `35`
+also have conditional LIVE behavior: inclusion here is not LIVE/model proof.
+`33` and `34` stay excluded: both assert an effect a tool call produced on disk, and
+the recording has no tool call, so the recorded runtime cannot satisfy them. Only
+`35` exercises its sandbox policy without a tool call, and its `policy`-mode output
+is the fifth reference fixture.
+Sessions generated from replay fixtures are explicitly **synthesised, not recorded
+transcripts**. Optional exact IDs can narrow a run, for example `--deterministic 00 01`.
+
+Range evidence records native successes and remaining acceptance gaps separately.
+Example `21` retains model/tool-selection flakiness; `35` does not claim host-decline
+behavior when no escalation was offered. Linux/Windows native enforcement remains
+uncertified. Example `20` tests synchronized late joining and post-open deadlines,
+but SDK bootstrap is noninterruptible: a never-settling SDK open is not proven bounded
+by the example's 90-second deadline.
+
+The parity facts include real process-crash/reopen recovery, exact fork transcript
+counts, rollback, and persisted abort outcomes. Run them and their real-source
+regression gates with:
+
+```bash
+npm run test:parity:ts
+python -m unittest discover -s tests/parity -p 'test_*.py' -v
+python examples/parity_manifest.py
+python tests/parity/capture_reference.py
+```
+
+The last command re-executes the five C# reference scenarios without rewriting their
+outputs. To deliberately refresh artifacts after an approved source/range change, use
+`python examples/parity_manifest.py --write` and
+`python tests/parity/capture_reference.py --write`; neither runner learns expected
+output from the ports. Both accept `--artifacts-path <dir>` to keep the build output
+of each run out of the per-user file-based-app cache, whose entries are keyed by source
+path; the tests always pass one so a throwaway tree leaves no multi-hundred-megabyte
+artifact behind. `provenance.json` is generated by that capture tool and compared
+verbatim on a read-only recheck, so its text cannot be hand-edited. Capturing the `00`,
+`01`, `03` and `04` references needs `NuGetAudit=false` in the environment: their restore
+emits an ambient NU1903 advisory the capture command's `NoWarn` list does not cover, and
+`35` resolves no advisory-bearing package. That suppression belongs to the capture command
+and is tracked in #141.
+
+### C#
+
 Every example is one file. Run it from the `examples/` directory:
 
 ```bash
@@ -108,6 +203,10 @@ dotnet run examples/00-conversation.cs
 
 Examples that call a model take 30–90 seconds. The ones that only exercise the durable
 machinery run in under a second.
+
+No sign-in? `./scripts/validate.sh --deterministic` runs the suite's credential-free layer
+against the recorded runtime in `tools/ReplayRuntime/`. See
+[Validating the suite](#validating-the-suite).
 
 ---
 
@@ -165,6 +264,34 @@ machinery run in under a second.
 | [30](examples/30-reload-and-restart.cs) | Reload and restart | Reload an extension while a call runs, then restart the process. Running work finishes on the code it started with; stored choices are names, so they bind to the new code. |
 | [31](examples/31-permissions.cs) | Permissions | A conversation is denied a tool, restarted, and denied again. Grants live in the store, so a restart cannot widen them. |
 | [32](examples/32-jsonl-store.cs) | The store file | Where a durable store lives and how it writes: an explicit path wins, no path resolves the per-user default, and the file is JSONL so a torn tail costs one record. |
+| [33](examples/33-sandbox-sdk-filesystem.cs) | The sandbox filesystem policy | A conversation carries a sandbox policy with a writable, a read-only, and a denied directory. The durable layer approves the shell call; the sandbox refuses the write. |
+| [34](examples/34-sandbox-sdk-network-credentials.cs) | The sandbox network and credential policy | The other half of the sandbox policy: network egress, credential masking and injection, dev-toolchain access, and MCP/LSP confinement. |
+| [35](examples/35-sandbox-sdk-observability-bypass.cs) | Sandbox observability and bypass | Enforcement rather than configuration: a blocked call, the denial it produced, and the bypass, working-directory-trust and keychain settings around it. |
+| [36](examples/36-durable-client-builder.cs) | The durable client builder | One call assembles a host and connects to nothing: `Build()` validates the description, the first operation initializes once, ownership decides what disposal releases, and one store takes one runtime. |
+| [37](examples/37-ef-core-store.cs) | The EF Core store | The store's state written through a relational schema instead of a JSONL file. The SQLite connection-string convention, the provider selected by name and by factory, the migration's tables, a reopen that reads the state back, and the four-provider matrix. No server needed. |
+
+### Sandbox examples: what offline mode proves
+
+The three sandbox examples (`33`, `34`, `35`) have two halves. The **policy half** builds the
+`DurableSandboxPolicy`, expands the `{workspace}` token, and asserts the wire mapping
+field-for-field. The **enforcement half** asserts what the operating system actually did — that
+a denied write was refused, that a masked credential never reached the shell.
+
+Offline mode (the recorded runtime, `ReplayRuntime` with `DURABLE_RUNTIME_PATH` set) proves
+**policy propagation, not OS enforcement**. In that mode `SandboxReport.Resolve()` reports
+`SandboxRunMode.Replayed`, the runtime reports backend `unsupported` on platform `other`, and no
+enforcement assertion runs. The three-part enforcement proof — the permission layer did not deny
+the call, the sandbox did deny it, and the two layers did their separate jobs — is verified only
+in `Enforced` mode, on a signed-in host where a real backend engaged.
+
+The `sandbox-advisory` CI job runs the three examples on `ubuntu-latest` (Bubblewrap),
+`macos-latest` (Seatbelt) and `windows-latest` (ProcessContainer) and prints the reported backend
+and platform per example. It runs on a nightly schedule and on pushes to `main` rather than on
+every pull request, because the report describes the runners and not the diff. The reporting step
+is `continue-on-error: true`, so a platform gap
+degrades an assertion set rather than failing a pull request; the report-completeness assertion
+is not, so a script that produces no report turns the check red. See
+[`docs/SANDBOX_CI.md`](docs/SANDBOX_CI.md).
 
 ---
 
@@ -200,12 +327,46 @@ Both paths compile the same source. `lib/Copilot.Durable.csproj` builds the pack
 `lib/Durable.cs`; `tests/Durable.Tests` references that project, so the test suite
 exercises the artifact consumers actually get.
 
+### One call: the builder and the facade
+
+`DurableClientBuilder` describes a host and `DurableCopilotClient` is that host. `Build()`
+validates the description and constructs the facade; it opens no store, starts no SDK client
+process, and resumes no task, so it is safe to call while the application is still being wired
+up. The first operation that needs either resource initializes both, once, and concurrent first
+operations share that attempt.
+
+```csharp
+await using var client = new DurableClientBuilder()
+    .UseStore(new DurableStoreOptions { Path = storePath })
+    .UseHarnessOptions(new DurableHarnessOptions())
+    .Build();
+
+var conversation = await client.RootAsync();
+await conversation.SubmitAsync("Summarize the repo").WaitAsync();
+```
+
+Disposal follows who created the resource. A store or client passed to `UseStore`/`UseClient` is
+*borrowed* — the facade uses it and leaves it alone; one the builder creates is *owned* and
+disposed with the facade. That order matters, because a persistent store holds an exclusive
+writer lock until it is disposed. A store also has exactly one runtime: a second facade over the
+same store is refused rather than racing the first for its tasks.
+
+`GetSessionConfig`/`GetSessionConfigAsync` build the configuration the runtime would use, applying
+the precedence rule — the conversation's stored choices are authoritative and the caller's
+arguments only fill what the conversation leaves unset. Neither creates a session, so a host can
+inspect what a restart would do without doing it. `NativeClient` is the raw-SDK escape hatch:
+calls made through it sit outside the durable guarantees, because a session created that way is
+not a `DurableConversation`. [`docs/DESIGN.md`](docs/DESIGN.md) §3.8 covers checkpoints, recovery,
+forks, and the full boundary.
+
 ### Core types
 
 | Type | Purpose |
 |---|---|
 | `DurableStore` | The durable state. Persists to an append-only JSONL file (explicit path, or the per-user default), or stays in memory. |
 | `DurableHarness` | Owns the client, the store, the registry, and the conversations. `OpenAsync`, `RootAsync`, `CreateConversationAsync`, `ForkAsync`, `CreateTaskAsync`. |
+| `DurableClientBuilder` | The one-call description of a host: `UseStore`, `UseClient`, `UseRegistry`, `UseHarnessOptions`, `Configure`, `Build()`. |
+| `DurableCopilotClient` | What `Build()` returns: the facade over one runtime. `InitializeAsync`, `CreateConversationAsync`, `ResumeConversationAsync`, `ForkAsync`, `GetSessionConfig(Async)`, `NativeClient`, `DisposeAsync`. |
 | `DurableConversation` | A Copilot session bound to durable app state. `SubmitAsync`, `Snapshot`, `CommitAsync`, `ConfigureAsync`, `Agent`, `ForkAsync`. |
 | `Transaction` | The unit of atomicity. `CreateConversation`, `AppendEntry`, `Doc`, `CreateTask`. Everything written inside commits together, or not at all. |
 | `DocumentDefinition<T>` | A document's kind, history policy, fork policy, and initial value. |
@@ -216,6 +377,26 @@ exercises the artifact consumers actually get.
 | `AgentChoices` | The per-conversation agent configuration: model, reasoning effort, extension names, tool names, working directory, instructions. |
 | `DurableTask` / `TaskRuntime` / `TaskCommit` | Durable tasks: a checkpointed state machine with idempotent memos and durable timers. |
 | `ToolWrapper` | Wraps a tool *by name*, so it decorates whichever implementation wins. |
+
+### Runtime host and optional Dev Tunnels
+
+Build the C# host with `dotnet build src/Durable.Runtime`. To serve an imported agent over
+loopback HTTP:
+
+```sh
+dotnet run --project src/Durable.Runtime -- serve --http --agent reviewer --definition reviewer.json --port 0
+```
+
+Add **`--dev-tunnel`** to opt in to `devtunnel host --port <bound-port>` using the `devtunnel`
+CLI on `PATH`. The host prints the actual tunnel URL to stderr when the CLI reports it.
+Tunnels are off by default; a missing tool, execution refusal, or failing CLI only produces a
+warning, and local HTTP continues serving. The host does not install or configure the CLI.
+Public exposure does not add authentication or relax the agent's containment checks: only opt in
+when you trust the callers and understand the agent's grants.
+
+Linux and Windows CI smoke jobs exercise the CLI, HTTP, RPC and optional-tool fallback contracts
+against the recorded runtime, with a controlled tunnel executable (no public exposure).
+See [the Dev Tunnels design](docs/DESIGN.md#314-dev-tunnels-and-host-portability).
 
 ### Documents
 
@@ -367,8 +548,31 @@ Validation runs in two complementary layers:
 1. **Self-asserting examples:** Every single example includes explicit `Check.*` assertions testing the durable invariants it claims (no duplicate executions across crash restarts, transaction rollback on mid-commit failure, document fork isolation, child-task abort cascade, etc.). An unhandled exception or failed assertion causes `validate.sh` to fail immediately.
 2. **xUnit test suite (`tests/Durable.Tests`):** Focused unit and integration tests verifying `DurableStore` rollback semantics, fork entry filtering and state independence, store crash recovery with memo idempotency, and abort propagation.
 
+The xUnit suite also runs the real Python and TypeScript late-join clients, including
+physical LF and CRLF source files. Before running it (directly or through `validate.sh`),
+install Python 3.11+ and Node.js 22.18+, then bootstrap the declared dependencies from the
+repository root:
+
 ```bash
-# Every example: compile, run xUnit suite, and run all 33 examples.
+python3 -m venv lib/py/.venv
+source lib/py/.venv/bin/activate
+python3 -m pip install -e lib/py
+npm ci --prefix lib/ts
+```
+
+The late-join test resolves its interpreter itself: it prefers `lib/py/.venv/bin/python`
+(`lib\py\.venv\Scripts\python.exe` on Windows) and falls back to `python3` (`python` on
+Windows) from `PATH`, using the first candidate that can import the Copilot SDK. Activating
+the environment is therefore optional for `dotnet test` and `validate.sh`, but the
+interpreter it selects must have the declared Python project installed. On Windows, activate
+`lib\py\.venv\Scripts\Activate.ps1` in PowerShell instead. Use `python` instead of `python3`
+for the Windows environment creation and pip commands. The Python SDK is pinned in
+`lib/py/pyproject.toml`;
+Node dependencies are restored from `lib/ts/package-lock.json`. CI provisions both
+languages and installs these dependencies before the unconditional .NET `Test` step.
+
+```bash
+# Every example: compile, run xUnit suite, and run all 38 examples.
 ./scripts/validate.sh
 
 # Fast offline validation: run xUnit suite + examples that do not call a model.
@@ -380,13 +584,35 @@ dotnet test tests/Durable.Tests
 # Compile only: build every example without running any of them.
 COMPILE_ONLY=1 ./scripts/validate.sh
 
+# Deterministic run: no Copilot sign-in, no credentials, no network.
+./scripts/validate.sh --deterministic
+
 # A few specific examples.
-./scripts/validate.sh 00 05 12
+./scripts/validate.sh 00-conversation 05-harness 12-recovery
 ```
 
-The script reports `PASS`/`FAIL` per example and prints the output of each one.
+The script reports `PASS`/`FAIL` per example and prints the output of each one. Every
+invocation also runs the vocabulary check: it fails when a source file under `examples/`
+describes itself with a placeholder term instead of naming what it really does.
 
-CI runs `dotnet test tests/Durable.Tests`, then `SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh`. Every example is compiled on every push, and the 13 that need no Copilot sign-in also execute with their assertions checked. The other 20 need a signed-in Copilot CLI and are not run in CI.
+The deterministic run executes the recorded runtime's own test suite, the durable tool round
+trip against it, a recorded conversation end to end, and 17 of the 38 examples. Three of those
+(`32-jsonl-store`, `36-durable-client-builder`, `37-ef-core-store`) never open a Copilot session;
+the other fourteen create one, and the recorded runtime serves it from the recording and marks
+the pass as
+`synthesised session — not a recorded transcript`. The remaining 21 examples are printed by
+name with the reason they cannot run: they need a request the runtime does not answer, or they
+assert a tool call, a model answer, or a host event the recording does not contain. It proves
+the suite runs reproducibly without credentials; it does not prove that a live model answers.
+`docs/DESIGN.md` §6.1 is the full statement.
+
+The deterministic run also checks two things the PASS lines alone would not. Every example that
+opens a session must print `effective model: <id>`, and the id must be the model the fixture
+records — read from the fixture, not from the library, so the check cannot agree with the code
+it is checking by construction. And every such example is run a second time, with the temporary
+paths, session ids, and timestamps normalised, and must produce identical output.
+
+CI runs `dotnet test tests/Durable.Tests`, then `SKIP_LIVE=1 SKIP_TESTS=1 ./scripts/validate.sh`, then `./scripts/validate.sh --deterministic`. Every example is compiled on every push, and the 15 that need no Copilot sign-in also execute with their assertions checked. The other 23 need a signed-in Copilot CLI and are not run in CI. The deterministic step enforces the effective-model and determinism checks, and also runs the Python and TypeScript parity suites and both language unit suites.
 
 ---
 
@@ -401,7 +627,7 @@ For token pricing tables, reasoning effort constraints, and SDK-specific tool-au
 ## Repository layout
 
 ```
-examples/                 33 self-contained file-based C# apps
+examples/                 38 self-contained file-based C# apps
 lib/Durable.cs            the shared durable layer every example includes
 lib/Copilot.Durable.csproj  builds the Copilot.Durable NuGet package from that file
 tests/Durable.Tests       xUnit test suite for the durable library
@@ -411,10 +637,39 @@ docs/
   RELEASING.md            release strategy: release unit, cadence, branch roles, tag procedure
   COMPARATIVE_ANALYSIS.md architecture comparison vs Pi Durable
   DURABILITY_ANALYSIS.md  what Copilot SDK provides vs what was added
-  EXAMPLES_AUDIT.md       rigorous fidelity audit of all 33 examples
+  TEMPORAL_MAF_COMPARISON.md  three-way matrices: Temporal MAF plugin, this library, SDK alone
+  assessments/            read-only assessments and the four spike results derived from that comparison
+  EXAMPLES_AUDIT.md       rigorous fidelity audit of examples 00 through 33
   COPILOT_SDK_NOTES.md    SDK quirks, tool shadowing rules, and pricing
   DESIGN.md               original architecture design specification
 ```
+
+---
+
+## Frequently Asked Questions (FAQ)
+
+### How does this compare to Microsoft's Durable Task Extension for Microsoft Agent Framework?
+
+Microsoft offers the [Durable Task extension for Microsoft Agent Framework](https://learn.microsoft.com/en-us/agent-framework/hosting/durable-extension) (`Microsoft.Agents.AI.DurableTask`). While both bring durable execution and fault tolerance to AI agents, they target different ecosystems and architectural trade-offs:
+
+- **Target Ecosystem:** Microsoft's extension targets Microsoft Agent Framework (`Microsoft.Agents.AI`). This library targets the **GitHub Copilot SDK** (`Copilot.Durable` driving the GitHub Copilot CLI).
+- **Infrastructure Footprint:** Microsoft's extension relies on the Durable Task Framework backed by a Durable Task Scheduler (DTS) service/emulator or Azure Functions host. `Copilot.Durable` is **self-contained and embedded**: agent state lives directly in your application store (a single JSONL file with cross-process locking, or an EF Core database) without requiring external orchestrator services, daemon containers, or cloud runtimes.
+- **State & Concurrency Semantics:** Microsoft's extension models long-running workflows as event-sourced orchestrations and entities (`RaiseEventAsync`). `Copilot.Durable` structures state around **versioned domain documents** (with first-writer-wins conflict policies), checkpointed state machines, and step-level memoization.
+
+Both approaches are benchmarked side-by-side under identical fault injections (process kills, duplicate deliveries, and store outages) in [**Band G of our Real-World Matrix**](docs/REAL_WORLD_MATRIX.md#band-g--long-running-operations).
+
+### How does this compare to Temporal's Microsoft Agent Framework plugin?
+
+[Temporal's `dotnet/microsoft-agent-framework` plugin](https://github.com/temporalio/ai-integrations/tree/main/dotnet/microsoft-agent-framework) solves a different half of the problem: it moves the **agent loop** into a Temporal Workflow, so every model call, MCP call and opted-in tool becomes a Temporal Activity with the engine's retry, timeout, heartbeat and replay semantics. `Copilot.Durable` leaves the loop to the Copilot runtime and makes the **application state** durable — documents, checkpoints, memos, permissions, forks.
+
+The trade is visible in one line each:
+
+- **Temporal gains** authored provider-error classification, tested replay compatibility, tamper-resistant approvals, and a workflow engine with no payload or determinism surprises you have not already accepted. **It costs** a Temporal Service, deterministic Workflow code (in-Workflow tools re-run on replay; context providers cannot await), and a 2 MiB per-call payload cap.
+- **`Copilot.Durable` gains** versioned domain documents with fork policies and point-in-time reads, ordinary async handlers with no determinism requirement, one portable store (JSONL or EF Core, no server), and identical semantics in C#, TypeScript and Python. **It costs** the engine — you own recovery, and the layer has no retry policy of its own.
+
+Both are honest about their gaps: Temporal's plugin is pre-release and promises replay only within a major; this layer is `v0.4.0` with a measured split-store limitation. The full three-way matrices, including the Copilot SDK on its own, are in [**Temporal × MAF Comparison**](docs/TEMPORAL_MAF_COMPARISON.md).
+
+---
 
 ## Acknowledgements & Attribution
 

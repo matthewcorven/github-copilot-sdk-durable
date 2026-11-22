@@ -1,0 +1,31 @@
+{
+  "id": 21,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 732000,
+  "currency": "CAD",
+  "address": {
+    "street": "33 Bay Street, Unit 4505",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M5J 2Z3",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 1,
+  "squareFootage": 857,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2019,
+  "parkingSpaces": 0,
+  "shortDescription": "Spacious 2-bedroom condo in Harbourfront with open layout, balcony, and underground parking.",
+  "fullDescription": "Welcome to 33 Bay Street, Unit 4505 in the vibrant Harbourfront neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area showcases original architectural details alongside tasteful modern updates. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. The 2 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. Building amenities include a fitness centre, rooftop terrace, party room, and 24-hour concierge. Enjoy a 90+ walk score with parks, cafes, schools, and transit all within minutes.",
+  "keyFeatures": [
+    "Chef’s kitchen with granite countertops and premium appliances",
+    "Landscaped front and rear gardens",
+    "Pot lights and designer fixtures throughout",
+    "Two-car attached garage",
+    "Walk-in closet in primary bedroom",
+    "Soaring nine-foot ceilings"
+  ],
+  "listedDate": "2026-03-28"
+}

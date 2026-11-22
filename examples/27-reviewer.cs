@@ -70,6 +70,10 @@ var root = await harness.RootAsync(new AgentChoices
     Permissions = ["custom-tool:read_file", "read"],
 });
 
+// The model the runtime reported for this session, not the one the host asked for.
+var effectiveModel = await root.WaitForEffectiveModelAsync();
+Console.WriteLine($"effective model: {effectiveModel.Model ?? "(not reported)"}");
+
 // The review loop. The hook is code-level configuration, so it is supplied when the
 // conversation is created rather than stored with the choices.
 var passes = 0;

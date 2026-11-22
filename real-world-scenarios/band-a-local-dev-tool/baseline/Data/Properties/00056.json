@@ -1,0 +1,30 @@
+{
+  "id": 56,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 1466000,
+  "currency": "CAD",
+  "address": {
+    "street": "2383 Bloor Street West",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6S 1P6",
+    "country": "Canada"
+  },
+  "bedrooms": 4,
+  "bathrooms": 2,
+  "squareFootage": 1914,
+  "lotSizeSquareFootage": 3400,
+  "yearBuilt": 1923,
+  "parkingSpaces": 1,
+  "shortDescription": "Elegant 4-bedroom detached family home in Bloor West Village with a wraparound porch and updated interior.",
+  "fullDescription": "Welcome to 2383 Bloor Street West in the vibrant Bloor West Village neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen offers ample counter space, premium fixtures, and a convenient eat-in dining area. The 4 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. A private outdoor space — perfect for morning coffee or summer entertaining — completes the package. The location is unbeatable: steps to TTC transit, acclaimed restaurants, and everyday shopping.",
+  "keyFeatures": [
+    "Crown mouldings and wainscotting",
+    "Steps to TTC subway and streetcar",
+    "Rooftop terrace with skyline views",
+    "Spacious kitchen with marble backsplash and gas range",
+    "Laneway parking for two vehicles"
+  ],
+  "listedDate": "2026-04-15"
+}

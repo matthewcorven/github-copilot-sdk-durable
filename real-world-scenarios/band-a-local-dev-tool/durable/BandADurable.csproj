@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+    <NoWarn>GHCP001;CS9113;$(NoWarn)</NoWarn>
+    <AssemblyName>BandADurable</AssemblyName>
+    <RootNamespace>AgentOrchestrator.Durable</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Using Include="Microsoft.Extensions.AI" />
+    <Using Include="System.ComponentModel" />
+    <Using Include="System.Text.Json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Markdig" Version="*" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.0" />
+  </ItemGroup>
+
+  <!-- The durable layer is consumed as the project reference, never copied: this scenario
+       exists to show what lib/Durable.cs can express, so a private copy would defeat it. -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\lib\Copilot.Durable.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The listings are property data, not agent state, so the baseline's seed files are
+         referenced rather than copied: a second copy would drift the moment one was edited. -->
+    <None Include="..\baseline\Data\Properties\*.json"
+          Link="Data\Properties\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Update="fixtures\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

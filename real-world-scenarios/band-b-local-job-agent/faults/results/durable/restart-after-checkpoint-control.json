@@ -1,0 +1,16 @@
+{
+  "variant": "durable",
+  "fault": "restart-after-checkpoint-control",
+  "outcome": "completed",
+  "phase": "an uninterrupted run to the end (the control)",
+  "detail": "Control: the same steps without the stop. 8 iteration(s), exit 0, plan 'complete 16 0', product digest 76524817ca57aa5b, verifier: pass. This is what the stopped run is measured against; the stop is the only difference.",
+  "evidence": "gate held 'in session.create 3' and released it; the run then reached its own end",
+  "harness": {
+    "dotnet": "dotnet",
+    "model": "gpt-5.1-codex-mini",
+    "command": "./faults/restart-after-checkpoint.sh --variant durable --fault-not-injected",
+    "script": "restart-after-checkpoint.sh",
+    "commit": "32770e70b5818b93d8745acfd83286cffb48c072"
+  },
+  "recordedAt": "2026-11-06T03:41:39.690445+00:00"
+}

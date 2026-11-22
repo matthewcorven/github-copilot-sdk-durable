@@ -1,0 +1,31 @@
+{
+  "id": 37,
+  "type": "Detached",
+  "status": "For Sale",
+  "price": 1434000,
+  "currency": "CAD",
+  "address": {
+    "street": "188 High Park Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6P 2S2",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 2,
+  "squareFootage": 1257,
+  "lotSizeSquareFootage": 6875,
+  "yearBuilt": 1960,
+  "parkingSpaces": 1,
+  "shortDescription": "Spacious 3-bedroom detached home on a quiet street in High Park North with mature trees and a private backyard.",
+  "fullDescription": "Welcome to 188 High Park Avenue in the vibrant High Park North neighbourhood. This beautifully presented detached home offers generous living space across multiple levels. The main living area showcases original architectural details alongside tasteful modern updates. The kitchen has been fully renovated with soft-close cabinetry, stone counters, and a breakfast bar. All 3 bedrooms are generously sized, and the primary offers a spa-inspired four-piece ensuite. The finished lower level adds valuable living space with a recreation room, extra bathroom, and storage. This coveted pocket puts you within walking distance of top schools, green spaces, and vibrant dining.",
+  "keyFeatures": [
+    "Steps to TTC subway and streetcar",
+    "Juliet balcony off primary bedroom",
+    "Hardwood floors throughout main level",
+    "Pet-friendly building",
+    "Underground parking spot included",
+    "Laneway parking for two vehicles"
+  ],
+  "listedDate": "2026-04-18"
+}

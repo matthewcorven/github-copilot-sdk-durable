@@ -1,0 +1,31 @@
+{
+  "id": 60,
+  "type": "Bungalow",
+  "status": "For Sale",
+  "price": 1247000,
+  "currency": "CAD",
+  "address": {
+    "street": "54 Morningside Avenue",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M6S 1C8",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 1,
+  "squareFootage": 1058,
+  "lotSizeSquareFootage": 5689,
+  "yearBuilt": 1954,
+  "parkingSpaces": 1,
+  "shortDescription": "Updated 2-bedroom bungalow in Swansea offering single-level living and a finished basement.",
+  "fullDescription": "Welcome to 54 Morningside Avenue in the vibrant Swansea neighbourhood. This inviting bungalow offers the ease of single-level living with a generous lot and private garden. The main living area boasts an open-concept design with pot lights and a cosy gas fireplace. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. The 2 bedrooms are well-proportioned, with the primary suite featuring a walk-in closet and updated ensuite. The deep lot provides ample space for gardening, play, or future expansion. This coveted pocket puts you within walking distance of top schools, green spaces, and vibrant dining.",
+  "keyFeatures": [
+    "Minutes to parks, shops, and restaurants",
+    "Juliet balcony off primary bedroom",
+    "Renovated galley kitchen with breakfast bar",
+    "Hardwood floors throughout main level",
+    "Integrated single-car garage",
+    "Built-in bookshelves in den"
+  ],
+  "listedDate": "2026-04-05"
+}

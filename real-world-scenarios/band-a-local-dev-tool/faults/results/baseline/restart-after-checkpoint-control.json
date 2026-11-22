@@ -1,0 +1,16 @@
+{
+  "variant": "baseline",
+  "fault": "restart-after-checkpoint-control",
+  "outcome": "lost",
+  "phase": "committed at nothing the restart can read (the baseline writes no state)",
+  "detail": "The server was stopped with SIGTERM (before any phase has progressed (queued only); status 0 reported by the shell, which is not evidence of an orderly stop (the application registers no handler)) and restarted. It shows 0 cards: processing 0, completed 0. Whatever phase had committed is gone with the process, so there is no checkpoint for a restart to resume from.",
+  "evidence": "stop: SIGTERM while the page showed the enquiry in flight; wait reported: status 0 reported by the shell, which is not evidence of an orderly stop (the application registers no handler) (exit 0); restart: same directory /Users/core/git/matthewcorven/github-copilot-sdk-durable-worktrees/squad-146-work/.scratch/band-a-faults/baseline/restart-after-checkpoint-control/app, same port 5217; cards=0 processing=0 completed=0",
+  "harness": {
+    "dotnet": "dotnet",
+    "runtime": "tools/ReplayRuntime",
+    "command": "./faults/restart-after-checkpoint.sh --variant baseline --fault-not-injected",
+    "script": "restart-after-checkpoint.sh",
+    "commit": "4ab32e3371a4738eac5ac1c1c6ee7fd64d9b2cc8"
+  },
+  "recordedAt": "2026-11-05T17:17:25.899365+00:00"
+}

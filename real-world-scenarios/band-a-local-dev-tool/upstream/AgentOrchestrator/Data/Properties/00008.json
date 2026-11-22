@@ -1,0 +1,31 @@
+{
+  "id": 8,
+  "type": "Condo",
+  "status": "For Sale",
+  "price": 806000,
+  "currency": "CAD",
+  "address": {
+    "street": "77 Sheppard Avenue East, Unit 802",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M2N 7B4",
+    "country": "Canada"
+  },
+  "bedrooms": 2,
+  "bathrooms": 2,
+  "squareFootage": 1095,
+  "lotSizeSquareFootage": null,
+  "yearBuilt": 2020,
+  "parkingSpaces": 0,
+  "shortDescription": "Bright 2-bedroom condo in North York Centre with floor-to-ceiling windows and stunning city views.",
+  "fullDescription": "Welcome to 77 Sheppard Avenue East, Unit 802 in the vibrant North York Centre neighbourhood. This well-appointed condominium suite delivers effortless urban living with premium amenities. The main living area boasts an open-concept design with pot lights and a cosy gas fireplace. The kitchen features modern finishes including a gas range, integrated dishwasher, and pantry storage. The sleeping quarters comprise 2 comfortable bedrooms, the largest enjoying a private ensuite bathroom. The deep lot provides ample space for gardening, play, or future expansion. The location is unbeatable: steps to TTC transit, acclaimed restaurants, and everyday shopping.",
+  "keyFeatures": [
+    "In-suite laundry with full-size washer and dryer",
+    "Floor-to-ceiling windows with city views",
+    "Landscaped front and rear gardens",
+    "Open kitchen with waterfall island and pot lights",
+    "Underground parking spot included",
+    "Pot lights and designer fixtures throughout"
+  ],
+  "listedDate": "2026-04-26"
+}

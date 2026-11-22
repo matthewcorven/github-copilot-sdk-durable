@@ -1,0 +1,31 @@
+{
+  "id": 49,
+  "type": "Townhouse",
+  "status": "For Sale",
+  "price": 1167000,
+  "currency": "CAD",
+  "address": {
+    "street": "44 Rumsey Road",
+    "city": "Toronto",
+    "province": "Ontario",
+    "postalCode": "M4G 1N5",
+    "country": "Canada"
+  },
+  "bedrooms": 3,
+  "bathrooms": 3,
+  "squareFootage": 1361,
+  "lotSizeSquareFootage": 819,
+  "yearBuilt": 2009,
+  "parkingSpaces": 1,
+  "shortDescription": "Modern 3-bedroom townhouse in Leaside with rooftop terrace and integrated garage.",
+  "fullDescription": "Welcome to 44 Rumsey Road in the vibrant Leaside neighbourhood. This stylish multi-level townhouse provides the space of a house with the convenience of condo living. The main living area impresses with nine-foot ceilings, designer fixtures, and a seamless flow between rooms. The kitchen is a chef’s dream with quartz countertops, a large island, and high-end stainless-steel appliances. All 3 bedrooms are generously sized, and the primary offers a spa-inspired four-piece ensuite. Additional highlights include in-suite laundry, ample storage, and energy-efficient mechanicals. Transit, cycling infrastructure, and the best of Toronto’s cultural scene are right at your doorstep.",
+  "keyFeatures": [
+    "Spacious kitchen with marble backsplash and gas range",
+    "Laneway parking for two vehicles",
+    "Fenced yard ideal for children and pets",
+    "Walking distance to top-rated schools",
+    "Exposed brick accent wall",
+    "Rooftop terrace with skyline views"
+  ],
+  "listedDate": "2026-04-24"
+}

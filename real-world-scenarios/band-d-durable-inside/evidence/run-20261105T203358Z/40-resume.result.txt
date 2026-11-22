@@ -1,0 +1,7 @@
+I found approval task `"t4"`.
+
+Its status in durable working state was `"WAITING"`.
+
+The exact deadline value stored with it was `"1793997250.6636398"`.
+
+Whether anything had to be redone: `"No."` The request remained in phase `"awaiting-approval"`, and after `resume_work` the task was still reported as `"pending"` with taskId `"t4"`.
