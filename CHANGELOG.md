@@ -82,6 +82,18 @@ See [`docs/RELEASING.md`](docs/RELEASING.md) for the release procedure.
   records of an existing type: no envelope version changes, no existing kind changes shape, and a
   store written before this feature reads back unchanged. C# only for now; the member documents
   are not yet part of the cross-language wire contract. (#224)
+- **Linked skills, MCP servers and tools: `DurableLink`, `DurableLinks`,
+  `DurablePortableConfiguration`.** An `AgentDefinition` can now name optional capabilities by
+  name and version instead of copying their content. `DurableLinks.Resolve` fails closed on a
+  missing or incompatible link and names the installed alternatives, and it refuses a link whose
+  requested grants exceed the member's own: a retrieved link cannot widen authority. A link's
+  grants are never applied as authority; they are a request checked against the definition's
+  `Permissions`. `DurablePortableConfiguration.Export` writes the portable half of a definition
+  and refuses to write a document containing a secret-shaped value; `Import` validates the
+  `schemaVersion` and resolves the links against the host's registries. `Extension` gains an
+  optional `Version`, and `DurableMcpServerRegistry` supplies MCP servers by name. The runtime
+  host validates links at import and startup and refuses a definition that names a missing link.
+  An existing definition without `links` reads and runs unchanged. (#226)
 
 ### Fixed
 

@@ -124,6 +124,16 @@ internal static class Program
             Console.Error.WriteLine($"error: {ex.Message}");
             return ExitCodes.AgentFailed;
         }
+        catch (DurableLinkedCapabilityException ex)
+        {
+            Console.Error.WriteLine($"error: {ex.Message}");
+            return ExitCodes.AgentFailed;
+        }
+        catch (DurableConfigurationException ex)
+        {
+            Console.Error.WriteLine($"error: {ex.Message}");
+            return ExitCodes.AgentFailed;
+        }
         catch (JsonException ex)
         {
             Console.Error.WriteLine($"error: the agent definition is not valid JSON: {ex.Message}");

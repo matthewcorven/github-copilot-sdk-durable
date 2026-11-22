@@ -33,6 +33,19 @@ internal static partial class AgentDefinitionValidator
     /// <exception cref="AgentDefinitionException">The definition names something the host cannot supply.</exception>
     /// <exception cref="DurableSandboxPolicyException">The definition's sandbox policy cannot be applied.</exception>
     public static void Validate(AgentDefinition definition, ExtensionRegistry registry)
+        => Validate(definition, registry, null);
+
+    /// <summary>Validates <paramref name="definition"/> against the host's extension and MCP registries.</summary>
+    /// <param name="definition">The definition to validate.</param>
+    /// <param name="registry">The host's extension registry.</param>
+    /// <param name="servers">The host's MCP server registry, or <c>null</c> when the host has none.</param>
+    /// <exception cref="AgentDefinitionException">The definition names a capability the host does not have.</exception>
+    /// <exception cref="DurableSandboxPolicyException">The definition's sandbox policy cannot be applied.</exception>
+    /// <exception cref="DurableLinkedCapabilityException">A link is missing, incompatible, or asks for more authority than the member holds.</exception>
+    public static void Validate(
+        AgentDefinition definition,
+        ExtensionRegistry registry,
+        DurableMcpServerRegistry? servers)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(registry);
@@ -42,6 +55,23 @@ internal static partial class AgentDefinitionValidator
         ValidateTools(definition, selected);
         ValidateSandbox(definition);
         ValidatePermissions(definition);
+        ValidateLinks(definition, registry, servers);
+    }
+
+    private static void ValidateLinks(
+        AgentDefinition definition,
+        ExtensionRegistry registry,
+        DurableMcpServerRegistry? servers)
+    {
+        if (definition.Links is null || definition.Links.Count == 0)
+        {
+            return;
+        }
+
+        // Resolution is the validation: a missing link, a version mismatch, or a grant wider than
+        // the member's own is a refusal with the fix in the message. The resolved links are not
+        // needed here; the definition's own choices are what the host runs.
+        DurableLinks.Resolve(definition.Links, registry, servers, definition.Permissions);
     }
 
     private static void ValidateName(AgentDefinition definition)

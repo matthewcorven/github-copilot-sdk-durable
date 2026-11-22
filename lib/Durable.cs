@@ -14,7 +14,9 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 #pragma warning disable IL2026, IL3050 // Durable state is reflection-serialized by design.
 using System.Text.Json.Serialization.Metadata;
 using GitHub.Copilot;
@@ -3053,17 +3055,25 @@ public sealed class Extension
         IReadOnlyList<AIFunction>? tools = null,
         IReadOnlyList<PromptSection>? sections = null,
         IReadOnlyList<DurableTaskDefinition>? tasks = null,
-        IReadOnlyList<ToolWrapper>? wraps = null)
+        IReadOnlyList<ToolWrapper>? wraps = null,
+        string? version = null)
     {
         Name = name;
         Tools = tools ?? [];
         Sections = sections ?? [];
         Tasks = tasks ?? [];
         Wraps = wraps ?? [];
+        Version = version;
     }
 
     /// <summary>The extension name. Stored configuration references extensions by this name.</summary>
     public string Name { get; }
+
+    /// <summary>
+    /// The extension version, when the host can report one. A linked configuration that names a
+    /// version refuses a host whose extension reports a different one, or none.
+    /// </summary>
+    public string? Version { get; }
 
     /// <summary>The tools this extension contributes.</summary>
     public IReadOnlyList<AIFunction> Tools { get; }
@@ -3741,9 +3751,28 @@ public sealed class AgentDefinition
     public InfiniteSessionConfig? InfiniteSessions { get; init; }
 
     /// <summary>
+    /// The optional skills, MCP servers and tools this definition links. Each link is resolved by
+    /// name and version against the host's registries before the definition is used, and a link
+    /// that cannot be resolved refuses the run rather than narrowing it.
+    /// </summary>
+    /// <remarks>
+    /// A link never carries secret material. Credentials for an MCP server live in the host's
+    /// environment or credential store and are not part of this document, so exporting the
+    /// definition cannot leak them. <see cref="DurableLinks.Resolve"/> enforces that a link's
+    /// requested grants are already covered by <see cref="Permissions"/>; a link cannot widen
+    /// authority.
+    /// </remarks>
+    public List<DurableLink>? Links { get; init; }
+
+    /// <summary>
     /// The choices this definition stands for. The only conversion, and it is total: every
     /// field of the definition has a home in the choices, so nothing is dropped on the way in.
     /// </summary>
+    /// <remarks>
+    /// <see cref="Links"/> is resolved before conversion and contributes its extensions and tool
+    /// names here; the link declarations themselves are not persisted with the choices because the
+    /// choices are the resolved capability set, not the portable declaration.
+    /// </remarks>
     public AgentChoices ToChoices() => new()
     {
         Extensions = Extensions is null ? null : [.. Extensions],
@@ -3757,6 +3786,619 @@ public sealed class AgentDefinition
         Permissions = Permissions is null ? null : [.. Permissions],
         Sandbox = Sandbox,
     };
+
+    /// <summary>
+    /// The choices this definition stands for, with its links resolved against the host's registries.
+    /// </summary>
+    /// <param name="extensions">The host's extension registry.</param>
+    /// <param name="servers">The host's MCP server registry, or <c>null</c> when the host has none.</param>
+    /// <returns>The choices, with the linked extensions and tool names folded in.</returns>
+    /// <exception cref="DurableLinkedCapabilityException">A link is missing, incompatible, or asks for more authority than the member holds.</exception>
+    /// <remarks>
+    /// The member's own grants are the ceiling. A link's requested grants are checked against them
+    /// and never added to them, so a link cannot widen authority. The linked extensions are added to
+    /// <see cref="AgentChoices.Extensions"/> and the linked tools to <see cref="AgentChoices.Tools"/>,
+    /// which is what makes a linked tool discoverable without making it authorized.
+    /// </remarks>
+    public AgentChoices ToChoices(ExtensionRegistry extensions, DurableMcpServerRegistry? servers = null)
+    {
+        ArgumentNullException.ThrowIfNull(extensions);
+
+        var resolved = DurableLinks.Resolve(Links, extensions, servers, Permissions);
+        var choices = ToChoices();
+        if (resolved.Count == 0)
+        {
+            return choices;
+        }
+
+        var linkedExtensions = resolved
+            .Where(link => link.Extension is not null)
+            .Select(link => link.Extension!.Name)
+            .ToList();
+        var linkedTools = resolved
+            .Where(link => link.Extension is not null)
+            .SelectMany(link => link.Extension!.Tools.Select(tool => tool.Name))
+            .ToList();
+
+        choices.Extensions = Merge(choices.Extensions, linkedExtensions);
+        choices.Tools = Merge(choices.Tools, linkedTools);
+        return choices;
+    }
+
+    private static List<string>? Merge(List<string>? declared, List<string> added)
+    {
+        if (added.Count == 0)
+        {
+            return declared;
+        }
+
+        var merged = declared is null ? [] : new List<string>(declared);
+        foreach (var name in added)
+        {
+            if (!merged.Contains(name, StringComparer.Ordinal))
+            {
+                merged.Add(name);
+            }
+        }
+
+        return merged;
+    }
+}
+
+/// <summary>Thrown when a linked capability cannot be resolved, or cannot be granted as declared.</summary>
+/// <remarks>
+/// A linked skill, MCP server or tool is optional to the configuration but mandatory to the run:
+/// when the configuration names one and the host cannot supply it, the run is refused rather than
+/// narrowed. The same type is thrown when a retrieved link asks for more authority than the
+/// member's own grants allow, so a widening attempt is a refusal and not a silent merge.
+/// </remarks>
+public sealed class DurableLinkedCapabilityException : Exception
+{
+    /// <summary>Creates the exception.</summary>
+    /// <param name="message">The actionable message naming the fix.</param>
+    public DurableLinkedCapabilityException(string message)
+        : base(message)
+    {
+    }
+
+    /// <summary>Creates the exception.</summary>
+    /// <param name="message">The actionable message naming the fix.</param>
+    /// <param name="innerException">The failure underneath.</param>
+    public DurableLinkedCapabilityException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+/// <summary>The kind of optional capability a configuration links.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<DurableLinkKind>))]
+public enum DurableLinkKind
+{
+    /// <summary>A prompt-only skill.</summary>
+    Skill,
+
+    /// <summary>An MCP server, and the tools it offers.</summary>
+    Mcp,
+
+    /// <summary>A single tool an extension provides.</summary>
+    Tool,
+}
+
+/// <summary>How a linked capability contributes to a member.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<DurableLinkMode>))]
+public enum DurableLinkMode
+{
+    /// <summary>
+    /// The link contributes only prompt text. It grants nothing, and a retrieved copy that names
+    /// a grant is refused rather than merged.
+    /// </summary>
+    Prompt,
+
+    /// <summary>
+    /// The link contributes an extension or an MCP server whose tools become discoverable. The
+    /// tools are still gated by the member's own permission grants; discoverability is not
+    /// authority.
+    /// </summary>
+    Tools,
+}
+
+/// <summary>
+/// A reference a configuration resolves through the host's registries rather than carrying inline.
+/// </summary>
+/// <remarks>
+/// The link is a name and a version, not a copy of the content. That is what makes a portable
+/// configuration portable: the same document resolves against whatever the host installed, and a
+/// host that installed a different version refuses instead of quietly running something else.
+/// </remarks>
+public sealed class DurableLink
+{
+    /// <summary>The kind of capability being linked.</summary>
+    public DurableLinkKind Kind { get; set; }
+
+    /// <summary>The name the host's registry resolves.</summary>
+    public required string Name { get; set; }
+
+    /// <summary>
+    /// The exact version the configuration was written against. A host whose registry reports a
+    /// different version refuses the link; a host that reports no version refuses a versioned link.
+    /// </summary>
+    public string? Version { get; set; }
+
+    /// <summary>How the link contributes. Defaults to <see cref="DurableLinkMode.Tools"/>.</summary>
+    public DurableLinkMode Mode { get; set; } = DurableLinkMode.Tools;
+
+    /// <summary>
+    /// The permission grants the link may add. These are a request, not an authority: the member's
+    /// own grants are the ceiling, and a link asking for more than the member has is refused.
+    /// </summary>
+    public IReadOnlyList<string>? Grants { get; set; }
+}
+
+/// <summary>The resolved form of a <see cref="DurableLink"/>.</summary>
+/// <param name="Kind">The kind of capability.</param>
+/// <param name="Name">The resolved name.</param>
+/// <param name="Version">The version the host reported, when it reported one.</param>
+/// <param name="Mode">How the capability contributes.</param>
+/// <param name="Grants">The grants the link asked for, already checked against the member's ceiling.</param>
+/// <param name="Extension">The resolved extension for a tool or skill link, when the host has one.</param>
+/// <param name="Server">The resolved MCP server for an MCP link, when the host has one.</param>
+public sealed record ResolvedDurableLink(
+    DurableLinkKind Kind,
+    string Name,
+    string? Version,
+    DurableLinkMode Mode,
+    IReadOnlyList<string> Grants,
+    Extension? Extension,
+    DurableMcpServer? Server);
+
+/// <summary>An MCP server a host can supply to a linked configuration.</summary>
+/// <param name="Name">The server name.</param>
+/// <param name="Version">The server version, or <c>null</c> when the host cannot report one.</param>
+/// <param name="Tools">The tool names the server offers.</param>
+/// <param name="Grants">The grants the server's own manifest asks for. They are never applied as authority.</param>
+public sealed record DurableMcpServer(
+    string Name,
+    string? Version,
+    IReadOnlyList<string> Tools,
+    IReadOnlyList<string>? Grants = null);
+
+/// <summary>The registry of MCP servers a host installed, resolved by name.</summary>
+public sealed class DurableMcpServerRegistry
+{
+    private readonly Dictionary<string, DurableMcpServer> _servers = new(StringComparer.Ordinal);
+
+    /// <summary>The installed servers, ordered by name.</summary>
+    public IReadOnlyList<DurableMcpServer> Servers =>
+        _servers.Values.OrderBy(server => server.Name, StringComparer.Ordinal).ToList();
+
+    /// <summary>Installs a server, replacing any server with the same name.</summary>
+    /// <param name="server">The server to install.</param>
+    public void Install(DurableMcpServer server)
+    {
+        ArgumentNullException.ThrowIfNull(server);
+        _servers[server.Name] = server;
+    }
+
+    /// <summary>Finds a server by name, or <c>null</c> when it is not installed.</summary>
+    /// <param name="name">The server name.</param>
+    public DurableMcpServer? Find(string name) => _servers.GetValueOrDefault(name);
+}
+
+/// <summary>
+/// Resolves a configuration's links against the host's registries and checks the authority they ask for.
+/// </summary>
+/// <remarks>
+/// The resolver is where "optional to the configuration, mandatory to the run" is enforced. A link
+/// that names something the host does not have is a refusal with the installed names in the message;
+/// a link whose version differs from the host's is a refusal with both versions; and a link that asks
+/// for a grant the member does not already hold is a refusal, because a retrieved link cannot widen
+/// authority. Nothing here merges a link's grants into the member's: the member's grants are the
+/// ceiling and the link's request is only ever compared against it.
+/// </remarks>
+public static class DurableLinks
+{
+    /// <summary>Resolves the links a configuration declares.</summary>
+    /// <param name="links">The declared links, or <c>null</c> for none.</param>
+    /// <param name="extensions">The host's extension registry.</param>
+    /// <param name="servers">The host's MCP server registry, or <c>null</c> when the host has none.</param>
+    /// <param name="memberGrants">The member's own permission grants, the ceiling a link cannot exceed.</param>
+    /// <returns>The resolved links, in declaration order.</returns>
+    /// <exception cref="DurableLinkedCapabilityException">A link is missing, incompatible, or asks for more authority than the member holds.</exception>
+    public static IReadOnlyList<ResolvedDurableLink> Resolve(
+        IReadOnlyList<DurableLink>? links,
+        ExtensionRegistry extensions,
+        DurableMcpServerRegistry? servers,
+        IReadOnlyList<string>? memberGrants)
+    {
+        ArgumentNullException.ThrowIfNull(extensions);
+
+        if (links is null || links.Count == 0)
+        {
+            return [];
+        }
+
+        var resolved = new List<ResolvedDurableLink>(links.Count);
+        foreach (var link in links)
+        {
+            ArgumentNullException.ThrowIfNull(link);
+            resolved.Add(ResolveOne(link, extensions, servers, memberGrants));
+        }
+
+        return resolved;
+    }
+
+    private static ResolvedDurableLink ResolveOne(
+        DurableLink link,
+        ExtensionRegistry extensions,
+        DurableMcpServerRegistry? servers,
+        IReadOnlyList<string>? memberGrants)
+    {
+        if (string.IsNullOrWhiteSpace(link.Name))
+        {
+            throw new DurableLinkedCapabilityException(
+                "a linked capability has no name. Every link must name the skill, MCP server or tool "
+                + "the host should resolve.");
+        }
+
+        return link.Kind switch
+        {
+            DurableLinkKind.Tool => ResolveTool(link, extensions, memberGrants),
+            DurableLinkKind.Skill => ResolveSkill(link, extensions, memberGrants),
+            DurableLinkKind.Mcp => ResolveMcp(link, servers, memberGrants),
+            _ => throw new DurableLinkedCapabilityException(
+                $"linked capability '{link.Name}' has unknown kind '{link.Kind}'. "
+                + "Use skill, mcp, or tool."),
+        };
+    }
+
+    private static ResolvedDurableLink ResolveTool(
+        DurableLink link,
+        ExtensionRegistry extensions,
+        IReadOnlyList<string>? memberGrants)
+    {
+        var extension = extensions.Find(link.Name);
+        if (extension is null)
+        {
+            throw new DurableLinkedCapabilityException(
+                $"linked tool '{link.Name}' is not installed.\n"
+                + $"Installed extensions: {Listing(extensions)}.\n"
+                + "Install the extension that provides the tool, or remove the link.");
+        }
+
+        CheckVersion(link, extension.Version, "extension", extension.Name);
+        return new ResolvedDurableLink(
+            link.Kind,
+            link.Name,
+            extension.Version,
+            link.Mode,
+            CheckGrants(link, memberGrants),
+            extension,
+            null);
+    }
+
+    private static ResolvedDurableLink ResolveSkill(
+        DurableLink link,
+        ExtensionRegistry extensions,
+        IReadOnlyList<string>? memberGrants)
+    {
+        var extension = extensions.Find(link.Name);
+        if (extension is null)
+        {
+            throw new DurableLinkedCapabilityException(
+                $"linked skill '{link.Name}' is not installed.\n"
+                + $"Installed extensions: {Listing(extensions)}.\n"
+                + "Install the extension that provides the skill, or remove the link.");
+        }
+
+        CheckVersion(link, extension.Version, "skill", extension.Name);
+        return new ResolvedDurableLink(
+            link.Kind,
+            link.Name,
+            extension.Version,
+            link.Mode,
+            CheckGrants(link, memberGrants),
+            extension,
+            null);
+    }
+
+    private static ResolvedDurableLink ResolveMcp(
+        DurableLink link,
+        DurableMcpServerRegistry? servers,
+        IReadOnlyList<string>? memberGrants)
+    {
+        var server = servers?.Find(link.Name);
+        if (server is null)
+        {
+            var installed = servers is null || servers.Servers.Count == 0
+                ? "(none)"
+                : string.Join(", ", servers.Servers.Select(candidate => candidate.Name));
+            throw new DurableLinkedCapabilityException(
+                $"linked MCP server '{link.Name}' is not installed.\n"
+                + $"Installed MCP servers: {installed}.\n"
+                + "Install the server, or remove the link.");
+        }
+
+        CheckVersion(link, server.Version, "MCP server", server.Name);
+        return new ResolvedDurableLink(
+            link.Kind,
+            link.Name,
+            server.Version,
+            link.Mode,
+            CheckGrants(link, memberGrants),
+            null,
+            server);
+    }
+
+    private static void CheckVersion(DurableLink link, string? installed, string kind, string name)
+    {
+        if (link.Version is null)
+        {
+            return;
+        }
+
+        if (installed is null)
+        {
+            throw new DurableLinkedCapabilityException(
+                $"linked {kind} '{name}' is installed, but the host reports no version, and the "
+                + $"configuration requires '{link.Version}'. The host cannot prove the link is the "
+                + "one the configuration was written against. Install a versioned build, or remove "
+                + "the version from the link.");
+        }
+
+        if (!string.Equals(link.Version, installed, StringComparison.Ordinal))
+        {
+            throw new DurableLinkedCapabilityException(
+                $"linked {kind} '{name}' is version '{installed}', but the configuration requires "
+                + $"'{link.Version}'. The link is incompatible with this host. Install '{link.Version}', "
+                + "or update the configuration to the installed version.");
+        }
+    }
+
+    private static IReadOnlyList<string> CheckGrants(DurableLink link, IReadOnlyList<string>? memberGrants)
+    {
+        if (link.Grants is null || link.Grants.Count == 0)
+        {
+            return [];
+        }
+
+        var granted = new List<string>(link.Grants.Count);
+        foreach (var requested in link.Grants)
+        {
+            if (string.IsNullOrWhiteSpace(requested))
+            {
+                throw new DurableLinkedCapabilityException(
+                    $"linked capability '{link.Name}' declares an empty permission grant. "
+                    + "Write 'kind' or 'kind:scope'.");
+            }
+
+            if (!PermissionPolicy.IsGranted(memberGrants, PermissionGrant.Parse(requested).Kind, PermissionGrant.Parse(requested).Scope))
+            {
+                throw new DurableLinkedCapabilityException(
+                    $"linked capability '{link.Name}' asks for permission grant '{requested}', which the "
+                    + "member's own grants do not cover. A linked capability cannot widen authority: "
+                    + "add the grant to the member's permissions, or remove it from the link.");
+            }
+
+            granted.Add(requested);
+        }
+
+        return granted;
+    }
+
+    private static string Listing(ExtensionRegistry extensions)
+    {
+        var names = extensions.Extensions.Select(extension => extension.Name).ToList();
+        return names.Count == 0 ? "(none)" : string.Join(", ", names);
+    }
+}
+
+/// <summary>Thrown when a portable configuration cannot be exported or imported safely.</summary>
+public sealed class DurableConfigurationException : Exception
+{
+    /// <summary>Creates the exception.</summary>
+    /// <param name="message">The actionable message naming the fix.</param>
+    public DurableConfigurationException(string message)
+        : base(message)
+    {
+    }
+}
+
+/// <summary>
+/// Exports and imports the portable half of an agent definition: names, links, grants and policy,
+/// with no secret material and no host-only fields.
+/// </summary>
+/// <remarks>
+/// A portable configuration is what a person commits. It names capabilities by name and version and
+/// never carries credentials: an MCP server's token lives in the host's environment or credential
+/// store, so exporting the configuration cannot leak it. The exporter refuses to write a document
+/// that contains a secret-shaped value instead of writing it and hoping the caller notices.
+/// <para>
+/// The importer validates the document's version and its links against the host's registries, so an
+/// unknown version or a missing capability fails closed at import rather than at first use.
+/// </para>
+/// </remarks>
+public static partial class DurablePortableConfiguration
+{
+    /// <summary>The portable configuration version this build writes and reads.</summary>
+    public const int SchemaVersion = 1;
+
+    /// <summary>The JSON property names the portable document writes.</summary>
+    private static readonly string[] PortableFields =
+    [
+        "schemaVersion", "name", "description", "instructions", "model", "reasoningEffort",
+        "workingDirectory", "extensions", "tools", "permissions", "sandbox", "streaming",
+        "infiniteSessions", "links",
+    ];
+
+    /// <summary>
+    /// Exports a definition as a portable document, resolving its links first when registries are supplied.
+    /// </summary>
+    /// <param name="definition">The definition to export.</param>
+    /// <param name="extensions">The host's extension registry, or <c>null</c> to export without resolving links.</param>
+    /// <param name="servers">The host's MCP server registry, or <c>null</c> when the host has none.</param>
+    /// <returns>The portable document.</returns>
+    /// <exception cref="DurableConfigurationException">The definition contains a secret-shaped value.</exception>
+    /// <exception cref="DurableLinkedCapabilityException">A link is missing or incompatible.</exception>
+    public static JsonElement Export(
+        AgentDefinition definition,
+        ExtensionRegistry? extensions = null,
+        DurableMcpServerRegistry? servers = null)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+
+        if (extensions is not null)
+        {
+            DurableLinks.Resolve(definition.Links, extensions, servers, definition.Permissions);
+        }
+
+        var document = new JsonObject
+        {
+            ["schemaVersion"] = SchemaVersion,
+            ["name"] = definition.Name,
+        };
+
+        AddIfNotNull(document, "description", definition.Description);
+        AddIfNotNull(document, "instructions", definition.Instructions);
+        AddIfNotNull(document, "model", definition.Model);
+        AddIfNotNull(document, "reasoningEffort", definition.ReasoningEffort);
+        AddIfNotNull(document, "workingDirectory", definition.WorkingDirectory);
+        AddIfNotNull(document, "extensions", definition.Extensions);
+        AddIfNotNull(document, "tools", definition.Tools);
+        AddIfNotNull(document, "permissions", definition.Permissions);
+        AddIfNotNull(document, "streaming", definition.Streaming);
+        AddIfNotNull(document, "infiniteSessions", definition.InfiniteSessions);
+        AddIfNotNull(document, "sandbox", definition.Sandbox);
+        AddIfNotNull(document, "links", definition.Links);
+
+        var element = JsonSerializer.SerializeToElement(document, DurableJson.Options);
+        var secret = FindSecret(element);
+        if (secret is not null)
+        {
+            throw new DurableConfigurationException(
+                $"the configuration for agent '{definition.Name}' contains what looks like a secret in "
+                + $"'{secret}'. Portable configuration must not carry credentials: keep the secret in the "
+                + "host's environment or credential store and reference the capability by name.");
+        }
+
+        return element;
+    }
+
+    /// <summary>
+    /// Imports a portable document and validates its links against the host's registries.
+    /// </summary>
+    /// <param name="configuration">The portable document.</param>
+    /// <param name="extensions">The host's extension registry.</param>
+    /// <param name="servers">The host's MCP server registry, or <c>null</c> when the host has none.</param>
+    /// <returns>The definition the document describes.</returns>
+    /// <exception cref="DurableConfigurationException">The document's version is unknown, or it is not a portable document.</exception>
+    /// <exception cref="DurableLinkedCapabilityException">A link is missing or incompatible.</exception>
+    public static AgentDefinition Import(
+        JsonElement configuration,
+        ExtensionRegistry extensions,
+        DurableMcpServerRegistry? servers = null)
+    {
+        ArgumentNullException.ThrowIfNull(extensions);
+
+        if (configuration.ValueKind != JsonValueKind.Object)
+        {
+            throw new DurableConfigurationException(
+                "a portable configuration must be a JSON object. "
+                + "Export one with DurablePortableConfiguration.Export.");
+        }
+
+        if (configuration.TryGetProperty("schemaVersion", out var versionElement)
+            && versionElement.ValueKind == JsonValueKind.Number
+            && versionElement.TryGetInt32(out var version)
+            && version != SchemaVersion)
+        {
+            throw new DurableConfigurationException(
+                $"the portable configuration declares schemaVersion {version}, but this build reads "
+                + $"{SchemaVersion}. Update the configuration with a migration, or use a host that "
+                + "reads the version it declares.");
+        }
+
+        var definition = configuration.Deserialize<AgentDefinition>(DurableJson.Options)
+            ?? throw new DurableConfigurationException(
+                "the portable configuration could not be read as an agent definition.");
+
+        DurableLinks.Resolve(definition.Links, extensions, servers, definition.Permissions);
+        return definition;
+    }
+
+    private static void AddIfNotNull(JsonObject document, string name, object? value)
+    {
+        if (value is null)
+        {
+            return;
+        }
+
+        document[name] = JsonSerializer.SerializeToNode(value, DurableJson.Options);
+    }
+
+    private static string? FindSecret(JsonElement element)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in element.EnumerateObject())
+                {
+                    var found = FindSecret(property.Value);
+                    if (found is not null)
+                    {
+                        return found;
+                    }
+
+                    if (property.Value.ValueKind == JsonValueKind.String
+                        && LooksLikeSecret(property.Name, property.Value.GetString()))
+                    {
+                        return property.Name;
+                    }
+                }
+
+                return null;
+
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray())
+                {
+                    var found = FindSecret(item);
+                    if (found is not null)
+                    {
+                        return found;
+                    }
+                }
+
+                return null;
+
+            case JsonValueKind.String:
+                return LooksLikeSecretValue(element.GetString()) ? "value" : null;
+
+            default:
+                return null;
+        }
+    }
+
+    private static bool LooksLikeSecret(string name, string? value) =>
+        SecretName().IsMatch(name) && !string.IsNullOrWhiteSpace(value);
+
+    private static bool LooksLikeSecretValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        return SecretValue().IsMatch(value);
+    }
+
+    [GeneratedRegex(
+        @"(?i)(api[_-]?key|client[_-]?secret|access[_-]?key|private[_-]?key|password|passwd|credential|bearer|token|secret)",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex SecretName();
+
+    [GeneratedRegex(
+        @"(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?i)bearer\s+[A-Za-z0-9._~+/-]{20,})",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex SecretValue();
 }
 
 /// <summary>What a scheduler does with the occurrences it missed while the host was down.</summary>

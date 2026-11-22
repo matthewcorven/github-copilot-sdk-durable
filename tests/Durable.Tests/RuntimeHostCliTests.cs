@@ -902,6 +902,29 @@ public sealed class RuntimeHostCliTests
     }
 
     [Fact]
+    public async Task Run_RefusesAMissingLinkedCapability()
+    {
+        using var scratch = new Scratch();
+        var storePath = scratch.PathIn("store.jsonl");
+        var definitionPath = scratch.Write("reviewer.json", """
+            {
+              "name": "reviewer",
+              "description": "Reviews changes.",
+              "links": [ { "kind": "tool", "name": "absent-link" } ]
+            }
+            """);
+
+        var (exitCode, _, stderr) = await RunHostAsync(
+            "run", "--agent", "reviewer", "--input", "hello",
+            "--definition", definitionPath, "--store", storePath, "--format", "jsonl");
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("absent-link", stderr, StringComparison.Ordinal);
+        Assert.Contains("not installed", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("succeeded", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Run_RequiresAnInput()
     {
         using var scratch = new Scratch();
