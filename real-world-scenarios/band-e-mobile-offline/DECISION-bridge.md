@@ -1,6 +1,7 @@
 # Decision: the Foundry Local Android bridge
 
-**Status:** accepted, 2026-11-05; updated 2026-11-17. The toolchain block this record was written
+**Status:** accepted, 2026-11-05; updated 2026-11-17; **§2 re-opened and the fallback taken,
+2026-11-25** (see §7). The toolchain block this record was written
 under is gone: the MAUI head in [`app/`](app/) builds and runs on an API 36 emulator, and
 [`evidence/e1-maui-run.txt`](evidence/e1-maui-run.txt) captures it. **The Kotlin facade in §3.1 is
 now compiled** with Gradle 8.13 / Kotlin 1.9.25 / AGP 8.13.0 in [`bridge/`](bridge/), bound into
@@ -83,6 +84,11 @@ consequences.
 ---
 
 ## 2. IPC, not embedded
+
+> **Re-opened 2026-11-25 (issue #166): the fallback in this section was taken for variant 1, because
+> the companion app cannot be installed on the device the demonstration runs on. The argument below
+> is unchanged and still governs the default; §7 records what changed, what it cost, and the evidence.**
+> Read this section as the reasoning, and §7 as the outcome on this device.
 
 The issue asks for this on performance, packaging, service-app dependency, and licensing grounds.
 They do not all point the same way, so take them one at a time.
@@ -384,6 +390,46 @@ asking "why does this demo want a data-sync foreground service?" deserves the an
 embedded AAR stops shipping native code (it would remove the process-death objection); the SDK ships a
 documented stateless HTTP surface, which would make (d) in §3.2 competitive; or the IPC hop is
 measured to be a material share of turn latency.
+
+## 7. Re-opened: the fallback was taken on this device
+
+**2026-11-25, issue #166.** §2 chose IPC and named four triggers that would re-open it. One fired:
+
+> - The **service-app dependency** is real and is priced in. … IPC adds a precondition an operator can
+>   fail to meet.
+
+On AVD `band-e-api36-playstore-arm64`, Google Play reports
+`Foundry Local isn't compatible with this version` for `com.microsoft.foundry.app`, and
+`com.microsoft.foundrylocal.app` is not installed. E1 reached the same conclusion from the other side
+on the physical device: no APK is published for the companion app, so Play is its only source
+([`evidence/e1-physical-device.txt`](evidence/e1-physical-device.txt)). The precondition cannot be met
+on either device, so the IPC path cannot be entered at all here.
+
+**Decision: variant 1 (#166) uses the embedded AAR.** This is §2's own fallback, taken under the
+trigger §2 named. What changed and what did not:
+
+| | Before | Now | Why |
+| --- | --- | --- | --- |
+| App packaging | `foundry-local-ipc-sdk-0.1.6.aar`, `Bind="false"` | `foundry-local-embedded-sdk-0.1.6.aar`, `Bind="false"` | one line in `app/BandEMobile.csproj`; the IPC line is removed, not conditioned, so a stale `libs/` copy cannot change the answer |
+| Kotlin facade (`bridge/`) | compiled against IPC | compiles against either, selected by `-Pbande.foundryAarMode` | both AARs publish the same API surface — verified with `javap`, [`evidence/e2-sdk-surface.txt`](evidence/e2-sdk-surface.txt) |
+| C# transport (`IChatClient`) | unchanged | unchanged | the seam already had no Android type in it |
+| Durable layer (`lib/Durable.cs`) | unchanged | unchanged | not involved in the mode |
+
+**The costs §2 listed are still costs, and variant 1 pays them deliberately.** The APK is 85.3 MB
+because the engine ships in it (≈64 MB of native libraries per ABI, listed in
+[`evidence/e2-aar-decision.txt`](evidence/e2-aar-decision.txt)); a native crash kills the app rather
+than a service; the model cache is app-private and disappears with the app; and `isConnected` is not
+applicable, so a completed turn proves the absence of a connection rather than its health. For a
+variant whose subject is *a durable store that survives the process*, paying them is the point: the
+store is the thing that survives, and a process-global engine beside it is what the demonstration is
+about. §2's objection — that co-residency adds a liability to a scenario about surviving failure —
+is answered by the measurement, not by argument: four offline turns and a `force-stop` left 3 turns of
+transcript and revision 3 of the document intact ([`evidence/e2-offline-demonstration.txt`](evidence/e2-offline-demonstration.txt)).
+
+**IPC remains the right default for a device where the companion app can be installed.** Nothing here
+withdraws §2 for that case; `./fetch-aar.sh ipc` plus `-Pbande.foundryAarMode=ipc` is still the
+combination §2 describes, and the facade has not forked into two versions. What variant 1 adds is the
+evidence that the mode is a packaging choice rather than a rewrite.
 
 ## Sources
 

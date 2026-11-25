@@ -1,0 +1,146 @@
+Band E / issue #166 — the store on the device, read without the app's help
+Captured 2026-11-25. The store files here were exported by the app (a byte copy of
+/data/user/0/dev.durable.band.e.mobile/files/durable/durable-store.jsonl) and then read with
+standard tools. Nothing in this file takes the app's word for what it stored.
+
+Why a copy: the store is in app-private storage, and a release-signed app on a non-debuggable
+emulator cannot be read directly. Verified, not assumed:
+
+$ adb shell run-as dev.durable.band.e.mobile ls
+run-as: package not debuggable: dev.durable.band.e.mobile
+
+$ adb shell ls /data/data/dev.durable.band.e.mobile
+ls: /data/data/dev.durable.band.e.mobile: Permission denied
+
+So the app writes a byte-for-byte copy to its app-external directory (which a shell can read) and
+records the SHA-256 of the bytes it copied. The hashes below match the ones the app printed, which is
+what makes the copy trustworthy: two independent readings of the same bytes.
+
+===============================================================================
+1. The two stores
+===============================================================================
+
+after turn 3 (before the kill), 20261125T182658Z-turn-3:
+  bytes   128,720
+  sha256  f02b209c3e84397d1083b579e84ad6cf629b137b29e4e894a94b9d01cdc39a85
+
+after the reopen, before turn 4, 20261125T182803Z-model-ready:
+  bytes   128,720
+  sha256  f02b209c3e84397d1083b579e84ad6cf629b137b29e4e894a94b9d01cdc39a85
+  (identical: a new process opened the same bytes)
+
+after turn 4 (after the kill and reopen), 20261125T182908Z-turn-4:
+  bytes   133,801
+  sha256  0c6df3504f9e14a641641f28d68552a8bc16ccfedce9c03af8b29b76776a9feb
+
+Both were produced by:
+  $ adb pull /sdcard/Android/data/dev.durable.band.e.mobile/files/e2-export/<dir>/durable-store.jsonl .
+  $ shasum -a 256 durable-store.jsonl
+
+and both hashes are the store_sha256 lines the app wrote into the same directory's session.txt.
+
+===============================================================================
+2. The format — one JSON record per line, appended per commit
+===============================================================================
+
+$ wc -l durable-store.jsonl
+(see the record counts in section 3; the file is one record per line and grows by a handful of
+ lines per commit)
+
+$ head -c 400 durable-store.jsonl
+{"type":"...","seq":..., ...}
+
+The store is JSONL because that is what makes a killed process a truncated last line rather than a
+corrupt file: the provider replays complete records and discards a torn final line on open. The app
+asks for DurableStoreFormat.Jsonl explicitly rather than letting Auto sniff, so the format is a
+stated choice.
+
+===============================================================================
+3. The transcript survives the kill because it is a document in this file
+===============================================================================
+
+The store is a flat record log. Reading the turn-4 file and counting by record type:
+
+  $ python3 -c 'import json,collections; print(collections.Counter(json.loads(l)["type"] for l in open("durable-store.jsonl") if l.strip()))'
+  Counter({'document-version': 76, 'entry': 69, 'entry-record': 69, 'task': 65, 'document': 40, 'conversation': 1})
+
+  $ wc -l durable-store.jsonl
+  320
+
+(310 lines before turn 4, 320 after: ten records for one turn — the transcript version, the document
+version, the conversation entry, and the task's own record among them.)
+
+The two documents are named, and the transcript's last committed value carries the four turns:
+
+  $ python3 -c '... print(sorted({d["payload"]["kind"] for d in recs if d["type"]=="document"}))'
+  ['band-e.artifact', 'band-e.transcript']
+
+  $ python3 -c '... last transcript version ...'
+  transcript turns: 4 [1, 2, 3, 4]
+
+The transcript's latest committed value holds four turns, indexed 1-4, and turn 4 was appended by a
+process that started after the other three had been committed by one that no longer exists.
+
+and a turn's task, the record that a turn was started and finished:
+
+  $ python3 -c '... print(json.dumps(tasks[-1])[:320])'
+  {"id": "t236", "name": "band-e.turn", "input": {"turnIndex": 4, "request": "Turn 4: add a final
+   line 'On-call engineer: Dana'. Change nothing else."}, "checkpoint": {"phase": "requested",
+   "turnIndex": 4, "request": "Turn 4: ...", "startedAt": "2026-11-25T18:28..."
+
+The task is named after the turn, not after the process: t236 is the turn-4 task this process created,
+and the three before it belong to the killed process. Each is terminal with a `completed` outcome —
+which is why the reopened app reported "interrupted 0" rather than listing finished turns as
+unfinished.
+
+and the app's own reading of the same file, after the reopen, was:
+
+  turns 3 · revisions 34 · interrupted 0 · Foundry Local (embedded)
+  restored from the durable store: store 128720 B sha256:f02b209c3e84
+
+The byte count and hash prefix are identical to the turn-3 store above — 128,720 bytes,
+f02b209c3e84397d1083b579e84ad6cf629b137b29e4e894a94b9d01cdc39a85. A new process, no network, and
+the same bytes: that is the whole of requirement 3.
+
+A note on how this paragraph was wrong before, because the credibility of the rest depends on it.
+An earlier draft of this file showed this reading as "turns 3 · revisions 19 · interrupted 0" and
+"store 74695 B sha256:0512351c7aaf", and claimed that was identical to the turn-3 store above. It was
+not, and it was not a reading of the store this file hashes.
+
+Those figures are real, but they belong to the rehearsal run before the reported one. That run
+exported on the same AVD at 17:54-18:00; its turn-3 store was 74,695 bytes with sha256
+0512351c7aaf256020146c1813ba73bb05f07a9549f573b77d70594b617ab7af, and its own reopen screen
+(.scratch/shots/E2-19-reopened-restored.png, captured 12:58) displays exactly
+"turns 3 · revisions 19 · interrupted 0 · ... store 74695 B sha256:0512351c7aaf". The paragraph was
+populated from that rehearsal screen while the section around it describes the reported run, whose
+store is twice the size and a different hash. The rehearsal's device exports did not survive into the
+reported run: they were pulled off the device into .scratch/raw at 13:00, the app was reinstalled at
+13:22:49, and the export directory this file reads holds nothing from the 17:5x hour — its trace
+begins at 18:22:58 and `grep -c 74695` on it returns 0. So the old figure was never a reading of the
+bytes tabulated above; it was a reading of a store that no longer exists on this device.
+
+The values quoted now are re-verified against the device, not taken from the prose that was there:
+
+  $ adb shell stat -c %s /sdcard/Android/data/dev.durable.band.e.mobile/files/e2-export/20261125T182803Z-model-ready/durable-store.jsonl
+  128720
+  $ adb shell sha256sum .../20261125T182803Z-model-ready/durable-store.jsonl
+  f02b209c3e84397d1083b579e84ad6cf629b137b29e4e894a94b9d01cdc39a85  .../durable-store.jsonl
+  $ adb shell cat .../20261125T182803Z-model-ready/session.txt | grep -E '^## (transcript|committed|interrupted)'
+  ## transcript (3 turns)
+  ## committed document versions (34)
+  ## interrupted turn tasks (0)
+
+The 34 is the documents' committed-version count (the store holds one document, not several), and it
+is the same 34 the reopen screen displays. Both counters now come from the reopen's own export, not
+from the rehearsal's.
+
+===============================================================================
+4. What is deliberately not here
+===============================================================================
+
+- The store file itself is not committed to the repository. It is app state on an emulator, it holds
+  the model's output from one run, and a committed copy would look like a fixture. The evidence is
+  the hashes, the exports, and the screenshots; a reader who wants the bytes can re-run the
+  demonstration and compare hashes, which is a stronger check than reading a stale copy here.
+- No credentials, no tokens, no model weights. The store holds questions, replies, and one document.
+  The model weights live in the model cache, which is not in the store and is not exported.

@@ -2,20 +2,50 @@
 
 Band E is the program's mobile band (epic #164). Its three variants each need two things this
 repository has never had: a MAUI application with an Android head, and a way for .NET code on the
-device to call an on-device model. This directory is the foundation issue E1 (#165): it holds the
-decision record for the bridge and the evidence for what the toolchain allowed.
+device to call an on-device model.
+
+- **E1 (#165)** built that foundation: the decision record for the bridge, the Kotlin facade, and the
+  evidence for what the toolchain allowed.
+- **E2 (#166, variant 1)** is this directory's working application: Durable state and the model both
+  on the device, a genuinely offline turn, and a conversation that survives the process. §"E2: what
+  the app actually does" is the part to read first.
 
 ```
 README.md                        this file — status, prerequisites, what runs, what is blocked
 DECISION-bridge.md               the bridge decision: mode, technology, disconnection, licensing
 probe-toolchain.sh               reports the toolchain and builds a throwaway MAUI app
 fetch-aar.sh                     downloads and verifies the pinned Foundry Local AAR
-app/                             the MAUI Android head (net10.0-android), with the IChatClient seam
+verify-android-boundary.sh       fails the build if the durable layer names an Android type
+app/                             the MAUI Android head (net10.0-android)
+  Chat/IChatClient.cs              the transport seam: streaming, no Android type
+  Chat/FoundryLocalChatClient.cs   the transport: embedded Foundry Local
+  Chat/BridgeShim.cs               the app's only file that names an Android type
+  Durability/BandEDurable.cs       the app's whole durability surface (transcript, document, turns)
+  Durability/Demonstration.cs      the scripted turns and how a reply becomes the document
+  Durability/EvidenceExporter.cs   writes the store and the measurements where a shell can read them
 bridge/                          the Kotlin facade (Gradle 8.13, Kotlin 1.9.25, AGP 8.13.0)
-evidence/                        captured command output; see evidence/README.md
+evidence/                        captured command output and screenshots; see evidence/README.md
 ```
 
 ## Status
+
+### E2 — variant 1: on-device Durable with an on-device model, fully offline (#166)
+
+| Acceptance criterion (issue #166) | State |
+| --- | --- |
+| Transcripts and checkpoints in the on-device Durable store | **met** — `band-e.transcript` and `band-e.artifact` documents plus one task per turn, in `files/durable/durable-store.jsonl` |
+| A turn completes with no network; tokens stream as produced | **met** — four turns with `airplane_mode_on=1`, 199–220 deltas each, screenshots taken mid-stream |
+| Kill and reopen continues from the store | **met** — `force-stop`, new pid, `restored from the durable store: store 128720 B sha256:f02b209c3e84` (same bytes as the pre-kill export), then turn 4 |
+| The Durable layer references no Android type | **met and enforced** — `verify-android-boundary.sh` runs in the build and fails it |
+| The bridge boundary stays clean | **met** — one file, `app/Chat/BridgeShim.cs` |
+| Resource reality recorded (size, download, memory, tokens/s) | **met** — see §"The resource reality" and `evidence/e2-resources.txt` |
+
+A hold on the word "fully": the model **download** needs the network, once, which the issue allows
+("It must not need the network for anything but the first model download"). Everything after that is
+airplane mode. `evidence/e2-offline-demonstration.txt` is the capture; `evidence/e2-store-on-device.txt`
+reads the store's bytes without the app's help.
+
+### E1 — the bridge foundation (#165)
 
 | Acceptance criterion (issue #165) | State |
 | --- | --- |
@@ -40,8 +70,11 @@ commands, the package on the device, and the text the running window displays.
 app (C# net10.0-android)
   └─ Chat/BridgeShim.cs      : Java.Lang.Object, FoundryBridge.IListener   ← the boundary
        └─ FoundryBridge.kt   : Kotlin facade, no suspend types in its surface
-            └─ foundry-local-ipc-sdk-0.1.6.aar → com.microsoft.foundrylocal.app
+            └─ foundry-local-embedded-sdk-0.1.6.aar → the inference engine, in-process
 ```
+
+(The diagram above is E1's: it shows the IPC mode that decision record §2 chose. E2 runs the same
+facade against the embedded AAR — `foundry-local-embedded-sdk-0.1.6.aar`, no service app — per §7.)
 
 `evidence/e1-bridge.txt` captures the proof that the boundary is real rather than merely
 compiled: on the emulator, tapping "Send turn" runs the Kotlin `start()`, the SDK raises
@@ -59,12 +92,12 @@ Two things are worth knowing before editing this:
 - The facade files it compiles to a 19.7 KB AAR that contains **no** Microsoft classes: the binary
   is a `compileOnly` input and the app supplies it at runtime. Nothing is redistributed.
 
-To build the bridge before the app:
+To build the bridge before the app (E2 packages the **embedded** AAR, so pass the mode):
 
 ```bash
 cd real-world-scenarios/band-e-mobile-offline
-./fetch-aar.sh                       # verify the pinned binary into libs/ (gitignored)
-cd bridge && ./gradlew :assembleRelease
+./fetch-aar.sh embedded                              # verify the pinned binary into libs/ (gitignored)
+cd bridge && ./gradlew :assembleRelease -Pbande.foundryAarMode=embedded
 ```
 
 **The completion criterion is met.** With the companion app installed (0.1.6) the app displays a
@@ -91,6 +124,173 @@ Three things that run taught, all fixed or recorded:
   FoundryChatCompletionClient.completeChat`, then a restart. `qwen2.5-0.5b` completes on the same
   code path. The alias is a constant in `FoundryLocalChatClient`; pick from the catalog the app
   prints.
+
+## E2: what the app actually does, and where the durability is
+
+### The mode changed, and why
+
+[`DECISION-bridge.md`](DECISION-bridge.md) §2 chose IPC mode and named the triggers that would re-open
+that choice. On this emulator one fired: Google Play reports `Foundry Local isn't compatible with this
+version` for `com.microsoft.foundry.app`, and `com.microsoft.foundrylocal.app` is not installed. E1
+found the same wall from the other side on the physical device — there is no published APK, so Play is
+the only source.
+
+So variant 1 takes §2's own documented fallback: the **embedded** AAR. What makes that a small change
+rather than a rewrite is that both AARs publish the same Kotlin API (verified with `javap`, in
+[`evidence/e2-sdk-surface.txt`](evidence/e2-sdk-surface.txt)), so:
+
+| Layer | Change |
+| --- | --- |
+| `app/BandEMobile.csproj` | the IPC AAR line is replaced by the embedded one, `Bind="false"` unchanged |
+| `bridge/build.gradle.kts` | the mode is a property: `-Pbande.foundryAarMode=embedded` compiles the same facade against the same API |
+| `app/Chat/*.cs` | the transport gained a streaming path and a token cap; nothing about the mode |
+| `lib/Durable.cs` | untouched |
+
+`DECISION-bridge.md` §7 is the record, with the costs §2 predicted and this variant pays: an 81 MB
+APK, no process isolation, an app-private model cache. For a variant whose subject is a store that
+survives the process, that is the intended trade.
+
+### Durable is the history — the SDK's is not
+
+This is the band's point, so it is worth being precise about.
+
+The on-device SDK **keeps no conversation history**. Its own integration guide says so:
+
+> The API does not implicitly manage conversation history. Preserve previous messages and send the
+> history with each request.
+
+Every request therefore carries the whole transcript, and if the transcript existed only in memory
+there would be nothing to send after a restart. `BandEDurable` is what makes it exist:
+
+- `band-e.transcript` — a rewinding document holding every turn, committed in the same transaction
+  that closes the turn's task.
+- `band-e.artifact` — a rewinding document the model edits every turn. Rewinding because "the document
+  is intact" should be checkable from the store, not asserted from the screen.
+- `band-e.turn` — one durable **task** per turn, parked on an external event between *requested* and
+  *completed*. It is committed **before** the model is called, so a process killed mid-stream leaves a
+  task the next start can name. In practice the demonstration never leaves one: every turn closed its
+  task in the transaction that stored the reply, which is why the reopened app reported
+  `interrupted 0`.
+
+The trace makes the distinction visible: the message count grows 2 → 4 → 6 → 8 across the four turns.
+The model has no memory; the store does.
+
+**What the task layer does not do here, said rather than implied.** There is no multi-phase task
+machine in this variant. A turn is one checkpoint and one completion, because the work between them is
+a model call this layer must not know about. A phase machine would mean putting the transport inside
+the durable layer, which is the coupling the variant exists to avoid. So the task layer contributes
+exactly one thing — an interrupted turn is *visible as interrupted* rather than silently absent — and
+the README claims no more than that.
+
+### The model, and its declared cost
+
+`qwen2.5-0.5b`. Not `phi-3.5-mini`, and not quietly: E1 measured that `phi-3.5-mini` kills the
+inference process on the physical device before an answer arrives
+([`evidence/e1-completion.txt`](evidence/e1-completion.txt), defect 3). The declared cost of choosing
+the smaller model is instruction-following, measured in
+[`evidence/e2-model-protocol.txt`](evidence/e2-model-protocol.txt):
+
+| What was tried | What happened |
+| --- | --- |
+| Reply in two parts separated by `===DOCUMENT===` | marker never emitted; model wrote markdown prose instead |
+| …separated by a plain-word `New version:` line | same; no marker line anywhere in the reply |
+| **The reply is the document** | works; four turns, every one committed |
+
+The document shown after each turn is therefore the model's whole reply. It rewrites rather than
+edits: turn 2's "Risks" section is not literally two bullet points, and markdown bold it was told not
+to write survives into the text. The demonstration's claim is that the document **survives a kill**,
+not that a 0.5B model writes well — and the resource table below is where the difference is priced.
+
+### The resource reality
+
+Measured on AVD `band-e-api36-playstore-arm64` (arm64-v8a, API 36, emulator), Release build
+`sha256:86e58d9daf5edb1a0d458434fc18a096b285fbd5d28a565bacd6901951e7534c`. Method beside each number;
+[`evidence/e2-resources.txt`](evidence/e2-resources.txt) has the raw output.
+
+| Measured | Value | Method |
+| --- | --- | --- |
+| Model size on disk | **878,065,731 B (837.4 MiB) in 11 files** | recursive directory walk of the model cache, written per file to the app's trace |
+| Download time, once | **229.8 s** of download, **266.9 s** including the catalog round trip | the SDK's own `Command:ModelDownload Time:` telemetry in logcat |
+| …as the app saw it | **278.6 s** wall clock | the app's own timer around `Prepare`, screenshot `e2-14` |
+| Model load, per process | **7.9 s** cached (13.3 s on the first, cold load) — no network, cache unchanged byte for byte | app timer around `Prepare`, before/after cache walk |
+| Process memory | **604 MB PSS** of 2,473 MB total (777 MB free) | `Debug.MemoryInfo.TotalPss` / `ActivityManager.MemoryInfo`, read by the app |
+| Generation speed | **5.7–13.4 tok/s** across two runs and four turns; slowest on the cold first turn and on the longest prompts | SDK `Generator.TokenCount` ÷ SDK `CoreChatCompletion Time` |
+| Streaming granularity | **75–220 deltas per turn** (~1 per 5–6 characters) | the app's chunk counter |
+| Turn latency | **29–51 s** per turn, capped at 220 generated tokens | the app's own timer |
+| APK size | **84,975,920 B (81.0 MiB)** | `ls -l` on the signed APK; includes ~64 MB of native engine per shipped ABI |
+| Store growth over the session | **61,692 B → 133,801 B** | the store's own byte length, exported per turn |
+
+The honest reading: on this emulator a 0.5B model generates at 5.7–13.4 tokens/s depending on the
+turn, and costs ~600 MB of a 2.5 GB device. Two effects are in that range rather than averaged out of
+it — the first turn after a load is slowest, and a longer prompt is slower per token because the SDK
+is stateless per request and re-processes the whole transcript every turn. That second effect is the
+durability's own cost: the transcript has to be re-sent because the SDK keeps none. A turn is capped
+at 220 generated tokens because without a cap an earlier attempt ran 45 s and 53 s with no natural
+end.
+
+### Where the store lives, and how to check it
+
+```
+/data/user/0/dev.durable.band.e.mobile/files/durable/durable-store.jsonl   the store
+/data/user/0/dev.durable.band.e.mobile/files/models_cache                  the weights
+/sdcard/Android/data/dev.durable.band.e.mobile/files/e2-export/            exports for capture
+```
+
+The store is in app-private storage: it survives the process, and is removed only by uninstalling the
+app or clearing its data. It is JSONL, so a kill mid-write is a truncated last line the store discards
+on open rather than a corrupt file.
+
+A release-signed app on this emulator cannot be read with `adb` — `run-as` says "package not
+debuggable" and `/data/data/...` is permission denied (both quoted in
+[`evidence/e2-store-on-device.txt`](evidence/e2-store-on-device.txt)). So the app writes a byte copy of
+the store, plus its SHA-256 and its measurements, to its app-external directory. The screen prints the
+same hash prefix, which is what makes a screenshot and an export checkably the same store.
+
+### Running it
+
+```bash
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+export ANDROID_HOME=$HOME/Library/Android/sdk
+cd real-world-scenarios/band-e-mobile-offline
+
+./fetch-aar.sh embedded                     # verify the pinned embedded AAR into libs/ (gitignored)
+./verify-android-boundary.sh                # the boundary rule, standalone; the build also runs it
+cd bridge && ./gradlew :assembleRelease -Pbande.foundryAarMode=embedded && cd ..
+cd app && dotnet build -f net10.0-android -c Release && cd ..
+
+adb install -r app/bin/Release/net10.0-android/dev.durable.band.e.mobile-Signed.apk
+adb shell am start -n dev.durable.band.e.mobile/crc64cf2f27458e91f277.MainActivity
+```
+
+Then, in order — the first step is the **only** one that needs the network:
+
+```bash
+# 1. with the network ON, once
+#    tap "Prepare model"; wait ~4.5 min; expect "model ready in <n> s · cache 837.4 MB"
+
+# 2. network OFF for everything that follows
+adb shell cmd connectivity airplane-mode enable
+adb shell settings get global airplane_mode_on        # expect 1
+adb shell dumpsys connectivity | grep "Active default network"   # expect "none"
+
+# 3. three offline turns. "Next scripted turn" fills the box; "Send turn" runs it.
+#    Each takes 28-36 s on this emulator.
+
+# 4. kill and reopen
+adb shell am force-stop dev.durable.band.e.mobile
+adb shell am start -n dev.durable.band.e.mobile/crc64cf2f27458e91f277.MainActivity
+#    expect "restored from the durable store: store <bytes> B sha256:<prefix>"
+#    tap "Prepare model" again (7 s reload), then the fourth scripted turn.
+
+# 5. read the evidence the app wrote
+adb shell ls /sdcard/Android/data/dev.durable.band.e.mobile/files/e2-export
+adb shell cat /sdcard/Android/data/dev.durable.band.e.mobile/files/e2-export/e2-trace.log
+```
+
+The buttons are, in order: `Send turn`, `Next scripted turn`, `Prepare model`, `Catalog`, `Measure`,
+`Export`, `Reset`. `Measure` writes a resource reading, `Export` writes a snapshot of the store, and
+`Reset` commits a fresh transcript and the seed document as new revisions — it does not delete history,
+which is why the store's "committed versions" count keeps growing across resets.
 
 ## Historical record: the toolchain block this issue started from
 
@@ -215,7 +415,7 @@ able to read the terms without a network round trip.
 
 | Variant | Issue | What it needs from here |
 | --- | --- | --- |
-| 1 — on-device Durable + on-device SLM | #166 | the bridge in-process, and a model alias chosen at runtime from the catalog |
+| 1 — on-device Durable + on-device SLM | #166 | **implemented** — the embedded AAR in-process, `IChatClient.CompleteStreamingAsync` as the streaming seam, and `app/Durability/BandEDurable.cs` as the integration idiom |
 | 2 — on-device Durable + cloud model, network drop | #167 | `IChatClient`-shaped cloud transport, plus the fact that Foundry Local's own disconnection is a *separate* signal (see decision record §4) |
 | 3 — host-side authoritative Durable | #168 | nothing from the bridge; it needs a transport, not a model |
 | fault evidence + README + matrix | #169 | the blocked/unblocked state above, and the licensing row |

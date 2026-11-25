@@ -42,8 +42,9 @@
 
 		<SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">15.0</SupportedOSPlatformVersion>
 		<SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">17.0</SupportedOSPlatformVersion>
-		<!-- The Foundry Local IPC AAR declares minSdk 33; the band's documented baseline matches. -->
+		<!-- Both Foundry Local AARs declare minSdk 33; the band's documented baseline matches. -->
 		<SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">33.0</SupportedOSPlatformVersion>
+
 		<SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</SupportedOSPlatformVersion>
 		<TargetPlatformMinVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</TargetPlatformMinVersion>
 	</PropertyGroup>
@@ -67,6 +68,10 @@
 	</ItemGroup>
 
 	<ItemGroup>
+		<ProjectReference Include="..\..\..\lib\Copilot.Durable.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
 		<PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
 		<PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="10.0.0" />
 	</ItemGroup>
@@ -82,8 +87,10 @@
 
 	<ItemGroup>
 		<!-- The Kotlin facade built by ../bridge (net10.0-android makes this an Android binding).
-		     Build it first with: cd ../bridge && ./gradlew :assembleRelease
-		     Its output is gitignored (*.aar); the condition keeps a clean clone loadable. -->
+		     Build it first with: cd ../bridge && ./gradlew :assembleRelease -Pbande.foundryAarMode=embedded
+		     The facade is compiled against the same AAR this file packages; the mode property
+		     exists so the two cannot silently disagree. Its output is gitignored (*.aar); the
+		     condition keeps a clean clone loadable. -->
 		<AndroidLibrary Include="..\bridge\build\outputs\aar\band-e-foundry-bridge-release.aar"
 		                Condition="Exists('..\bridge\build\outputs\aar\band-e-foundry-bridge-release.aar')" />
 
@@ -92,9 +99,27 @@
 		     DECISION-bridge.md 3.2(a) rejects: its Kotlin surface produces colliding
 		     partials (CS0260) and would model every obfuscator-kept synthetic class.
 		     The Kotlin facade above IS the binding, so this AAR is packaged as runtime
-		     classes only and no C# binding is generated from it. -->
-		<AndroidLibrary Include="..\libs\foundry-local-ipc-sdk-0.1.6.aar" Bind="false"
-		                Condition="Exists('..\libs\foundry-local-ipc-sdk-0.1.6.aar')" />
+		     classes only and no C# binding is generated from it.
+
+		     EMBEDDED, not IPC. DECISION-bridge.md 2 chose IPC and named "the companion app
+		     is unavailable" as the trigger to re-open it; on this emulator Google Play reports
+		     com.microsoft.foundry.app is not compatible with the device, so the fallback 2
+		     documented was taken (DECISION-bridge.md 6). Exactly one AAR may be in an APK:
+		     each registers a FoundryLocalManagerFactory through its own ContentProvider, and
+		     with both present the app cannot tolerate the ambiguity. The IPC reference is gone
+		     rather than conditioned, so a stale libs/ copy cannot change the answer. -->
+		<AndroidLibrary Include="..\libs\foundry-local-embedded-sdk-0.1.6.aar" Bind="false"
+		                Condition="Exists('..\libs\foundry-local-embedded-sdk-0.1.6.aar')" />
 	</ItemGroup>
+
+
+	<!-- Issue #166 requirement 4, made a build gate rather than a comment: one file may name an
+	     Android type (Chat/BridgeShim.cs), and the durable layer may not. The scan is a shell script
+	     because an analyzer would be a package, and this band installs nothing. Delete this target and
+	     the rule stops being checked; that is the trade, stated. -->
+	<Target Name="VerifyAndroidBoundary" BeforeTargets="CoreCompile">
+		<Exec Command="bash &quot;$(MSBuildThisFileDirectory)..\verify-android-boundary.sh&quot;"
+		      StandardOutputImportance="high" />
+	</Target>
 
 </Project>

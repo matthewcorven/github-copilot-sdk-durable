@@ -1,0 +1,145 @@
+Band E / issue #166 — the AAR decision: why this device runs the embedded SDK
+Captured 2026-11-25 on AVD band-e-api36-playstore-arm64, arm64-v8a, API 36.
+
+DECISION-bridge.md 2 chose IPC, with embedded as "a documented, fetchable fallback", and named the
+triggers that would re-open it. This file is the evidence for taking that fallback on this device.
+DECISION-bridge.md 6 is the record; this is the raw material.
+
+===============================================================================
+1. The trigger: the IPC companion app is not installable here
+===============================================================================
+
+Google Play on this emulator reports, for com.microsoft.foundry.app:
+
+  Foundry Local isn't compatible with this version
+
+and the package the IPC AAR queries for, com.microsoft.foundrylocal.app, is not installed:
+
+$ adb shell pm list packages | grep -i foundry
+(no output)
+
+E1 established the same thing from the other direction on the physical device: no APK is published
+for the companion app, so Play is its only source (evidence/e1-physical-device.txt). On this emulator
+Play refuses it outright. The IPC path cannot start here — not "started and failed", but "cannot be
+entered at all", because FoundryLocalManager.create checks for a service app that does not exist.
+
+===============================================================================
+2. Both AARs are fetched and hash-verified
+===============================================================================
+
+$ ./fetch-aar.sh both --verify-only
+OK       foundry-local-ipc-sdk-0.1.6.aar  sha256=7dc74260d2dbd16c2c3c02bcd9de1d852bb89366f71a63ea9813fe764c2665c1
+OK       foundry-local-embedded-sdk-0.1.6.aar  sha256=6a8ba85433fca1f48535986f529702fb43ad8d83bcd5df30f30a6c7969474e87
+
+Both from microsoft/FoundryLocalAndroid v0.1.6. Neither is committed: libs/ is gitignored and
+fetch-aar.sh is the substitute (DECISION-bridge.md 5).
+
+===============================================================================
+3. The two AARs publish the same Kotlin API, so this is a packaging change
+===============================================================================
+
+Read from each archive's classes.jar with javap, on this machine:
+
+$ javap -cp classes.jar com.microsoft.foundrylocal.api.ChatClient      (embedded AAR)
+public interface com.microsoft.foundrylocal.api.ChatClient {
+  public abstract java.lang.Object completeChat(com.microsoft.foundrylocal.api.ChatCompletionRequest, kotlin.coroutines.Continuation<? super com.microsoft.foundrylocal.api.ChatCompletion>);
+  public abstract kotlinx.coroutines.flow.Flow<com.microsoft.foundrylocal.api.ChatCompletionChunk> completeChatStreaming(com.microsoft.foundrylocal.api.ChatCompletionRequest);
+}
+
+$ javap -cp classes.jar 'com.microsoft.foundrylocal.api.FoundryLocalManager$Companion'   (embedded AAR)
+  public final java.lang.Object create(android.content.Context, com.microsoft.foundrylocal.api.Configuration, kotlin.jvm.functions.Function0<kotlin.Unit>, kotlin.coroutines.Continuation<? super com.microsoft.foundrylocal.api.FoundryLocalManager>);
+
+$ javap -cp classes.jar com.microsoft.foundrylocal.api.Model                (embedded AAR)
+  download / load / unload / isCached / isLoaded / createChatClient  — signatures identical to IPC
+
+Consequence: the Kotlin facade in bridge/ compiles against either AAR without a source change. The
+mode is a Gradle property:
+
+$ grep foundryAarMode bridge/build.gradle.kts bridge/gradle.properties
+bridge/build.gradle.kts:    val foundryAarMode = providers.gradleProperty("bande.foundryAarMode").getOrElse("ipc")
+bridge/gradle.properties:bande.foundryAarMode=ipc
+
+$ ./gradlew :assembleRelease -Pbande.foundryAarMode=embedded
+BUILD SUCCESSFUL
+-rw-r--r--  23474  build/outputs/aar/band-e-foundry-bridge-release.aar
+
+(The facade AAR grew from 23 113 to 23 474 bytes in this session — that is the added
+completeStreamingCapped method, not the mode.)
+
+===============================================================================
+4. How the embedded manager registers itself
+===============================================================================
+
+The embedded AAR's manifest declares a ContentProvider that registers the manager factory at process
+start, so FoundryLocalManager.create works with no companion app:
+
+$ unzip -p libs/foundry-local-embedded-sdk-0.1.6.aar AndroidManifest.xml
+  <provider
+      android:name="com.microsoft.foundrylocal.embedded.EmbeddedSdkInitProvider"
+      android:authorities="${applicationId}.foundrylocal-embedded-init"
+      android:exported="false"
+      android:initOrder="50" />
+
+The manifest comment above it in the AAR states that embedded uses initOrder=50 and IPC initOrder=100
+"so when both SDKs are on the classpath the embedded factory overwrites IPC". That is why exactly one
+AAR may be referenced: with both, the winner is an init-order tie-break rather than a decision, and a
+demonstration should not rest on one.
+
+===============================================================================
+5. What the APK actually contains, and what it does not
+===============================================================================
+
+Package reference, after the change (app/BandEMobile.csproj):
+
+  <AndroidLibrary Include="..\libs\foundry-local-embedded-sdk-0.1.6.aar" Bind="false" ... />
+
+and the IPC line is gone rather than conditioned, so a stale libs/ copy cannot change the answer.
+
+$ grep -c foundry-local-ipc-sdk app/BandEMobile.csproj
+0
+
+Merged manifest of the built app — one provider, the embedded one:
+
+$ grep -o 'EmbeddedSdkInitProvider\|IpcSdkInitProvider' app/obj/Release/net10.0-android/android/AndroidManifest.xml | sort | uniq -c
+      1 EmbeddedSdkInitProvider
+
+Native libraries for both shipped ABIs (the embedded AAR's jni/ folder, packaged by Bind="false"):
+
+$ unzip -l <signed apk> | grep -E "lib/(arm64-v8a|x86_64)/.*(Foundry|onnxruntime)"
+    20389528  lib/arm64-v8a/Microsoft.AI.Foundry.Local.Core.so
+       63064  lib/arm64-v8a/libonnxruntime-genai-jni.so
+     5629600  lib/arm64-v8a/libonnxruntime-genai.so
+    27408600  lib/arm64-v8a/libonnxruntime.so
+      111648  lib/arm64-v8a/libonnxruntime4j_jni.so
+    19736856  lib/x86_64/Microsoft.AI.Foundry.Local.Core.so
+       61736  lib/x86_64/libonnxruntime-genai-jni.so
+     5946976  lib/x86_64/libonnxruntime-genai.so
+    33204920  lib/x86_64/libonnxruntime.so
+      100016  lib/x86_64/libonnxruntime4j_jni.so
+
+119 lib/arm64-v8a entries in the APK in total (119 x86_64).
+
+And the load actually happening at run time, from logcat — the four native libraries the engine
+pulls in, from the app's own APK:
+
+$ adb logcat -d | grep "nativeloader.*Foundry\|nativeloader.*onnxruntime"
+D nativeloader: Load /data/app/~~.../base.apk!/lib/arm64/libonnxruntime-genai-jni.so ... ok
+D nativeloader: Load /data/app/~~.../base.apk!/lib/arm64/libfoundry_local_jni.so ... ok
+D nativeloader: Load /data/app/~~.../base.apk!/lib/arm64/libonnxruntime4j_jni.so ... ok
+
+===============================================================================
+6. What the fallback costs
+===============================================================================
+
+- app size: 84 975 920 B (81.0 MiB) for the signed APK of the final build
+  (`sha256:86e58d9daf5edb1a0d458434fc18a096b285fbd5d28a565bacd6901951e7534c`), because the engine
+  ships in the app (DECISION-bridge.md 2's table puts the IPC AAR at 441 KB and the embedded at
+  44 MB; the APK cost is the native libraries, listed above).
+- no process isolation: a native crash in the engine takes the app down. This variant's subject is a
+  store that survives the process, so that liability is acceptable here in a way DECISION-bridge.md 2
+  argued it was not for the default path.
+- model management is the app's: the cache is app-private (files/models_cache) and removed with the
+  app. The IPC mode shares a service-managed cache between clients; embedded does not.
+- `isConnected` is not applicable: the SDK's own mode table says connection loss is "Not applicable"
+  in embedded mode. A turn that completes here is therefore evidence that no connection was needed,
+  which is stronger for this variant than a healthy connection would have been.
