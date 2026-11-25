@@ -5,6 +5,7 @@ namespace BandEMobile;
 public partial class MainPage : ContentPage
 {
     private readonly IChatClient _chatClient;
+    private string? _lastBridgeDiagnostic;
     private readonly IReadOnlyList<ChatMessage> _conversation =
     [
         new ChatMessage("system", "You are a Band E probe. Answer in one short sentence."),
@@ -18,7 +19,9 @@ public partial class MainPage : ContentPage
         // The transport is constructed here rather than injected so the page can be created
         // by the default MAUI host without a DI registration; swapping in a remote transport
         // later means changing only this line.
-        _chatClient = new FoundryLocalChatClient(Platform.AppContext);
+        var client = new FoundryLocalChatClient(Platform.AppContext);
+        _chatClient = client;
+        client.Diagnostic += d => _lastBridgeDiagnostic = d;
 
         var availability = FoundryLocalProbe.Check(Platform.AppContext);
         TransportLabel.Text = $"transport: {_chatClient.Name}";
@@ -48,15 +51,11 @@ public partial class MainPage : ContentPage
 
                 // Distinguish "the service app is missing" from "the bridge itself is broken":
                 // the probe exercises the JNI boundary even when IPC cannot start.
-                var probe = await BridgeShim.ProbeStartAsync(Platform.AppContext!, "BandEMobile");
-
-                // If the service app is present the catalog is reachable, so report its real
-                // aliases instead of leaving the model name as a guess.
-                if (FoundryLocalProbe.Check(Platform.AppContext).CompanionInstalled)
-                {
-                    var aliases = await BridgeShim.ListAliasesAsync(Platform.AppContext!, "BandEMobile");
-                    probe += Environment.NewLine + $"catalog: {aliases}";
-                }
+                // No second FoundryBridge is created here on purpose. Foundry Local Core
+                // initializes once per service process; creating another manager yields
+                // "FoundryLocalCore has already been initialized" and drops the live connection,
+                // which is what turned a successful model load into a mid-turn disconnect.
+                var probe = _lastBridgeDiagnostic ?? "(no bridge diagnostic)";
                 // The classification is on screen on purpose: the evidence file records what
                 // the device actually reported, not what the app wished for.
                 ResultLabel.Text =

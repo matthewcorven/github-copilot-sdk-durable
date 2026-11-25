@@ -11,7 +11,7 @@ namespace BandEMobile.Chat;
 /// </summary>
 public sealed class FoundryLocalChatClient : IChatClient
 {
-    private const string ModelAlias = "phi-3.5-mini";
+    private const string ModelAlias = "qwen2.5-0.5b";
 
     private readonly Context? _context;
     private readonly Func<FoundryLocalProbe.Availability> _availability;
@@ -29,6 +29,13 @@ public sealed class FoundryLocalChatClient : IChatClient
     }
 
     public string Name => "Foundry Local (IPC)";
+
+    /// <summary>
+    /// Progress and stage notes, for the screen and the evidence file. Raised instead of
+    /// creating a second manager to inspect state: Foundry Local Core initializes once per
+    /// service process, and a second manager tears down the live connection.
+    /// </summary>
+    public event Action<string>? Diagnostic;
 
     public async Task<ChatResult> CompleteAsync(
         IReadOnlyList<ChatMessage> conversation,
@@ -61,7 +68,7 @@ public sealed class FoundryLocalChatClient : IChatClient
                 appName: "BandEMobile",
                 modelAlias: ModelAlias,
                 conversation,
-                onProgress: _ => { },
+                onProgress: text => Diagnostic?.Invoke(text),
                 cancellationToken).ConfigureAwait(false);
 
             return ChatResult.Ok(new ChatCompletion(text, Name));

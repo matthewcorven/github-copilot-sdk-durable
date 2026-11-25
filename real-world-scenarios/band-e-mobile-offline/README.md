@@ -20,27 +20,18 @@ evidence/                        captured command output; see evidence/README.md
 | Acceptance criterion (issue #165) | State |
 | --- | --- |
 | A MAUI app builds on this machine | **met** — `app/` builds with 0 errors; `./probe-toolchain.sh` exits 0 |
-| The app runs on an Android emulator (API 33+) | **met** — installed and resumed on API 36, arm64-v8a |
+| The app runs on an Android emulator (API 33+) | **met** — API 36 emulator, and a physical API 37 device |
 | Kotlin bridge compiled and bound | **met** — facade AAR builds; JNI call reaches the SDK on device |
-| One completion against Foundry Local, answer displayed | **not met** — the IPC companion app is not installed |
+| One completion against Foundry Local, answer displayed | **met** — qwen2.5-0.5b answered on the physical device |
 | AAR version and SHA-256 pinned and documented | **met** — 0.1.6, verified by `./fetch-aar.sh` |
 | License forbids vendoring, `fetch-aar.sh` used instead | **met** — `.gitignore` excludes `libs/`; stated below |
 
 `evidence/e1-maui-run.txt` is the capture for the build and run rows: the exact build and install
 commands, the package on the device, and the text the running window displays.
 `evidence/e1-bridge.txt` is the capture for the bridge row.
+`evidence/e1-completion.txt` is the capture for the completion row.
 
-The completion row is a device precondition, not a code defect. IPC mode needs Microsoft's companion
-app `com.microsoft.foundrylocal.app`, which is distributed through Google Play. The emulator image
-ships Play but has no signed-in account, so installing it needs a manual sign-in. Until it is
-installed the app reports the fact it can verify rather than a fabricated answer:
-
-```
-companion: absent — com.microsoft.foundrylocal.app is not installed (API 36)
-failed [TransportUnavailable] retryable: companion app com.microsoft.foundrylocal.app absent ...
-```
-
-## The bridge, and what is still missing
+## The bridge
 
 `bridge/` holds the Kotlin facade `DECISION-bridge.md` §3.1 specifies. It compiles
 (Gradle **8.13**, Kotlin **1.9.25**, AGP **8.13.0**, Java 17, compileSdk 36) and the app binds it:
@@ -55,8 +46,9 @@ app (C# net10.0-android)
 `evidence/e1-bridge.txt` captures the proof that the boundary is real rather than merely
 compiled: on the emulator, tapping "Send turn" runs the Kotlin `start()`, the SDK raises
 `FoundryLocalException: Failed to bind to service using explicit intent`, and that exception
-crosses the generated invoker into a classified `ChatFailureKind` on screen. **The cross-language
-path works; the service it talks to is not installed.**
+crosses the generated invoker into a classified `ChatFailureKind` on screen. That capture was
+taken before the service app was installed; `e1-completion.txt` is the same boundary carrying a
+real answer.
 
 Two things are worth knowing before editing this:
 
@@ -75,16 +67,30 @@ cd real-world-scenarios/band-e-mobile-offline
 cd bridge && ./gradlew :assembleRelease
 ```
 
-**What is still missing** is the service app itself. IPC mode needs
-`com.microsoft.foundrylocal.app` from Google Play. The emulator image ships Play but has no
-signed-in account, so installing it needs a manual operator sign-in; no agent entered
-credentials. Until it is installed the app reports the fact it can verify:
+**The completion criterion is met.** With the companion app installed (0.1.6) the app displays a
+real answer, captured in [`evidence/e1-completion.txt`](evidence/e1-completion.txt):
 
 ```
-companion: absent — com.microsoft.foundrylocal.app is not installed (API 36)
-failed [TransportUnavailable] retryable: ... bridge loaded; start() failed [TransportUnavailable]:
-FoundryLocalException: Failed to bind to service using explicit intent
+user: Is the device online?
+assistant: Yes, I am an active participant and can be accessed via the network.
+completed via Foundry Local (IPC)
 ```
+
+The service's own log carries the same text (`Raw response: {"model":"qwen2.5-0.5b", ...}`), so
+the transcript is the model's output rather than anything this app invented.
+
+Three things that run taught, all fixed or recorded:
+
+- **A second manager tears down the first.** Foundry Local Core initializes once per service
+  process; creating a bridge just to inspect state dropped the live connection mid-turn. The
+  transport now reports progress through an event and never opens a second manager.
+- **`download()` reports Failure when nothing needs downloading.** With the model already on disk
+  the service logs `0 to download, 6 skipped` and `Status:Failure` anyway. Download is therefore
+  best-effort and `load()` decides usability.
+- **`phi-3.5-mini` kills the preview service on this device** — `Service process gone during
+  FoundryChatCompletionClient.completeChat`, then a restart. `qwen2.5-0.5b` completes on the same
+  code path. The alias is a constant in `FoundryLocalChatClient`; pick from the catalog the app
+  prints.
 
 ## Historical record: the toolchain block this issue started from
 

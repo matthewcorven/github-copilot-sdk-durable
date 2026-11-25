@@ -130,14 +130,32 @@ class FoundryBridge(context: Context, appName: String) {
                     return@launch
                 }
 
+                // The service can report Failure from download_model even when it has nothing
+                // to fetch: its own log shows "Blob enumeration complete: 0 to download,
+                // 6 skipped" and 2.7 GB already on disk, then Status:Failure. Neither the
+                // download status nor isCached() is trustworthy in that state, so the download
+                // is attempted best-effort and load() is left to judge whether the model is
+                // actually usable.
+                var downloadFailure: Throwable? = null
                 if (!resolved.isCached()) {
-                    listener.onChunk("downloading '$alias'")
-                    resolved.download(progress = { progress: Float ->
-                        listener.onChunk("download ${(progress * 100).toInt()}%")
-                    })
+                    listener.onChunk("ensuring '$alias'")
+                    try {
+                        resolved.download(progress = { progress: Float ->
+                            listener.onChunk("download ${(progress * 100).toInt()}%")
+                        })
+                    } catch (t: Throwable) {
+                        downloadFailure = t
+                        listener.onChunk("download reported: ${t.describe()}")
+                    }
                 }
 
-                resolved.load()
+                try {
+                    resolved.load()
+                } catch (t: Throwable) {
+                    // Load failed. If the download was the first thing to fail, report that,
+                    // because it is the actionable cause and it came first.
+                    throw downloadFailure ?: t
+                }
                 chatClient = resolved.createChatClient()
                 model = resolved
                 listener.onCompleted("model ready: $alias")
