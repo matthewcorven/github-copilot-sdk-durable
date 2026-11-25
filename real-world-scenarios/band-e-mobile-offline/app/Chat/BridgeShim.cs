@@ -152,6 +152,41 @@ internal sealed class BridgeShim : Java.Lang.Object, FoundryBridge.IListener
     public void OnDisconnected() =>
         Fail(ChatFailureKind.Disconnected, "service disconnected mid-turn");
 
+    /// <summary>
+    /// Asks the facade for the catalog's aliases. Returns them as a joined string, or a
+    /// classified failure description. Used to replace the guessed alias with the device's own.
+    /// </summary>
+    public static async Task<string> ListAliasesAsync(Context context, string appName)
+    {
+        var shim = new BridgeShim(context, appName);
+        using var bridge = new FoundryBridge(context, appName);
+        shim.MarkProbe();
+        try
+        {
+            bridge.Start(shim);
+            var started = await shim.WaitForProbeAsync().ConfigureAwait(false);
+            if (!started.StartsWith("started", StringComparison.Ordinal))
+            {
+                return $"start() did not succeed: {started}";
+            }
+            shim.MarkProbe();
+            bridge.ListModelAliases(shim);
+            return await shim.WaitForProbeAsync().ConfigureAwait(false);
+        }
+        catch (BridgeException ex)
+        {
+            return $"catalog unavailable [{ex.Kind}]: {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            return $"catalog error: {ex.GetType().Name}: {ex.Message}";
+        }
+        finally
+        {
+            bridge.Close();
+        }
+    }
+
     private TaskCompletionSource<string>? _probe;
 
     private void MarkProbe() =>

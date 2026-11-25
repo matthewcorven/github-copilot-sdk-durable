@@ -49,6 +49,14 @@ public partial class MainPage : ContentPage
                 // Distinguish "the service app is missing" from "the bridge itself is broken":
                 // the probe exercises the JNI boundary even when IPC cannot start.
                 var probe = await BridgeShim.ProbeStartAsync(Platform.AppContext!, "BandEMobile");
+
+                // If the service app is present the catalog is reachable, so report its real
+                // aliases instead of leaving the model name as a guess.
+                if (FoundryLocalProbe.Check(Platform.AppContext).CompanionInstalled)
+                {
+                    var aliases = await BridgeShim.ListAliasesAsync(Platform.AppContext!, "BandEMobile");
+                    probe += Environment.NewLine + $"catalog: {aliases}";
+                }
                 // The classification is on screen on purpose: the evidence file records what
                 // the device actually reported, not what the app wished for.
                 ResultLabel.Text =

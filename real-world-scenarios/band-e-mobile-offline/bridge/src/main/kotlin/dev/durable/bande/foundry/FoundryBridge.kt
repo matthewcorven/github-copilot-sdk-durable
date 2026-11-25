@@ -90,6 +90,31 @@ class FoundryBridge(context: Context, appName: String) {
         }
     }
 
+    /**
+     * Reports the catalog's aliases as a comma-separated string on [Listener.onCompleted], or a
+     * classified failure. Exists because the model alias is catalog-specific and the AAR does not
+     * pin one: guessing an alias would turn "wrong name" into an unexplained failure.
+     */
+    fun listModelAliases(listener: Listener) {
+        scope.launch {
+            val m = manager
+            if (m == null) {
+                listener.onFailed(CODE_NOT_STARTED, "start() first", false)
+                return@launch
+            }
+            try {
+                val models = m.getCatalog().listModels()
+                if (models.isEmpty()) {
+                    listener.onFailed(CODE_MODEL_MISSING, "catalog is empty", false)
+                    return@launch
+                }
+                listener.onCompleted(models.joinToString(", ") { it.alias })
+            } catch (t: Throwable) {
+                listener.onFailed(CODE_MODEL_FAILED, t.describe(), true)
+            }
+        }
+    }
+
     /** Resolves the alias, downloads it if it is not cached, loads it, and creates a chat client. */
     fun ensureModel(alias: String, listener: Listener) {
         scope.launch {
