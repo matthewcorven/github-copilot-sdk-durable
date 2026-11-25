@@ -1,0 +1,64 @@
+Band E / issue #165 — run on a physical Android device
+Captured 2026-11-25. Transcribed from commands run against the attached device.
+
+=== device ===
+$ adb devices -l
+R5CWB24DHCB   device usb:1048576X product:dm3quew model:SM_S918U1 device:dm3q transport_id:15
+
+ro.product.model        SM-S918U1  (Samsung Galaxy S24 Ultra)
+ro.product.manufacturer samsung
+ro.build.version.release 17
+ro.build.version.sdk     37
+ro.product.cpu.abi       arm64-v8a
+
+This is a newer API level than the emulator used earlier (36), so it also tests that the
+minSdk 33 floor and the targetSdk 36 declaration behave on a newer platform.
+
+=== build and install ===
+$ dotnet build -f net10.0-android -c Release -t:SignAndroidPackage -p:EmbedAssembliesIntoApk=true
+Build succeeded. 0 Error(s)
+APK: bin/Release/net10.0-android/dev.durable.band.e.mobile-Signed.apk   29,495,014 B
+
+$ adb install --no-incremental dev.durable.band.e.mobile-Signed.apk
+Success
+
+=== launch ===
+$ adb shell am start -n dev.durable.band.e.mobile/crc64cf2f27458e91f277.MainActivity
+$ adb shell dumpsys activity activities | grep topResumedActivity
+topResumedActivity=ActivityRecord{... u0 dev.durable.band.e.mobile/crc64cf2f27458e91f277.MainActivity}
+
+=== what the device displays ===
+"Band E - Foundry Local"
+"transport: Foundry Local (IPC)"
+"companion: absent — com.microsoft.foundrylocal.app is not installed (API 37)"
+"Send turn"
+after tapping "Send turn":
+"failed [TransportUnavailable] retryable: companion app com.microsoft.foundrylocal.app absent —
+ com.microsoft.foundrylocal.app is not installed (API 37)
+ bridge loaded; start() failed [TransportUnavailable]:
+ FoundryLocalException: Failed to bind to service using explicit intent"
+
+The bridge behaves identically on real hardware and on the emulator: the Kotlin class loads,
+start() runs, FoundryLocalManager.create throws because there is no service to bind to, and the
+exception crosses the generated invoker into a classified ChatFailureKind.
+
+=== the service app has no sideload path ===
+$ pm list packages | grep foundry
+(no matches)
+Checking the upstream releases for an installable APK:
+  microsoft/FoundryLocalAndroid v0.1.6 assets =
+    foundry-local-ipc-sdk-0.1.6.aar, foundry-local-embedded-sdk-0.1.6.aar,
+    <both>.sha256, license, third-party notices
+No .apk is published. com.microsoft.foundrylocal.app is distributed only through Google Play,
+so it cannot be installed by sideload from the release assets. A Play Store sign-in on the device
+is required, which only the device owner can perform.
+
+=== a guessed model alias was removed as a blind spot ===
+The app previously hard-coded "phi-3.5-mini" and would have failed with an unexplained
+"alias not in catalog" if the device catalog disagreed. It now asks the catalog and prints the
+aliases it really offers (bridge.listModelAliases -> BridgeShim.ListAliasesAsync -> screen), but
+only once the service app is present. This run could not reach that point because start() fails.
+
+=== completion criterion still NOT met ===
+Same single blocker as the emulator: no companion app. Nothing else is outstanding.
+No cloud resource, paid call, hosted service, or secret was involved.

@@ -1,0 +1,57 @@
+Band E / issue #165 — an on-device Foundry Local completion, displayed by the app
+Captured 2026-11-25 on the attached physical device. This is the acceptance criterion the
+earlier captures could not reach.
+
+=== device and service app ===
+SM-S918U1 (Galaxy S24 Ultra), Android 17 / API 37, arm64-v8a
+com.microsoft.foundrylocal.app   versionName=0.1.6
+  (the version the decision record §2 requires be recorded; the AAR does not pin it)
+
+=== model ===
+alias: qwen2.5-0.5b    (from the device catalog, not a guess)
+service log: Model loaded successfully: qwen2.5-0.5b-instruct-generic-cpu:4
+             Command:ModelLoad Status:Success Time:207ms
+
+=== what the app shows after tapping "Send turn" ===
+companion: present — version 0.1.6 (API 37)
+
+  system: You are a Band E probe. Answer in one short sentence.
+  user: Is the device online?
+  assistant: Yes, I am an active participant and can be accessed via the network.
+
+completed via Foundry Local (IPC)
+
+=== corroboration in the service's own log ===
+ChatCompletionClientImpl: Raw response: {"model":"qwen2.5-0.5b","choices":[{"delta":
+  {"role":"assistant","content":"Yes, I am an active participant and can be accessed ...
+
+The answer the screen displays is the answer the service generated: the transcript above and
+this raw response agree, so the text did not originate in this app.
+
+=== three real defects this run found, all fixed ===
+1. Duplicate manager tore down the live connection.
+   The app created a SECOND FoundryBridge purely to inspect state. Foundry Local Core
+   initializes once per service process, so the second creation logged
+   "FoundryLocalCore has already been initialized" (17 times) and dropped the connection
+   that the real call was using. Removed: the transport now reports progress through a
+   Diagnostic event instead of opening a second manager.
+
+2. download() reports Failure when there is nothing to download.
+   Service log: "Blob enumeration complete: 0 to download, 6 skipped",
+   "totalSizeToDownload:0 totalSizeAlreadyDownloaded:2777051903", then
+   "Command:ModelDownload Status:Failure". Neither the download status nor isCached() was
+   trustworthy in that state, so the facade now treats download as best-effort and lets
+   load() decide whether the model is usable. After that change the same model loaded:
+   "Model loaded successfully".
+
+3. phi-3.5-mini kills the service process on this device.
+   Reaching chat_completions with phi-3.5-mini produced
+   "Service process gone during FoundryChatCompletionClient.completeChat" and the service
+   restarted under a new pid, before any answer arrived. qwen2.5-0.5b completes normally on
+   the same code path and the same device. This is a behaviour of the preview service app
+   with that model here, recorded rather than worked around.
+
+=== scope ===
+Local device only. No cloud resource was provisioned, no paid call was made, no hosted
+Foundry service was used, and no secret was read or written. The catalog the service reads is
+its own metadata, which the SDK fetches internally.

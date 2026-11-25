@@ -1,0 +1,100 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<!-- Band E is Android-only: the Foundry Local AAR targets Android and this band's
+		     acceptance runs on an Android emulator. -->
+		<TargetFrameworks>net10.0-android</TargetFrameworks>
+
+		<!-- Note for MacCatalyst:
+		The default runtime is maccatalyst-x64, except in Release config, in which case the default is maccatalyst-x64;maccatalyst-arm64.
+		When specifying both architectures, use the plural <RuntimeIdentifiers> instead of the singular <RuntimeIdentifier>.
+		The Mac App Store will NOT accept apps with ONLY maccatalyst-arm64 indicated;
+		either BOTH runtimes must be indicated or ONLY macatalyst-x64. -->
+		<!-- For example: <RuntimeIdentifiers>maccatalyst-x64;maccatalyst-arm64</RuntimeIdentifiers> -->
+
+		<OutputType>Exe</OutputType>
+		<RootNamespace>BandEMobile</RootNamespace>
+		<UseMaui>true</UseMaui>
+		<SingleProject>true</SingleProject>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+
+		<!-- Enable XAML source generation for faster build times and improved performance.
+		     This generates C# code from XAML at compile time instead of runtime inflation.
+		     To disable, remove this line.
+		     For individual files, you can override by setting Inflator metadata:
+		       <MauiXaml Update="MyPage.xaml" Inflator="Default" /> (reverts to defaults: Runtime for Debug, XamlC for Release)
+		       <MauiXaml Update="MyPage.xaml" Inflator="Runtime" /> (force runtime inflation) -->
+		<MauiXamlInflator>SourceGen</MauiXamlInflator>
+
+		<!-- Display name -->
+		<ApplicationTitle>BandEMobile</ApplicationTitle>
+
+		<!-- App Identifier -->
+		<ApplicationId>dev.durable.band.e.mobile</ApplicationId>
+
+		<!-- Versions -->
+		<ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
+		<ApplicationVersion>1</ApplicationVersion>
+
+		<!-- To develop, package, and publish an app to the Microsoft Store, see: https://aka.ms/MauiTemplateUnpackaged -->
+		<WindowsPackageType>None</WindowsPackageType>
+
+		<SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">15.0</SupportedOSPlatformVersion>
+		<SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">17.0</SupportedOSPlatformVersion>
+		<!-- The Foundry Local IPC AAR declares minSdk 33; the band's documented baseline matches. -->
+		<SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">33.0</SupportedOSPlatformVersion>
+		<SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</SupportedOSPlatformVersion>
+		<TargetPlatformMinVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</TargetPlatformMinVersion>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<!-- App Icon -->
+		<MauiIcon Include="Resources\AppIcon\appicon.svg" ForegroundFile="Resources\AppIcon\appiconfg.svg" Color="#512BD4" />
+
+		<!-- Splash Screen -->
+		<MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#512BD4" BaseSize="128,128" />
+
+		<!-- Images -->
+		<MauiImage Include="Resources\Images\*" />
+		<MauiImage Update="Resources\Images\dotnet_bot.png" Resize="True" BaseSize="300,185" />
+		
+		<!-- Custom Fonts -->
+		<MauiFont Include="Resources\Fonts\*" />
+
+		<!-- Raw Assets (also remove the "Resources\Raw" prefix) -->
+		<MauiAsset Include="Resources\Raw\**" LogicalName="%(RecursiveDir)%(Filename)%(Extension)" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
+		<PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="10.0.0" />
+	</ItemGroup>
+
+	<PropertyGroup>
+		<!-- The raw Foundry AAR is packaged for its runtime classes only. Generating a
+		     binding over it is what DECISION-bridge.md 3.2(a) rejects, and it fails as
+		     predicted: colliding partials and duplicate [Register] attributes (CS0260/
+		     CS0579). The Kotlin facade is the binding; no C# metadata is generated here. -->
+		<AndroidGenerateJavaBindingAnnotations>false</AndroidGenerateJavaBindingAnnotations>
+		<TrimMode>partial</TrimMode>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<!-- The Kotlin facade built by ../bridge (net10.0-android makes this an Android binding).
+		     Build it first with: cd ../bridge && ./gradlew :assembleRelease
+		     Its output is gitignored (*.aar); the condition keeps a clean clone loadable. -->
+		<AndroidLibrary Include="..\bridge\build\outputs\aar\band-e-foundry-bridge-release.aar"
+		                Condition="Exists('..\bridge\build\outputs\aar\band-e-foundry-bridge-release.aar')" />
+
+		<!-- The verified Foundry Local binary, fetched by ../fetch-aar.sh, never committed.
+		     Bind="false" is deliberate. Generating a binding over the raw AAR is what
+		     DECISION-bridge.md 3.2(a) rejects: its Kotlin surface produces colliding
+		     partials (CS0260) and would model every obfuscator-kept synthetic class.
+		     The Kotlin facade above IS the binding, so this AAR is packaged as runtime
+		     classes only and no C# binding is generated from it. -->
+		<AndroidLibrary Include="..\libs\foundry-local-ipc-sdk-0.1.6.aar" Bind="false"
+		                Condition="Exists('..\libs\foundry-local-ipc-sdk-0.1.6.aar')" />
+	</ItemGroup>
+
+</Project>
