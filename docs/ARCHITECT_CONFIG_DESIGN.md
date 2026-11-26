@@ -504,6 +504,46 @@ repository already agrees — `DESIGN.md §3.1` treats a persisted grant as repr
 `Containment` (`src/Durable.Runtime/Containment.cs:22`) reports `None` when a host handler takes
 over, because the durable layer genuinely enforces nothing in that case.
 
+### A7.4 Linked capabilities as implemented by #226
+
+The design's §A7.2 table is the contract; #226 implements the link layer that feeds it. The
+implementation is in `lib/Durable.cs` and the host's validator, and it changes no authority line:
+
+- **A link is a name and a version, not a copy.** `DurableLink` carries `Kind` (`skill`, `mcp`,
+  `tool`), `Name`, optional `Version`, a `Mode` (`prompt` or `tools`), and optional `Grants`.
+  `DurableLinks.Resolve` resolves it against the host's `ExtensionRegistry` and
+  `DurableMcpServerRegistry`. A missing link refuses with the installed names in the message; a
+  version mismatch refuses with both versions; an unversioned host refuses a versioned link.
+- **A link's grants are a request, never an authority.** `DurableLinks.Resolve` checks each
+  requested grant against the definition's own `Permissions` with `PermissionPolicy.IsGranted`.
+  A request the member does not already hold is refused; nothing is merged into the definition's
+  grants. An MCP server's own manifest grants are recorded on the resolved server but never
+  applied.
+- **Discoverability is not authorization.** A resolved link contributes extension and tool names
+  to the compiled `AgentChoices`, so the model is offered them. The permission handler at
+  `lib/Durable.cs:6191` still decides each call; a linked tool the member did not grant is
+  offered and denied.
+- **Portable configuration carries no secrets.** `DurablePortableConfiguration.Export` writes
+  only the portable fields and refuses to emit a document containing a secret-shaped value
+  (key name or value). Credentials stay in the host's environment or credential store and are
+  referenced by name. `Import` validates `schemaVersion` and resolves the links, so a retrieved
+  configuration cannot widen authority at import either.
+- **The host refuses at import and startup.** `AgentDefinitionValidator.Validate` calls
+  `DurableLinks.Resolve` when `Links` is present, so a definition with a missing or incompatible
+  link fails closed before a turn runs. An existing definition without `links` reads and runs
+  unchanged.
+
+One registry, two readers. Validation and resolution both receive the host's single
+`DurableMcpServerRegistry`, built once in `Program.cs`. The host has no configuration surface for
+an MCP server yet, so that registry is empty today and the two readers cannot disagree. When a
+surface is added, populate the one registry rather than threading a separate list through
+validation: a definition must be validated against the same servers it will resolve against, or a
+link can validate and then fail to resolve.
+
+This closes Q5's *mechanism* (secrets live outside the document; the exporter refuses to emit
+them) without choosing a credential store, which remains the user's decision. Q2, Q7 and Q12 are
+unaffected.
+
 ## A8. Current configuration versus missing capability
 
 This section exists because the parent issue requires the distinction, and because a design

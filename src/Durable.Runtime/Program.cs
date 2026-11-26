@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using GitHub.Copilot;
 using GitHub.Copilot.Rpc;
+using Microsoft.Extensions.AI;
 
 namespace Durable.Runtime;
 
@@ -124,6 +125,16 @@ internal static class Program
             Console.Error.WriteLine($"error: {ex.Message}");
             return ExitCodes.AgentFailed;
         }
+        catch (DurableLinkedCapabilityException ex)
+        {
+            Console.Error.WriteLine($"error: {ex.Message}");
+            return ExitCodes.AgentFailed;
+        }
+        catch (DurableConfigurationException ex)
+        {
+            Console.Error.WriteLine($"error: {ex.Message}");
+            return ExitCodes.AgentFailed;
+        }
         catch (JsonException ex)
         {
             Console.Error.WriteLine($"error: the agent definition is not valid JSON: {ex.Message}");
@@ -146,7 +157,8 @@ internal static class Program
         ReportStore(store, options.StorePath);
 
         var registry = BuildRegistry();
-        var definition = await LoadDefinitionAsync(store, registry, options);
+        var servers = BuildMcpRegistry();
+        var definition = await LoadDefinitionAsync(store, registry, servers, options);
 
         var (containment, reason) = ContainmentClassifier.Classify(definition, options.PermissionHandler is not null);
         ReportContainment(definition.Name, containment, reason);
@@ -154,7 +166,7 @@ internal static class Program
         await using var harness = await DurableHarness.OpenAsync(store, registry, HarnessOptions(options));
 
         var result = await RunTurnAsync(
-            harness, store, definition, options, containment, reason, options.Input!);
+            harness, store, definition, options, containment, reason, options.Input!, registry, servers);
 
         Console.Out.WriteLine(result.ToJson());
 
@@ -431,7 +443,8 @@ internal static class Program
         ReportStore(store, options.StorePath);
 
         var registry = BuildRegistry();
-        var definition = await LoadDefinitionAsync(store, registry, options);
+        var servers = BuildMcpRegistry();
+        var definition = await LoadDefinitionAsync(store, registry, servers, options);
 
         var (containment, reason) = ContainmentClassifier.Classify(definition, options.PermissionHandler is not null);
         ReportContainment(definition.Name, containment, reason);
@@ -496,7 +509,8 @@ internal static class Program
         try
         {
             await using var harness = await DurableHarness.OpenAsync(store, registry, HarnessOptions(options));
-            occurrence = await RunTurnAsync(harness, store, definition, options, containment, reason, prompt);
+            occurrence = await RunTurnAsync(
+                    harness, store, definition, options, containment, reason, prompt, registry, servers);
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or DurableRecoveryRequiredException)
         {
@@ -642,7 +656,8 @@ internal static class Program
         ReportStore(store, options.StorePath);
 
         var registry = BuildRegistry();
-        var definition = await LoadDefinitionAsync(store, registry, options);
+        var servers = BuildMcpRegistry();
+        var definition = await LoadDefinitionAsync(store, registry, servers, options);
 
         var (containment, reason) = ContainmentClassifier.Classify(definition, options.PermissionHandler is not null);
         ReportContainment(definition.Name, containment, reason);
@@ -674,7 +689,7 @@ internal static class Program
             await RegisterScheduleAsync(store, definition.Name, interval, options, clock());
         }
 
-        var occurrences = await DriveAsync(store, registry, definition, options, containment, reason, clock);
+        var occurrences = await DriveAsync(store, registry, servers, definition, options, containment, reason, clock);
 
         var current = ScheduleStore.Find(store, definition.Name);
         Console.Out.WriteLine(new ScheduleResult
@@ -699,6 +714,7 @@ internal static class Program
     private static async Task<IReadOnlyList<RunResult>> DriveAsync(
         DurableStore store,
         ExtensionRegistry registry,
+        DurableMcpServerRegistry servers,
         AgentDefinition definition,
         HostOptions options,
         Containment containment,
@@ -732,7 +748,9 @@ internal static class Program
                     options,
                     containment,
                     reason,
-                    schedule.Input ?? options.Input ?? DefaultScheduleInput(definition.Name)));
+                    schedule.Input ?? options.Input ?? DefaultScheduleInput(definition.Name),
+                    registry,
+                    servers));
 
             var occurrences = new List<RunResult>();
             for (var pass = 0; options.Passes is not { } limit || pass < limit; pass++)
@@ -824,9 +842,12 @@ internal static class Program
         HostOptions options,
         Containment containment,
         string reason,
-        string input)
+        string input,
+        ExtensionRegistry registry,
+        DurableMcpServerRegistry servers)
     {
-        var conversation = await OpenConversationAsync(harness, store, definition, options);
+        var conversation = await OpenConversationAsync(
+            harness, store, definition, options, registry, servers);
 
         var result = await ExecuteTurnAsync(
             store, conversation, definition, options, containment, reason, input);
@@ -963,7 +984,8 @@ internal static class Program
         ReportStore(store, options.StorePath);
 
         var registry = BuildRegistry();
-        var definition = await LoadDefinitionAsync(store, registry, options);
+        var servers = BuildMcpRegistry();
+        var definition = await LoadDefinitionAsync(store, registry, servers, options);
 
         var (containment, reason) = ContainmentClassifier.Classify(definition, options.PermissionHandler is not null);
         ReportContainment(definition.Name, containment, reason);
@@ -993,7 +1015,9 @@ internal static class Program
 
         if (options.Rpc)
         {
-            return await ServeRpcAsync(harness, store, definition, options, containment, reason, turnGate, stopping);
+            return await ServeRpcAsync(
+                harness, store, definition, options, containment, reason, turnGate, stopping,
+                registry, servers);
         }
 
         await using var transport = HttpTransport.Start(options.Port);
@@ -1003,7 +1027,8 @@ internal static class Program
 
         await transport.RunAsync(
             (request, response) => HandleAsync(
-                request, response, harness, store, definition, options, containment, reason, turnGate),
+                request, response, harness, store, definition, options, containment, reason, turnGate,
+                registry, servers),
             stopping.Token,
             ShutdownGrace);
 
@@ -1029,7 +1054,9 @@ internal static class Program
         Containment containment,
         string containmentReason,
         SemaphoreSlim turnGate,
-        CancellationTokenSource stopping)
+        CancellationTokenSource stopping,
+        ExtensionRegistry registry,
+        DurableMcpServerRegistry servers)
     {
         var transport = RpcTransport.Standard();
 
@@ -1037,7 +1064,8 @@ internal static class Program
 
         await transport.RunAsync(
             request => HandleRpcAsync(
-                request, transport, harness, store, definition, options, containment, containmentReason, turnGate),
+                request, transport, harness, store, definition, options, containment, containmentReason, turnGate,
+                registry, servers),
             stopping.Token,
             ShutdownGrace);
 
@@ -1064,7 +1092,9 @@ internal static class Program
         HostOptions options,
         Containment containment,
         string containmentReason,
-        SemaphoreSlim turnGate)
+        SemaphoreSlim turnGate,
+        ExtensionRegistry registry,
+        DurableMcpServerRegistry servers)
     {
         if (request.Agent is { } requested
             && !string.Equals(requested, definition.Name, StringComparison.Ordinal))
@@ -1081,7 +1111,8 @@ internal static class Program
         try
         {
             var conversation = await OpenConversationAsync(
-                harness, store, definition, options with { NewConversation = request.NewConversation });
+                harness, store, definition, options with { NewConversation = request.NewConversation },
+                registry, servers);
 
             // The snapshot is the state a late joiner would see, which is what makes the stream
             // self-contained: a client that attaches mid-conversation still learns the history.
@@ -1204,7 +1235,9 @@ internal static class Program
         HostOptions options,
         Containment containment,
         string containmentReason,
-        SemaphoreSlim turnGate)
+        SemaphoreSlim turnGate,
+        ExtensionRegistry registry,
+        DurableMcpServerRegistry servers)
     {
         if (request.Method != "POST")
         {
@@ -1261,7 +1294,8 @@ internal static class Program
         try
         {
             var conversation = await OpenConversationAsync(
-                harness, store, definition, options with { NewConversation = newConversation });
+                harness, store, definition, options with { NewConversation = newConversation },
+                registry, servers);
 
             await response.StartAsync(200, "OK", "application/x-ndjson");
 
@@ -1347,7 +1381,8 @@ internal static class Program
         ReportStore(store, options.StorePath);
 
         var registry = BuildRegistry();
-        var definition = await LoadDefinitionAsync(store, registry, options);
+        var servers = BuildMcpRegistry();
+        var definition = await LoadDefinitionAsync(store, registry, servers, options);
 
         var (containment, reason) = ContainmentClassifier.Classify(definition, options.PermissionHandler is not null);
         ReportContainment(definition.Name, containment, reason);
@@ -1608,6 +1643,23 @@ internal static class Program
     }
 
     /// <summary>
+    /// The MCP servers this host offers. Empty: a server is a configured capability and the host
+    /// has no configuration surface for one yet, so a `links` entry naming an MCP server is
+    /// refused by <see cref="DurableLinks"/> rather than silently ignored. The registry is built
+    /// here, and the same instance is passed to validation and to resolution, so a host that
+    /// later gains a configuration surface has one registry to populate.
+    /// </summary>
+    private static DurableMcpServerRegistry BuildMcpRegistry() => new();
+
+    /// <summary>
+    /// Resolves a definition against this host's registries. One place, so the turn path and the
+    /// test that proves the turn path exercise the same call.
+    /// </summary>
+    internal static AgentChoices ResolveChoices(
+        AgentDefinition definition, ExtensionRegistry registry, DurableMcpServerRegistry servers) =>
+        definition.ToChoices(registry, servers);
+
+    /// <summary>
     /// The extensions the host installs. They are the vocabulary an agent definition may name;
     /// a definition that names anything else is refused rather than silently narrowed.
     /// </summary>
@@ -1624,6 +1676,20 @@ internal static class Program
             new PromptSection("git", _ => Task.FromResult<string?>(
                 "Use git for version control, and never rewrite history that has been shared.")),
         ]));
+        // A deployment that wants a linkable tool adds it here through the environment, not by
+        // widening the default set: a definition that omits `extensions` receives every
+        // registered extension, so adding a tool-bearing extension unconditionally would change
+        // what every such definition is offered.
+        if (Environment.GetEnvironmentVariable("DURABLE_LINKABLE_TOOL") is { Length: > 0 } linkable)
+        {
+            registry.Install(new Extension(linkable, tools:
+            [
+                CopilotTool.DefineTool(
+                    (string path) => $"read {path}",
+                    factoryOptions: new AIFunctionFactoryOptions { Name = $"{linkable}_read" }),
+            ]));
+        }
+
         registry.Install(new Extension("tests", sections:
         [
             new PromptSection("tests", _ => Task.FromResult<string?>(
@@ -1644,12 +1710,13 @@ internal static class Program
     private static async Task<AgentDefinition> LoadDefinitionAsync(
         DurableStore store,
         ExtensionRegistry registry,
+        DurableMcpServerRegistry servers,
         HostOptions options)
     {
         if (options.DefinitionPath is { } path)
         {
             var imported = ReadDefinition(path);
-            AgentDefinitionValidator.Validate(imported, registry);
+            AgentDefinitionValidator.Validate(imported, registry, servers);
 
             if (!string.Equals(imported.Name, options.Agent, StringComparison.Ordinal))
             {
@@ -1672,7 +1739,7 @@ internal static class Program
             ?? throw new AgentDefinitionException(
                 $"the stored definition for agent '{options.Agent}' could not be read.");
 
-        AgentDefinitionValidator.Validate(stored, registry);
+        AgentDefinitionValidator.Validate(stored, registry, servers);
         return stored;
     }
 
@@ -1731,7 +1798,9 @@ internal static class Program
         DurableHarness harness,
         DurableStore store,
         AgentDefinition definition,
-        HostOptions options)
+        HostOptions options,
+        ExtensionRegistry extensions,
+        DurableMcpServerRegistry servers)
     {
         var ownerId = AgentDefinition.OwnerId(definition.Name);
 
@@ -1742,12 +1811,12 @@ internal static class Program
             // The store is the source of truth for the definition, so a resumed conversation
             // follows the definition as it stands now rather than as it stood when the
             // conversation was created.
-            await resumed.ConfigureAsync(definition.ToChoices());
+            await resumed.ConfigureAsync(ResolveChoices(definition, extensions, servers));
             return resumed;
         }
 
         return await harness.CreateConversationAsync(
-            definition.ToChoices(),
+            ResolveChoices(definition, extensions, servers),
             ownerConversationId: ownerId);
     }
 
