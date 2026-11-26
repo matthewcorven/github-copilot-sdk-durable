@@ -262,8 +262,9 @@ public sealed class MemberLifecycleTests
         await DurableMembers.HireAsync(store, "alice", "core", T0);
         await DurableMembers.TransitionAsync(store, "alice", MemberLifecycleState.Active, "core", T0.AddMinutes(1));
 
-        // Create bob's document without committing a version, so Read(bob) is null but the
-        // create-if-absent guard fails.
+        // Build the only state in which the two disagree: the document key exists but has no
+        // committed version. Read(bob) resolves through Latest and answers null; TryCreateDocument
+        // only needs the key and therefore refuses. That disagreement is the reachable defect.
         await store.CommitAsync(tx =>
         {
             Assert.True(tx.TryCreateDocument(DurableMembers.StateDefinition, DurableMemberState.OwnerId("bob")));
@@ -292,6 +293,8 @@ public sealed class MemberLifecycleTests
     public async Task Hire_UncertainMember_CommitsNoEntry()
     {
         using var store = DurableStore.CreateEphemeral();
+        // The same reachable disagreement as Replace_UncertainSuccessor_CommitsNothing: the key
+        // exists, no version does, so Read is null while the create-if-absent guard refuses.
         await store.CommitAsync(tx =>
         {
             Assert.True(tx.TryCreateDocument(DurableMembers.StateDefinition, DurableMemberState.OwnerId("ghost")));
