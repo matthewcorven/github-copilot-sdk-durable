@@ -7,6 +7,14 @@ honest cost of on-device stated. Every number here was measured on this emulator
 the method: which platform call or which log line produced it. Nothing is estimated, and the two
 numbers that are proxies rather than the real thing are labelled as such.
 
+Two Release builds appear in this file, and the hash above is not the right label for all of it.
+Section 5 was captured under that build. Sections 3, 4 and 6 are the run e2-offline-demonstration.txt
+captured, which is a different build: sections 3 and 6 carry no build line of their own, so they are
+attributed from what they do carry — section 3 from its export tag, section 6 from its own footnote
+back to e2-offline-demonstration.txt — and section 4 from its pids, which are that run's pids. The
+per-row attribution is in ../README.md's provenance note; this paragraph says why the header does not
+settle it for the whole file.
+
 ===============================================================================
 1. Model size on disk — 878,065,731 B in 11 files
 ===============================================================================
@@ -187,10 +195,12 @@ demonstration's four turns:
   turn 2: 220 deltas for 1269 chars
   turn 3: 220 deltas for 1269 chars
   turn 4: 220 deltas for 1269 chars
-220 is the cap, so those turns hit it. The earlier shorter turns in the same store produced 75, 97,
-111 and 70 deltas — one delta per 5-6 characters either way. (Those four are the earlier turns'
-chunk counts as committed in the store, not a separate trace; this file's own transcript is the
-four 220s above.)
+220 is the cap, so those turns hit it. The earlier shorter turns in this run produced lower counts —
+one delta per 5-6 characters either way — but those counts are **not quoted here as figures**. They
+live in the demonstration run's `durable-store.jsonl`, which is app state and is deliberately not
+committed (see evidence/e2-store-on-device.txt section 4); the committed evidence holds no export of
+them. Quoting them would be quoting an artifact no reader of this repository can resolve, which is
+the defect this file was corrected for, one level down.
 
 ===============================================================================
 6. The generation cap, and why one exists

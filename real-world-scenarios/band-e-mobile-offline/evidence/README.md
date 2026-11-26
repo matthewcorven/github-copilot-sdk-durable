@@ -58,3 +58,34 @@ The screenshots are PNGs captured with `adb exec-out screencap -p` on the emulat
 A screenshot is not proof on its own: each one is tied to an export or a trace line in
 `e2-offline-demonstration.txt`, and the store's hash prefix on screen is the same one the export
 recorded.
+
+## Checking that a figure is sourced
+
+`../verify-evidence-figures.sh` reads `../README.md`, takes every figure out of every table row that
+states a measurement, and fails when one does not appear as a standalone number in this directory, in
+the README's own fenced captures, or in `../probe-toolchain.sh`.
+
+```sh
+../verify-evidence-figures.sh            # exit 1 on any unsourced figure
+../verify-evidence-figures.sh --list     # print every figure it checked
+```
+
+It exists because this defect was introduced by hand three times: a summary table quoting a number
+the files beneath it do not contain. The first two rounds fixed the numbers one at a time; this checks
+them all at once.
+
+What it does not prove, said here because a passing check is easy to over-read:
+
+- **It does not check attribution.** A real number quoted against the wrong row, model, build or unit
+  passes. `21 files` is a real measurement, of the 1.5B model, and the script cannot tell it from the
+  0.5B model's `11`. Cross-model and cross-build claims are what `../README.md`'s provenance note and
+  a reviewer are for.
+- **It does not check that a figure means what its caption says.** It checks presence, not sense.
+- **It does not read the store.** Figures whose only source is the run's `durable-store.jsonl` are
+  unsourceable by construction, because that file is app state and is not committed — `e2-store-on-device.txt`
+  §4 says why. The script reports such a figure unsourced rather than resolving it.
+- **A figure inside a filename, a section number or a version is excluded**, because those are
+  coordinates rather than measurements. Version-like dotted numbers are excluded entirely.
+
+Its blind spot is the one every round of review found: a number that exists but is attached to the
+wrong thing. It narrows the problem to that, which is smaller than "any figure may be wrong".
