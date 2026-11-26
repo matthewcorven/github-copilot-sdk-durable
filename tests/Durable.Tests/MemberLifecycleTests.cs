@@ -241,6 +241,71 @@ public sealed class MemberLifecycleTests
         Assert.Contains("replaced", again.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// The successor's create-if-absent guard must run before anything is staged, because
+    /// <see cref="DurableStore.CommitAsync{T}"/> rolls back on a throw and not on a returned
+    /// result. When it ran second, the handoff and the predecessor's `replaced` version were
+    /// committed alongside the refusal: the predecessor was terminally replaced, pointing at a
+    /// successor that was never hired, while the caller was told "uncertain, retry".
+    /// </summary>
+    /// <remarks>
+    /// The state that triggers it is a successor document that exists but holds no version, which
+    /// <see cref="DurableMembers.Read"/> reports as absent (it needs `Latest`) while
+    /// <see cref="Transaction.TryCreateDocument{T}"/> reports as present (it only needs the key).
+    /// That is reachable whenever a document is created before its first commit -- including a
+    /// transaction that threw after creating it.
+    /// </remarks>
+    [Fact]
+    public async Task Replace_UncertainSuccessor_CommitsNothing()
+    {
+        using var store = DurableStore.CreateEphemeral();
+        await DurableMembers.HireAsync(store, "alice", "core", T0);
+        await DurableMembers.TransitionAsync(store, "alice", MemberLifecycleState.Active, "core", T0.AddMinutes(1));
+
+        // Create bob's document without committing a version, so Read(bob) is null but the
+        // create-if-absent guard fails.
+        await store.CommitAsync(tx =>
+        {
+            Assert.True(tx.TryCreateDocument(DurableMembers.StateDefinition, DurableMemberState.OwnerId("bob")));
+            return Task.CompletedTask;
+        });
+        Assert.Null(DurableMembers.Read(store, "bob"));
+
+        var result = await DurableMembers.ReplaceAsync(
+            store, "alice", "bob", "context", "core", T0.AddMinutes(2));
+
+        Assert.Equal(MemberTransitionOutcome.Uncertain, result.Outcome);
+
+        // The whole point: nothing from the failed replacement may survive.
+        var predecessor = DurableMembers.Read(store, "alice")!;
+        Assert.Equal(MemberLifecycleState.Active, predecessor.State);
+        Assert.Null(predecessor.ReplacedBy);
+        Assert.Null(predecessor.HandoffKind);
+        Assert.Null(DurableMembers.ReadHandoff(store, "alice"));
+    }
+
+    /// <summary>
+    /// The same ordering rule in <see cref="DurableMembers.HireAsync"/>: a refusal must not leave
+    /// a transcript entry behind for a hire that never happened.
+    /// </summary>
+    [Fact]
+    public async Task Hire_UncertainMember_CommitsNoEntry()
+    {
+        using var store = DurableStore.CreateEphemeral();
+        await store.CommitAsync(tx =>
+        {
+            Assert.True(tx.TryCreateDocument(DurableMembers.StateDefinition, DurableMemberState.OwnerId("ghost")));
+            return Task.CompletedTask;
+        });
+        Assert.Null(DurableMembers.Read(store, "ghost"));
+
+        var result = await DurableMembers.HireAsync(store, "ghost", "core", T0);
+
+        Assert.Equal(MemberTransitionOutcome.Uncertain, result.Outcome);
+        Assert.Null(DurableMembers.Read(store, "ghost"));
+        Assert.Empty(store.EntriesOf(DurableMemberState.OwnerId("ghost")));
+    }
+
     [Fact]
     public async Task AStoreWithNoMemberRecords_StillReadsAndRefusesCleanly()
     {

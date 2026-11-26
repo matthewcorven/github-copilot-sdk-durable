@@ -4899,7 +4899,10 @@ public static class DurableMembers
                 InFlight = [],
             };
 
-            var entryId = transaction.AppendEntry(ownerId, "member-state");
+            // The create-if-absent guard runs BEFORE anything is staged. It is the only check
+            // that can refuse, and `CommitAsync` rolls back on a throw rather than on a returned
+            // result: staging the entry first would commit it alongside the refusal, leaving a
+            // transcript entry for a hire that never happened.
             if (!transaction.TryCreateDocument(StateDefinition, ownerId))
             {
                 return Task.FromResult(new MemberTransitionResult(
@@ -4909,6 +4912,7 @@ public static class DurableMembers
                     + "treating it as uncertain rather than hiring over it."));
             }
 
+            var entryId = transaction.AppendEntry(ownerId, "member-state");
             transaction.CommitDocument(StateDefinition, ownerId, state, entryId);
             return Task.FromResult(new MemberTransitionResult(
                 MemberTransitionOutcome.Succeeded,
@@ -5095,13 +5099,12 @@ public static class DurableMembers
             var predecessorOwner = DurableMemberState.OwnerId(name);
             var successorOwner = DurableMemberState.OwnerId(successor);
 
-            var handoffEntry = transaction.AppendEntry(handoffOwner, "member-handoff");
-            transaction.CommitDocument(HandoffDefinition, handoffOwner, handoff, handoffEntry);
-
-            var replacedEntry = transaction.AppendEntry(predecessorOwner, "member-state");
-            transaction.CommitDocument(StateDefinition, predecessorOwner, replaced, replacedEntry);
-
-            var successorEntry = transaction.AppendEntry(successorOwner, "member-state");
+            // The successor's create-if-absent guard runs BEFORE anything is staged, for the same
+            // reason HireAsync's does: `CommitAsync` rolls back on a throw, not on a returned
+            // result. Staging the handoff and the predecessor's `replaced` version first would
+            // commit both alongside the refusal -- leaving the predecessor terminally replaced,
+            // pointing at a successor that was never hired, while the caller is told "uncertain,
+            // retry". That is the exact half-state the method's doc comment promises cannot happen.
             if (!transaction.TryCreateDocument(StateDefinition, successorOwner))
             {
                 return Task.FromResult(new MemberTransitionResult(
@@ -5111,6 +5114,13 @@ public static class DurableMembers
                     + "read back; treating the replacement as uncertain rather than overwriting it."));
             }
 
+            var handoffEntry = transaction.AppendEntry(handoffOwner, "member-handoff");
+            transaction.CommitDocument(HandoffDefinition, handoffOwner, handoff, handoffEntry);
+
+            var replacedEntry = transaction.AppendEntry(predecessorOwner, "member-state");
+            transaction.CommitDocument(StateDefinition, predecessorOwner, replaced, replacedEntry);
+
+            var successorEntry = transaction.AppendEntry(successorOwner, "member-state");
             transaction.CommitDocument(StateDefinition, successorOwner, successorRecord, successorEntry);
             return Task.FromResult(new MemberTransitionResult(
                 MemberTransitionOutcome.Succeeded,
