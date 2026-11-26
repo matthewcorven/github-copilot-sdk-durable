@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Durable.Runtime;
 
 namespace Durable.Tests;
 
@@ -75,6 +76,37 @@ public sealed class RuntimeHostCliTests
         {
             Assert.Contains(flag, stdout, StringComparison.Ordinal);
         }
+    }
+
+    /// <summary>
+    /// The host resolves a definition's `links` against its own registries, so a linked tool is
+    /// folded into the choices the conversation is configured with.
+    /// </summary>
+    /// <remarks>
+    /// Before this was wired, the host called the parameterless
+    /// <see cref="AgentDefinition.ToChoices()"/> overload, which ignores `links` entirely. A
+    /// definition with a valid link therefore validated and then ran with the link contributing
+    /// nothing -- the tool was never offered, so there was nothing to authorize or deny. That
+    /// silence is what this asserts against: the linked tool must appear in the choices.
+    /// </remarks>
+    [Fact]
+    public void ResolveChoices_FoldsALinkedToolIn()
+    {
+        var definition = new AgentDefinition
+        {
+            Name = "reviewer",
+            Description = "Reviews changes.",
+            Instructions = "Review the change.",
+            // A `Tool` link names the EXTENSION that provides the tool, not the tool itself.
+            Links = [new DurableLink { Kind = DurableLinkKind.Tool, Name = "workspace" }],
+        };
+
+        var choices = Program.ResolveChoices(definition, Program.RegistryForTests(), new DurableMcpServerRegistry());
+
+        Assert.NotNull(choices.Extensions);
+        Assert.Contains("workspace", choices.Extensions, StringComparer.Ordinal);
+        Assert.NotNull(choices.Tools);
+        Assert.Contains("read_file", choices.Tools, StringComparer.Ordinal);
     }
 
     [Fact]
