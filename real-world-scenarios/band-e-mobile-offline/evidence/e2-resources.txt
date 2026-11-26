@@ -92,8 +92,11 @@ Readings from the same session, for the shape of the growth rather than a trend 
   598.3 MB — an earlier build, four turns committed (18:00:18 measure)
   536/488  — earlier builds, one turn / none (17:57 / 17:11 exports)
 
-The number is dominated by the model, not by the transcript: the store grew from 61,692 B to
-133,801 B across the whole session, which is 70 KB against 604 MB.
+The number is dominated by the model, not by the transcript: the store grew from 128,720 B to
+133,801 B across the whole session, which is 5 KB against 604 MB. Both ends are the run's own
+exports, not a pre-turn figure: 128,720 B is the turn-3 export before the kill
+(evidence/e2-offline-demonstration.txt section 5) and 133,801 B is the turn-4 export after it
+(section 8).
 
 ===============================================================================
 4. Generation speed — 0.5B model on this emulator
@@ -184,8 +187,10 @@ demonstration's four turns:
   turn 2: 220 deltas for 1269 chars
   turn 3: 220 deltas for 1269 chars
   turn 4: 220 deltas for 1269 chars
-220 is the cap, so those turns hit it; the earlier shorter turns produced 75-111 deltas, i.e. roughly
-one delta per 5-6 characters either way.
+220 is the cap, so those turns hit it. The earlier shorter turns in the same store produced 75, 97,
+111 and 70 deltas — one delta per 5-6 characters either way. (Those four are the earlier turns'
+chunk counts as committed in the store, not a separate trace; this file's own transcript is the
+four 220s above.)
 
 ===============================================================================
 6. The generation cap, and why one exists

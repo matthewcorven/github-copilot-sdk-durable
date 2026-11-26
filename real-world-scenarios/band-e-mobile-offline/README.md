@@ -34,7 +34,7 @@ evidence/                        captured command output and screenshots; see ev
 | Acceptance criterion (issue #166) | State |
 | --- | --- |
 | Transcripts and checkpoints in the on-device Durable store | **met** — `band-e.transcript` and `band-e.artifact` documents plus one task per turn, in `files/durable/durable-store.jsonl` |
-| A turn completes with no network; tokens stream as produced | **met** — four turns with `airplane_mode_on=1`, 199–220 deltas each, screenshots taken mid-stream |
+| A turn completes with no network; tokens stream as produced | **met** — four turns with `airplane_mode_on=1`, 220 deltas each (the cap), screenshots taken mid-stream |
 | Kill and reopen continues from the store | **met** — `force-stop`, new pid, `restored from the durable store: store 128720 B sha256:f02b209c3e84` (same bytes as the pre-kill export), then turn 4 |
 | The Durable layer references no Android type | **met and enforced** — `verify-android-boundary.sh` runs in the build and fails it |
 | The bridge boundary stays clean | **met** — one file, `app/Chat/BridgeShim.cs` |
@@ -241,7 +241,7 @@ is [`evidence/e2-physical-device.txt`](evidence/e2-physical-device.txt).
 ### The resource reality
 
 Measured on AVD `band-e-api36-playstore-arm64` (arm64-v8a, API 36, emulator), Release build
-`sha256:86e58d9daf5edb1a0d458434fc18a096b285fbd5d28a565bacd6901951e7534c`. Method beside each number;
+`sha256:2607726ff7938085cdd353aeb104c5d43ec67f5ccbb46ea1c4223ba5fe6cda9e`. Method beside each number;
 [`evidence/e2-resources.txt`](evidence/e2-resources.txt) has the raw output.
 
 | Measured | Value | Method |
@@ -251,11 +251,11 @@ Measured on AVD `band-e-api36-playstore-arm64` (arm64-v8a, API 36, emulator), Re
 | …as the app saw it | **278.6 s** wall clock | the app's own timer around `Prepare`, screenshot `e2-14` |
 | Model load, per process | **7.9 s** cached (13.3 s on the first, cold load) — no network, cache unchanged byte for byte | app timer around `Prepare`, before/after cache walk |
 | Process memory | **604 MB PSS** of 2,473 MB total (777 MB free) | `Debug.MemoryInfo.TotalPss` / `ActivityManager.MemoryInfo`, read by the app |
-| Generation speed | **5.7–13.4 tok/s** across two runs and four turns; slowest on the cold first turn and on the longest prompts | SDK `Generator.TokenCount` ÷ SDK `CoreChatCompletion Time` |
-| Streaming granularity | **75–220 deltas per turn** (~1 per 5–6 characters) | the app's chunk counter |
+| Generation speed | **5.7–13.4 tok/s** across two runs and eight turns; slowest on the cold first turn and on the longest prompts | SDK `Generator.TokenCount` ÷ SDK `CoreChatCompletion Time`; `evidence/e2-resources.txt` §4 |
+| Streaming granularity | **220 deltas per turn on all four demonstration turns** (the cap) | the app's chunk counter; `evidence/e2-offline-demonstration.txt` §4 and §7, `evidence/e2-resources.txt` §5 |
 | Turn latency | **29–51 s** per turn, capped at 220 generated tokens | the app's own timer |
-| APK size | **84,975,920 B (81.0 MiB)** | `ls -l` on the signed APK; includes ~64 MB of native engine per shipped ABI |
-| Store growth over the session | **61,692 B → 133,801 B** | the store's own byte length, exported per turn |
+| APK size | **85,253,322 B (81.3 MiB)** | `ls -l` on the signed APK in `evidence/e2-resources.txt` §5; includes ~64 MB of native engine per shipped ABI. A different build's signed APK measured 84,975,920 B (81.0 MiB) — `evidence/e2-aar-decision.txt` §6 and `evidence/e2-offline-demonstration.txt` header |
+| Store growth over the session | **128,720 B → 133,801 B** | the store's own byte length, exported per turn. Both ends are the committed run's own exports: `evidence/e2-offline-demonstration.txt` §5 (`store_bytes: 128720`) and §8 (`store_bytes: 133801`). The pre-turn figure is not a committed export — see the provenance note below |
 
 The honest reading: on this emulator a 0.5B model generates at 5.7–13.4 tokens/s depending on the
 turn, and costs ~600 MB of a 2.5 GB device. Two effects are in that range rather than averaged out of
@@ -264,6 +264,35 @@ is stateless per request and re-processes the whole transcript every turn. That 
 durability's own cost: the transcript has to be re-sent because the SDK keeps none. A turn is capped
 at 220 generated tokens because without a cap an earlier attempt ran 45 s and 53 s with no natural
 end.
+
+> **Provenance of the table above.** Two Release builds appear in this evidence set, and the table
+> does not merge them silently. Each row resolves to a capture line and to the build that line's file
+> names in its own header:
+>
+> | Row | Resolves to | Build |
+> | --- | --- | --- |
+> | Model size on disk | `e2-resources.txt` §1 (`878,065,731` bytes, 21 files walked) | `2607726f…` |
+> | Download time | `e2-resources.txt` §2 (`229,813` / `266,876` ms) | `2607726f…` |
+> | …as the app saw it | `e2-resources.txt` §2, `278.6 s` screen figure | `2607726f…` |
+> | Model load, per process | `e2-offline-demonstration.txt` §4 (`13.3 s`) and §7 (`7.9 s`) | `86e58d9d…` |
+> | Process memory | `e2-resources.txt` §3 (`603.7` PSS) | `2607726f…` |
+> | Generation speed | `e2-resources.txt` §4 (`5.7`–`13.4` tok/s) | `2607726f…` |
+> | Streaming granularity | `e2-offline-demonstration.txt` §4/§7 and `e2-resources.txt` §5 (four `220`s) | `86e58d9d…` |
+> | Turn latency | `e2-resources.txt` §6 (`29`–`51` s) | `2607726f…` |
+> | APK size | `e2-resources.txt` §5 (`85253322` bytes) | `2607726f…` |
+> | Store growth | `e2-offline-demonstration.txt` §5 (`128720`) and §8 (`133801`) | `86e58d9d…` |
+>
+> The two builds' signed APKs are genuinely different sizes: `85,253,322 B (81.3 MiB)` for the
+> `2607726f…` build (`e2-resources.txt` §5) and `84,975,920 B (81.0 MiB)` for the `86e58d9d…` build
+> (`e2-offline-demonstration.txt` header, `e2-aar-decision.txt` §6). The APK-size row quotes the build
+> whose file reports it; the other build's size is stated in its own cell rather than dropped.
+>
+> Two things this evidence set does not contain, and the table does not claim: the **pre-turn store
+> size** of the `86e58d9d…` run — the earliest figure its committed evidence holds is the turn-3
+> export, `128,720 B` — and a **hash and size stated for the same APK file** in `e2-resources.txt` §5,
+> whose `shasum` names `bande-e2.apk` while its `ls -l` names
+> `dev.durable.band.e.mobile-Signed.apk`. The table cites the size §5 reports and leaves that pairing
+> to the file.
 
 ### Where the store lives, and how to check it
 
