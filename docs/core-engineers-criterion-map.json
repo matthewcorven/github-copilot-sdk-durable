@@ -1,10 +1,10 @@
 {
   "schema": "core-engineers-criterion-map/v1",
-  "candidateSha": "1d18f67f98a49f3a8536c8f7270eed5c49a16260",
-  "updatedAt": "2026-11-26T21:36:05.614Z",
+  "candidateSha": "514684abc68521a86884a0b77b663f1eafe4c04e",
+  "updatedAt": "2026-11-26T22:48:09.545Z",
   "criteria": {
     "durable-recovery": {
-      "sourceDigest": "18c9b7797034a5c0cb86ae36d7ab025b44f27e0ce4a4cf3ab87aeab393964a8d",
+      "sourceDigest": "7372ef8aebbbc01a566c37911cfa69aed29e19f3c78439b980032048e80ec8bb",
       "title": "Committed checkpoints survive process death with tested recovery",
       "requiresE2E": true,
       "tests": [
@@ -26,7 +26,7 @@
       ]
     },
     "isolation": {
-      "sourceDigest": "5ad404a84c2fb622e7319aced5b5f8d9cf10c115d1ff5715e1383b4e1eb49184",
+      "sourceDigest": "40dba49a8901fae895888a17bd411d8d20d69957f54ce322186a8ded693ed9cb",
       "title": "Concurrent clients, forks and store failures preserve documented guarantees",
       "requiresE2E": true,
       "tests": [
@@ -124,7 +124,7 @@
       ]
     },
     "handoff": {
-      "sourceDigest": "dd062c56224299b807b032b2eb0fd47a0e077599afcf5340010292ce961c7543",
+      "sourceDigest": "431173352976cbf3891194cdaa78b3a74be9e927eef6676c823c73861904a6e8",
       "title": "Replacement and interrupted shifts resume through audited durable handoffs",
       "requiresE2E": true,
       "tests": [
@@ -190,7 +190,7 @@
       ]
     },
     "prompt-hooks": {
-      "sourceDigest": "b0f17e43ec417eef26c5b47e9a0278c9e9415bf6a351ce2a01606f662ec1faee",
+      "sourceDigest": "6d0a7d25c2a2b704e50e5b42e96ffdca50f344f9a939074f4d976097664ae86f",
       "title": "System-prompt arrangement and hooks have tested precedence and trust boundaries",
       "requiresE2E": true,
       "tests": [
