@@ -1,10 +1,10 @@
 {
   "schema": "core-engineers-criterion-map/v1",
-  "candidateSha": "255805f7f7b28342e8632ec57647635ac101f2c2",
-  "updatedAt": "2026-11-21T00:21:34.320-05:00",
+  "candidateSha": "1d18f67f98a49f3a8536c8f7270eed5c49a16260",
+  "updatedAt": "2026-11-26T21:36:05.614Z",
   "criteria": {
     "durable-recovery": {
-      "sourceDigest": "d934718302e0d862ce3cf7ebfef6c37dd038eb249fb1340e53e02f9371731a92",
+      "sourceDigest": "18c9b7797034a5c0cb86ae36d7ab025b44f27e0ce4a4cf3ab87aeab393964a8d",
       "title": "Committed checkpoints survive process death with tested recovery",
       "requiresE2E": true,
       "tests": [
@@ -26,7 +26,7 @@
       ]
     },
     "isolation": {
-      "sourceDigest": "cb7e91fcfdffb5aaee9c14f24cf80f5d3643fb831c68f43440d9a4ff3c26e2e9",
+      "sourceDigest": "5ad404a84c2fb622e7319aced5b5f8d9cf10c115d1ff5715e1383b4e1eb49184",
       "title": "Concurrent clients, forks and store failures preserve documented guarantees",
       "requiresE2E": true,
       "tests": [
@@ -48,7 +48,7 @@
       ]
     },
     "ports": {
-      "sourceDigest": "3f1ec3bf1faf8afeee66fb00f0eb41234e51cb03ce9caac417b496d1a31605b5",
+      "sourceDigest": "cc2c0a88a6b1b4e63ef3f317ffadad8e90f1ae1a0994336cccb072cf0bbc0c7a",
       "title": "C#/TypeScript/Python contracts and existing stores remain compatible",
       "requiresE2E": true,
       "tests": [
@@ -80,7 +80,7 @@
       ]
     },
     "configure-members": {
-      "sourceDigest": "1e89bcd53d6db54475fcfef173fe866ebf089ca3bdb91b09efa9225b8308e4f3",
+      "sourceDigest": "fc1e85297fcaaafb9cfa9c29714efb363e1641ac976367f5738a7c74a514c2d5",
       "title": "Client architect can configure and activate service agents",
       "requiresE2E": true,
       "tests": [
@@ -124,7 +124,7 @@
       ]
     },
     "handoff": {
-      "sourceDigest": "4e9b01e13ff19968b2bbaa8319062cef929a203799b4806b8b7e9c1912f42e2e",
+      "sourceDigest": "dd062c56224299b807b032b2eb0fd47a0e077599afcf5340010292ce961c7543",
       "title": "Replacement and interrupted shifts resume through audited durable handoffs",
       "requiresE2E": true,
       "tests": [
@@ -146,7 +146,7 @@
       ]
     },
     "workflow-config": {
-      "sourceDigest": "38436c8d40e92dc94f9c9f11157578bedb641d7891b922f751f4ca88c5d4732e",
+      "sourceDigest": "32c242c6cc113e7f90c9586fb8cdc75e20c079490d1f1137abe14facc69f0f31",
       "title": "Versioned configuration defines bounded workflows and ownership",
       "requiresE2E": true,
       "tests": [
@@ -168,7 +168,7 @@
       ]
     },
     "linked-tools": {
-      "sourceDigest": "86ab8cf80e6ee3df0a04b76efa82320b12949fb7ef304010a117f133a842a39c",
+      "sourceDigest": "12068cff2db37f00a73576f30719078420cc6a1cc57e45bb57e7a8c4563f3b19",
       "title": "Optional linked skills/MCPs/tools require explicit permission and fail safely",
       "requiresE2E": true,
       "tests": [
@@ -190,7 +190,7 @@
       ]
     },
     "prompt-hooks": {
-      "sourceDigest": "a2502bc75f46895614d07fa545c2f2d3632843b85d9b48ddc3e533a6089e8164",
+      "sourceDigest": "b0f17e43ec417eef26c5b47e9a0278c9e9415bf6a351ce2a01606f662ec1faee",
       "title": "System-prompt arrangement and hooks have tested precedence and trust boundaries",
       "requiresE2E": true,
       "tests": [
@@ -253,7 +253,7 @@
       "tests": []
     },
     "local-environment": {
-      "sourceDigest": "2524c40712f2e5ac1cf8ddadfaf021cc81df0ed3b07defcf153fd91390c40442",
+      "sourceDigest": "5af7b7a3a65c960c1567e960f529c114e6bb7597a8cf0dae11fce0d2c7f011b6",
       "title": "Aspire/emulators/disposable dependencies reproduce the service locally",
       "requiresE2E": true,
       "tests": [
@@ -299,14 +299,14 @@
       "tests": []
     },
     "scope-plan": {
-      "sourceDigest": "620114d8480d6855c05092188927e6d3fbb32fd13b2a7a0dc3d5e6cc6484d569",
+      "sourceDigest": "3ed920847c6a72afbe9b02a48f0002d6ebe01a7b64d264805994e1b87f133bc8",
       "title": "PO/Architect approve MVP scope, dependency-complete breakdown and estimates",
       "requiresE2E": false,
       "gap": "Unmapped: no executable test; PO/Architect approval is a recorded decision, not a test.",
       "tests": []
     },
     "worked-use-case": {
-      "sourceDigest": "e8c763a8dbd7d9ee94dc79212d878fe9dbda6a82d9f1c2c785dbdde6b1f45c35",
+      "sourceDigest": "e45fdd2bcc5d09a23b62f8ff15c9d41785afe774f92357debee4d32223e5f994",
       "title": "Team hiring/pausing and workflow customization are a real service walkthrough",
       "requiresE2E": true,
       "tests": [
@@ -323,7 +323,7 @@
       ]
     },
     "support": {
-      "sourceDigest": "d8bee08eaa11ad2467ee12114928d0d8ff9fb83fdc642337e04b0b6802f17b3b",
+      "sourceDigest": "0d8f3a984f644184c22bfdf3409fba9d686cd3f381a5c39aa101e1a422e6fa49",
       "title": "Configuration migration, troubleshooting, rollback and support ownership documented",
       "requiresE2E": false,
       "gap": "Unmapped: no executable test; migration/rollback/support ownership is documentation plus a recorded review.",
