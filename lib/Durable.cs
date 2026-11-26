@@ -2492,6 +2492,13 @@ public sealed class DurableStore : IDisposable
     public IReadOnlyList<string> Entries(string conversationId) => _provider.Entries(conversationId);
 
     /// <summary>
+    /// Reads the entry ids recorded under an owner id, oldest first. An owner id that is not a
+    /// conversation — a document owner such as <c>member:alice</c> — is still an owner whose
+    /// entries are part of the store's audit trail.
+    /// </summary>
+    public IReadOnlyList<string> EntriesOf(string ownerId) => _provider.Entries(ownerId);
+
+    /// <summary>
     /// Advances a task's durable state, letting the callback write other records in
     /// the same transaction. Everything the callback writes is saved together with the
     /// checkpoint, or discarded if the callback throws.
@@ -4523,6 +4530,800 @@ public static class DurableShifts
     };
 }
 
+/// <summary>The lifecycle states a configured member can be in.</summary>
+/// <remarks>
+/// <para>
+/// "Not hired" is not a state: it is the absence of a <see cref="DurableMemberState"/> record.
+/// A state with no record cannot be transitioned, so hiring is a transition from nothing into
+/// <see cref="Benched"/> and nothing else creates a member.
+/// </para>
+/// <para>
+/// The spellings are the cross-language wire contract. They are stored as text so a record
+/// written by a newer build reads back as <see cref="Uncertain"/> rather than throwing, and the
+/// transition rules are stated once, in <see cref="DurableMembers.CanTransition"/>.
+/// </para>
+/// </remarks>
+public enum MemberLifecycleState
+{
+    /// <summary>Hired and declared, but not holding the shift. The initial state.</summary>
+    Benched,
+
+    /// <summary>Holding the shift; new work is admitted.</summary>
+    Active,
+
+    /// <summary>Held out of the rotation; in-flight work is left to finish, not drained.</summary>
+    Paused,
+
+    /// <summary>Held out of the rotation and finishing what it holds.</summary>
+    Draining,
+
+    /// <summary>Superseded by a successor. Terminal.</summary>
+    Replaced,
+
+    /// <summary>
+    /// The stored state is not one this build understands. A caller must not mutate it:
+    /// reconcile by hand.
+    /// </summary>
+    Uncertain,
+}
+
+/// <summary>The stored spellings of <see cref="MemberLifecycleState"/>.</summary>
+public static class MemberLifecycleWire
+{
+    /// <summary>The stored spelling of <see cref="MemberLifecycleState.Benched"/>.</summary>
+    public const string Benched = "benched";
+
+    /// <summary>The stored spelling of <see cref="MemberLifecycleState.Active"/>.</summary>
+    public const string Active = "active";
+
+    /// <summary>The stored spelling of <see cref="MemberLifecycleState.Paused"/>.</summary>
+    public const string Paused = "paused";
+
+    /// <summary>The stored spelling of <see cref="MemberLifecycleState.Draining"/>.</summary>
+    public const string Draining = "draining";
+
+    /// <summary>The stored spelling of <see cref="MemberLifecycleState.Replaced"/>.</summary>
+    public const string Replaced = "replaced";
+
+    /// <summary>The stored spelling of <see cref="MemberLifecycleState.Uncertain"/>.</summary>
+    public const string Uncertain = "uncertain";
+}
+
+/// <summary>
+/// The durable lifecycle record of one configured member, stored as the document kind
+/// <c>durable.member-state</c> under the owner id <c>member:{name}</c>.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The record answers "what happened to this member", not "what did the architect declare".
+/// The declaration is a separate document owned by the architect layer; keeping the two apart
+/// is what lets a transition be audited without rewriting the declaration, and lets the
+/// declaration be read as of an entry without lifecycle noise in it.
+/// </para>
+/// <para>
+/// Every transition commits a new version of this record and an entry owned by the same
+/// <c>member:{name}</c> owner id. The version carries the transition, the instant and the
+/// reason, so the store's own history — not a separate log — is the audit trail. The epoch is a
+/// monotonic counter that makes a stale transition refuse rather than overwrite a newer one.
+/// </para>
+/// <para>
+/// <see cref="InFlight"/> lists task ids the member admitted and has not finished. It lists
+/// identifiers; a task's own record is its truth. The list is maintained by the transition
+/// function from the store's task records, so a drained member's list is empty and a paused
+/// member's list names what is still running.
+/// </para>
+/// </remarks>
+public sealed record DurableMemberState
+{
+    /// <summary>The document kind a member state is stored under.</summary>
+    public const string DocumentKind = "durable.member-state";
+
+    /// <summary>The prefix of the owner id a member state is stored under.</summary>
+    public const string OwnerPrefix = "member:";
+
+    /// <summary>The owner id a member's state is stored under.</summary>
+    public static string OwnerId(string name) => $"{OwnerPrefix}{name}";
+
+    /// <summary>The member's name, matching the compiled definition's name.</summary>
+    public required string Name { get; init; }
+
+    /// <summary>
+    /// The lifecycle state as the store holds it: the single authority for what the record says.
+    /// It is deliberately a string so a value written by a newer build survives this reader.
+    /// </summary>
+    public string? StateText { get; init; }
+
+    /// <summary>
+    /// The lifecycle state as this build reads it. A computed view of <see cref="StateText"/>,
+    /// resolved through this build's vocabulary; it is never written and never a fallback for
+    /// missing text.
+    /// </summary>
+    [JsonIgnore]
+    public MemberLifecycleState State => DurableMembers.ReadState(StateText);
+
+    /// <summary>The monotonic claim epoch. Every transition increments it by one.</summary>
+    public long Epoch { get; init; }
+
+    /// <summary>The host instance or session token that last transitioned the member.</summary>
+    public string? Owner { get; init; }
+
+    /// <summary>When the current state was committed, in UTC.</summary>
+    public DateTimeOffset Since { get; init; }
+
+    /// <summary>The transition that produced the current state, e.g. <c>hire</c> or <c>pause</c>.</summary>
+    public string? Transition { get; init; }
+
+    /// <summary>The reason the transition gave, as it was recorded.</summary>
+    public string? Reason { get; init; }
+
+    /// <summary>Task ids the member admitted and has not finished.</summary>
+    public IReadOnlyList<string> InFlight { get; init; } = [];
+
+    /// <summary>
+    /// The successor's name, set when the member was replaced. The handoff pointer: reading it
+    /// is how a successor — or an auditor — finds the context that was handed over.
+    /// </summary>
+    public string? ReplacedBy { get; init; }
+
+    /// <summary>When the replacement was committed, in UTC.</summary>
+    public DateTimeOffset? ReplacedAt { get; init; }
+
+    /// <summary>The handoff document kind a replacement writes, when one was written.</summary>
+    public string? HandoffKind { get; init; }
+
+    /// <summary>The handoff document's owner id, when one was written.</summary>
+    public string? HandoffOwnerId { get; init; }
+}
+
+/// <summary>
+/// The handoff context a replacement writes for its successor, stored as the document kind
+/// <c>durable.member-handoff</c> under the owner id <c>member-handoff:{name}</c>.
+/// </summary>
+/// <remarks>
+/// The handoff is a document rather than a field on the member state because it is the
+/// successor's input, not the predecessor's status: it outlives the predecessor's terminal
+/// state and is read as its own record. It is written in the same transaction as the
+/// predecessor's <c>replaced</c> version, so there is never a moment when the successor is
+/// named without the context it was handed.
+/// </remarks>
+public sealed class DurableMemberHandoff
+{
+    /// <summary>The document kind a member handoff is stored under.</summary>
+    public const string DocumentKind = "durable.member-handoff";
+
+    /// <summary>The prefix of the owner id a member handoff is stored under.</summary>
+    public const string OwnerPrefix = "member-handoff:";
+
+    /// <summary>The owner id a member's handoff is stored under.</summary>
+    public static string OwnerId(string name) => $"{OwnerPrefix}{name}";
+
+    /// <summary>The member being replaced.</summary>
+    public required string Predecessor { get; init; }
+
+    /// <summary>The member taking over.</summary>
+    public required string Successor { get; init; }
+
+    /// <summary>The predecessor's epoch when the replacement was committed.</summary>
+    public long Epoch { get; init; }
+
+    /// <summary>The task ids the predecessor still held when it was replaced.</summary>
+    public IReadOnlyList<string> InFlight { get; init; } = [];
+
+    /// <summary>The context the successor starts from.</summary>
+    public required string Context { get; init; }
+
+    /// <summary>When the handoff was committed, in UTC.</summary>
+    public required DateTimeOffset WrittenAt { get; init; }
+}
+
+/// <summary>What a member transition did.</summary>
+/// <remarks>
+/// <see cref="Succeeded"/> is the only outcome that changed the store. A refusal is a value, not
+/// an exception, because refusing an invalid transition is the normal answer to a request that
+/// arrived at the wrong time — and the refusal has to name what to do next. An exception is
+/// reserved for a caller error the caller cannot act on, such as a missing member name.
+/// </remarks>
+[JsonConverter(typeof(JsonStringEnumConverter<MemberTransitionOutcome>))]
+public enum MemberTransitionOutcome
+{
+    /// <summary>The transition was committed.</summary>
+    Succeeded,
+
+    /// <summary>The request is not valid for the member's current state.</summary>
+    Refused,
+
+    /// <summary>The member's record cannot be interpreted. Read-only.</summary>
+    Uncertain,
+}
+
+/// <summary>The result of a member transition.</summary>
+/// <param name="Outcome">What happened.</param>
+/// <param name="State">The member's state after the call, or as it was found on a refusal.</param>
+/// <param name="Message">A human-readable reason, always present for a refusal.</param>
+public sealed record MemberTransitionResult(
+    MemberTransitionOutcome Outcome,
+    DurableMemberState? State,
+    string Message)
+{
+    /// <summary>Whether the store changed.</summary>
+    [JsonIgnore]
+    public bool Succeeded => Outcome is MemberTransitionOutcome.Succeeded;
+}
+
+/// <summary>
+/// The shared member lifecycle operations: hire, activate, pause, resume, drain, bench and
+/// replace, each a durable transition on an ordinary document.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Nothing here is a new persistence primitive. A member's state is a document of kind
+/// <see cref="DurableMemberState.DocumentKind"/>; a replacement's handoff is a document of kind
+/// <see cref="DurableMemberHandoff.DocumentKind"/>. Both are <see cref="ForkPolicy.Initial"/>,
+/// because forking a conversation is not inheriting a member. The owner namespaces
+/// <c>member:</c> and <c>member-handoff:</c> are disjoint from every existing owner id.
+/// </para>
+/// <para>
+/// Every transition runs inside one <see cref="DurableStore.CommitAsync"/>: it reads the current
+/// version, validates the transition and the expected epoch, writes the new version and appends
+/// an entry owned by the member. A crash before the commit leaves the previous version; a crash
+/// after it leaves the new one. There is no half-transition, because the store commits
+/// atomically.
+/// </para>
+/// <para>
+/// The transition table is stated once, in <see cref="CanTransition"/>, and both the runtime and
+/// the tests read it. An invalid transition is refused with a message naming the current state,
+/// the requested state and the transitions that are valid now.
+/// </para>
+/// </remarks>
+public static class DurableMembers
+{
+    /// <summary>The definition a member state is stored under.</summary>
+    public static readonly DocumentDefinition<DurableMemberState> StateDefinition =
+        new(DurableMemberState.DocumentKind, DocumentHistory.Rewindable, ForkPolicy.Initial);
+
+    /// <summary>The definition a member handoff is stored under.</summary>
+    public static readonly DocumentDefinition<DurableMemberHandoff> HandoffDefinition =
+        new(DurableMemberHandoff.DocumentKind, DocumentHistory.Rewindable, ForkPolicy.Initial);
+
+    /// <summary>The states a member in <paramref name="state"/> may move to.</summary>
+    /// <remarks>
+    /// The table is the design's state machine: <c>benched</c> and <c>active</c> can be paused or
+    /// drained; <c>paused</c> and <c>draining</c> can resume to <c>active</c>; a drain that
+    /// finishes lands on <c>benched</c>; and every non-terminal state can be replaced. Resuming
+    /// from <c>draining</c> is valid because an abandoned drain is a pause by another name: the
+    /// operator may want the member back in the rotation without waiting for the work.
+    /// </remarks>
+    public static IReadOnlyList<MemberLifecycleState> TransitionsFrom(MemberLifecycleState state) => state switch
+    {
+        MemberLifecycleState.Benched =>
+            [MemberLifecycleState.Active, MemberLifecycleState.Paused, MemberLifecycleState.Draining, MemberLifecycleState.Replaced],
+        MemberLifecycleState.Active =>
+            [MemberLifecycleState.Paused, MemberLifecycleState.Draining, MemberLifecycleState.Replaced],
+        MemberLifecycleState.Paused =>
+            [MemberLifecycleState.Active, MemberLifecycleState.Draining, MemberLifecycleState.Replaced],
+        MemberLifecycleState.Draining =>
+            [MemberLifecycleState.Active, MemberLifecycleState.Benched, MemberLifecycleState.Paused, MemberLifecycleState.Replaced],
+        _ => [],
+    };
+
+    /// <summary>Whether <paramref name="from"/> may move to <paramref name="to"/>.</summary>
+    public static bool CanTransition(MemberLifecycleState from, MemberLifecycleState to) =>
+        TransitionsFrom(from).Contains(to);
+
+    /// <summary>The stored spelling of a state.</summary>
+    public static string Text(MemberLifecycleState state) => state switch
+    {
+        MemberLifecycleState.Benched => MemberLifecycleWire.Benched,
+        MemberLifecycleState.Active => MemberLifecycleWire.Active,
+        MemberLifecycleState.Paused => MemberLifecycleWire.Paused,
+        MemberLifecycleState.Draining => MemberLifecycleWire.Draining,
+        MemberLifecycleState.Replaced => MemberLifecycleWire.Replaced,
+        _ => MemberLifecycleWire.Uncertain,
+    };
+
+    /// <summary>
+    /// Resolves a stored state text through this build's vocabulary. A missing or unknown value
+    /// is <see cref="MemberLifecycleState.Uncertain"/>, never a guess.
+    /// </summary>
+    public static MemberLifecycleState ReadState(string? text) => text switch
+    {
+        MemberLifecycleWire.Benched => MemberLifecycleState.Benched,
+        MemberLifecycleWire.Active => MemberLifecycleState.Active,
+        MemberLifecycleWire.Paused => MemberLifecycleState.Paused,
+        MemberLifecycleWire.Draining => MemberLifecycleState.Draining,
+        MemberLifecycleWire.Replaced => MemberLifecycleState.Replaced,
+        _ => MemberLifecycleState.Uncertain,
+    };
+
+    /// <summary>Reads a member's state, or <c>null</c> when the member is not hired.</summary>
+    public static DurableMemberState? Read(DurableStore store, string name)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        var document = store.Document(DurableMemberState.DocumentKind, DurableMemberState.OwnerId(name));
+        return document?.Latest is { } latest
+            ? DurableJson.FromElement<DurableMemberState>(latest)
+            : null;
+    }
+
+    /// <summary>Reads a replacement handoff, or <c>null</c> when there is none.</summary>
+    public static DurableMemberHandoff? ReadHandoff(DurableStore store, string name)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        var document = store.Document(DurableMemberHandoff.DocumentKind, DurableMemberHandoff.OwnerId(name));
+        return document?.Latest is { } latest
+            ? DurableJson.FromElement<DurableMemberHandoff>(latest)
+            : null;
+    }
+
+    /// <summary>Hires a member into the <c>benched</c> state.</summary>
+    /// <remarks>
+    /// Hiring is create-if-absent: a member that already has a record is refused rather than
+    /// overwritten, because overwriting would erase the transition history a rehire's audit
+    /// depends on. The successor of a <c>replaced</c> member is a different name, so a name is
+    /// never reused to avoid that history.
+    /// </remarks>
+    public static Task<MemberTransitionResult> HireAsync(
+        DurableStore store,
+        string name,
+        string? owner,
+        DateTimeOffset now,
+        string? reason = null)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        return store.CommitAsync(transaction =>
+        {
+            var ownerId = DurableMemberState.OwnerId(name);
+            var existing = Read(store, name);
+            if (existing is not null)
+            {
+                return Task.FromResult(new MemberTransitionResult(
+                    MemberTransitionOutcome.Refused,
+                    existing,
+                    $"member '{name}' is already hired in state '{Text(existing.State)}'. "
+                    + "A hired member is not overwritten; use a transition, or hire a successor under a new name."));
+            }
+
+            var state = new DurableMemberState
+            {
+                Name = name,
+                StateText = Text(MemberLifecycleState.Benched),
+                Epoch = 1,
+                Owner = owner,
+                Since = now,
+                Transition = "hire",
+                Reason = reason,
+                InFlight = [],
+            };
+
+            // The create-if-absent guard runs BEFORE anything is staged. It is the only check
+            // that can refuse, and `CommitAsync` rolls back on a throw rather than on a returned
+            // result: staging the entry first would commit it alongside the refusal, leaving a
+            // transcript entry for a hire that never happened.
+            if (!transaction.TryCreateDocument(StateDefinition, ownerId))
+            {
+                return Task.FromResult(new MemberTransitionResult(
+                    MemberTransitionOutcome.Uncertain,
+                    null,
+                    $"the store holds a member state for '{name}' that this transaction could not read back; "
+                    + "treating it as uncertain rather than hiring over it."));
+            }
+
+            var entryId = transaction.AppendEntry(ownerId, "member-state");
+            transaction.CommitDocument(StateDefinition, ownerId, state, entryId);
+            return Task.FromResult(new MemberTransitionResult(
+                MemberTransitionOutcome.Succeeded,
+                state,
+                $"hired '{name}' into '{Text(MemberLifecycleState.Benched)}'."));
+        });
+    }
+
+    /// <summary>Moves a member to a non-terminal state, validating the transition and the epoch.</summary>
+    /// <param name="store">The store the member lives in.</param>
+    /// <param name="name">The member's name.</param>
+    /// <param name="to">The state to move to. <c>replaced</c> is not valid here; use <see cref="ReplaceAsync"/>.</param>
+    /// <param name="owner">The host instance or session token performing the transition.</param>
+    /// <param name="now">The instant to record.</param>
+    /// <param name="expectedEpoch">The epoch the caller believes is current, or <c>null</c> to accept the current one.</param>
+    /// <param name="reason">Why the transition happened, recorded on the new version.</param>
+    public static Task<MemberTransitionResult> TransitionAsync(
+        DurableStore store,
+        string name,
+        MemberLifecycleState to,
+        string? owner,
+        DateTimeOffset now,
+        long? expectedEpoch = null,
+        string? reason = null)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        if (to is MemberLifecycleState.Replaced)
+        {
+            return Task.FromResult(new MemberTransitionResult(
+                MemberTransitionOutcome.Refused,
+                null,
+                "replacement is not a plain transition: it needs a successor and a handoff. Use ReplaceAsync."));
+        }
+
+        return store.CommitAsync(transaction =>
+        {
+            var current = Read(store, name);
+            if (current is null)
+            {
+                return Task.FromResult(new MemberTransitionResult(
+                    MemberTransitionOutcome.Refused,
+                    null,
+                    $"member '{name}' is not hired. Hire it first; a member with no record has no state to transition."));
+            }
+
+            if (current.State is MemberLifecycleState.Uncertain)
+            {
+                return Task.FromResult(new MemberTransitionResult(
+                    MemberTransitionOutcome.Uncertain,
+                    current,
+                    $"member '{name}' records state '{current.StateText ?? "(none)"}', which this build cannot "
+                    + "interpret. Read-only; reconcile it before transitioning."));
+            }
+
+            var refusal = RefuseInvalid(current, to, expectedEpoch);
+            if (refusal is not null)
+            {
+                return Task.FromResult(refusal);
+            }
+
+            var next = current with
+            {
+                StateText = Text(to),
+                Epoch = current.Epoch + 1,
+                Owner = owner,
+                Since = now,
+                Transition = to is MemberLifecycleState.Active ? "activate" : Text(to),
+                Reason = reason,
+            };
+
+            var ownerId = DurableMemberState.OwnerId(name);
+            var entryId = transaction.AppendEntry(ownerId, "member-state");
+            transaction.CommitDocument(StateDefinition, ownerId, next, entryId);
+            return Task.FromResult(new MemberTransitionResult(
+                MemberTransitionOutcome.Succeeded,
+                next,
+                $"'{name}' moved from '{Text(current.State)}' to '{Text(to)}' at epoch {next.Epoch}."));
+        });
+    }
+
+    /// <summary>Replaces a member with a successor and writes the handoff context.</summary>
+    /// <remarks>
+    /// The predecessor's <c>replaced</c> version, the handoff document and the successor's
+    /// <c>benched</c> state are committed in one transaction. Either all three land or none does,
+    /// so a successor is never named without the context it was handed, and the predecessor is
+    /// never terminal without a successor to point at.
+    /// </remarks>
+    public static Task<MemberTransitionResult> ReplaceAsync(
+        DurableStore store,
+        string name,
+        string successor,
+        string context,
+        string? owner,
+        DateTimeOffset now,
+        long? expectedEpoch = null)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentException.ThrowIfNullOrWhiteSpace(successor);
+        ArgumentNullException.ThrowIfNull(context);
+
+        if (string.Equals(name, successor, StringComparison.Ordinal))
+        {
+            return Task.FromResult(new MemberTransitionResult(
+                MemberTransitionOutcome.Refused,
+                null,
+                $"member '{name}' cannot replace itself. Name the successor as a different member."));
+        }
+
+        return store.CommitAsync(transaction =>
+        {
+            var current = Read(store, name);
+            if (current is null)
+            {
+                return Task.FromResult(new MemberTransitionResult(
+                    MemberTransitionOutcome.Refused,
+                    null,
+                    $"member '{name}' is not hired, so there is nothing to replace."));
+            }
+
+            if (current.State is MemberLifecycleState.Uncertain)
+            {
+                return Task.FromResult(new MemberTransitionResult(
+                    MemberTransitionOutcome.Uncertain,
+                    current,
+                    $"member '{name}' records state '{current.StateText ?? "(none)"}', which this build cannot "
+                    + "interpret. Read-only; reconcile it before replacing."));
+            }
+
+            var refusal = RefuseInvalid(current, MemberLifecycleState.Replaced, expectedEpoch);
+            if (refusal is not null)
+            {
+                return Task.FromResult(refusal);
+            }
+
+            var successorState = Read(store, successor);
+            if (successorState is not null)
+            {
+                return Task.FromResult(new MemberTransitionResult(
+                    MemberTransitionOutcome.Refused,
+                    current,
+                    $"successor '{successor}' is already hired in state '{Text(successorState.State)}'. "
+                    + "A replacement introduces a new member; hire a different name."));
+            }
+
+            var handoffOwner = DurableMemberHandoff.OwnerId(name);
+            var handoff = new DurableMemberHandoff
+            {
+                Predecessor = name,
+                Successor = successor,
+                Epoch = current.Epoch + 1,
+                InFlight = current.InFlight,
+                Context = context,
+                WrittenAt = now,
+            };
+
+            var successorRecord = new DurableMemberState
+            {
+                Name = successor,
+                StateText = Text(MemberLifecycleState.Benched),
+                Epoch = 1,
+                Owner = owner,
+                Since = now,
+                Transition = "replace",
+                Reason = $"replaced '{name}'.",
+                InFlight = [],
+            };
+
+            var replaced = current with
+            {
+                StateText = Text(MemberLifecycleState.Replaced),
+                Epoch = current.Epoch + 1,
+                Owner = owner,
+                Since = now,
+                Transition = "replace",
+                Reason = $"replaced by '{successor}'.",
+                ReplacedBy = successor,
+                ReplacedAt = now,
+                HandoffKind = DurableMemberHandoff.DocumentKind,
+                HandoffOwnerId = handoffOwner,
+            };
+
+            var predecessorOwner = DurableMemberState.OwnerId(name);
+            var successorOwner = DurableMemberState.OwnerId(successor);
+
+            // The successor's create-if-absent guard runs BEFORE anything is staged, for the same
+            // reason HireAsync's does: `CommitAsync` rolls back on a throw, not on a returned
+            // result. Staging the handoff and the predecessor's `replaced` version first would
+            // commit both alongside the refusal -- leaving the predecessor terminally replaced,
+            // pointing at a successor that was never hired, while the caller is told "uncertain,
+            // retry". That is the exact half-state the method's doc comment promises cannot happen.
+            if (!transaction.TryCreateDocument(StateDefinition, successorOwner))
+            {
+                return Task.FromResult(new MemberTransitionResult(
+                    MemberTransitionOutcome.Uncertain,
+                    current,
+                    $"the store holds a member state for successor '{successor}' that this transaction could not "
+                    + "read back; treating the replacement as uncertain rather than overwriting it."));
+            }
+
+            var handoffEntry = transaction.AppendEntry(handoffOwner, "member-handoff");
+            transaction.CommitDocument(HandoffDefinition, handoffOwner, handoff, handoffEntry);
+
+            var replacedEntry = transaction.AppendEntry(predecessorOwner, "member-state");
+            transaction.CommitDocument(StateDefinition, predecessorOwner, replaced, replacedEntry);
+
+            var successorEntry = transaction.AppendEntry(successorOwner, "member-state");
+            transaction.CommitDocument(StateDefinition, successorOwner, successorRecord, successorEntry);
+            return Task.FromResult(new MemberTransitionResult(
+                MemberTransitionOutcome.Succeeded,
+                replaced,
+                $"replaced '{name}' with '{successor}'; handoff context is in '{handoffOwner}'."));
+        });
+    }
+
+    /// <summary>
+    /// Records the task ids a member currently holds, re-reading each task's status. The task
+    /// record is the truth: a task that finished is dropped from the list even if the caller
+    /// still names it.
+    /// </summary>
+    public static Task<MemberTransitionResult> RecordInFlightAsync(
+        DurableStore store,
+        string name,
+        IReadOnlyList<string> taskIds,
+        string? owner,
+        DateTimeOffset now,
+        long? expectedEpoch = null)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(taskIds);
+
+        return store.CommitAsync(transaction =>
+        {
+            var current = Read(store, name);
+            if (current is null)
+            {
+                return Task.FromResult(new MemberTransitionResult(
+                    MemberTransitionOutcome.Refused,
+                    null,
+                    $"member '{name}' is not hired, so it holds no work."));
+            }
+
+            if (current.State is MemberLifecycleState.Uncertain)
+            {
+                return Task.FromResult(new MemberTransitionResult(
+                    MemberTransitionOutcome.Uncertain,
+                    current,
+                    $"member '{name}' records state '{current.StateText ?? "(none)"}', which this build cannot "
+                    + "interpret. Read-only; reconcile it before recording work."));
+            }
+
+            if (expectedEpoch is { } expected && expected != current.Epoch)
+            {
+                return Task.FromResult(new MemberTransitionResult(
+                    MemberTransitionOutcome.Refused,
+                    current,
+                    $"member '{name}' is at epoch {current.Epoch}, not {expected}. Re-read the member and retry."));
+            }
+
+            var open = new List<string>();
+            foreach (var taskId in taskIds)
+            {
+                var task = store.Task(taskId);
+                if (task is not null && task.Status is not TaskStatus.Terminal)
+                {
+                    open.Add(taskId);
+                }
+            }
+
+            var next = current with
+            {
+                Epoch = current.Epoch + 1,
+                Owner = owner,
+                Since = now,
+                Transition = "record-in-flight",
+                Reason = $"{open.Count} task(s) still in flight.",
+                InFlight = open,
+            };
+
+            var ownerId = DurableMemberState.OwnerId(name);
+            var entryId = transaction.AppendEntry(ownerId, "member-state");
+            transaction.CommitDocument(StateDefinition, ownerId, next, entryId);
+            return Task.FromResult(new MemberTransitionResult(
+                MemberTransitionOutcome.Succeeded,
+                next,
+                $"'{name}' records {open.Count} task(s) in flight at epoch {next.Epoch}."));
+        });
+    }
+
+    /// <summary>
+    /// Finishes a drain: <c>draining</c> becomes <c>benched</c> only when every listed task is
+    /// terminal. A drain with work still running is refused and told what is outstanding.
+    /// </summary>
+    public static Task<MemberTransitionResult> CompleteDrainAsync(
+        DurableStore store,
+        string name,
+        string? owner,
+        DateTimeOffset now,
+        long? expectedEpoch = null)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        return store.CommitAsync(transaction =>
+        {
+            var current = Read(store, name);
+            if (current is null)
+            {
+                return Task.FromResult(new MemberTransitionResult(
+                    MemberTransitionOutcome.Refused,
+                    null,
+                    $"member '{name}' is not hired, so there is no drain to complete."));
+            }
+
+            if (current.State is MemberLifecycleState.Uncertain)
+            {
+                return Task.FromResult(new MemberTransitionResult(
+                    MemberTransitionOutcome.Uncertain,
+                    current,
+                    $"member '{name}' records state '{current.StateText ?? "(none)"}', which this build cannot "
+                    + "interpret. Read-only; reconcile it before completing a drain."));
+            }
+
+            if (current.State is not MemberLifecycleState.Draining)
+            {
+                return Task.FromResult(new MemberTransitionResult(
+                    MemberTransitionOutcome.Refused,
+                    current,
+                    $"member '{name}' is '{Text(current.State)}', not '{Text(MemberLifecycleState.Draining)}'. "
+                    + "Only a draining member can complete a drain."));
+            }
+
+            if (expectedEpoch is { } expected && expected != current.Epoch)
+            {
+                return Task.FromResult(new MemberTransitionResult(
+                    MemberTransitionOutcome.Refused,
+                    current,
+                    $"member '{name}' is at epoch {current.Epoch}, not {expected}. Re-read the member and retry."));
+            }
+
+            var outstanding = current.InFlight.Where(id => store.Task(id) is { Status: not TaskStatus.Terminal }).ToList();
+            if (outstanding.Count > 0)
+            {
+                return Task.FromResult(new MemberTransitionResult(
+                    MemberTransitionOutcome.Refused,
+                    current,
+                    $"member '{name}' is still draining {outstanding.Count} task(s) in flight: {string.Join(", ", outstanding)}. "
+                    + "Wait for them, or pause the member to stop draining while the work continues."));
+            }
+
+            var next = current with
+            {
+                StateText = Text(MemberLifecycleState.Benched),
+                Epoch = current.Epoch + 1,
+                Owner = owner,
+                Since = now,
+                Transition = "drain-complete",
+                Reason = "every in-flight task reached a terminal state.",
+                InFlight = [],
+            };
+
+            var ownerId = DurableMemberState.OwnerId(name);
+            var entryId = transaction.AppendEntry(ownerId, "member-state");
+            transaction.CommitDocument(StateDefinition, ownerId, next, entryId);
+            return Task.FromResult(new MemberTransitionResult(
+                MemberTransitionOutcome.Succeeded,
+                next,
+                $"'{name}' finished draining and is '{Text(MemberLifecycleState.Benched)}' at epoch {next.Epoch}."));
+        });
+    }
+
+    private static MemberTransitionResult? RefuseInvalid(
+        DurableMemberState current,
+        MemberLifecycleState to,
+        long? expectedEpoch)
+    {
+        if (expectedEpoch is { } expected && expected != current.Epoch)
+        {
+            return new MemberTransitionResult(
+                MemberTransitionOutcome.Refused,
+                current,
+                $"member '{current.Name}' is at epoch {current.Epoch}, not {expected}. "
+                + "Another transition landed first; re-read the member and retry.");
+        }
+
+        if (current.State is MemberLifecycleState.Replaced)
+        {
+            return new MemberTransitionResult(
+                MemberTransitionOutcome.Refused,
+                current,
+                $"member '{current.Name}' is '{Text(MemberLifecycleState.Replaced)}' and terminal. "
+                + "A replaced member is not transitioned; hire a successor.");
+        }
+
+        if (!CanTransition(current.State, to))
+        {
+            var valid = TransitionsFrom(current.State);
+            var allowed = valid.Count == 0 ? "(none)" : string.Join(", ", valid.Select(Text));
+            return new MemberTransitionResult(
+                MemberTransitionOutcome.Refused,
+                current,
+                $"member '{current.Name}' cannot move from '{Text(current.State)}' to '{Text(to)}'. "
+                + $"Valid transitions from '{Text(current.State)}': {allowed}.");
+        }
+
+        return null;
+    }
+}
+
 /// <summary>
 /// The model a runtime reported for a session or for one turn of it.
 /// </summary>
@@ -6276,6 +7077,8 @@ internal sealed class DurableRuntime : IAsyncDisposable
         DurableSchedule.DocumentKind,
         DurableShiftClaim.DocumentKind,
         DurableShiftHandoff.DocumentKind,
+        DurableMemberState.DocumentKind,
+        DurableMemberHandoff.DocumentKind,
     ];
 
     private HashSet<string>? _internalDocumentKinds;

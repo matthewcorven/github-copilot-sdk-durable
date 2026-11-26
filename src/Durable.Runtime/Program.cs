@@ -78,6 +78,12 @@ internal static class Program
         new("handoff-achieved", true, "What this shift completed, recorded in the shift handoff."),
         new("handoff-selected", true, "What this shift worked on, recorded in the shift handoff."),
         new("handoff-blockers", true, "Blockers a successor must know about, recorded in the shift handoff."),
+        new("state", true, "The lifecycle state a member transition moves to: active, benched, paused, or draining."),
+        new("successor", true, "The member that takes over on replace."),
+        new("context", true, "The handoff context a replace records for the successor."),
+        new("reason", true, "Why the transition happened. Recorded with the new state."),
+        new("expected-epoch", true, "The member epoch the caller believes is current. A mismatch is refused."),
+        new("in-flight", true, "A task id the member holds. Repeatable."),
     ];
 
     private static async Task<int> Main(string[] args)
@@ -96,8 +102,9 @@ internal static class Program
                 "serve" => await ServeAsync(args),
                 "schedule" => await ScheduleAsync(args),
                 "shift" => await ShiftAsync(args),
+                "member" => await MemberAsync(args),
                 _ => throw new UsageException(
-                    $"unknown command '{args[0]}'. Commands are run, serve, schedule, and shift."),
+                    $"unknown command '{args[0]}'. Commands are run, serve, schedule, shift, and member."),
             };
         }
         catch (UsageException ex)
@@ -157,6 +164,207 @@ internal static class Program
             "turnUnsuccessful" => ExitCodes.TurnUnsuccessful,
             _ => ExitCodes.AgentFailed,
         };
+    }
+
+    /// <summary>
+    /// Runs one member lifecycle transition against the store and prints the result.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The member command deliberately does not load an agent definition. A lifecycle transition
+    /// is state on the member record, not a turn: refusing a transition because the definition
+    /// changed underneath it would conflate two different failures. The definition is the
+    /// architect layer's concern; the lifecycle is this command's.
+    /// </para>
+    /// <para>
+    /// A refusal is printed as a result with exit code 1, not as a usage error. The request was
+    /// understood; the state did not permit it. A usage error is reserved for a request the
+    /// command cannot understand at all, such as a missing action or a state name that is not in
+    /// the vocabulary.
+    /// </para>
+    /// </remarks>
+    private static async Task<int> MemberAsync(string[] args)
+    {
+        var options = ParseHostOptions(args, requireInput: false);
+        var action = MemberAction(args);
+        var member = options.Member;
+        if (string.IsNullOrWhiteSpace(member))
+        {
+            throw new UsageException($"member {action} requires --member <name>.");
+        }
+
+        var now = ClockFor(options)();
+        var owner = options.Owner ?? options.Session;
+
+        using var store = OpenStore(options);
+        ClaimOwnership(store, options.StorePath);
+        ReportStore(store, options.StorePath);
+
+        MemberTransitionResult result;
+        MemberResult output;
+        switch (action)
+        {
+            case "hire":
+                result = await DurableMembers.HireAsync(store, member, owner, now, options.Reason);
+                output = MemberResult.From(member, action, result);
+                break;
+
+            case "activate":
+                result = await DurableMembers.TransitionAsync(
+                    store, member, MemberLifecycleState.Active, owner, now, options.ExpectedEpoch, options.Reason);
+                output = MemberResult.From(member, action, result);
+                break;
+
+            case "pause":
+                result = await DurableMembers.TransitionAsync(
+                    store, member, MemberLifecycleState.Paused, owner, now, options.ExpectedEpoch, options.Reason);
+                output = MemberResult.From(member, action, result);
+                break;
+
+            case "resume":
+                result = await DurableMembers.TransitionAsync(
+                    store, member, MemberLifecycleState.Active, owner, now, options.ExpectedEpoch, options.Reason);
+                output = MemberResult.From(member, action, result);
+                break;
+
+            case "drain":
+                result = await DurableMembers.TransitionAsync(
+                    store, member, MemberLifecycleState.Draining, owner, now, options.ExpectedEpoch, options.Reason);
+                output = MemberResult.From(member, action, result);
+                break;
+
+            case "bench":
+                result = await DurableMembers.TransitionAsync(
+                    store, member, MemberLifecycleState.Benched, owner, now, options.ExpectedEpoch, options.Reason);
+                output = MemberResult.From(member, action, result);
+                break;
+
+            case "complete-drain":
+                result = await DurableMembers.CompleteDrainAsync(
+                    store, member, owner, now, options.ExpectedEpoch);
+                output = MemberResult.From(member, action, result);
+                break;
+
+            case "replace":
+                if (string.IsNullOrWhiteSpace(options.Successor))
+                {
+                    throw new UsageException("member replace requires --successor <name>.");
+                }
+
+                if (options.Context is null)
+                {
+                    throw new UsageException("member replace requires --context <text>.");
+                }
+
+                result = await DurableMembers.ReplaceAsync(
+                    store, member, options.Successor, options.Context, owner, now, options.ExpectedEpoch);
+                output = MemberResult.From(member, action, result);
+                if (result.Succeeded)
+                {
+                    var handoff = DurableMembers.ReadHandoff(store, member);
+                    output = new MemberResult
+                    {
+                        Member = output.Member,
+                        Transition = output.Transition,
+                        Outcome = output.Outcome,
+                        Message = output.Message,
+                        State = output.State,
+                        Handoff = handoff is null ? null : MemberHandoffResult.From(handoff),
+                    };
+                }
+
+                break;
+
+            case "record-in-flight":
+                if (options.InFlight.Count == 0)
+                {
+                    throw new UsageException("member record-in-flight requires at least one --in-flight <taskId>.");
+                }
+
+                result = await DurableMembers.RecordInFlightAsync(
+                    store, member, options.InFlight, owner, now, options.ExpectedEpoch);
+                output = MemberResult.From(member, action, result);
+                break;
+
+            case "show":
+                var state = DurableMembers.Read(store, member);
+                if (state is null)
+                {
+                    throw new UsageException(
+                        $"member '{member}' is not hired. Run member hire --member {member} first.");
+                }
+
+                result = new MemberTransitionResult(MemberTransitionOutcome.Succeeded, state, "read-only.");
+                output = MemberResult.From(member, action, result);
+                break;
+
+            default:
+                throw new UsageException(
+                    $"unknown member action '{action}'. Actions are hire, activate, pause, resume, drain, "
+                    + "bench, complete-drain, replace, record-in-flight, and show.");
+        }
+
+        Console.Out.WriteLine(output.ToJson());
+        return result.Succeeded ? ExitCodes.Succeeded : ExitCodes.AgentFailed;
+    }
+
+    /// <summary>The member action named by the invocation, or a usage error naming the actions.</summary>
+    private static string MemberAction(string[] args)
+    {
+        var positionals = new List<string>();
+        for (var i = 1; i < args.Length; i++)
+        {
+            if (args[i].StartsWith("--", StringComparison.Ordinal))
+            {
+                if (args[i].Contains('='))
+                {
+                    continue;
+                }
+
+                if (i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal))
+                {
+                    i++;
+                }
+
+                continue;
+            }
+
+            positionals.Add(args[i]);
+        }
+
+        if (positionals.Count == 0)
+        {
+            throw new UsageException(
+                "member requires an action: hire, activate, pause, resume, drain, bench, complete-drain, "
+                + "replace, record-in-flight, or show.");
+        }
+
+        if (positionals.Count > 1)
+        {
+            throw new UsageException($"member takes one action, got '{positionals[0]}' and '{positionals[1]}'.");
+        }
+
+        return positionals[0];
+    }
+
+    /// <summary>
+    /// Reads the epoch a caller expects to hold. A non-numeric value is a usage error: a caller
+    /// that typed an epoch meant to guard a transition, and silently dropping the guard would
+    /// turn a stale-write refusal into a lost update.
+    /// </summary>
+    private static long? ParseEpoch(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        if (!long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var epoch) || epoch < 0)
+        {
+            throw new UsageException($"'{text}' is not a member epoch. Write a whole number, e.g. 1.");
+        }
+
+        return epoch;
     }
 
     /// <summary>
@@ -1161,7 +1369,11 @@ internal static class Program
         var parsed = CommandLine.Parse(args, 1, HostSpecs, out var positionals);
         if (positionals.Count > 0)
         {
-            throw new UsageException($"unexpected argument '{positionals[0]}'");
+            // member names its action as the first positional. Every other command takes none.
+            if (args[0] != "member" || positionals.Count > 1)
+            {
+                throw new UsageException($"unexpected argument '{positionals[0]}'");
+            }
         }
 
         if (parsed.Has("dev-tunnel") && (args[0] != "serve" || !parsed.Has("http") || parsed.Has("rpc")))
@@ -1180,8 +1392,11 @@ internal static class Program
             storePath ??= DurableStore.DefaultStorePath();
         }
 
+        // A member transition is store state, not a turn, so it does not need an agent definition.
+        var agent = args[0] == "member" ? parsed.Last("agent") ?? string.Empty : parsed.Required("agent");
+
         return new HostOptions(
-            Agent: parsed.Required("agent"),
+            Agent: agent,
             Input: requireInput ? parsed.Required("input") : parsed.Last("input"),
             DefinitionPath: parsed.Last("definition"),
             StorePath: storePath,
@@ -1208,7 +1423,13 @@ internal static class Program
             HandoffAchieved: parsed.Last("handoff-achieved"),
             HandoffRemaining: parsed.Last("handoff-remaining"),
             HandoffNext: parsed.All("handoff-next").ToList(),
-            HandoffBlockers: parsed.Last("handoff-blockers"));
+            HandoffBlockers: parsed.Last("handoff-blockers"),
+            State: parsed.Last("state"),
+            Successor: parsed.Last("successor"),
+            Context: parsed.Last("context"),
+            Reason: parsed.Last("reason"),
+            ExpectedEpoch: ParseEpoch(parsed.Last("expected-epoch")),
+            InFlight: parsed.All("in-flight").ToList());
     }
 
     /// <summary>
@@ -1590,6 +1811,8 @@ internal static class Program
           schedule  Run an agent on a schedule. Delivered by #97.
           shift     Claim a shift, resume it from its committed handoff, run once, and hand off.
                     A claim another owner holds with no handoff, or an uncertain claim, is refused.
+          member    Hire, activate, pause, resume, drain, bench, replace or inspect a member's
+                    lifecycle. Every transition is committed and audited; an invalid one is refused.
 
         Options:
           --agent <name>              The agent definition to run. Required.
@@ -1629,6 +1852,21 @@ internal static class Program
           --handoff-achieved <text>   What this shift completed, recorded in the handoff.
           --handoff-selected <text>   What this shift worked on, recorded in the handoff.
           --handoff-blockers <text>   Blockers a successor must know about, recorded in the handoff.
+
+        member <action> --member <name> [options]
+          hire | activate | pause | resume | drain | bench | replace | complete-drain | show
+
+          --store <file>              The store file. Defaults to the durable store.
+          --format <format>           The store format: auto, jsonl, legacy-json, or in-memory.
+          --member <name>             The member to transition. Required.
+          --owner <token>             This invocation's owner token. Alias: --session.
+          --state <state>             active, benched, paused, or draining. Optional for pause and resume.
+          --successor <name>          The member that takes over on replace. Required by replace.
+          --context <text>            The handoff context a replace records. Required by replace.
+          --reason <text>             Why the transition happened. Recorded with the new state.
+          --expected-epoch <n>        The epoch the caller believes is current. A mismatch is refused.
+          --in-flight <taskId>        A task id the member holds. Repeatable. Used by record-in-flight.
+          --now <instant>             Treat this instant as now. Defaults to the wall clock.
           --help                      Show this help.
 
         Exit codes:
@@ -1672,7 +1910,13 @@ internal static class Program
         string? HandoffAchieved,
         string? HandoffRemaining,
         IReadOnlyList<string> HandoffNext,
-        string? HandoffBlockers);
+        string? HandoffBlockers,
+        string? State,
+        string? Successor,
+        string? Context,
+        string? Reason,
+        long? ExpectedEpoch,
+        IReadOnlyList<string> InFlight);
 
     /// <summary>
     /// One turn, as the transport that ran it needs to see it: the serialized result, the answer

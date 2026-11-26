@@ -923,7 +923,7 @@ public sealed class RuntimeHostCliTests
 
         Assert.Equal(2, exitCode);
         Assert.Contains("deploy", stderr, StringComparison.Ordinal);
-        Assert.Contains("run, serve, schedule, and shift", stderr, StringComparison.Ordinal);
+        Assert.Contains("run, serve, schedule, shift, and member", stderr, StringComparison.Ordinal);
     }
 
     private static async Task<(int ExitCode, string Stdout, string Stderr)> RunHostAsync(

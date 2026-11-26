@@ -64,6 +64,25 @@ See [`docs/RELEASING.md`](docs/RELEASING.md) for the release procedure.
   `TaskRuntime.MemoAsync` from a phase handler outside a commit is unchanged.
   No store bytes change: the guard is in-memory runtime state. C#, TypeScript and Python. (#201)
 
+- **Member lifecycle: `member` command, `DurableMembers`.** A configured member now has a
+  long-lived lifecycle record beside its definition: `hire`, `activate`, `pause`, `resume`,
+  `drain`, `complete-drain`, `record-in-flight`, and `replace`. The transition table is stated once
+  in `DurableMembers.TransitionsFrom`; an illegal transition is refused and names the valid
+  alternatives instead of being silently ignored. Every transition is one audited commit that
+  appends an entry owned by `member:{name}` and writes the next version anchored to it, so the
+  document's own history is the audit trail and a refused transition leaves no version behind.
+  The epoch is the duplicate guard: a caller may pass the epoch it expects, and a mismatch is
+  refused so the caller re-reads. `hire` is create-if-absent, so a second hire cannot overwrite
+  the first member's history. Pause and drain are different promises: pause leaves the in-flight
+  list intact and resume does not re-admit anything automatically; drain is finished only by
+  `complete-drain`, which refuses while a listed task is still non-terminal. Replacement writes
+  the predecessor's `replaced` version, the successor's `benched` version and the handoff
+  document in one transaction, so a successor never exists without the context it was handed.
+  Two new additive document kinds (`durable.member-state`, `durable.member-handoff`) are ordinary
+  records of an existing type: no envelope version changes, no existing kind changes shape, and a
+  store written before this feature reads back unchanged. C# only for now; the member documents
+  are not yet part of the cross-language wire contract. (#224)
+
 ### Fixed
 
 - **Shift handoff phase spelling mismatched between C#, TypeScript and Python.** C# wrote the
