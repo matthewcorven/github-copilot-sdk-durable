@@ -99,6 +99,15 @@ See [`docs/RELEASING.md`](docs/RELEASING.md) for the release procedure.
 
 ### Fixed
 
+- **`DurableShifts.ClaimAsync` staged a transcript entry before its create-if-absent guard.**
+  The guard was the only check that could refuse, and `DurableStore.CommitAsync` rolls back on a
+  throw rather than on a returned result, so the `ReadOnly` branch committed the entry it had just
+  appended while the claim document was never written. The store then held a `shift-claim` entry
+  for a claim that never happened, which surfaces in the conversation transcript as a claim that
+  did not occur. The guard now runs before anything is staged; the failing branch stages nothing.
+  This is the same ordering defect that blocked `DurableMembers.HireAsync` and `ReplaceAsync`
+  (`#224`); the TypeScript and Python ports already branch on document existence before appending,
+  so they were not affected. (#249)
 - **Shift handoff phase spelling mismatched between C#, TypeScript and Python.** C# wrote the
   enum's own names (`Running`/`HandedOff`) while both ports wrote `running`/`handedOff`. A
   C#-written *running* handoff therefore read back in TypeScript as `handedOff` (and compared
