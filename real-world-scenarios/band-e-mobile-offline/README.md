@@ -251,10 +251,10 @@ Measured on AVD `band-e-api36-playstore-arm64` (arm64-v8a, API 36, emulator), Re
 | …as the app saw it | **278.6 s** wall clock | the app's own timer around `Prepare`, screenshot `e2-14` |
 | Model load, per process | **7.9 s** cached (13.3 s on the first, cold load) — no network, cache unchanged byte for byte | app timer around `Prepare`, before/after cache walk |
 | Process memory | **603.7 MB PSS** of 2,473 MB total (777 MB free) | `Debug.MemoryInfo.TotalPss` / `ActivityManager.MemoryInfo`, read by the app; `evidence/e2-resources.txt` §3 |
-| Generation speed | **4.8–13.4 tok/s** across two runs and eight turns; slowest on the cold first turn and on the longest prompts | SDK `Generator.TokenCount` ÷ SDK `CoreChatCompletion Time`; `evidence/e2-resources.txt` §4 |
+| Generation speed | **4.8–13.4 tok/s** across two runs and eight turns — **5.7 / 9.1 / 9.9 / 10.4 tok/s** on `86e58d9d…` (the demonstration) and **4.8 / 12.6 / 12.7 / 13.4 tok/s** on the earlier build; slowest on the cold first turn and on the longest prompts | SDK `Generator.TokenCount` ÷ SDK `CoreChatCompletion Time`, both blocks in `evidence/e2-resources.txt` §4; the `16359`/`16956` lines are the demonstration's pids, the `12:54:31`–`12:59:36` lines the earlier build's |
 | Streaming granularity | **220 deltas per turn on all four demonstration turns** (the cap) | the app's chunk counter; `evidence/e2-offline-demonstration.txt` §4 and §7, `evidence/e2-resources.txt` §5 |
-| Turn latency | **28.8–50.6 s** per turn, capped at 220 generated tokens | the SDK's own `CoreChatCompletion Time`; the app's own timer reads **28.9 / 46.8 / 48.6 / 50.7 s** for the same turns, one digit higher because the two clocks start at different points (`evidence/e2-resources.txt` §4 and §6) |
-| APK size | **85,253,322 B (81.3 MiB)** | `ls -l` on the signed APK in `evidence/e2-resources.txt` §5; includes ~64 MB of native engine per shipped ABI. A different build's signed APK measured 84,975,920 B (81.0 MiB) — `evidence/e2-aar-decision.txt` §6 and `evidence/e2-offline-demonstration.txt` header |
+| Turn latency | **28.8–50.6 s** per turn on the SDK's own `CoreChatCompletion Time` (28.8 / 46.8 / 48.6 / 50.6 s), capped at 220 generated tokens; the app's own timer reads **28.9 / 46.9 / 48.6 / 50.9 s** (28.9–50.9 s) for the same turns, tens of milliseconds apart because the two clocks start at different points | the SDK clock is `evidence/e2-resources.txt` §4; the app clock is the `<n> ms` on `evidence/e2-offline-demonstration.txt`'s `turn N: stream closed` lines, `:100` / `:108` / `:116` / `:246`, repeated by `e2-resources.txt` §6 |
+| APK size | **85,253,322 B (81.3 MiB)** | `ls -l` on the signed APK in `evidence/e2-resources.txt` §5; includes 55.5 MB (arm64-v8a) and 60.9 MB (x86_64) of native engine per shipped ABI, summed from the AAR's `jni/` entries. A different build's signed APK measured 84,975,920 B (81.0 MiB) — `evidence/e2-aar-decision.txt` §6 and `evidence/e2-offline-demonstration.txt` header |
 | Store growth over the session | **128,720 B → 133,801 B** | the store's own byte length, exported per turn. Both ends are the committed run's own exports: `evidence/e2-offline-demonstration.txt` §5 (`store_bytes: 128720`) and §8 (`store_bytes: 133801`). The pre-turn figure is not a committed export — see the provenance note below |
 
 The honest reading: on this emulator a 0.5B model generates at 4.8–13.4 tokens/s depending on the
@@ -266,32 +266,39 @@ at 220 generated tokens because without a cap an earlier attempt ran 45 s and 53
 end.
 
 > **Provenance of the table above.** Two Release builds appear in this evidence set, and the table
-> does not merge them silently. Each row resolves to a capture line and to the build that line's file
-> names in its own header. Where a file's header names no build, the row is attributed from what the
-> line itself carries — an export tag or a pid — and says so on that row, rather than inheriting the
-> file's opening hash.
+> does not merge them silently. Each row resolves to a capture line and to the build that line belongs
+> to. That build is not inherited from a file's opening hash: `e2-resources.txt`'s own second
+> paragraph states which of its sections its header hash (`2607726f…`) covers — §2 and §5 — and that
+> §3, §4 and §6 are the other, `86e58d9d…` run. §1 is the case in between, and the header hash is not
+> what makes its row true: its file walk is timestamped `18:00:18`, which is neither §2's download
+> telemetry (`11:54`/`12:10`) nor the demonstration's window (`18:23`–`18:29`), and §3's own reading
+> list calls the `18:00:18 measure` "an earlier build". The figure is used because the `86e58d9d…`
+> run's own trace carries the same bytes, not because a file's header named a build. Where a row's
+> line carries no build at all, it is attributed from what the line does carry — an export tag or a
+> pid — and says so on that row.
 >
 > | Row | Resolves to | Build |
 > | --- | --- | --- |
-> | Model size on disk | `e2-resources.txt` §1 (`878,065,731` bytes, 11 files walked; the same file/count pair in §3 and in `e2-offline-demonstration.txt` §4/§7) | `2607726f…` |
+> | Model size on disk | `e2-resources.txt` §1 (`878,065,731` bytes, 11 files walked, from the `18:00:18` trace); the same file/count pair in §3 and in `e2-offline-demonstration.txt` §4/§7 | **both captures** — the `18:00:18` walk is not attributed to either build, and the `86e58d9d…` run's own trace reports the same bytes, so the row states what two captures agree on |
 > | Download time | `e2-resources.txt` §2 (`229,813` / `266,876` ms) | `2607726f…` |
 > | …as the app saw it | `e2-resources.txt` §2, `278.6 s` screen figure | `2607726f…` |
 > | Model load, per process | `e2-offline-demonstration.txt` §4 (`13.3 s`) and §7 (`7.9 s`) | `86e58d9d…` |
 > | Process memory | `e2-resources.txt` §3 (`603.7` PSS), from the measurement export tagged `20261125T182918Z`, about 10 s after the turn-4 export `20261125T182908Z` that `e2-offline-demonstration.txt` §8 republishes | `86e58d9d…` — from the export tag; §3 names no build |
 > | Generation speed | `e2-resources.txt` §4 (`4.8`–`13.4` tok/s); the pid grep in §4 selects `16359`/`16956`, and those are the demonstration run's own pids (`e2-offline-demonstration.txt` §5 and §6) | `86e58d9d…` — from the pids; §4 names no build, and this file's header hash does not apply to it |
 > | Streaming granularity | `e2-offline-demonstration.txt` §4/§7 and `e2-resources.txt` §5 (four `220`s) | `86e58d9d…` |
-> | Turn latency | `e2-resources.txt` §4 (`28.8`–`50.6` s, the SDK clock) and §6 (`28.9`–`50.7` s, the app clock); §6 footnotes its source as `e2-offline-demonstration.txt` §4 and §7 | `86e58d9d…` — from that footnote; §6 names no build |
+> | Turn latency | `e2-resources.txt` §4 (`28.8`–`50.6` s, the SDK clock) and §6 (`28.9`–`50.9` s, the app clock, one line per turn); §6 cites `e2-offline-demonstration.txt`'s `turn N: stream closed` lines — `:100`, `:108`, `:116` / `:246` — and not a figure of its own | `86e58d9d…` — from that citation; §6 names no build |
 > | APK size | `e2-resources.txt` §5 (`85253322` bytes) | `2607726f…` |
 > | Store growth | `e2-offline-demonstration.txt` §5 (`128720`) and §8 (`133801`) | `86e58d9d…` |
 >
-> Only four rows are `2607726f…` figures: model size, both download rows, and APK size.
+> Three rows are `2607726f…` only: both download rows and APK size. Model size is the one figure that
+> genuinely holds for both runs, so its row names both captures rather than one build: it is the same
+> model and the same cache, and §1's `18:00:18` walk and the `86e58d9d…` run's own traces agree on
+> `878,065,731 B / 11 files` byte for byte.
 > `e2-resources.txt` is one file whose own §5 reports that build's hash while its §3, §4 and §6 are
 > the `86e58d9d…` run — §5 hashes `bande-e2.apk` to `2607726f…` one line after `ls -l` reports a
 > different filename, which is the single unpaired hash-and-size in this set and is left to the file
 > quoted below. "Which file" and "which build" are therefore different questions, and this table
-> answers them separately. The model size is the one figure that genuinely holds for both runs: it is
-> the same model and the same cache, so §1 and the `86e58d9d…` run's own trace agree on
-> `878,065,731 B / 11 files`.
+> answers them separately.
 >
 > The two builds' signed APKs are genuinely different sizes: `85,253,322 B (81.3 MiB)` for the
 > `2607726f…` build (`e2-resources.txt` §5) and `84,975,920 B (81.0 MiB)` for the `86e58d9d…` build
@@ -351,7 +358,7 @@ adb shell settings get global airplane_mode_on        # expect 1
 adb shell dumpsys connectivity | grep "Active default network"   # expect "none"
 
 # 3. three offline turns. "Next scripted turn" fills the box; "Send turn" runs it.
-#    Each takes 28-36 s on this emulator.
+#    28.9 / 46.9 / 48.6 s on this emulator (the app's own timer; the fourth turn is 50.9 s).
 
 # 4. kill and reopen
 adb shell am force-stop dev.durable.band.e.mobile

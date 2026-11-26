@@ -42,6 +42,15 @@ Sum of the eleven files: 878,065,731 B = 837.4 MiB. The dominant file is model.o
 
 screenshot: evidence/screenshots/e2-13-final-state.png shows "model cache 837.4 MB in 11 files".
 
+The `18:00:18` on those lines is the walk's own timestamp, and it is not this file's download run
+(§2's telemetry is `11:54` and `12:10`) nor the demonstration run (§3's own reading list calls the
+`18:00:18 measure` "an earlier build", against the `18:29` measurements, and
+e2-offline-demonstration.txt ran `18:23`–`18:29`). So this section's figure is not attributed to a
+build by its timestamp, and the header hash is not what makes it true: it is used because the
+`86e58d9d…` run's own trace reports the same `878,065,731 B / 11 files` before and after each of its
+two loads (evidence/e2-offline-demonstration.txt §4 and §7). One model cache, measured in two
+captures, agreeing byte for byte.
+
 ===============================================================================
 2. Download time — 229.8 s for a full download, 266.9 s including the catalog round trip
 ===============================================================================
@@ -72,7 +81,7 @@ minutes on this emulator, once". It is a one-time cost, and the reason the varia
 for exactly this step and nothing else.
 
 ===============================================================================
-3. Memory — 598 MB process PSS of a 2,473 MB device
+3. Memory — 603.7 MB process PSS of a 2,473 MB device
 ===============================================================================
 
 Method: Debug.MemoryInfo.TotalPss for the app's own process, and ActivityManager.MemoryInfo for the
@@ -101,7 +110,7 @@ Readings from the same session, for the shape of the growth rather than a trend 
   536/488  — earlier builds, one turn / none (17:57 / 17:11 exports)
 
 The number is dominated by the model, not by the transcript: the store grew from 128,720 B to
-133,801 B across the whole session, which is 5 KB against 604 MB. Both ends are the run's own
+133,801 B across the whole session, which is 5.1 KB against 604 MB. Both ends are the run's own
 exports, not a pre-turn figure: 128,720 B is the turn-3 export before the kill
 (evidence/e2-offline-demonstration.txt section 5) and 133,801 B is the turn-4 export after it
 (section 8).
@@ -137,10 +146,10 @@ An earlier build, whose turns were shorter, for comparison:
 
 11-25 12:54:31.183  Count:133  / 12:54:56.044 Time:27566ms   =  4.8 tok/s
 11-25 12:55:47.806  Count:394  / 12:56:12.482 Time:31170ms   = 12.6 tok/s
-11-25 12:56:50.680  Count:426  / 12:57:17.359 Time:33428ms   = 12.8 tok/s
+11-25 12:56:50.680  Count:426  / 12:57:17.359 Time:33428ms   = 12.7 tok/s
 11-25 12:59:08.383  Count:484  / 12:59:36.544 Time:36030ms   = 13.4 tok/s
 
-So the rate is **5.7-13.4 tok/s**, and it depends on the turn rather than being a property of the
+So the rate is **4.8-13.4 tok/s**, and it depends on the turn rather than being a property of the
 device. Two effects are visible across both sets and neither is averaged away:
 
 - **Turn 1 is always the slowest** (4.8 and 5.7 tok/s). The first turn after a model load does work
@@ -149,7 +158,7 @@ device. Two effects are visible across both sets and neither is averaged away:
   The prompt is re-processed every turn because there is no KV cache across calls: the SDK is
   stateless per request, and this is a cost of that.
 
-For the README's table, the number to quote is the range **5.7-13.4 tok/s** with the reason, not a
+For the README's table, the number to quote is the range **4.8-13.4 tok/s** with the reason, not a
 single average that hides both effects.
 
 Caveat, stated rather than buried: the upper bound on tokens here is 220 (the cap this variant sends
@@ -185,7 +194,8 @@ $ unzip -l <apk> | grep -E "lib/(arm64-v8a|x86_64)/.*(Foundry|onnxruntime)"
     33204920  lib/x86_64/libonnxruntime.so
       100016  lib/x86_64/libonnxruntime4j_jni.so
 
-That is the cost of on-device: ~64 MB of inference engine per ABI shipped in the app, plus 837 MB of
+That is the cost of on-device: 55.5 MB of inference engine for arm64-v8a and 60.9 MB for x86_64, summed from the embedded
+AAR's jni/ entries, shipped in the app, plus 837 MB of
 weights downloaded once. The IPC mode the decision record originally chose ships neither, because the
 engine lives in the service app — which is exactly the trade DECISION-bridge.md 6 records.
 
@@ -211,9 +221,14 @@ rewriting a ~1 200-character document generates past 200 tokens, and at 6-13 tok
 turn; without a cap an earlier attempt ran 45 s and 53 s with no natural end (logcat:
 CoreChatCompletion Time:44982ms, 53514ms). Every turn of the demonstration is capped:
 
-  turn 1  28.9 s      turn 2  46.8 s      turn 3  48.6 s      turn 4  50.7 s
+  turn 1  28.9 s      turn 2  46.9 s      turn 3  48.6 s      turn 4  50.9 s
 
-(the app's own timers, evidence/e2-offline-demonstration.txt section 4 and 7)
+(the app's own timer, one line per turn in evidence/e2-offline-demonstration.txt: the
+`turn N: stream closed, …, NNNNN ms` lines at `:100`, `:108`, `:116` and `:246`; its
+`elapsed_ms` exports say the same — `:161` (`28896`) and `:274`, `:165` (`46862`, one ms under the
+line's `46863`) and `:278`, `:169` (`48601`) and `:282`, `:286` (`50867`). The SDK's own `CoreChatCompletion
+Time` for the same four turns is the other clock and reads lower: 28.8 / 46.8 / 48.6 / 50.6 s,
+`e2-resources.txt` section 4. The two sets are not interchangeable.)
 
 The cap is a property of this demonstration, not of the layer: lib/Durable.cs is untouched by it and
 the transport seam takes the value as an argument (IChatClient.CompleteStreamingAsync's maxTokens).

@@ -63,7 +63,7 @@ Streaming rate, deltas over elapsed:
   turn 3  220 / 3.402 s = 64.7 delta/s
   turn 4  220 / 3.721 s = 59.1 delta/s
 
-Against the emulator's 0.5B run (5.7-13.4 tok/s from E1, 1.8-3.9 delta/s from the 1.5B run), the
+Against the emulator's 0.5B run (4.8-13.4 tok/s, section 4 of e2-resources.txt, 1.8-3.9 delta/s from the 1.5B run), the
 phone is an order of magnitude faster at the same model.
 
 Memory, model loaded, four turns committed:
