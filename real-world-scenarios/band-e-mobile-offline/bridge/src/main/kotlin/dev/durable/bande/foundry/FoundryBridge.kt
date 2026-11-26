@@ -167,12 +167,24 @@ class FoundryBridge(context: Context, appName: String) {
 
     /** One non-streaming turn. Returns immediately; the answer arrives on [listener]. */
     fun complete(history: Array<String>, requestId: Long, listener: Listener) {
-        runTurn(history, requestId, listener, streaming = false)
+        runTurn(history, requestId, listener, streaming = false, maxTokens = 0)
     }
 
     /** One streaming turn: `onChunk` per delta, then `onCompleted` with the assembled text. */
     fun completeStreaming(history: Array<String>, requestId: Long, listener: Listener) {
-        runTurn(history, requestId, listener, streaming = true)
+        runTurn(history, requestId, listener, streaming = true, maxTokens = 0)
+    }
+
+    /**
+     * One streaming turn with a generation cap.
+     *
+     * The cap is part of the caller's problem, not the SDK's: a document-revision turn on a 0.5B model
+     * runs long, and the emulator's tokens/second makes "long" mean tens of seconds. Passing the cap
+     * down lets the caller keep a turn inside its own time budget. `maxTokens = 0` means the catalogue
+     * default, which is what the two callers above keep using.
+     */
+    fun completeStreamingCapped(history: Array<String>, requestId: Long, maxTokens: Int, listener: Listener) {
+        runTurn(history, requestId, listener, streaming = true, maxTokens = maxTokens)
     }
 
     private fun runTurn(
@@ -180,6 +192,7 @@ class FoundryBridge(context: Context, appName: String) {
         requestId: Long,
         listener: Listener,
         streaming: Boolean,
+        maxTokens: Int,
     ) {
         // One turn per conversation keeps transcript order deterministic (§3.1 property 2).
         if (!turnInFlight.compareAndSet(false, true)) {
@@ -197,7 +210,11 @@ class FoundryBridge(context: Context, appName: String) {
 
         activeJob = scope.launch {
             try {
-                val request = ChatCompletionRequest(messages = history.map(::parseMessage))
+                val request = if (maxTokens > 0) {
+                    ChatCompletionRequest(messages = history.map(::parseMessage), maxTokens = maxTokens)
+                } else {
+                    ChatCompletionRequest(messages = history.map(::parseMessage))
+                }
 
                 if (streaming) {
                     val assembled = StringBuilder()

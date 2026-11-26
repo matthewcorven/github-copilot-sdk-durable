@@ -1,0 +1,119 @@
+Band E / issue #166 — a larger model on the emulator: does the emulator constrain the choice?
+Captured 2026-11-25. Transcribed from commands run against the booted AVD; output quoted, not
+paraphrased.
+
+The issue's note says: "If the emulator cannot run the model acceptably, record the measurement and
+use a physical device — do not quietly swap to a smaller model and report different numbers."
+
+The committed default is qwen2.5-0.5b. That swap was declared, but the condition behind it was never
+tested: no larger model had been tried on the emulator. This file tests it.
+
+=== the model tried, and why that one ===
+
+The device's own catalog (tap Catalog, read from the embedded SDK, not a hard-coded guess):
+
+  catalog: phi-4-reasoning, qwen2.5-coder-0.5b, phi-4-mini-reasoning, qwen2.5-0.5b, qwen2.5-1.5b,
+  qwen2.5-coder-1.5b, qwen2.5-14b, qwen2.5-coder-14b, qwen2.5-coder-7b, qwen2.5-7b, gpt-oss-20b,
+  phi-3-mini-128k, phi-3.5-mini, phi-4, phi-3-mini-4k
+
+qwen2.5-1.5b was chosen: 3x the parameters of the pinned model, the same family, so the comparison
+isolates model size rather than architecture or tokenizer. phi-3.5-mini was not used as the
+larger-model probe because E1 already measured it killing the inference process on the physical
+device (evidence/e1-completion.txt, defect 3).
+
+Only `BandEDurable.ModelAlias` was changed for this run, and it was restored afterwards.
+
+=== does it load at all? ===
+
+  Tap "Prepare model" with the network on:
+  model ready in 117.1 s · cache 2679.6 MB in 21 files (+1842.2 MB this run)
+
+So yes. 1,842.2 MB were downloaded for this model on top of what was cached; the model occupies
+2,679.6 MB in 21 files. The emulator has 6.2 GB free on /data and 2,473 MB of RAM.
+
+=== does it turn, offline? ===
+
+Airplane mode on for the whole conversation:
+
+  $ adb shell settings get global airplane_mode_on
+  1
+  $ adb shell dumpsys connectivity | grep -m1 "Active default network"
+  Active default network: none
+
+Four turns, from the app's own trace:
+
+  19:49:19 turn 1: stream closed, 220 deltas, 1385 chars, 56483 ms
+  19:49:19 turn 1: committed reply 43 chars, document rev 1 (whole reply taken as the document)
+  19:50:14 turn 2: stream closed, 60 deltas, 303 chars, 32920 ms
+  19:50:14 turn 2: committed reply 241 chars, document rev 1 (reply was 303 chars against a
+                    1384-char document: kept the document)
+  19:51:28 turn 3: stream closed, 118 deltas, 673 chars, 48686 ms
+  19:51:28 turn 3: committed reply 241 chars, document rev 1 (reply was 673 chars against a
+                    1384-char document: kept the document)
+  19:53:57 turn 4: stream closed, 128 deltas, 702 chars, 35898 ms
+  19:53:57 turn 4: committed reply 42 chars, document rev 2 (whole reply taken as the document)
+
+SDK-side confirmation, from logcat, four completions in the offline run:
+
+  Command:CoreChatCompletion Status:Success   Time: 56092 / 32858 / 48663 / 35400 ms
+  Generator.TokenCount -> Count: 164 / 424 / 508 / 584
+
+Token counts include the prompt; the cap is 220 completion tokens per turn (maxTokens: 220 in
+MainPage.xaml.cs), so the unambiguous streaming rate is deltas per second:
+
+  turn 1  220 deltas / 56.5 s =  3.9 delta/s
+  turn 2   60 deltas / 32.9 s =  1.8 delta/s
+  turn 3  118 deltas / 48.7 s =  2.4 delta/s
+  turn 4  128 deltas / 35.9 s =  3.6 delta/s
+
+Memory with the model loaded and four turns committed:
+
+  PSS 1186 MB of 2473 MB (499 MB free) · model cache 2679.6 MB in 21 files
+
+=== kill and reopen, offline ===
+
+  pre-kill export (tap Export):  store_bytes 161185
+                                 store_sha256 e194b50c19cd99e779388df75f22eedd1adc7fccc2024b7278819ddadd0cee2a
+                                 ## transcript (3 turns)  ## committed document versions (42)
+
+  $ adb shell am force-stop dev.durable.band.e.mobile     (pid 18529 -> gone)
+  $ adb shell am start -n ...MainActivity                  (pid 23138)
+
+  restored: turns 3 · revisions 42 · interrupted 0 · Foundry Local (embedded)
+            restored from the durable store: store 161185 B sha256:e194b50c19cd
+
+161185 B and e194b50c19cd are the pre-kill values, read by a new process with the network off.
+Turn 4 then ran offline and committed as rev 2 of the document, 166170 B store at the end.
+
+Reset of the model between the three-turn run and turn 4 was not required: the cached model loaded
+in 15.6 s with no network.
+
+=== what this establishes, and what it does not ===
+
+Establishes: the emulator can load and run qwen2.5-1.5b, with the network off, through the whole
+demonstration including a kill and reopen. The emulator is therefore NOT the constraint that forced
+a 0.5B model. The issue's condition for the swap cannot be satisfied by claiming an emulator limit.
+
+Does not establish: that 1.5B is the better default. It is 4-8x slower per turn on this emulator
+(32.9-56.5 s against 2.9-3.7 s for 0.5B on the physical device), and it trips the document size
+guard on two of the three edit turns, because it replies with a short summary of the change rather
+than the whole document. See "the guard" below.
+
+=== the guard, and what the 1.5B replies exposed ===
+
+The demonstration asks for "a document the agent edits across turns". Turns 2 and 3 of this run did
+not change the document:
+
+  reply was 303 chars against a 1384-char document: kept the document
+  reply was 673 chars against a 1384-char document: kept the document
+
+That is Demo's size guard working as designed: a reply shorter than half the previous document is
+treated as a collapsed response and refused, a defect E2 fixed after a one-line reply overwrote the
+document. But with a more capable model the guard is now rejecting something else: a correct,
+surgical answer. The 1.5B model reads "add a section" and returns the section plus a line of
+context, which is what the instruction asks for; it is the *whole-document rewrite* that satisfies
+the guard, and that is a 0.5B behaviour.
+
+So the guard conflates "the model collapsed" with "the model edited surgically". Recording it here
+rather than tuning it away: it is a real interaction between a durability safety rule and model
+capability, and variant 1's demonstration is written around whole-document rewrites.

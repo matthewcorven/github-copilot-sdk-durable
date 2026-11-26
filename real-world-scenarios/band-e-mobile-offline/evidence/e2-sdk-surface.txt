@@ -1,0 +1,120 @@
+Band E / issue #166 — the Foundry Local SDK on this Android target, read from the archives
+Captured 2026-11-25 on this machine. This file answers three questions the E2 implementation had to
+settle before writing code, and quotes the class files rather than the documentation:
+  1. does the embedded AAR register itself without the companion app?
+  2. is its API surface identical to the IPC AAR's (so the Kotlin facade needs no change)?
+  3. what does the engine say when its catalog cannot be reached?
+
+===============================================================================
+1. The embedded AAR's auto-registration
+===============================================================================
+
+$ unzip -p libs/foundry-local-embedded-sdk-0.1.6.aar AndroidManifest.xml
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ~ Copyright (c) Microsoft Corporation.
+  ~ Licensed under the MIT License.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.microsoft.foundrylocal.embedded" >
+
+    <uses-sdk android:minSdkVersion="33" />
+
+    <application>
+
+        <!--
+            ContentProvider for auto-registering the embedded SDK factory.
+            initOrder=50 runs AFTER IPC SDK's initOrder=100, so when both
+            SDKs are on the classpath the embedded factory overwrites IPC.
+        -->
+        <provider
+            android:name="com.microsoft.foundrylocal.embedded.EmbeddedSdkInitProvider"
+            android:authorities="${applicationId}.foundrylocal-embedded-init"
+            android:exported="false"
+            android:initOrder="50" />
+    </application>
+
+</manifest>
+
+$ javap -p -cp classes.jar com.microsoft.foundrylocal.embedded.EmbeddedSdkInitProvider
+public final class com.microsoft.foundrylocal.embedded.EmbeddedSdkInitProvider extends android.content.ContentProvider {
+  public com.microsoft.foundrylocal.embedded.EmbeddedSdkInitProvider();
+  public boolean onCreate();
+  public android.database.Cursor query(...);
+  public java.lang.String getType(android.net.Uri);
+  ...
+}
+
+`onCreate` is the registration hook. Nothing in this app calls it: the platform does, when the
+process starts, because the provider is in the app's merged manifest (evidence/e2-aar-decision.txt 5).
+
+===============================================================================
+2. The API surface, side by side with the IPC AAR
+===============================================================================
+
+$ javap -cp classes.jar 'com.microsoft.foundrylocal.api.FoundryLocalManager$Companion'   (embedded)
+public final class com.microsoft.foundrylocal.api.FoundryLocalManager$Companion {
+  public final void registerFactory(com.microsoft.foundrylocal.api.FoundryLocalManagerFactory);
+  public final java.lang.Object create(android.content.Context, com.microsoft.foundrylocal.api.Configuration, kotlin.jvm.functions.Function0<kotlin.Unit>, kotlin.coroutines.Continuation<? super com.microsoft.foundrylocal.api.FoundryLocalManager>);
+  ...
+}
+
+$ javap -cp classes.jar com.microsoft.foundrylocal.api.Configuration   (embedded)
+  public com.microsoft.foundrylocal.api.Configuration(java.lang.String appName, java.lang.String modelCacheDir, java.lang.String logLevel, java.util.Map<java.lang.String, java.lang.String> additionalSettings, java.lang.String azureCatalogFilter, boolean disableTelemetry);
+  getAppName / getModelCacheDir / getLogLevel / getAdditionalSettings / getAzureCatalogFilter / getDisableTelemetry
+
+$ javap -cp classes.jar com.microsoft.foundrylocal.api.Catalog   (embedded)
+public interface com.microsoft.foundrylocal.api.Catalog {
+  listModels / getModel / getModelInfo / getCachedModels / getCacheLocation / setCacheLocation / getLoadedModels
+}
+
+$ javap -cp classes.jar com.microsoft.foundrylocal.api.Model   (embedded)
+public interface com.microsoft.foundrylocal.api.Model {
+  getInfo / download(Function1<Float>, PendingIntent, int, Continuation) / load / unload /
+  isDownloading / isCached / isLoaded / removeFromCache / createChatClient / createAudioClient
+}
+
+$ javap -cp classes.jar com.microsoft.foundrylocal.api.ChatCompletionRequest   (embedded)
+  public com.microsoft.foundrylocal.api.ChatCompletionRequest(java.util.List<ChatMessage>, java.lang.Float temperature, java.lang.Integer maxTokens, java.lang.Float topP, java.lang.Integer topK, java.util.List<java.lang.String> stop, java.lang.Float presencePenalty, java.lang.Float frequencyPenalty);
+
+The maxTokens parameter is why the facade's completeStreamingCapped can exist at all: the request
+constructor takes it, and the earlier facade simply did not pass one.
+
+The IPC AAR's classes.jar was extracted the same way and its com/microsoft/foundrylocal/api/* class
+list is the same set of names. The app's Kotlin facade imports only that package, so it compiled
+against embedded with no edit — the build was run to confirm it, see evidence/e2-aar-decision.txt 3.
+
+===============================================================================
+3. What the engine reports when its catalog cannot be reached
+===============================================================================
+
+From the app, airplane mode on, no model cached:
+
+  failed [ModelUnavailable]: FoundryLocalException: Catalog operation failed: Error:
+  Microsoft.Neutron.Downloader.RegionFallbackException: Catalog request failed across 7 region(s)
+  ... ai.azure.com:443 ... System.Net.Sockets.SocketException (0xFFFDFFFF): hostname nor servname
+  provided, or not known
+
+The SDK's own initialize log names where it puts things, which is how the app knows its cache path
+without being told:
+
+$ adb logcat -d | grep "Cache directory"
+FoundryLocalCore: [INF] Created AzureModelCatalog. URI:https://ai.azure.com/api/eastus/ux/v1.0 Cache directory:/data/user/0/dev.durable.band.e.mobile/files/models_cache
+
+That line is why Chat/DeviceProfile.ModelCachePath is files/models_cache. It was written as
+files/models first, measured at 0 bytes after a complete download, and corrected against this log —
+which is a small example of the rule this band follows: read the SDK's own output rather than assume
+its defaults.
+
+===============================================================================
+4. What was not done, and why
+===============================================================================
+
+- No binding was generated over either AAR. `Bind="false"` and AndroidGenerateJavaBindingAnnotations
+  =false are unchanged from E1, and the reason is unchanged: binding the raw AAR fails with
+  CS0260/CS0579 (DECISION-bridge.md 3.2(a), confirmed in evidence/e1-bridge.txt).
+- No private copy of the SDK or of lib/Durable.cs exists in the app. The app references
+  lib/Copilot.Durable.csproj as a project and calls its public API; the only new code is the
+  integration layer in app/Durability, which is application code, not a fork of the layer.
+- The model was not swapped to a cloud model or a smaller one mid-run. qwen2.5-0.5b was chosen once,
+  declared, and used for every turn in evidence/e2-offline-demonstration.txt.

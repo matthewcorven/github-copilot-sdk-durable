@@ -1,0 +1,179 @@
+Band E / issue #166 — the model, the two prompts that did not work, and the one that did
+Captured 2026-11-25 on AVD band-e-api36-playstore-arm64, app dev.durable.band.e.mobile (embedded AAR,
+qwen2.5-0.5b). Every block is the app's own trace or export read off the device with adb, or logcat.
+
+Why this file exists: the issue says "do not quietly swap models" and asks for the measured cost. The
+cost here is not only size and speed — it is instruction-following. A 0.5B model could not be made to
+honour a reply protocol, and the demonstration was redesigned around what it can do. That is a
+measurement of the model, and hiding it would make the resource table a lie.
+
+===============================================================================
+1. The model, and why this one
+===============================================================================
+
+alias: qwen2.5-0.5b
+source: the embedded SDK's catalog, read on this device, not a hard-coded guess
+  $ adb logcat -d | grep "Model loaded"
+  FoundryLocalCore: [INF] Model loaded successfully: qwen2.5-0.5b-instruct-generic-cpu:4
+
+The alternative from E1 was phi-3.5-mini. It is not used, and the reason is E1's measurement rather
+than a preference: on the physical device, reaching chat_completions with phi-3.5-mini produced
+"Service process gone during FoundryChatCompletionClient.completeChat" before any answer arrived
+(evidence/e1-completion.txt, defect 3). A model that kills the inference process is not a model this
+band can demonstrate offline survival on. qwen2.5-0.5b is the smallest model the catalog offers that
+completes on this code path.
+
+Declared cost of that choice:
+  - It rewrites the whole document every turn rather than editing a section. Turn 3 asks for a
+    'Rollback' section and the model produces a new document that says what it thinks; it is not a
+    surgical edit. The demonstration's requirement is that the document survives a kill, not that the
+    edit is clean.
+  - It writes markdown bold it was told not to write ("**Title:**" survives into the document).
+  - It cannot follow a reply protocol (sections 2 and 3 below).
+
+===============================================================================
+2. Protocol attempt 1 — a symbolic marker
+===============================================================================
+
+System prompt: "...then the exact line ===DOCUMENT=== on its own line, then the complete revised
+document..."
+User prompt:  "Reply with one short sentence, then the line ===DOCUMENT=== followed by the complete
+revised document."
+
+Result, from the app's trace:
+
+$ adb shell cat .../e2-export/e2-trace.log
+17:38:23.514 turn 1: stream closed, 17 deltas, 98 chars, 5238 ms
+17:38:23.533 turn 1: committed reply 98 chars, document rev 0 (no document marker in reply)
+
+and the reply itself, from the transcript on screen:
+
+  ▶ 1. Turn 1: create the document. ...
+  Title: Offline Release Checklist
+
+  Summary of an App Release That Must Work Without Network Support
+
+The marker never appears. The model transcribed the instruction's *content* as prose and dropped the
+symbolic control token. No document was committed (rev 0).
+
+===============================================================================
+3. Protocol attempt 2 — a plain-word marker
+===============================================================================
+
+System prompt changed to end with: 'Part two starts on its own line with the words "New version:" and
+then contains the whole revised document.'
+
+Result:
+
+17:40:23.384 turn 1: 2 messages, prompt 375 chars
+17:40:34.145 turn 1: stream closed, 61 deltas, 368 chars, 10754 ms
+17:40:34.190 turn 1: committed reply 368 chars, document rev 0 (no document marker in reply)
+
+Reply on screen:
+
+  Title: Offline Release Checklist
+
+  Paragraph: A mobile application must be available offline without any internet connection to
+  function correctly. This checklist provides information on what devices need to be connected, ...
+
+No "New version:" line anywhere. Two different marker designs, both ignored.
+
+===============================================================================
+4. The protocol that works: the reply IS the document
+===============================================================================
+
+Three prompt designs were needed, and the third is what ships. They are recorded in order because
+each fixed something the previous one could not.
+
+(a) "writing tool": "You are a writing tool. The user gives you a task and the current document. You
+    always do the task: the user owns the text. Your whole reply is the document and nothing else.
+    Start with the title line. No preamble, no commentary, no markdown bold."
+
+    This removes the marker parse entirely: whatever the model returns is the document. It produced
+    four committed revisions, and it still had two problems, both visible in the exports:
+
+    - turns drifted towards a **shorter** document. One run's turn 4 answered a "change nothing
+      else" request with a single 470-character sentence, and the 1 269-character document became
+      that sentence.
+    - the model kept answering with a preamble it had been told not to write: "Here's the updated
+      document based on your requirements:".
+
+(b) A size guard, on top of (a): a reply shorter than **half the document it was asked to revise** is
+    not accepted as a revision. The document keeps its previous value and the transcript records why.
+    That stops the document being silently destroyed, but by then the model has still answered badly.
+
+(c) What ships — "text editor":
+
+    "You are a text editor. The user gives you a CURRENT DOCUMENT and one CHANGE to make. Copy the
+    current document exactly, word for word, and apply only that change. Keep the title line
+    unchanged unless the change is about the title. Do not summarise, do not shorten, do not add
+    commentary, do not use markdown bold. Your whole reply is the revised document."
+
+    with the user message ending "Copy the CURRENT DOCUMENT above exactly and apply only the TASK
+    change. Reply with the document and nothing else."
+
+    With (c) the demonstration's four turns all produce a full document at the cap:
+
+18:24:23.879 turn 1: committed reply 44 chars, document rev 1 (whole reply taken as the document)
+18:25:52.640 turn 2: committed reply 44 chars, document rev 2 (whole reply taken as the document)
+18:26:58.151 turn 3: committed reply 44 chars, document rev 3 (whole reply taken as the document)
+18:29:07.934 turn 4: committed reply 44 chars, document rev 4 (whole reply taken as the document)
+
+    and the document body is 1 248 -> 1 269 -> 1 269 -> 1 269 characters (evidence/e2-offline-
+    demonstration.txt sections 5 and 8). The preamble is gone.
+
+None of this makes the model good at editing. Section 8 of the demonstration evidence says exactly
+what the document does and does not show; the point here is narrower and it is a resource fact: a
+0.5B model needs the instruction spelled out as a copy-and-change task before it will do one at all.
+
+===============================================================================
+5. What a refusal looks like when it happens (kept, not hidden)
+===============================================================================
+
+In an earlier run with the very first, generic writing prompt, turn 1 refused:
+
+  ▶ 1. Turn 1: ... I apologize, but I cannot generate content without authorship or knowledge to
+  write about a specific topic like offline release checks on mobile apps. Could you please provide
+  more details or clarify your question?
+
+and a later run's turn 3 replied with a single conversational line:
+
+17:50:59.916 turn 3: committed reply 129 chars, document rev 2 (the reply was conversational, not a
+document)
+
+That turn's document was not overwritten because the reply failed the shape test. The reply is in the
+transcript with its note, which is the durable record of "the model declined"; the document stays at
+the last version a model actually wrote. The size guard in section 4(b) exists for the same reason and
+covers the case the shape test cannot: a reply that is a plausible document but a much shorter one.
+
+===============================================================================
+6. The catalog needs the network — the one allowed dependency
+===============================================================================
+
+Prepare with airplane mode on and nothing cached:
+
+  failed [ModelUnavailable]: [ModelUnavailable] FoundryLocalException: Catalog operation failed:
+  Error: Microsoft.Neutron.Downloader.RegionFallbackException: Catalog request failed across 7
+  region(s): eastus(HttpRequestException), eastus2(HttpRequestException), centralus(HttpRequestException),
+  southcentralus(HttpRequestException), westus2(HttpRequestException), westeurope(HttpRequestException),
+  australiasoutheast(HttpRequestException). ---> System.Net.Http.HttpRequestException: hostname nor
+  servname provided, or not known (ai.azure.com:443) ---> System.Net.Sockets.SocketException
+  (0xFFFDFFFF): hostname nor servname provided, or not known    at System.Net.Sockets.Socket.
+  AwaitableSocketAsyncEventArgs.ThrowException(SocketError, CancellationToken) + 0x40 ...
+
+  (screenshot: evidence/screenshots/e2-12-catalog-needs-network.png)
+
+This is the boundary the issue draws: network for the first model download, nothing else. It is also
+the failure mode an operator will hit if they demo this with airplane mode already on and an empty
+cache, so the README says it in one line.
+
+===============================================================================
+7. Cap on generated tokens
+===============================================================================
+
+The transport passes maxTokens=220 per turn. Before it, an uncapped revision ran 45 s and 53 s and
+the stream had no natural end (logcat: CoreChatCompletion Time:44982ms, 53514ms). With the cap every
+demonstration turn finished in 27.6-36.2 s (evidence/e2-resources.txt section 4).
+
+The cap is passed through the facade (FoundryBridge.completeStreamingCapped, added for this), so it is
+a transport argument rather than a global. lib/Durable.cs is not involved.

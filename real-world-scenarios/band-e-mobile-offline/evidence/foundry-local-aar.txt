@@ -15,6 +15,25 @@ Release SHA-256 (release body, https://github.com/microsoft/FoundryLocalAndroid/
 All four match: the two AARs against the published SHA-256, the license and notices
 against the release assets' own digests reported by the GitHub API.
 
+Sizes of the same four files, because the download table in ../README.md quotes them and a hash alone
+does not pin a size. Read from the files in libs/ (the AARs) and this directory (the two texts), which
+are the copies the hashes above were taken from.
+
+$ ls -l libs/foundry-local-ipc-sdk-0.1.6.aar libs/foundry-local-embedded-sdk-0.1.6.aar
+  441,036    foundry-local-ipc-sdk-0.1.6.aar
+  46,634,727 foundry-local-embedded-sdk-0.1.6.aar
+
+$ wc -c evidence/foundry-local-android-sdk-license-0.1.6.txt evidence/foundry-local-android-third-party-notices-0.1.6.md
+  11,489 foundry-local-android-sdk-license-0.1.6.txt
+   3,509 foundry-local-android-third-party-notices-0.1.6.md
+
+Note what these are not: the AAR sizes are the downloaded archive's own byte length on disk, not the
+sum of its zip entries, which unzip -l totals differently below (487,039 and 122,399,630). The two
+text sizes are this repository's copies, and they are the files the hashes above were taken of.
+
+The other build's signed APK — 84 975 920 B — is measured in e2-aar-decision.txt section 6 and the
+e2-offline-demonstration.txt header. It is not repeated here: this file is about the four downloads.
+
 === IPC AAR vs embedded AAR ===
 $ unzip -l foundry-local-ipc-sdk-0.1.6.aar | tail -2
 ---------                     -------

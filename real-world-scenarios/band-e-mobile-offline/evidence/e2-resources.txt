@@ -1,0 +1,235 @@
+Band E / issue #166 — the resource reality of running the model on the device
+Captured 2026-11-25 on AVD band-e-api36-playstore-arm64 (arm64-v8a, API 36, emulator), app
+dev.durable.band.e.mobile. APK sha256 2607726ff7938085cdd353aeb104c5d43ec67f5ccbb46ea1c4223ba5fe6cda9e.
+
+Requirement 5 of the issue asks for model size, download time, memory, and tokens/second, with the
+honest cost of on-device stated. Every number here was measured on this emulator. Next to each one is
+the method: which platform call or which log line produced it. Nothing is estimated, and the two
+numbers that are proxies rather than the real thing are labelled as such.
+
+Two Release builds appear in this file, and the hash above is not the right label for all of it.
+Section 5 was captured under that build. Sections 3, 4 and 6 are the run e2-offline-demonstration.txt
+captured, which is a different build: sections 3 and 6 carry no build line of their own, so they are
+attributed from what they do carry — section 3 from its export tag, section 6 from its own footnote
+back to e2-offline-demonstration.txt — and section 4 from its pids, which are that run's pids. The
+per-row attribution is in ../README.md's provenance note; this paragraph says why the header does not
+settle it for the whole file.
+
+===============================================================================
+1. Model size on disk — 878,065,731 B in 11 files
+===============================================================================
+
+Method: a recursive directory walk of the model cache by the app
+(Chat/BridgeShim.cs, DeviceResources.ListFiles) invoked from the Measure button, which writes each
+file's byte length to the app's trace. The cache directory is
+/data/user/0/dev.durable.band.e.mobile/files/models_cache, app-private.
+
+$ adb shell cat .../e2-export/e2-trace.log   (excerpt)
+18:00:18.324 cache-file added_tokens.json 605 B
+18:00:18.325 cache-file genai_config.json 1517 B
+18:00:18.325 cache-file inference_model.json 418 B
+18:00:18.326 cache-file merges.txt 1671853 B
+18:00:18.326 cache-file model.onnx 169136 B
+18:00:18.326 cache-file model.onnx.data 861939200 B
+18:00:18.326 cache-file special_tokens_map.json 613 B
+18:00:18.326 cache-file tokenizer.json 11421894 B
+18:00:18.327 cache-file tokenizer_config.json 7334 B
+18:00:18.327 cache-file vocab.json 2776833 B
+18:00:18.327 cache-file foundry.modelinfo.json 76328 B
+
+Sum of the eleven files: 878,065,731 B = 837.4 MiB. The dominant file is model.onnx.data at
+861,939,200 B — 98% of the total. foundry.modelinfo.json is the SDK's own metadata, not weights.
+
+screenshot: evidence/screenshots/e2-13-final-state.png shows "model cache 837.4 MB in 11 files".
+
+The `18:00:18` on those lines is the walk's own timestamp, and it is not this file's download run
+(§2's telemetry is `11:54` and `12:10`) nor the demonstration run (§3's own reading list calls the
+`18:00:18 measure` "an earlier build", against the `18:29` measurements, and
+e2-offline-demonstration.txt ran `18:23`–`18:29`). So this section's figure is not attributed to a
+build by its timestamp, and the header hash is not what makes it true: it is used because the
+`86e58d9d…` run's own trace reports the same `878,065,731 B / 11 files` before and after each of its
+two loads (evidence/e2-offline-demonstration.txt §4 and §7). One model cache, measured in two
+captures, agreeing byte for byte.
+
+===============================================================================
+2. Download time — 229.8 s for a full download, 266.9 s including the catalog round trip
+===============================================================================
+
+Method: the SDK's own telemetry line in logcat, which times the command it ran. Two downloads were
+observed on this emulator, on different runs.
+
+$ adb logcat -d | grep "ModelDownload Status"
+11-25 11:54:18.131 I FoundryLocalCore: [INF] [Telemetry] AppName:BandEMobile UserAgent:FoundryLocalCore
+  Command:ModelDownload Status:Success Direct:True Time:229813ms
+11-25 12:10:29.922 I FoundryLocalCore: [INF] [Telemetry] AppName:BandEMobile UserAgent:FoundryLocalCore
+  Command:ModelDownload Status:Success Direct:True Time:266876ms
+
+229,813 ms = 229.8 s and 266,876 ms = 266.9 s. The difference between the two runs is the catalog
+fetch and the retry behaviour around it, not the model.
+
+The app's own wall-clock figure for the downloading run is NOT recorded here, and that is a gap
+rather than an oversight to paper over: the harness only began writing its per-step trace after that
+download, and logcat had rotated past it by the time the trace existed. What is recorded is the
+screen at the end of the downloading run:
+
+  model ready in 278.6 s · cache 837.4 MB (11 files, +837.4 MB this run)
+  (screenshot: evidence/screenshots/e2-14-download-wall-clock-278s.png)
+
+278.6 s of app wall clock against the SDK's 266.9 s of ModelDownload in the same run — the difference
+is the catalog round trip and the engine's initialize. The honest summary is "about four and a half
+minutes on this emulator, once". It is a one-time cost, and the reason the variant allows the network
+for exactly this step and nothing else.
+
+===============================================================================
+3. Memory — 603.7 MB process PSS of a 2,473 MB device
+===============================================================================
+
+Method: Debug.MemoryInfo.TotalPss for the app's own process, and ActivityManager.MemoryInfo for the
+system, read by Chat/BridgeShim.cs (DeviceResources.ProcessPssMb / SystemMemoryMb) at the moment the
+Measure button was pressed, with the model loaded and four turns committed.
+
+$ adb shell cat .../e2-export/20261125T182918Z-measure/session.txt
+## resources
+captured_at: 2026-11-25T18:29:17.9035468+00:00
+process_pss_mb: 603.7   (Debug.MemoryInfo.TotalPss / 1024)
+system_mem_total_mb: 2473   (ActivityManager.MemoryInfo.TotalMem)
+system_mem_available_mb: 777   (ActivityManager.MemoryInfo.AvailMem)
+files_dir_free_bytes: 6707548160   (File.UsableSpace)
+model_cache_bytes: 878065731   (11 files, directory walk)
+
+PSS is the proportionally-shared resident set: the pages this process owns, plus its share of pages
+shared with others. It is what the platform reports as "this app's memory", and it is the number to
+compare against the device's total. 603.7 MB of 2,473 MB is 24% of this emulator's RAM for the app
+with the model loaded, four turns committed, and 777 MB still available.
+
+Readings from the same session, for the shape of the growth rather than a trend fit:
+
+  612.8 MB — the per-turn reading taken as turn 4 committed (18:29:07 export)
+  603.7 MB — the same process, measured 10 s later (18:29:17 measure, above)
+  598.3 MB — an earlier build, four turns committed (18:00:18 measure)
+  536/488  — earlier builds, one turn / none (17:57 / 17:11 exports)
+
+The number is dominated by the model, not by the transcript: the store grew from 128,720 B to
+133,801 B across the whole session, which is 5.1 KB against 604 MB. Both ends are the run's own
+exports, not a pre-turn figure: 128,720 B is the turn-3 export before the kill
+(evidence/e2-offline-demonstration.txt section 5) and 133,801 B is the turn-4 export after it
+(section 8).
+
+===============================================================================
+4. Generation speed — 0.5B model on this emulator
+===============================================================================
+
+Method: the SDK's own generated-token count for the turn (Generator.TokenCount in logcat) divided by
+the SDK's own turn time (CoreChatCompletion Time in the same log). Both numbers are the SDK's, so
+this is tokens/second in the sense the issue asks for, not a word count.
+
+The demonstration run in evidence/e2-offline-demonstration.txt, whose four turns are the ones the
+screenshots show. The pid column is included because turns 1-3 ran in one process and turn 4 in
+another, after the kill:
+
+$ adb logcat -d | grep -E "Generator.TokenCount|CoreChatCompletion Status" | grep -E "16359|16956"
+11-25 13:23:58.215 16359  Generator.TokenCount -> Count:164
+11-25 13:24:23.742 16359  Command:CoreChatCompletion Status:Success Direct:True Time:28776ms
+11-25 13:25:13.414 16359  Generator.TokenCount -> Count:425
+11-25 13:25:52.540 16359  Command:CoreChatCompletion Status:Success Direct:True Time:46803ms
+11-25 13:26:18.283 16359  Generator.TokenCount -> Count:479
+11-25 13:26:58.138 16359  Command:CoreChatCompletion Status:Success Direct:True Time:48590ms
+11-25 13:28:26.758 16956  Generator.TokenCount -> Count:524
+11-25 13:29:07.660 16956  Command:CoreChatCompletion Status:Success Direct:True Time:50606ms
+
+turn 1 (2 messages):        164 tokens / 28.8 s =  5.7 tok/s
+turn 2 (4 messages):        425 tokens / 46.8 s =  9.1 tok/s
+turn 3 (6 messages):        479 tokens / 48.6 s =  9.9 tok/s
+turn 4 (8 messages, new pid): 524 tokens / 50.6 s = 10.4 tok/s
+
+An earlier build, whose turns were shorter, for comparison:
+
+11-25 12:54:31.183  Count:133  / 12:54:56.044 Time:27566ms   =  4.8 tok/s
+11-25 12:55:47.806  Count:394  / 12:56:12.482 Time:31170ms   = 12.6 tok/s
+11-25 12:56:50.680  Count:426  / 12:57:17.359 Time:33428ms   = 12.7 tok/s
+11-25 12:59:08.383  Count:484  / 12:59:36.544 Time:36030ms   = 13.4 tok/s
+
+So the rate is **4.8-13.4 tok/s**, and it depends on the turn rather than being a property of the
+device. Two effects are visible across both sets and neither is averaged away:
+
+- **Turn 1 is always the slowest** (4.8 and 5.7 tok/s). The first turn after a model load does work
+  the later ones do not.
+- **Longer prompts are slower per token** (9.1-10.4 tok/s at 4-8 messages against 12.6-13.4 at 2-6).
+  The prompt is re-processed every turn because there is no KV cache across calls: the SDK is
+  stateless per request, and this is a cost of that.
+
+For the README's table, the number to quote is the range **4.8-13.4 tok/s** with the reason, not a
+single average that hides both effects.
+
+Caveat, stated rather than buried: the upper bound on tokens here is 220 (the cap this variant sends
+to keep a turn inside a budget; see section 6), so the counts above are the generated tokens, which is
+below the cap because the model stopped early. The rate is measured on the same basis for all four
+turns.
+
+The app's on-screen figure is a word count over the reply plus the document ("words/s"), not tokens/s.
+It is a different quantity — words are not tokens — and it is labelled on screen as words/s so nobody
+reads two different measures as one. The tokens/s above is the one requirement 5 asks for.
+
+===============================================================================
+5. The APK and the streaming a turn costs
+===============================================================================
+
+$ shasum -a 256 bande-e2.apk
+2607726ff7938085cdd353aeb104c5d43ec67f5ccbb46ea1c4223ba5fe6cda9e
+
+$ ls -l dev.durable.band.e.mobile-Signed.apk
+85253322 bytes (81.3 MiB)
+
+The APK carries the embedded AAR's native libraries for both ABIs it supports:
+
+$ unzip -l <apk> | grep -E "lib/(arm64-v8a|x86_64)/.*(Foundry|onnxruntime)"
+    20389528  lib/arm64-v8a/Microsoft.AI.Foundry.Local.Core.so
+       63064  lib/arm64-v8a/libonnxruntime-genai-jni.so
+     5629600  lib/arm64-v8a/libonnxruntime-genai.so
+    27408600  lib/arm64-v8a/libonnxruntime.so
+      111648  lib/arm64-v8a/libonnxruntime4j_jni.so
+    19736856  lib/x86_64/Microsoft.AI.Foundry.Local.Core.so
+       61736  lib/x86_64/libonnxruntime-genai-jni.so
+     5946976  lib/x86_64/libonnxruntime-genai.so
+    33204920  lib/x86_64/libonnxruntime.so
+      100016  lib/x86_64/libonnxruntime4j_jni.so
+
+That is the cost of on-device: 55.5 MiB of inference engine for arm64-v8a and 60.9 MiB for x86_64, summed from the embedded
+AAR's jni/ entries. Both ABIs are packaged, but deflated: Core.so is 19.4 + 18.8 MiB raw and
+7.6 + 7.9 MiB in the APK, which is why 116.4 MiB of native code fits in an 81.3 MiB package, plus 837 MB of
+weights downloaded once. The IPC mode the decision record originally chose ships neither, because the
+engine lives in the service app — which is exactly the trade DECISION-bridge.md 6 records.
+
+Deltas per turn, from the app's trace, are the streaming granularity a UI actually sees. The
+demonstration's four turns:
+  turn 1: 220 deltas for 1250 chars
+  turn 2: 220 deltas for 1269 chars
+  turn 3: 220 deltas for 1269 chars
+  turn 4: 220 deltas for 1269 chars
+220 is the cap, so those turns hit it. The earlier shorter turns in this run produced lower counts —
+one delta per 5-6 characters either way — but those counts are **not quoted here as figures**. They
+live in the demonstration run's `durable-store.jsonl`, which is app state and is deliberately not
+committed (see evidence/e2-store-on-device.txt section 4); the committed evidence holds no export of
+them. Quoting them would be quoting an artifact no reader of this repository can resolve, which is
+the defect this file was corrected for, one level down.
+
+===============================================================================
+6. The generation cap, and why one exists
+===============================================================================
+
+The transport passes maxTokens=220. It is a cap, not a target. It exists because a 0.5B model
+rewriting a ~1 200-character document generates past 200 tokens, and at 6-13 tok/s that is 30-50 s per
+turn; without a cap an earlier attempt ran 45 s and 53 s with no natural end (logcat:
+CoreChatCompletion Time:44982ms, 53514ms). Every turn of the demonstration is capped:
+
+  turn 1  28.9 s      turn 2  46.9 s      turn 3  48.6 s      turn 4  50.9 s
+
+(the app's own timer, one line per turn in evidence/e2-offline-demonstration.txt: the
+`turn N: stream closed, …, NNNNN ms` lines at `:100`, `:108`, `:116` and `:246`; its
+`elapsed_ms` exports say the same — `:161` (`28896`) and `:274`, `:165` (`46862`, one ms under the
+line's `46863`) and `:278`, `:169` (`48601`) and `:282`, `:286` (`50867`). The SDK's own `CoreChatCompletion
+Time` for the same four turns is the other clock and reads lower: 28.8 / 46.8 / 48.6 / 50.6 s,
+`e2-resources.txt` section 4. The two sets are not interchangeable.)
+
+The cap is a property of this demonstration, not of the layer: lib/Durable.cs is untouched by it and
+the transport seam takes the value as an argument (IChatClient.CompleteStreamingAsync's maxTokens).

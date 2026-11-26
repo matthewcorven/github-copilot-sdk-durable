@@ -14,3 +14,7 @@ bridge/.gradle/
 bridge/local.properties
 .gradle/
 .kotlin/
+
+# Scratch: drive scripts, pull copies and intermediate screenshots from a demonstration run. The
+# evidence that matters is copied into evidence/ before a run is finished; this is the working set.
+.scratch/
