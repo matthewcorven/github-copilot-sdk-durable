@@ -194,8 +194,9 @@ $ unzip -l <apk> | grep -E "lib/(arm64-v8a|x86_64)/.*(Foundry|onnxruntime)"
     33204920  lib/x86_64/libonnxruntime.so
       100016  lib/x86_64/libonnxruntime4j_jni.so
 
-That is the cost of on-device: 55.5 MB of inference engine for arm64-v8a and 60.9 MB for x86_64, summed from the embedded
-AAR's jni/ entries, shipped in the app, plus 837 MB of
+That is the cost of on-device: 55.5 MiB of inference engine for arm64-v8a and 60.9 MiB for x86_64, summed from the embedded
+AAR's jni/ entries. Both ABIs are packaged, but deflated: Core.so is 19.4 + 18.8 MiB raw and
+7.6 + 7.9 MiB in the APK, which is why 116.4 MiB of native code fits in an 81.3 MiB package, plus 837 MB of
 weights downloaded once. The IPC mode the decision record originally chose ships neither, because the
 engine lives in the service app — which is exactly the trade DECISION-bridge.md 6 records.
 

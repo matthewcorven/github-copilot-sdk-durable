@@ -416,7 +416,7 @@ trigger §2 named. What changed and what did not:
 | Durable layer (`lib/Durable.cs`) | unchanged | unchanged | not involved in the mode |
 
 **The costs §2 listed are still costs, and variant 1 pays them deliberately.** The APK is 85.3 MB
-because the engine ships in it (≈64 MB of native libraries per ABI, listed in
+because the engine ships in it (55.5 MiB of native libraries for arm64-v8a and 60.9 MiB for x86_64, listed in
 [`evidence/e2-aar-decision.txt`](evidence/e2-aar-decision.txt)); a native crash kills the app rather
 than a service; the model cache is app-private and disappears with the app; and `isConnected` is not
 applicable, so a completed turn proves the absence of a connection rather than its health. For a
