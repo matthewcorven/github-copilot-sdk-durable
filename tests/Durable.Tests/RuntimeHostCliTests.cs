@@ -79,34 +79,51 @@ public sealed class RuntimeHostCliTests
     }
 
     /// <summary>
-    /// The host resolves a definition's `links` against its own registries, so a linked tool is
-    /// folded into the choices the conversation is configured with.
+    /// A linked capability reaches the conversation end to end: after a real `run`, the store's
+    /// `durable.agent` document — which is the resolved <see cref="AgentChoices"/> the conversation
+    /// was configured with — carries the link's extension and tool.
     /// </summary>
     /// <remarks>
-    /// Before this was wired, the host called the parameterless
-    /// <see cref="AgentDefinition.ToChoices()"/> overload, which ignores `links` entirely. A
-    /// definition with a valid link therefore validated and then ran with the link contributing
-    /// nothing -- the tool was never offered, so there was nothing to authorize or deny. That
-    /// silence is what this asserts against: the linked tool must appear in the choices.
+    /// This asserts on the persisted choices rather than on
+    /// <see cref="Durable.Runtime.Program.ResolveChoices"/> directly. The earlier version of this
+    /// test called the helper, which meant it passed even when the host's call sites still used the
+    /// parameterless <see cref="AgentDefinition.ToChoices()"/> — it pinned the helper, not the
+    /// defect. Review caught that; this version drives the host and reads what it stored.
     /// </remarks>
     [Fact]
-    public void ResolveChoices_FoldsALinkedToolIn()
+    public async Task Run_PersistsTheLinkedToolInTheAgentChoices()
     {
-        var definition = new AgentDefinition
-        {
-            Name = "reviewer",
-            Description = "Reviews changes.",
-            Instructions = "Review the change.",
-            // A `Tool` link names the EXTENSION that provides the tool, not the tool itself.
-            Links = [new DurableLink { Kind = DurableLinkKind.Tool, Name = "workspace" }],
-        };
+        using var scratch = new Scratch();
+        var storePath = scratch.PathIn("store.jsonl");
+        var definitionPath = scratch.Write("linked.json", """
+            {
+              "name": "reviewer",
+              "description": "Reviews changes.",
+              "instructions": "Review the change and report what is wrong with it.",
+              "extensions": ["durable"],
+              "links": [{ "kind": "tool", "name": "linkable" }]
+            }
+            """);
 
-        var choices = Program.ResolveChoices(definition, Program.RegistryForTests(), new DurableMcpServerRegistry());
+        var (exitCode, _, stderr) = await RunHostAsync(
+            new[] { "DURABLE_LINKABLE_TOOL=linkable" },
+            "run",
+            "--agent", "reviewer",
+            "--input", "review this change",
+            "--definition", definitionPath,
+            "--store", storePath,
+            "--format", "jsonl");
 
-        Assert.NotNull(choices.Extensions);
-        Assert.Contains("workspace", choices.Extensions, StringComparer.Ordinal);
-        Assert.NotNull(choices.Tools);
-        Assert.Contains("read_file", choices.Tools, StringComparer.Ordinal);
+        Assert.True(exitCode == 0, $"the host did not run: {stderr}");
+
+        using var store = DurableStore.Create(new DurableStoreOptions { Path = storePath });
+        var agentDocument = store.Documents.Single(document => document.Kind == "durable.agent");
+        var choices = agentDocument.Latest!.Value.Deserialize<AgentChoices>(DurableJson.Options)!;
+
+        // The link names the extension that provides the tool; resolution folds in both the
+        // extension and the tool it carries. Without the wiring this list is just ["durable"].
+        Assert.Contains("linkable", choices.Extensions ?? [], StringComparer.Ordinal);
+        Assert.Contains("linkable_read", choices.Tools ?? [], StringComparer.Ordinal);
     }
 
     [Fact]
@@ -984,9 +1001,14 @@ public sealed class RuntimeHostCliTests
     private static async Task<(int ExitCode, string Stdout, string Stderr)> RunHostAsync(
         params string[] args) => await RunHostWithFixtureAsync(args, "basic.json");
 
+    private static async Task<(int ExitCode, string Stdout, string Stderr)> RunHostAsync(
+        string[] environment, params string[] args) =>
+        await RunHostWithFixtureAsync(args, "basic.json", environment);
+
     private static async Task<(int ExitCode, string Stdout, string Stderr)> RunHostWithFixtureAsync(
         string[] args,
-        string fixture)
+        string fixture,
+        string[]? environment = null)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -1005,6 +1027,11 @@ public sealed class RuntimeHostCliTests
         // The host resolves its runtime from the environment, and the fixture is a runtime
         // argument, so the recording is chosen the same way a real deployment would choose it.
         startInfo.Environment["DURABLE_RUNTIME_PATH"] = ReplayRuntimePath();
+        foreach (var assignment in environment ?? [])
+        {
+            var split = assignment.IndexOf('=');
+            startInfo.Environment[assignment[..split]] = assignment[(split + 1)..];
+        }
         startInfo.ArgumentList.Add("--runtime-arg");
         startInfo.ArgumentList.Add("--fixture");
         startInfo.ArgumentList.Add("--runtime-arg");

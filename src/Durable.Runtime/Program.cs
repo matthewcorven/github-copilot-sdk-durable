@@ -1662,12 +1662,6 @@ internal static class Program
         AgentDefinition definition, ExtensionRegistry registry, DurableMcpServerRegistry servers) =>
         definition.ToChoices(registry, servers);
 
-    /// <summary>
-    /// The host's extension registry, for tests that assert on resolution. Builds the same
-    /// registry <c>run</c> builds, so an assertion here is an assertion about the host.
-    /// </summary>
-    internal static ExtensionRegistry RegistryForTests() => BuildRegistry();
-
     private static ExtensionRegistry BuildRegistry()
     {
         var registry = new ExtensionRegistry();
@@ -1681,16 +1675,20 @@ internal static class Program
             new PromptSection("git", _ => Task.FromResult<string?>(
                 "Use git for version control, and never rewrite history that has been shared.")),
         ]));
-        registry.Install(new Extension("workspace", tools:
-        [
-            // A tool this host can actually offer, so that a definition's `links` entry has
-            // something to resolve against. Without one, every link is refused and the
-            // resolution path is unreachable -- which is how the parameterless ToChoices
-            // overload went unnoticed.
-            CopilotTool.DefineTool(
-                (string path) => $"read {path}",
-                factoryOptions: new AIFunctionFactoryOptions { Name = "read_file" }),
-        ]));
+        // A deployment that wants a linkable tool adds it here through the environment, not by
+        // widening the default set: a definition that omits `extensions` receives every
+        // registered extension, so adding a tool-bearing extension unconditionally would change
+        // what every such definition is offered.
+        if (Environment.GetEnvironmentVariable("DURABLE_LINKABLE_TOOL") is { Length: > 0 } linkable)
+        {
+            registry.Install(new Extension(linkable, tools:
+            [
+                CopilotTool.DefineTool(
+                    (string path) => $"read {path}",
+                    factoryOptions: new AIFunctionFactoryOptions { Name = $"{linkable}_read" }),
+            ]));
+        }
+
         registry.Install(new Extension("tests", sections:
         [
             new PromptSection("tests", _ => Task.FromResult<string?>(
