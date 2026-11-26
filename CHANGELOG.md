@@ -93,7 +93,9 @@ See [`docs/RELEASING.md`](docs/RELEASING.md) for the release procedure.
   `schemaVersion` and resolves the links against the host's registries. `Extension` gains an
   optional `Version`, and `DurableMcpServerRegistry` supplies MCP servers by name. The runtime
   host validates links at import and startup and refuses a definition that names a missing link.
-  An existing definition without `links` reads and runs unchanged. (#226)
+  An existing definition without `links` reads and runs unchanged. C# only: TypeScript and Python
+  do not read `links`, so a definition carrying one is ignored there rather than refused — a port
+  that meets an unresolvable link silently drops it where C# fails closed. (#226)
 
 ### Fixed
 

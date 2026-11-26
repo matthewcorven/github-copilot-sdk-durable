@@ -533,6 +533,13 @@ implementation is in `lib/Durable.cs` and the host's validator, and it changes n
   link fails closed before a turn runs. An existing definition without `links` reads and runs
   unchanged.
 
+One registry, two readers. Validation and resolution both receive the host's single
+`DurableMcpServerRegistry`, built once in `Program.cs`. The host has no configuration surface for
+an MCP server yet, so that registry is empty today and the two readers cannot disagree. When a
+surface is added, populate the one registry rather than threading a separate list through
+validation: a definition must be validated against the same servers it will resolve against, or a
+link can validate and then fail to resolve.
+
 This closes Q5's *mechanism* (secrets live outside the document; the exporter refuses to emit
 them) without choosing a credential store, which remains the user's decision. Q2, Q7 and Q12 are
 unaffected.

@@ -158,7 +158,7 @@ internal static class Program
 
         var registry = BuildRegistry();
         var servers = BuildMcpRegistry();
-        var definition = await LoadDefinitionAsync(store, registry, options);
+        var definition = await LoadDefinitionAsync(store, registry, servers, options);
 
         var (containment, reason) = ContainmentClassifier.Classify(definition, options.PermissionHandler is not null);
         ReportContainment(definition.Name, containment, reason);
@@ -444,7 +444,7 @@ internal static class Program
 
         var registry = BuildRegistry();
         var servers = BuildMcpRegistry();
-        var definition = await LoadDefinitionAsync(store, registry, options);
+        var definition = await LoadDefinitionAsync(store, registry, servers, options);
 
         var (containment, reason) = ContainmentClassifier.Classify(definition, options.PermissionHandler is not null);
         ReportContainment(definition.Name, containment, reason);
@@ -657,7 +657,7 @@ internal static class Program
 
         var registry = BuildRegistry();
         var servers = BuildMcpRegistry();
-        var definition = await LoadDefinitionAsync(store, registry, options);
+        var definition = await LoadDefinitionAsync(store, registry, servers, options);
 
         var (containment, reason) = ContainmentClassifier.Classify(definition, options.PermissionHandler is not null);
         ReportContainment(definition.Name, containment, reason);
@@ -985,7 +985,7 @@ internal static class Program
 
         var registry = BuildRegistry();
         var servers = BuildMcpRegistry();
-        var definition = await LoadDefinitionAsync(store, registry, options);
+        var definition = await LoadDefinitionAsync(store, registry, servers, options);
 
         var (containment, reason) = ContainmentClassifier.Classify(definition, options.PermissionHandler is not null);
         ReportContainment(definition.Name, containment, reason);
@@ -1382,7 +1382,7 @@ internal static class Program
 
         var registry = BuildRegistry();
         var servers = BuildMcpRegistry();
-        var definition = await LoadDefinitionAsync(store, registry, options);
+        var definition = await LoadDefinitionAsync(store, registry, servers, options);
 
         var (containment, reason) = ContainmentClassifier.Classify(definition, options.PermissionHandler is not null);
         ReportContainment(definition.Name, containment, reason);
@@ -1643,14 +1643,11 @@ internal static class Program
     }
 
     /// <summary>
-    /// The extensions the host installs. They are the vocabulary an agent definition may name;
-    /// a definition that names anything else is refused rather than silently narrowed.
-    /// </summary>
-    /// <summary>
     /// The MCP servers this host offers. Empty: a server is a configured capability and the host
     /// has no configuration surface for one yet, so a `links` entry naming an MCP server is
-    /// refused by <see cref="DurableLinks"/> rather than silently ignored. The registry exists so
-    /// that resolution is real and the refusal is explicit.
+    /// refused by <see cref="DurableLinks"/> rather than silently ignored. The registry is built
+    /// here, and the same instance is passed to validation and to resolution, so a host that
+    /// later gains a configuration surface has one registry to populate.
     /// </summary>
     private static DurableMcpServerRegistry BuildMcpRegistry() => new();
 
@@ -1662,6 +1659,10 @@ internal static class Program
         AgentDefinition definition, ExtensionRegistry registry, DurableMcpServerRegistry servers) =>
         definition.ToChoices(registry, servers);
 
+    /// <summary>
+    /// The extensions the host installs. They are the vocabulary an agent definition may name;
+    /// a definition that names anything else is refused rather than silently narrowed.
+    /// </summary>
     private static ExtensionRegistry BuildRegistry()
     {
         var registry = new ExtensionRegistry();
@@ -1709,12 +1710,13 @@ internal static class Program
     private static async Task<AgentDefinition> LoadDefinitionAsync(
         DurableStore store,
         ExtensionRegistry registry,
+        DurableMcpServerRegistry servers,
         HostOptions options)
     {
         if (options.DefinitionPath is { } path)
         {
             var imported = ReadDefinition(path);
-            AgentDefinitionValidator.Validate(imported, registry);
+            AgentDefinitionValidator.Validate(imported, registry, servers);
 
             if (!string.Equals(imported.Name, options.Agent, StringComparison.Ordinal))
             {
@@ -1737,7 +1739,7 @@ internal static class Program
             ?? throw new AgentDefinitionException(
                 $"the stored definition for agent '{options.Agent}' could not be read.");
 
-        AgentDefinitionValidator.Validate(stored, registry);
+        AgentDefinitionValidator.Validate(stored, registry, servers);
         return stored;
     }
 

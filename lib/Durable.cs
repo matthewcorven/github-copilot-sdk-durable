@@ -4222,14 +4222,6 @@ public static partial class DurablePortableConfiguration
     /// <summary>The portable configuration version this build writes and reads.</summary>
     public const int SchemaVersion = 1;
 
-    /// <summary>The JSON property names the portable document writes.</summary>
-    private static readonly string[] PortableFields =
-    [
-        "schemaVersion", "name", "description", "instructions", "model", "reasoningEffort",
-        "workingDirectory", "extensions", "tools", "permissions", "sandbox", "streaming",
-        "infiniteSessions", "links",
-    ];
-
     /// <summary>
     /// Exports a definition as a portable document, resolving its links first when registries are supplied.
     /// </summary>
@@ -4315,6 +4307,15 @@ public static partial class DurablePortableConfiguration
                 $"the portable configuration declares schemaVersion {version}, but this build reads "
                 + $"{SchemaVersion}. Update the configuration with a migration, or use a host that "
                 + "reads the version it declares.");
+        }
+
+        var secret = FindSecret(configuration);
+        if (secret is not null)
+        {
+            throw new DurableConfigurationException(
+                $"the portable configuration contains what looks like a secret in '{secret}'. "
+                + "Portable configuration must not carry credentials: keep the secret in the host's "
+                + "environment or credential store and reference the capability by name.");
         }
 
         var definition = configuration.Deserialize<AgentDefinition>(DurableJson.Options)

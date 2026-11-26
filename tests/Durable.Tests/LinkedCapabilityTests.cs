@@ -271,26 +271,25 @@ public sealed class LinkedCapabilityTests
     }
 
     [Fact]
-    public void Export_RefusesASecretNamedProperty()
+    public void Import_RefusesASecretNamedProperty()
     {
-        var definition = new AgentDefinition
-        {
-            Name = "reviewer",
-            Links =
-            [
-                new DurableLink
-                {
-                    Kind = DurableLinkKind.Mcp,
-                    Name = "github",
-                    Grants = ["mcp:github/search"],
-                },
-            ],
-        };
+        // Import is the only surface that accepts a document the type system did not build, so it
+        // is the one place a secret-shaped *property name* can arrive. The public surface has no
+        // credentials field, so this cannot be expressed through AgentDefinition.
+        var document = JsonDocument.Parse(
+            """
+            {
+              "schemaVersion": 1,
+              "name": "reviewer",
+              "clientSecret": "not-a-real-secret"
+            }
+            """);
 
-        // A link with a secret-shaped field would be caught by the same scan; the public surface
-        // has no credentials field, so this proves the scan walks the document rather than a list.
-        var exported = DurablePortableConfiguration.Export(definition);
-        Assert.DoesNotContain("clientSecret", exported.GetRawText(), StringComparison.OrdinalIgnoreCase);
+        var error = Assert.Throws<DurableConfigurationException>(
+            () => DurablePortableConfiguration.Import(document.RootElement, new ExtensionRegistry()));
+
+        Assert.Contains("must not carry credentials", error.Message, StringComparison.Ordinal);
+        Assert.Contains("clientSecret", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
