@@ -577,6 +577,42 @@ public sealed class ShiftClaimTests
         Assert.Equal(1, DurableShifts.ReadClaim(store, Key)!.Grants);
     }
 
+    /// <summary>
+    /// The create-if-absent guard must run before anything is staged, because
+    /// <see cref="DurableStore.CommitAsync{T}"/> rolls back on a throw and not on a returned result.
+    /// When it ran second, the appended entry was committed alongside the refusal: the store gained
+    /// a transcript entry for a claim that never happened, and the caller was told "read-only".
+    /// </summary>
+    /// <remarks>
+    /// The state that triggers it is a claim document that exists but holds no version, which the
+    /// read above reports as absent (it needs `Latest`) while
+    /// <see cref="Transaction.TryCreateDocument{T}"/> reports as present (it only needs the key).
+    /// That is reachable whenever a document is created before its first commit -- including a
+    /// transaction that threw after creating it.
+    /// </remarks>
+    [Fact]
+    public async Task Claim_AnUnreadableClaimDocument_CommitsNoEntry()
+    {
+        using var store = DurableStore.CreateEphemeral();
+        var claimOwnerId = DurableShiftClaim.OwnerId(Key);
+
+        // Create the claim document without committing a version, so the read is null but the
+        // create-if-absent guard fails.
+        await store.CommitAsync(tx =>
+        {
+            Assert.True(tx.TryCreateDocument(DurableShifts.ClaimDefinition, claimOwnerId));
+            return Task.CompletedTask;
+        });
+        Assert.Null(DurableShifts.ReadClaim(store, Key));
+        Assert.Empty(store.EntriesOf(claimOwnerId));
+
+        var result = await DurableShifts.ClaimAsync(store, Key, "run-a", T0, "po", "session-a");
+
+        Assert.Equal(ShiftClaimOutcome.ReadOnly, result.Outcome);
+        Assert.Null(result.Claim);
+        Assert.Empty(store.EntriesOf(claimOwnerId));
+    }
+
     private static async Task WriteHandoffLiteralAsync(DurableStore store, string phase)
     {
         // Written the way the previous C# build wrote it: a capitalized phase text on the wire.

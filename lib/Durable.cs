@@ -4858,7 +4858,10 @@ public static class DurableShifts
                     ClaimedAt = now,
                 };
 
-                var entryId = transaction.AppendEntry(claimOwnerId, "shift-claim");
+                // The create-if-absent guard runs BEFORE anything is staged. It is the only check
+                // that can refuse, and `CommitAsync` rolls back on a throw rather than on a returned
+                // result: staging the entry first would commit it alongside the refusal, leaving a
+                // transcript entry for a claim that never happened.
                 if (!transaction.TryCreateDocument(definition, claimOwnerId))
                 {
                     return System.Threading.Tasks.Task.FromResult(new ShiftClaimResult(
@@ -4868,6 +4871,7 @@ public static class DurableShifts
                         + "treating it as uncertain rather than claiming over it."));
                 }
 
+                var entryId = transaction.AppendEntry(claimOwnerId, "shift-claim");
                 transaction.CommitDocument(definition, claimOwnerId, created, entryId);
                 return System.Threading.Tasks.Task.FromResult(
                     new ShiftClaimResult(ShiftClaimOutcome.Acquired, created, $"acquired attempt 1 for '{owner}'."));
