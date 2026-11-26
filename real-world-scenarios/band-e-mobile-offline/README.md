@@ -38,7 +38,8 @@ evidence/                        captured command output and screenshots; see ev
 | Kill and reopen continues from the store | **met** — `force-stop`, new pid, `restored from the durable store: store 128720 B sha256:f02b209c3e84` (same bytes as the pre-kill export), then turn 4 |
 | The Durable layer references no Android type | **met and enforced** — `verify-android-boundary.sh` runs in the build and fails it |
 | The bridge boundary stays clean | **met** — one file, `app/Chat/BridgeShim.cs` |
-| Resource reality recorded (size, download, memory, tokens/s) | **met** — see §"The resource reality" and `evidence/e2-resources.txt` |
+| Resource reality recorded (size, download, memory, tokens/s) | **met** — see §"The resource reality", and both legs: `evidence/e2-resources.txt` (emulator), `evidence/e2-larger-model.txt` (1.5B on the emulator), `evidence/e2-physical-device.txt` (0.5B on the phone) |
+| The model choice is justified, not assumed | **met** — the emulator ran 1.5B offline, so it is not the constraint; the phone run is the recorded alternative |
 
 A hold on the word "fully": the model **download** needs the network, once, which the issue allows
 ("It must not need the network for anything but the first model download"). Everything after that is
@@ -200,6 +201,42 @@ The document shown after each turn is therefore the model's whole reply. It rewr
 edits: turn 2's "Risks" section is not literally two bullet points, and markdown bold it was told not
 to write survives into the text. The demonstration's claim is that the document **survives a kill**,
 not that a 0.5B model writes well — and the resource table below is where the difference is priced.
+
+### Was the emulator the reason for the smaller model? No.
+
+The issue's note says that if the emulator cannot run the model acceptably, record the measurement
+and use a physical device rather than quietly swapping to a smaller model. That condition had not
+been tested, so it was: **qwen2.5-1.5b** — 3x the parameters, same family — was run on the same AVD
+with the network off. It loads (2,679.6 MB, 117.1 s), it turns (32.9–56.5 s per turn, 1.8–3.9
+delta/s), and it survives a kill and reopen from identical bytes. **The emulator is not the
+constraint**, so "the emulator forced a 0.5B model" is not an available justification.
+[`evidence/e2-larger-model.txt`](evidence/e2-larger-model.txt) has it.
+
+What that run also exposed is an interaction worth knowing before the next variant: with a model that
+replies surgically ("here is the new section") rather than rewriting the whole document, the size
+guard refuses the reply as a collapse, and two of four turns kept the document unchanged. The guard
+conflates *the model collapsed* with *the model edited surgically*. The demonstration is written
+around whole-document rewrites, which is a 0.5B behaviour; that is a real limitation of the demo's
+shape, recorded rather than tuned away.
+
+The 0.5B demonstration was therefore run a second time **on the physical device**, which is the
+honest alternative the note offers. Both legs are captured, and the comparison is the useful part:
+
+| Metric | Emulator, qwen2.5-1.5b | Phone, qwen2.5-0.5b |
+| --- | --- | --- |
+| Model on disk | 2,679.6 MB / 21 files | 837.4 MB / 11 files |
+| Download | 117.1 s (+1,842.2 MB) | 46.8 s (+837.4 MB) |
+| Per-turn wall clock | 32.9–56.5 s | 2.9–3.7 s |
+| Streaming rate | 1.8–3.9 delta/s | 59.1–76.5 delta/s |
+| PSS | 1,186 MB of 2,473 MB | 620 MB of 7,073 MB |
+| Turns that revised the document | 2 of 4 (guard refused 2) | 4 of 4 |
+| Preamble leaked into body | no | yes |
+
+So the honest statement of the model choice is: the pinned **0.5B** model is what the demonstration
+uses, on both devices, because it is fast enough to iterate and its whole-document rewrites match the
+demo's shape. It is **not** used because the emulator could not do better. Its cost is the
+instruction-following in the table above and the leaked preamble in the document body. The phone run
+is [`evidence/e2-physical-device.txt`](evidence/e2-physical-device.txt).
 
 ### The resource reality
 

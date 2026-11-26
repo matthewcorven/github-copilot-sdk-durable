@@ -1,0 +1,120 @@
+Band E / issue #166 — the full demonstration on the physical device, 0.5B model
+Captured 2026-11-26. Transcribed from commands run against the attached phone; output quoted.
+
+This is the second leg the issue's note asks for: if the model is to be the smaller one, the
+alternative to "the emulator cannot run a bigger model" (tested and refuted in e2-larger-model.txt)
+is to record the cost honestly on the faster hardware and say so.
+
+=== device ===
+
+  $ adb devices -l
+  R5CWB24DHCB  device usb:... model:SM_S918U1 device:dm3q
+
+  ro.product.model         SM-S918U1 (Galaxy S24 Ultra)
+  ro.build.version.sdk     37
+  ro.product.cpu.abi       arm64-v8a
+  MemTotal                 7,242,336 kB (7,073 MB reported by ActivityManager)
+  /data free               88 G
+
+Model: qwen2.5-0.5b, the committed default. APK: the same Release build, installed with
+`adb install -r`.
+
+=== model preparation, network on, once ===
+
+  model ready in 46.8 s · cache 837.4 MB in 11 files (+837.4 MB this run)
+
+Against the emulator's 229.8 s for the same model, the phone is ~4.9x faster to download. This is
+the number the emulator evidence could not supply.
+
+=== offline for the whole conversation ===
+
+  $ adb shell settings get global airplane_mode_on
+  1
+  $ adb shell dumpsys connectivity | grep -m1 "Active default network"
+  Active default network: none
+
+  $ adb shell cmd connectivity airplane-mode disable    (only after the run, to restore the
+                                                         phone to the state it arrived in)
+  0
+
+Four turns, from the app's own trace:
+
+  03:00:55 turn 1: stream closed, 219 deltas, 1305 chars, 2864 ms
+  03:00:55 turn 1: committed reply 44 chars, document rev 1 (whole reply taken as the document)
+  03:01:20 turn 2: stream closed, 220 deltas, 1330 chars, 3406 ms
+  03:01:20 turn 2: committed reply 44 chars, document rev 2 (whole reply taken as the document)
+  03:01:45 turn 3: stream closed, 220 deltas, 1330 chars, 3402 ms
+  03:01:45 turn 3: committed reply 44 chars, document rev 3 (whole reply taken as the document)
+  03:03:23 turn 4: stream closed, 220 deltas, 1330 chars, 3721 ms
+  03:03:23 turn 4: committed reply 44 chars, document rev 4 (whole reply taken as the document)
+
+Every turn revised the document: with whole-document rewrites the size guard never fired, which is
+the behaviour the demonstration is written for.
+
+SDK-side confirmation, from logcat:
+
+  Command:CoreChatCompletion Status:Success  Time: 2846 / 3401 / 3393 / 3704 ms
+  Generator.TokenCount -> Count: 164 / 425 / 479 / 524
+
+Streaming rate, deltas over elapsed:
+
+  turn 1  219 / 2.864 s = 76.5 delta/s
+  turn 2  220 / 3.406 s = 64.6 delta/s
+  turn 3  220 / 3.402 s = 64.7 delta/s
+  turn 4  220 / 3.721 s = 59.1 delta/s
+
+Against the emulator's 0.5B run (5.7-13.4 tok/s from E1, 1.8-3.9 delta/s from the 1.5B run), the
+phone is an order of magnitude faster at the same model.
+
+Memory, model loaded, four turns committed:
+
+  PSS 620 MB of 7073 MB (2028 MB free) · model cache 837.4 MB in 11 files
+
+=== kill and reopen, offline ===
+
+  pre-kill export:  store_bytes 15314
+                    store_sha256 ba25145645b620bb123e3842242e5545a509f0930e41473ddaa61707cfe76a50
+                    ## transcript (3 turns)  ## committed document versions (5)
+
+  $ adb shell am force-stop dev.durable.band.e.mobile    (pid 15649 -> gone)
+  $ adb shell am start -n ...MainActivity                 (pid 18719)
+
+  restored: turns 3 · revisions 5 · interrupted 0 · Foundry Local (embedded)
+            restored from the durable store: store 15314 B sha256:ba25145645b6
+
+Identical bytes, new process, network off. Cached model then loaded offline in 1.9 s (against
+15.6 s on the emulator for the larger model).
+
+Turn 4 ran offline after that and committed, ending at:
+
+  store_bytes 20394
+  store_sha256 c713ffdd5f654e2f7b364f2370a5694e739e32d17e6bc8248e0bd6d5897c24a9
+  ## transcript (4 turns)
+  ## document — revision 4, updated by turn 4
+  ## interrupted turn tasks (0)
+
+=== the model's own limit, on good hardware ===
+
+The document the phone produced reads:
+
+  Here is the revised document:
+  **Title:** Offline Release Checklist
+
+The model's preamble ("Here is the revised document:") is inside the document body. The 0.5B model
+needed three prompt designs to produce a document at all (evidence/e2-model-protocol.txt) and still
+leaks framing into the artifact. Faster hardware does not fix that: it is a capability limit of the
+0.5B model, and it is the cost the demonstration carries.
+
+=== comparison, both legs ===
+
+  | metric                   | emulator, qwen2.5-1.5b | phone, qwen2.5-0.5b |
+  | model on disk            | 2,679.6 MB / 21 files  | 837.4 MB / 11 files |
+  | download                 | 117.1 s (+1842.2 MB)   | 46.8 s (+837.4 MB)  |
+  | per-turn wall clock      | 32.9-56.5 s            | 2.9-3.7 s           |
+  | streaming rate           | 1.8-3.9 delta/s        | 59.1-76.5 delta/s   |
+  | PSS                      | 1186 MB of 2473 MB     | 620 MB of 7073 MB   |
+  | turns that revised doc   | 2 of 4 (guard refused 2)| 4 of 4             |
+  | preamble leak in body    | no                     | yes                 |
+
+Both legs: airplane mode on throughout, kill and reopen from identical bytes, zero interrupted
+tasks. Neither leg needed the network after the initial download.
